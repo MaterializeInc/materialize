@@ -82,6 +82,69 @@ def append {n m : Nat} (a : Schema n) (b : Schema m) : Schema (n + m) :=
     types := a.types ++ b.types
     rowErrFree := a.rowErrFree && b.rowErrFree }
 
+/-- Block 1: cast on `List.Vector` preserves the underlying `.val`
+(the cast only changes the type-level length proof). Used to factor
+`cast` through `Subtype.ext`. -/
+theorem _root_.List.Vector.cast_val {α : Type u} {n p : Nat}
+    (h : n = p) (v : List.Vector α n) :
+    (h ▸ v : List.Vector α p).val = v.val := by
+  cases h
+  rfl
+
+/-- Block 2: cast of `Vector` append at `(n+m)+k` equals the
+unfolded append at `n+(m+k)`. Underlying-lists agreement via
+`List.append_assoc`; cast factors via `Subtype.ext` +
+`Vector.cast_val`. -/
+theorem _root_.List.Vector.cast_eq_append_assoc {α : Type u} {n m k : Nat}
+    (a : List.Vector α n) (b : List.Vector α m) (c : List.Vector α k)
+    (h : n + m + k = n + (m + k)) :
+    (h ▸ ((a ++ b) ++ c) : List.Vector α (n + (m + k))) = a ++ (b ++ c) := by
+  apply Subtype.ext
+  rw [List.Vector.cast_val]
+  rcases a with ⟨la, _⟩
+  rcases b with ⟨lb, _⟩
+  rcases c with ⟨lc, _⟩
+  show (la ++ lb) ++ lc = la ++ (lb ++ lc)
+  exact List.append_assoc la lb lc
+
+/-- Block 3: cast on `Schema.mk` distributes through the constructor.
+The `cols` / `types` fields carry the cast; `rowErrFree` is invariant.
+Free-variable `cases h` reduces the cast to identity. -/
+theorem cast_mk {n p : Nat} (h : n = p)
+    (cols : List.Vector ColSchema n) (types : List.Vector ColType n) (b : Bool) :
+    (h ▸ ({ cols := cols, types := types, rowErrFree := b } : Schema n)
+      : Schema p)
+    = { cols := h ▸ cols, types := h ▸ types, rowErrFree := b } := by
+  cases h
+  rfl
+
+/-- Heterogeneous associativity for `Schema.append`. Composes
+`Vector.cast_eq_append_assoc`, `Schema.cast_mk`, and `Bool.and_assoc`
+under the `eqRec_heq` HEq↔cast trick. Arity-cast scaffolding that
+`Collection.cross_assoc` consumes. -/
+theorem append_assoc_heq {n m k : Nat}
+    (a : Schema n) (b : Schema m) (c : Schema k) :
+    HEq (Schema.append (Schema.append a b) c)
+        (Schema.append a (Schema.append b c)) := by
+  have hnat : n + m + k = n + (m + k) := Nat.add_assoc n m k
+  -- HEq via cast trip: HEq LHS (hnat ▸ LHS) by eqRec_heq.symm, then
+  -- (hnat ▸ LHS) = RHS as Eq via cast_mk + cast_eq_append_assoc.
+  apply HEq.trans (HEq.symm (eqRec_heq hnat _))
+  apply heq_of_eq
+  show (hnat ▸ ({ cols := (a.cols ++ b.cols) ++ c.cols,
+                  types := (a.types ++ b.types) ++ c.types,
+                  rowErrFree := (a.rowErrFree && b.rowErrFree) && c.rowErrFree }
+                : Schema (n + m + k))
+        : Schema (n + (m + k)))
+       = { cols := a.cols ++ (b.cols ++ c.cols),
+           types := a.types ++ (b.types ++ c.types),
+           rowErrFree := a.rowErrFree && (b.rowErrFree && c.rowErrFree) }
+  rw [Schema.cast_mk hnat]
+  congr 1
+  · exact List.Vector.cast_eq_append_assoc a.cols b.cols c.cols hnat
+  · exact List.Vector.cast_eq_append_assoc a.types b.types c.types hnat
+  · exact Bool.and_assoc a.rowErrFree b.rowErrFree c.rowErrFree
+
 end Schema
 
 /-- Cell-scoped errors raised by `Datum`-level operations. -/
