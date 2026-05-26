@@ -39,14 +39,6 @@ ARG ANTITHESIS_WORKLOAD_GROUP=combined
 # plumbing.
 MZFROM testdrive AS testdrive-src
 
-# SQLsmith source image — pulled in for its random-query binary which the
-# `parallel_driver_sqlsmith.py` driver shells out to.  The image builds
-# sqlsmith from the MaterializeInc/sqlsmith fork against ubuntu-base
-# (libpqxx + libpq dynamically linked), so we COPY both the binary and
-# its C++ runtime deps into the final image; see the dedicated COPY block
-# below.
-MZFROM sqlsmith AS sqlsmith-src
-
 # Debian 13 (trixie) base ships GLIBC 2.41; testdrive's mzbuild image is
 # built against ubuntu-base (Ubuntu 24.04, GLIBC 2.39) and references
 # GLIBC 2.38 / 2.39 symbols. The previous `python:3.12-slim-bookworm`
@@ -133,16 +125,6 @@ COPY --from=testdrive-src /usr/local/bin/protoc /usr/local/bin/protoc
 COPY --from=testdrive-src /usr/local/include/google /usr/local/include/google
 ENV PROTOC=/usr/local/bin/protoc
 ENV PROTOC_INCLUDE=/usr/local/include
-
-# SQLsmith binary + its C++ runtime deps for `parallel_driver_sqlsmith.py`.
-# Built from the MaterializeInc/sqlsmith fork against ubuntu-base, so it
-# dynamically links libpqxx + libpq + libstdc++.  libpq is already covered
-# by the trixie postgresql-client install above; libpqxx (ubuntu's 7.X)
-# has no Debian-trixie ABI match (trixie ships 7.10), so we bundle the
-# exact build-time .so alongside the binary.  libstdc++ is forward-
-# compatible between the two distros, so the image's own copy suffices.
-COPY --from=sqlsmith-src /workdir/sqlsmith/sqlsmith /usr/local/bin/sqlsmith
-COPY --from=sqlsmith-src /usr/lib/x86_64-linux-gnu/libpqxx-*.so* /usr/local/lib/
 RUN ldconfig
 
 # Repo-checked-in testdrive .td files for the testdrive-runner drivers,

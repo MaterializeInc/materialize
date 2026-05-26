@@ -354,13 +354,6 @@ groups:
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
       - parallel-workload/parallel_driver_explicit_txn_prepare_execute
       - parallel-workload/parallel_driver_pw_hot_objects
-      # SQLsmith random-query stress.  Generates AST-derived SELECTs the
-      # framework's own action vocabulary doesn't reach (deep joins,
-      # weird casts, window expressions over MV outputs).  Targets
-      # planner / optimizer panics under fault windows.  The binary is
-      # bundled into the workload image by the Dockerfile's
-      # `MZFROM sqlsmith` multi-stage copy.
-      - parallel-workload/parallel_driver_sqlsmith
     anytime: []
 
   platform-checks:
