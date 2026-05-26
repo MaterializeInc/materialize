@@ -344,37 +344,43 @@ Time, consolidation, distinct, and aggregate are out of scope at
 this layer.
 Lifting to a timed collection is additive on top.
 
-### Order-sensitivity caveat
+### Order-sensitivity and retraction (`Collection.Equiv`)
 
-`Collection n` is a `List (Update n)`, so the canonical equivalence
-is list equality.
-Two collections that are user-observably equal as multisets but
-enumerate updates in different orders are *distinct* under `=`.
-Concretely, `unionAll a b` and `unionAll b a` are different lists
-even though every downstream consumer treats them as equal.
+`Collection n = List (Update n)` under `=` is too fine for
+user-observable semantics on two axes:
 
-Every "sound under `=`" claim in `transforms.md` is therefore sound
-up to the specific list order the operator produces.
-Pushdown lemmas at `=` succeed because both sides enumerate updates
-in the same order; a fusion that reshapes the enumeration would
-not state at `=`.
-The natural next step is a `Collection.Equiv` permutation-quotient
-(via `List.Perm`) with `=` as a strictly stronger relation used as
-a proof shortcut.
-That work is open; until it lands, `unionAll` commutativity, `cross`
-factor reordering, and any consolidation-style rewrite remain
-unstatable.
+* **Order.** `unionAll a b` and `unionAll b a` are distinct lists
+  even though every downstream consumer treats them as equal.
+  Pushdown lemmas that close under `=` rely on both sides
+  enumerating updates in the same order; a fusion that reshapes
+  enumeration cannot state at `=`.
+* **Retraction.** `Update.diff` and `Update.err_diff` are
+  retractable `Int`s, but `=` never quotients by consolidation, so
+  `[(r, 1, 0), (r, -1, 0)] ≠ []` even though the user observes
+  them as the same.
 
-### Retraction caveat
+`Collection.Equiv` (mechanized in `Mz/Collection.lean`) is the
+smallest equivalence relation closed under three primitive
+rewrites: `perm` (`List.Perm` — order), `merge` (same-row diff
+combination — consolidation), `drop_zero` (drop a `(r, 0, 0)`
+update — zero erasure). Strict `=` is strictly stronger and remains
+the safer relation for proofs that close under it; rewrites whose
+content is permutation- or consolidation-invariant migrate to
+`Collection.Equiv`.
 
-`Update.diff` and `Update.err_diff` are `Int`, retractable to model
-differential-dataflow consolidation.
-The model never quotients by consolidation, so a collection
-`[(r, 1, 0), (r, -1, 0)]` is *not* equal to `[]` under `=` even
-though the user observes them as the same.
-Negative diffs propagate through operators correctly but no
-theorem witnesses that they cancel — that requires consolidation,
-deferred with the time dimension.
+Two demonstrators are mechanized:
+
+* `unionAll_comm_equiv : Equiv (unionAll a b) (unionAll b a)` — via
+  `perm` alone.
+* `negate_unionAll_self : Equiv (unionAll (negate s) s) []` — pair
+  every update with its negation (`perm`), merge to a zero update
+  (`merge`), drop (`drop_zero`). The load-bearing retraction
+  identity that strict `=` cannot witness.
+
+Existing `=`-tagged rewrites in `transforms.md` continue to hold
+unchanged; migrating them to `Collection.Equiv` is mechanical
+(strict `=` implies `Collection.Equiv` via `Equiv.refl`) and
+deferred until a forcing function appears.
 
 This has a second-order effect on the `refines` lift in
 `Mz/Collection.lean`.
@@ -383,9 +389,9 @@ and `filter_cross_pushdown_left_refines` would close unconditionally
 if `recL.diff * recR.err_diff ≥ 0`.
 On non-negative diffs that's trivial; on signed `Int` diffs it's a
 real side condition (`SignOK`).
-The frontier is in the diff signature, not the relation — quotienting
-by consolidation first (or restricting to non-negative diffs) makes
-the lift unconditional.
+Quotienting by consolidation first (or restricting to non-negative
+diffs) makes the lift unconditional — `Collection.Equiv` is the
+natural home for that strengthening.
 
 ## Errors
 
@@ -789,6 +795,7 @@ Relations and analyses a planner can cite today.
 | `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines` |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
+| `Collection.Equiv`         | `Mz/Collection.lean`         | `unionAll` commutativity; `negate s ++ s ≈ []` retraction | most `=`-tagged rewrites not yet migrated |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |

@@ -922,4 +922,87 @@ sign side condition is the cleanest middle ground; the strict
 
 end Collection
 
+/-! ## Consolidated equivalence (`Collection.Equiv`)
+
+`Collection n = List (Update n)` under `=` distinguishes order and
+unconsolidated pairs that the user observes as the same. The strict
+`=` relation says `[(r, 1, 0), (r, -1, 0)] ≠ []` even though
+consolidation cancels them; `unionAll a b ≠ unionAll b a` even
+though both produce the same multiset under consolidation.
+
+`Collection.Equiv` is the smallest equivalence relation closed under
+three primitive rewrites:
+
+* **perm** — `List.Perm` (collections are unordered).
+* **merge** — adjacent same-row updates combine their diffs
+  (`(r, d₁, e₁) :: (r, d₂, e₂) :: rest ≈ (r, d₁+d₂, e₁+e₂) :: rest`).
+* **drop_zero** — a fully-zero update can be dropped.
+
+Strict `=` continues as the safer relation for proofs that close
+under it; `Collection.Equiv` is the layer at which retraction-based
+rewrites (`unionAll_comm`, `negate_unionAll_self`, fusions that
+reshape enumeration order) can be stated.
+
+Demonstrators below: `unionAll_comm_equiv` (perm only) and
+`negate_unionAll_self` (perm + merge + drop_zero). Migrating
+existing `=`-tagged rewrites to `Collection.Equiv` is mechanical
+(strict `=` implies `Collection.Equiv` via `Equiv.refl ∘ Eq.symm`)
+and deferred until a forcing function appears. -/
+
+namespace Collection
+
+variable {n : Nat}
+
+/-- Smallest equivalence on collections closed under permutation,
+same-row diff consolidation, and zero-update dropping. -/
+inductive Equiv : Collection n → Collection n → Prop
+  | refl (s : Collection n) : Equiv s s
+  | symm {a b : Collection n} : Equiv a b → Equiv b a
+  | trans {a b c : Collection n} : Equiv a b → Equiv b c → Equiv a c
+  | perm {a b : Collection n} : a.Perm b → Equiv a b
+  | merge (r : RowN n) (d₁ e₁ d₂ e₂ : Int) (rest : Collection n) :
+      Equiv
+        (⟨r, d₁, e₁⟩ :: ⟨r, d₂, e₂⟩ :: rest)
+        (⟨r, d₁ + d₂, e₁ + e₂⟩ :: rest)
+  | drop_zero (r : RowN n) (rest : Collection n) :
+      Equiv (⟨r, 0, 0⟩ :: rest) rest
+
+/-- `unionAll` is commutative under `Collection.Equiv` (perm only). -/
+theorem unionAll_comm_equiv (a b : Collection n) :
+    Equiv (unionAll a b) (unionAll b a) :=
+  Equiv.perm (List.perm_append_comm)
+
+/-- `negate s` cancels `s` under `Collection.Equiv`. Pair every
+update with its negation (perm), merge to a zero update, drop. The
+load-bearing retraction identity that strict `=` cannot witness. -/
+theorem negate_unionAll_self (s : Collection n) :
+    Equiv (unionAll (negate s) s) ([] : Collection n) := by
+  induction s with
+  | nil => exact Equiv.refl []
+  | cons rec rest ih =>
+    rcases rec with ⟨r, d, e⟩
+    -- Goal: Equiv (negate (⟨r,d,e⟩ :: rest) ++ ⟨r,d,e⟩ :: rest) []
+    -- Unfold to: ⟨r,-d,-e⟩ :: negate rest ++ ⟨r,d,e⟩ :: rest
+    show Equiv
+      (⟨r, -d, -e⟩ :: negate rest ++ ⟨r, d, e⟩ :: rest)
+      ([] : Collection n)
+    -- Step 1: perm to bring ⟨r,d,e⟩ adjacent to ⟨r,-d,-e⟩.
+    have hperm :
+        (⟨r, -d, -e⟩ :: negate rest ++ ⟨r, d, e⟩ :: rest : Collection n).Perm
+        (⟨r, -d, -e⟩ :: ⟨r, d, e⟩ :: (negate rest ++ rest)) := by
+      show (⟨r, -d, -e⟩ :: (negate rest ++ ⟨r, d, e⟩ :: rest)).Perm
+           (⟨r, -d, -e⟩ :: ⟨r, d, e⟩ :: (negate rest ++ rest))
+      exact List.Perm.cons _ List.perm_middle
+    refine Equiv.trans (Equiv.perm hperm) ?_
+    -- Step 2: merge the adjacent pair.
+    refine Equiv.trans (Equiv.merge r (-d) (-e) d e (negate rest ++ rest)) ?_
+    -- Step 3: -d + d = 0 and -e + e = 0; rewrite to ⟨r,0,0⟩.
+    have h_d : (-d : Int) + d = 0 := by omega
+    have h_e : (-e : Int) + e = 0 := by omega
+    rw [h_d, h_e]
+    -- Step 4: drop the zero update, then IH.
+    exact Equiv.trans (Equiv.drop_zero r (negate rest ++ rest)) ih
+
+end Collection
+
 end Mz

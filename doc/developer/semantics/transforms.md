@@ -55,8 +55,10 @@ with the empty collection.
 | Transform | Statement | Relation |
 | --- | --- | --- |
 | `unionAll_assoc` | `(a ⊎ b) ⊎ c = a ⊎ (b ⊎ c)` | `=` |
+| `unionAll_comm_equiv` | `unionAll a b ≈ unionAll b a` | `Collection.Equiv` (perm only); fails at `=` |
 | `cross_assoc` | `cross (cross a b) c = castCollection h (cross a (cross b c))` | `=` modulo arity cast `n+m+k = n+(m+k)` |
 | `crossOne_assoc` | update-level cross associativity, same cast | `=` |
+| `negate_unionAll_self` | `unionAll (negate s) s ≈ []` | `Collection.Equiv` (perm + merge + drop_zero); fails at `=` (no consolidation) |
 
 ## Involution / idempotence
 
