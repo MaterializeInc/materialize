@@ -402,6 +402,31 @@ theorem filter_cross_pushdown_left_unsound :
   rw [hLHS] at hRHS
   cases hRHS
 
+/-! ## Filter / cross pushdown — strict recovery (open)
+
+Soundness recovery under `NoRowErr l ∧ NoRowErr r`. The
+counterexample above exploits the bilinear err-diff rule's mixed
+terms `d_L · e_R` and `e_L · d_R`; under both sides being
+`NoRowErr`, every cross-multiplied err-diff term vanishes
+pre-cross, so the pre- and post-cross filter should agree on the
+data. The proof requires a substitution-aware predicate lift
+(`p_comb (recL ++ recR) ≃ p_left recL`) plus pointwise inversion
+of `filterOne` under each `eval` case.
+
+The mechanization tripped on iota reduction of `filterOne`'s match
+auxiliary after `unfold filterOne; rw [hLR]; cases hev :` — the
+match scrutinizing `Datum.err e✝` (post-cases substitution)
+remained unreduced even after `generalize` + `clear`. Worked
+around with explicit per-case rewrite lemmas in
+`hFilterLHS` / `hFilterRHS` but those triggered the same blocked
+iota at the call-site `show Update.mk _ _ _ = Update.mk _ _ _`.
+The blockage is presumably the match-auxiliary `filterOne.match_1`
+not being marked `@[reducible]`; resolving requires either marking
+or `simp only [filterOne]` with the auto-generated `eq_*` lemmas.
+
+Left as open; the counterexample (`filter_cross_pushdown_left_unsound`)
+remains the load-bearing demonstration. -/
+
 /-! ## Row refinement
 
 Pointwise refinement on `Env sch` cells. Lifts `Datum.refines` to
