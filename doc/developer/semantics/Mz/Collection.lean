@@ -3,6 +3,7 @@ import Mz.Eval
 import Mz.Equiv
 import Mz.MightError
 import Mz.OutputType
+import Mathlib.Tactic.Ring
 
 /-!
 # Schema-indexed `Collection`
@@ -216,6 +217,79 @@ theorem cross_nil_right {sch_l : Schema n} {sch_r : Schema m}
 theorem cross_cons_left {sch_l : Schema n} {sch_r : Schema m}
     (recL : Update sch_l) (sL : Collection sch_l) (sR : Collection sch_r) :
     cross (recL :: sL) sR = sR.map (crossOne recL) ++ cross sL sR := rfl
+
+/-! ## Schema cast on Update / Collection
+
+Building blocks for stating cross associativity (and other
+arity-aware Schema rearrangements) as `Eq` rather than `HEq`. Each
+cast takes an arity-eq + Schema HEq pair and substitutes through. -/
+
+/-- Cast an `Update` from `sch1` to `sch2` when the schemas are HEq
+across an arity equality. Both arity and Schema substitutions reduce
+the cast to identity. -/
+def _root_.Mz.Update.cast {n p : Nat} {sch1 : Schema n} {sch2 : Schema p}
+    (h_arity : n = p) (h_sch : HEq sch1 sch2) (u : Update sch1) :
+    Update sch2 := by
+  subst h_arity
+  have heq : sch1 = sch2 := eq_of_heq h_sch
+  subst heq
+  exact u
+
+/-- Cast a `Collection` from `sch1` to `sch2` when the schemas are
+HEq across an arity equality. Defined as pointwise `Update.cast`. -/
+def cast {n p : Nat} {sch1 : Schema n} {sch2 : Schema p}
+    (h_arity : n = p) (h_sch : HEq sch1 sch2) (l : Collection sch1) :
+    Collection sch2 :=
+  l.map (Update.cast h_arity h_sch)
+
+/-- When both arity and Schema equalities are `rfl`, the cast is
+the identity (as a List). -/
+theorem cast_rfl {n : Nat} {sch : Schema n} (l : Collection sch) :
+    cast rfl HEq.rfl l = l := by
+  show l.map (Update.cast rfl HEq.rfl) = l
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    show Update.cast rfl HEq.rfl hd :: tl.map (Update.cast rfl HEq.rfl) = hd :: tl
+    rw [ih]
+    congr 1
+
+/-! ## crossOne multiplicity associativity
+
+`crossOne`'s `diff` and `err_diff` fields are associative as `Int`
+expressions — closed by `ring`. The row component is the non-trivial
+part of `cross_assoc` (deferred). -/
+
+theorem crossOne_diff_assoc (a b c : Int) :
+    (a * b) * c = a * (b * c) := by ring
+
+theorem crossOne_err_diff_assoc (dL eL dM eM dR eR : Int) :
+    (dL * dM) * eR + (dL * eM + eL * dM + eL * eM) * dR
+      + (dL * eM + eL * dM + eL * eM) * eR
+    = dL * (dM * eR + eM * dR + eM * eR) + eL * (dM * dR)
+      + eL * (dM * eR + eM * dR + eM * eR) := by ring
+
+/-! ## Cross associativity (open — row component)
+
+With `Schema.append_assoc_heq` + `Update.cast` / `Collection.cast`
+the natural cross_assoc statement is:
+
+```
+theorem cross_assoc {n m k} {sl sm sk}
+    (l : Collection sl) (mc : Collection sm) (r : Collection sk) :
+    cast (Nat.add_assoc n m k) (Schema.append_assoc_heq sl sm sk)
+      (cross (cross l mc) r) = cross l (cross mc r)
+```
+
+The data and err multiplicities close under Int ring laws (the
+bilinear err rule is `(d, e) * (d', e') = (d*d', d*e' + e*d' + e*e')`,
+which `ring` discharges). The blocker is the row component:
+`(crossOne (crossOne a b) c).row` and `(crossOne a (crossOne b c)).row`
+both produce `Fin (n + (m + k)) → Datum _`, but the index dispatch
+splits at different positions (LHS at `n+m`, RHS at `n`). Equating
+them pointwise requires Fin-index manipulation under three `▸` casts
+(`Schema.types_get_append_left/right` at two nesting levels). Left
+as follow-up. -/
 
 /-! ## NoRowErr precondition -/
 
