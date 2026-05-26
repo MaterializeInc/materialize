@@ -648,7 +648,7 @@ the original did not have.
 The lift of `Datum.refines` to `Update` / `Collection` is
 mechanized in `Mz/Collection.lean`:
 
-* `Row.refines a b := ∀ i : Fin n, (a.get i).refines (b.get i)`.
+* `Row.refines a b := ∀ i : Fin n, (a i).refines (b i)`.
 * `Update.refines a b := Row.refines a.row b.row ∧ a.diff = b.diff
   ∧ a.err_diff ≥ b.err_diff` (data multiplicity equal; err
   multiplicity allowed to drop).

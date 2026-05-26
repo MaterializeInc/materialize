@@ -180,8 +180,8 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 ## Output-schema propagation
 
 `Expr.outputCols sch e` derives the output `ColSchema` for a
-schema-indexed `Expr`. Soundness theorem is open in the indexed
-model.
+schema-indexed `Expr`. Soundness theorem `eval_satisfies_outputCols`
+is mechanized in `Mz/OutputType.lean`.
 
 | Transform | Statement | Status |
 | --- | --- | --- |

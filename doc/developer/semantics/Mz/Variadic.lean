@@ -2,14 +2,11 @@ import Mz.PrimEval
 import Mz.Laws
 
 /-!
-# Variadic `AND` and `OR` (indexed)
+# Variadic `AND` and `OR`
 
-Laws over `evalAndN` / `evalOrN` on `List (Datum .bool)`. Indexed
-counterpart of `Mz/Variadic.lean`.
-
-All `¬d.IsInt` hypotheses present in the untyped model disappear:
-the indexed `Datum .bool` rules out `.int` at the type level.
--/
+Laws over `evalAndN` / `evalOrN` on `List (Datum .bool)`. The GADT
+rules out `.int` at the type level, so no `¬d.IsInt` hypotheses
+appear. -/
 
 namespace Mz
 

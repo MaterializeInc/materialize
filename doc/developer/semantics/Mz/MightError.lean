@@ -1,15 +1,13 @@
 import Mz.Eval
 
 /-!
-# `might_error` analyzer + soundness (indexed)
+# `might_error` analyzer + soundness
 
 Conservative analyzer that returns `true` when an `Expr sch k`
-might evaluate to `.err _`. Indexed counterpart of
-`Mz/MightError.lean`.
+might evaluate to `.err _`.
 
-The kind discipline of the indexed model removes the
-type-mismatch case from every primitive's error sources. What's
-left:
+The GADT kind discipline removes the type-mismatch case from
+every primitive's error sources. What's left:
 
 * `.lit (.err _)` — literal error.
 * `.divide _ _` — divide-by-zero on `.int 0` divisor.

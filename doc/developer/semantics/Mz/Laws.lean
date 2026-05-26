@@ -1,18 +1,15 @@
 import Mz.PrimEval
 
 /-!
-# Algebraic laws (indexed)
+# Algebraic laws
 
 Laws over `evalAnd`, `evalOr`, and `evalNot` constrained to
-`Datum .bool`. Indexed counterpart of `Mz/Laws.lean`.
-
-Compared with the untyped model:
+`Datum .bool`.
 
 * Identity laws (`evalAnd_true_left`, `evalAnd_true_right`,
-  `evalOr_false_*`) drop their `¬d.IsInt` hypotheses — the
-  indexed `Datum .bool` rules out `.int` at the type level.
-* Idempotence (`evalAnd_idem`, `evalOr_idem`) drops `¬d.IsInt`
-  for the same reason.
+  `evalOr_false_*`) state without `¬d.IsInt` hypotheses — the
+  GADT rules out `.int` at the type level.
+* Idempotence (`evalAnd_idem`, `evalOr_idem`) similarly.
 * Conditional commutativity (`evalAnd_comm_of_no_err`,
   `evalOr_comm_of_no_err`) keeps only the genuine `¬IsErr`
   hypotheses (a real cell-content concern, not a

@@ -8,8 +8,7 @@ import Mathlib.Tactic.Ring
 /-!
 # Schema-indexed `Collection`
 
-Updates and collections parameterized by a schema. Indexed
-counterpart of `Mz/Collection.lean`.
+Updates and collections parameterized by a schema.
 
 `Update sch` carries:
 

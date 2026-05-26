@@ -1,14 +1,13 @@
 import Mz.Datum
 
 /-!
-# Primitive scalar evaluators (indexed)
+# Primitive scalar evaluators
 
 Each evaluator is typed by the input / output kinds. No catch-all
-`_ , _ => .null` arms: the indexed `Datum k` rules out
+`_ , _ => .null` arms: the GADT `Datum k` rules out
 type-mismatched operands at the type level.
 
-The primitives split into three groups, mirroring the layout of
-the untyped `Mz/PrimEval.lean`:
+The primitives split into four groups:
 
 * **Binary boolean and ternary if-then** on `Datum .bool`:
   `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`.
@@ -20,7 +19,7 @@ the untyped `Mz/PrimEval.lean`:
 * **Variadic** on `Datum k`: `evalAndN` / `evalOrN` (bool only),
   `evalCoalesce` (any `k`, two-pass form).
 
-Codomain of every evaluator is now closed by construction — the
+Codomain of every evaluator is closed by construction — the
 boolean evaluators return `Datum .bool`, the arithmetic ones
 return `Datum .int`, comparisons return `Datum .bool`. No
 type-mismatch routing, no `¬IsInt` hypotheses on downstream laws.
@@ -113,8 +112,8 @@ def evalDivide : Datum .int → Datum .int → Datum .int
 /-! ## Comparison
 
 Both operands share the same kind via the index parameter. Mixed-
-kind comparison isn't expressible at the type level — the untyped
-catch-all `.null` route disappears entirely. -/
+kind comparison isn't expressible at the type level — no
+catch-all `.null` route. -/
 
 def evalEq {k : ColType} : Datum k → Datum k → Datum .bool
   | .err e, _        => .err e

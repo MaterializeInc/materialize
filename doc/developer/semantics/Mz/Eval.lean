@@ -2,7 +2,7 @@ import Mz.Expr
 import Mz.PrimEval
 
 /-!
-# Big-step evaluator (indexed)
+# Big-step evaluator
 
 `eval (env : Env sch) (e : Expr sch k) : Datum k`. Schema-indexed.
 The schema enforces:
@@ -17,14 +17,12 @@ The environment is a typed lookup function:
 returns a `Datum` whose kind agrees with the schema's declared
 type for that column.
 
-Mutual `eval` + `evalList` to handle variadic `ExprList`. Same
-shape as `Mz/Eval.lean` modulo the indexing.
+Mutual `eval` + `evalList` to handle variadic `ExprList`.
 
-Modeling note on laziness carries over from the untyped model:
-strict surface evaluation realizes the spec's lazy semantics for
-absorbing operators (`.andN`, `.orN`, `.coalesce`) and for
-`.ifThen`'s inactive arm via the absorption / discard rules in
-`PrimEval`. -/
+Laziness modeling note: strict surface evaluation realizes the
+spec's lazy semantics for absorbing operators (`.andN`, `.orN`,
+`.coalesce`) and for `.ifThen`'s inactive arm via the absorption
+/ discard rules in `PrimEval`. -/
 
 namespace Mz
 

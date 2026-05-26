@@ -1,13 +1,12 @@
 import Mz.PrimEval
 
 /-!
-# `coalesce` laws (indexed)
+# `coalesce` laws
 
-Cell equations for `evalCoalesce` on `Datum k`. Indexed counterpart
-of `Mz/Coalesce.lean`.
+Cell equations for `evalCoalesce` on `Datum k`.
 
-All operands share kind `k` by construction — the type-mismatch
-handling that occupies the untyped model is gone.
+All operands share kind `k` by construction — type-mismatch is
+unconstructible at the GADT level.
 
 Per-kind sections cover the bool and int instances. The `.top`
 kind admits only `.null` / `.err _` operands; its laws are a

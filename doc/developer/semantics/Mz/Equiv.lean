@@ -2,14 +2,12 @@ import Mz.PrimEval
 import Mz.Strict
 
 /-!
-# Equivalence relations on indexed `Datum`
+# Equivalence relations on `Datum`
 
-`Datum.eqErrSet` and `Datum.refines` lifted to `Datum k`. Indexed
-counterpart of `Mz/Equiv.lean`.
-
-Each relation is per-kind: `eqErrSet : Datum k → Datum k → Prop`.
-The indexed signatures of evaluators make compositionality
-mechanical — operands of mismatched kinds are inexpressible. -/
+`Datum.eqErrSet` and `Datum.refines` per `Datum k`. Each relation
+is per-kind: `eqErrSet : Datum k → Datum k → Prop`. The GADT
+signatures of evaluators make compositionality mechanical —
+operands of mismatched kinds are inexpressible. -/
 
 namespace Mz
 

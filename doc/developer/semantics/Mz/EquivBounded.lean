@@ -2,17 +2,15 @@ import Mz.PrimEval
 import Mz.Equiv
 
 /-!
-# Bounded-arithmetic counterexample (indexed)
+# Bounded-arithmetic counterexample
 
 The boundedness counterexample for `evalPlus` associativity on
-`Datum .int`. Indexed counterpart of `Mz/EquivBounded.lean`.
+`Datum .int`.
 
 The two evaluation orders of `x + 1 + (-1)` at `x = max` disagree:
 left-leaning errs on overflow at `max + 1`; right-leaning folds
 `1 + (-1) = 0` and returns `.int max`. Under `=` they're distinct;
-under `refines` LHS ⊑ RHS (err refines value); the reverse fails.
-
-Same shape as the untyped version, restricted to `Datum .int`. -/
+under `refines` LHS ⊑ RHS (err refines value); the reverse fails. -/
 
 namespace Mz
 

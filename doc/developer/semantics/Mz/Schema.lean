@@ -4,14 +4,13 @@ import Mathlib.Data.Vector.Basic
 /-!
 # Schema (types only)
 
-Type-level schema definitions reused by the indexed model in
-`Mz/Indexed/`. The actual satisfaction predicates and indexed
-schema-driven theorems live in `Mz/Indexed/Schema.lean` and
-`Mz/Indexed/OutputType.lean`.
+Type-level schema definitions: `ColType`, `ColSchema`, `Schema n`,
+`EvalError`. Satisfaction predicates that touch `Datum` / `Expr`
+values live in `Mz/OutputType.lean` (`DatumSatisfies`,
+`RowSatisfies`, `EnvErrFree_of_RowSatisfies`).
 
-This file is import-only — no values that depend on the indexed
-`Datum` / `Expr` / `Collection`. The GADT migration moved every
-predicate that touches the value layer to `Mz/Indexed/*`. -/
+This file carries no values that depend on `Datum` / `Expr` /
+`Collection` — it is the bottom of the import chain. -/
 
 namespace Mz
 

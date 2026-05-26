@@ -1,10 +1,9 @@
 import Mz.Eval
 
 /-!
-# `LegalEval` (indexed)
+# `LegalEval`
 
-Non-deterministic relational eval on indexed `Expr`. Indexed
-counterpart of `Mz/Legal.lean`.
+Non-deterministic relational eval on indexed `Expr`.
 
 `LegalEval env e d : Prop` reads "`d : Datum k` is an admissible
 outcome of evaluating `e : Expr sch k` under `env : Env sch`,
@@ -14,10 +13,9 @@ The deterministic `eval` produces one legal outcome
 (`legal_of_eval`); other admissible outcomes correspond to other
 strategies.
 
-Scope as in the untyped version: binary err-payload
-non-determinism (both `.err _` payloads admissible from
-`(.err _) + (.err _)`); variadic short-circuit, data-side
-commutativity, collection lift deferred. -/
+Scope: binary err-payload non-determinism (both `.err _` payloads
+admissible from `(.err _) + (.err _)`); variadic short-circuit,
+data-side commutativity, collection lift deferred. -/
 
 namespace Mz
 

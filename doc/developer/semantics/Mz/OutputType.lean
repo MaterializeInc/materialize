@@ -4,12 +4,12 @@ import Mz.MightError
 import Mz.Coalesce
 
 /-!
-# Output column schema for indexed `Expr`
+# Output column schema for `Expr`
 
 `Expr.outputCols sch e : ColSchema` derives nullable / errable
 bits for the cells produced by evaluating `e`. The type `k` is
 already known from the GADT index — no separate `outputKind`
-function. Indexed counterpart of `Mz/OutputType.lean`.
+function.
 
 Soundness theorem `eval_satisfies_outputCols`: evaluating `e` on
 a row satisfying `sch` produces a `Datum k` satisfying

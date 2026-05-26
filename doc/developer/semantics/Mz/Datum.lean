@@ -14,11 +14,7 @@ The `.null` and `.err _` constructors are universally quantified
 over the kind index. Pattern matching on a `Datum k` for known `k`
 prunes the constructors not inhabiting that kind, so evaluators
 written against `Datum .bool` see only the boolean fragment and
-need no catch-all routing.
-
-The untyped counterpart lives in `Mz/Datum.lean` (current main
-model) and continues to compile alongside this file during the
-GADT migration. -/
+need no catch-all routing. -/
 
 namespace Mz
 
@@ -51,8 +47,10 @@ instance {k : ColType} : DecidablePred (@IsNull k) := by
   intro d
   cases d <;> unfold IsNull <;> infer_instance
 
-/-- Bool variant of `IsNull` for use in fold contexts where a
-`Prop` doesn't compose. -/
+/-- Bool variant of `IsNull`. Sole consumer is `Coalesce.residue`'s
+`rest.any Datum.isNullB` check in `Mz/PrimEval.lean` — `List.any`
+needs a `Bool` predicate, and the `Prop`-valued `IsNull` doesn't
+compose there. -/
 def isNullB {k : ColType} : Datum k → Bool
   | .null => true
   | _     => false

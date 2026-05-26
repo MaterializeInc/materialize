@@ -1,13 +1,10 @@
 import Mz.PrimEval
 
 /-!
-# Strict propagation (indexed)
+# Strict propagation
 
-Err-propagation and null-propagation classes on the indexed
-primitives. Indexed counterpart of `Mz/Strict.lean`.
-
-Compared with the untyped model, the abstractions specialize to
-the indexed signatures:
+Err-propagation and null-propagation classes on the primitives.
+Abstractions specialize to the indexed signatures:
 
 * Unary classes target `Datum .bool → Datum .bool` (`evalNot`).
 * Binary arithmetic classes target `Datum .int → Datum .int →
@@ -15,10 +12,10 @@ the indexed signatures:
 * Binary comparison classes target `Datum k → Datum k → Datum
   .bool` (`evalEq`, `evalLt`), polymorphic in the operand kind.
 
-The `.int`-fallthrough cases that the untyped model handled via a
+Kind-fallthrough cases that an untyped model would handle via a
 catch-all `.null` route don't exist in the indexed domains, so
-proofs collapse to the three-case case-split (`.bool` for bool
-ops, `.int` for arithmetic, `.null` and `.err _` universally). -/
+proofs collapse to the three-case split (`.bool` for bool ops,
+`.int` for arithmetic, `.null` and `.err _` universally). -/
 
 namespace Mz
 
@@ -141,8 +138,8 @@ theorem evalLt_errPropagating {k : ColType} :
 
 /-! ## Negative results
 
-`AND` and `OR` are not err-strict in either position. Same
-counterexamples as the untyped model, restricted to `Datum .bool`. -/
+`AND` and `OR` are not err-strict in either position; absorption
+allows `.bool false`/`.bool true` to override an err operand. -/
 
 theorem evalAnd_not_errStrict_left :
     ¬ ∀ (d : Datum .bool) (e : EvalError), evalAnd (.err e) d = .err e := by

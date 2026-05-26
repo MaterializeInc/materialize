@@ -1,14 +1,13 @@
 import Mz.PrimEval
 
 /-!
-# Boolean truth tables (indexed)
+# Boolean truth tables
 
 Cell-by-cell proofs that `evalAnd` / `evalOr` / `evalNot` realize
-the truth tables on `Datum .bool`. Indexed counterpart of
-`Mz/Boolean.lean`.
+the truth tables on `Datum .bool`.
 
 All proofs reduce to `rfl`. The codomain of every evaluator is
-already closed to `Datum .bool` by the indexing; no `¬IsInt`
+closed to `Datum .bool` by the GADT indexing; no `¬IsInt`
 hypothesis or catch-all `.null` route to consider. -/
 
 namespace Mz
