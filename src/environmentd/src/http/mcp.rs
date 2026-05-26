@@ -1011,14 +1011,28 @@ async fn read_data_product(
 
     // Lookup query: serves as the existence check (we still error
     // `DataProductNotFound` on an empty result) and at the same time
-    // recovers the catalog cluster for auto-routing. `mz_mcp_data_products`
-    // can hold multiple rows per object_name when a product is indexed on
-    // multiple clusters; `ORDER BY cluster NULLS LAST LIMIT 1` picks one
-    // deterministically. Callers can disambiguate via `cluster_override`.
+    // recovers the catalog cluster for auto-routing along with whether the
+    // calling role has `USAGE` on it. `mz_mcp_data_products` filters by
+    // `SELECT` on the object but not by cluster privileges, so a role may
+    // legitimately see a data product whose home cluster it cannot use;
+    // when that happens we fall back to the session default rather than
+    // emit `SET CLUSTER` followed by a hard `permission denied` failure.
+    //
+    // `mz_mcp_data_products` can hold multiple rows per object_name when a
+    // product is indexed on multiple clusters. The `ORDER BY` picks the
+    // best candidate deterministically: prefer a cluster the role can
+    // actually use, then break ties alphabetically. Callers can override
+    // the choice via `cluster_override`.
     let lookup_query = format!(
-        "SELECT cluster FROM mz_internal.mz_mcp_data_products \
+        "SELECT \
+             cluster, \
+             cluster IS NULL OR has_cluster_privilege(cluster, 'USAGE') \
+                 AS has_cluster_usage \
+         FROM mz_internal.mz_mcp_data_products \
          WHERE object_name = {} \
-         ORDER BY cluster NULLS LAST \
+         ORDER BY \
+             (cluster IS NOT NULL AND has_cluster_usage) DESC, \
+             cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
     );
@@ -1026,13 +1040,34 @@ async fn read_data_product(
     if lookup_rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
-    let catalog_cluster: Option<&str> = lookup_rows
-        .first()
+    let lookup_row = lookup_rows.first();
+    let catalog_cluster: Option<&str> = lookup_row
         .and_then(|row| row.first())
         .and_then(|v| v.as_str());
+    // Treat anything other than an explicit `true` as a missing privilege,
+    // including the unexpected `NULL` case.
+    let has_cluster_usage: bool = lookup_row
+        .and_then(|row| row.get(1))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // Override beats catalog; catalog beats session default.
-    let target_cluster = cluster_override.or(catalog_cluster);
+    // Override beats everything. Otherwise auto-route to the catalog
+    // cluster only when the role has `USAGE` on it; without `USAGE` the
+    // `SET CLUSTER` would succeed but the subsequent `SELECT` would fail
+    // with a `permission denied`, so we leave the read on the session
+    // default — slower (no index) but correct.
+    let target_cluster = cluster_override.or_else(|| {
+        if has_cluster_usage {
+            catalog_cluster
+        } else {
+            debug!(
+                name = %name,
+                cluster = ?catalog_cluster,
+                "skipping auto-route: role lacks USAGE on the data product's cluster",
+            );
+            None
+        }
+    });
 
     // No row cap is applied here: the response is bounded by the size cap
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
@@ -1050,12 +1085,15 @@ async fn read_data_product(
 /// `safe_name` must already be the validated, quoted form produced by
 /// [`safe_data_product_name`]. `target_cluster`, when provided, is escaped
 /// as a SQL string literal and wrapped in `SET CLUSTER` inside a `BEGIN
-/// READ ONLY` transaction so the cluster choice is scoped to this read and
-/// does not leak into the session.
+/// READ ONLY` transaction so the cluster choice is scoped to this read
+/// and does not leak into the session.
 ///
 /// When `target_cluster` is `None` we emit a single bare `SELECT` instead
-/// of opening a transaction, which avoids three extra round trips on the
-/// hot path of session-default reads.
+/// of opening a transaction. This case is reached for restricted roles
+/// that have `SELECT` on the data product but not `USAGE` on its home
+/// cluster: rather than `SET CLUSTER` to a cluster the role cannot use
+/// (which would hard-fail), [`read_data_product`] falls back to the
+/// session default and accepts the suboptimal-but-correct read.
 fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
     match target_cluster {
         Some(cluster) => format!(
