@@ -11,6 +11,7 @@ use std::ops::Range;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
+use mz_expr::{MultiplicityErrorKind, log_multiplicity_error};
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
@@ -247,15 +248,14 @@ where
             });
             let copies: i64 = if copies.is_negative() {
                 let row = &*borrow;
-                tracing::error!(
-                    target = %self.target_id, diff = %copies, ?row,
-                    "index peek encountered negative multiplicities in ok trace",
-                );
-                return Err(format!(
-                    "Invalid data in source, \
-                             saw retractions ({}) for row that does not exist: {:?}",
-                    -copies, row,
-                ));
+                let err = mz_expr::MultiplicityError {
+                    kind: MultiplicityErrorKind::Negative,
+                    code_place: "index peek".into(),
+                    detail: format!("target={}, diff={}, row={:?}", self.target_id, copies, row,)
+                        .into(),
+                };
+                log_multiplicity_error(&err);
+                return Err(err.to_string());
             } else {
                 copies.into_inner()
             };

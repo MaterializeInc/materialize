@@ -521,7 +521,7 @@ query I
 SELECT 5 FROM repeat_row_non_negative(null);
 ----
 
-statement error  Negative multiplicity in constant result: -1
+statement error  negative record multiplicity in constant result
 SELECT * FROM (values ('a')), repeat_row(-1)
 
 statement error constant folding encountered reduce on collection with non-positive multiplicities

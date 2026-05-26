@@ -27,6 +27,7 @@
 use columnar::Columnar;
 use columnation::{Columnation, Region};
 use mz_expr::EvalError;
+use mz_expr::{MULTIPLICITY_ERROR_TITLE, MultiplicityError};
 use mz_proto::{ProtoType, RustType};
 use mz_repr::Row;
 use mz_storage_types::errors::{DataflowError, ProtoDataflowError};
@@ -213,6 +214,7 @@ impl ErrorLogger {
     /// the breadcrumbs to their associated error in Sentry.
     ///
     // TODO(database-issues#5362): Rethink or justify our error logging strategy.
+    #[allow(dead_code)] // kept for future non-multiplicity uses
     pub fn log(&self, message: &'static str, details: &str) {
         tracing::warn!(
             dataflow = self.dataflow_name,
@@ -230,6 +232,30 @@ impl ErrorLogger {
             "[customer-data] {message} ({details})"
         );
         mz_ore::soft_panic_or_log!("{}", message);
+    }
+
+    /// Log a [`MultiplicityError`] using the standard "static title + [customer-data]
+    /// tagged details" contract, attaching the dataflow name of this [`ErrorLogger`]
+    /// as a structured field.
+    ///
+    /// Use this from call sites that have an [`ErrorLogger`] in scope (dataflow
+    /// rendering code in reduce/top-k); other call sites should use the free
+    /// [`mz_expr::log_multiplicity_error`] function instead.
+    ///
+    /// `kind` and `code_place` are emitted as structured tracing fields.
+    /// `detail` is emitted in the `[customer-data]`-tagged message body.
+    pub fn log_multiplicity_error(&self, err: &MultiplicityError) {
+        tracing::warn!(
+            dataflow = self.dataflow_name,
+            kind = ?err.kind,
+            code_place = %err.code_place,
+            "[customer-data] {}: {}",
+            MULTIPLICITY_ERROR_TITLE,
+            err.detail,
+        );
+        // Note: simply `tracing::error!(MULTIPLICITY_ERROR_TITLE);` wouldn't work well, because it
+        // would surprisingly print as `MULTIPLICITY_ERROR_TITLE="invalid record multiplicity"`.
+        tracing::error!("{}", MULTIPLICITY_ERROR_TITLE);
     }
 }
 

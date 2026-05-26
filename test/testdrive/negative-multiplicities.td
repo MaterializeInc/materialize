@@ -23,7 +23,7 @@ ALTER SYSTEM SET enable_repeat_row  = true
 -1
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64
+contains:negative record multiplicity in index peek
 
 > INSERT INTO base VALUES (1, 1, -1)
 
@@ -31,7 +31,7 @@ contains:Invalid data in source, saw retractions (1) for row that does not exist
 -2
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64
+contains:negative record multiplicity in index peek
 
 # regression scenario per database-issues#5246, with non-monotonic rendering
 > CREATE VIEW topk AS
@@ -44,19 +44,19 @@ contains:Invalid data in source, saw retractions (2) for row that does not exist
 > CREATE DEFAULT INDEX ON topk;
 
 ! SELECT * from topk;
-contains:Negative multiplicities in TopK
+contains:negative record multiplicity in TopK
 
 # regression scenario per database-issues#5224
 ! SELECT DISTINCT data FROM data;
-contains:Non-positive multiplicity in DistinctBy
+contains:non-positive record multiplicity in DistinctBy
 
 # regression scenario per database-issues#5359
 ! SELECT list_agg(DISTINCT data)[1] FROM data;
-contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
+contains:non-positive record multiplicity in ReduceInaccumulable DISTINCT
 
 # regression scenario per database-issues#5360
 ! SELECT list_agg(data)[1] FROM data;
-contains:Non-positive accumulation in ReduceInaccumulable
+contains:non-positive record multiplicity in ReduceInaccumulable
 
 # regression scenario per database-issues#5086, with non-monotonic rendering
 > CREATE VIEW max_data AS
@@ -65,7 +65,7 @@ contains:Non-positive accumulation in ReduceInaccumulable
 > CREATE DEFAULT INDEX ON max_data;
 
 ! SELECT * FROM max_data;
-contains:Invalid data in source, saw non-positive accumulation
+contains:non-positive record multiplicity in hierarchical mins-maxes aggregate
 
 # verify that some reduction in a collation plan catches a negative
 # multiplicity.
@@ -84,8 +84,7 @@ contains:Invalid data in source, saw non-positive accumulation
 > CREATE DEFAULT INDEX ON collation;
 
 ! SELECT * FROM collation;
-# Case-insensitive match for both 'Non' and 'non'
-contains:on-positive accumulation
+contains:non-positive record multiplicity
 
 # Window aggregations
 # These are currently commented out, because window functions currently don't check their inputs for negative
