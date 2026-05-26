@@ -176,7 +176,7 @@ pub(crate) fn attempt_left_join_magic(
         // then we can fish out values from that input. If it equates values
         // across multiple inputs, we would need to fish out valid tuples and
         // no idea how we would get those w/o doing a join or a cartesian product.
-        let equations = if let Some(list) = decompose_equations(&on, oa + ba) {
+        let equations = if let Some(list) = decompose_left_to_right_equations(&on, oa + ba) {
             list
         } else {
             tracing::debug!(case = 4, index, "attempt_left_join_magic");
@@ -395,8 +395,8 @@ use mz_expr::func::variadic::{And, Or};
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.
-/// Excludes equations where both columns are `>= lhs_cutoff`.
-fn decompose_equations(
+/// In order to only find _useful_ equations, one column must be `< lhs_cutoff` and one must be `>= lhs_cutoff`.
+fn decompose_left_to_right_equations(
     predicate: &MirScalarExpr,
     lhs_cutoff: usize,
 ) -> Option<Vec<(usize, usize)>> {
@@ -419,9 +419,9 @@ fn decompose_equations(
                 if let (MirScalarExpr::Column(c1, _name1), MirScalarExpr::Column(c2, _name2)) =
                     (&**expr1, &**expr2)
                 {
-                    if c1 < c2 && *c1 < lhs_cutoff {
+                    if c1 < c2 && *c1 < lhs_cutoff && lhs_cutoff <= *c2 {
                         equations.push((*c1, *c2));
-                    } else if *c2 < lhs_cutoff {
+                    } else if *c2 < lhs_cutoff && lhs_cutoff <= *c1 {
                         equations.push((*c2, *c1));
                     }
                 } else {
