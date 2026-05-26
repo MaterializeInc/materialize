@@ -88,8 +88,13 @@ top.
   `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators,
   `filter_cross_pushdown_left_unsound` counterexample.
 
-**Still open**: `cross_assoc` (arity cast plumbing — Schema HEq
-under `Nat.add_assoc` + Vector append assoc);
+**Arity-cast scaffolding** (Mz.Schema): `Vector.cast_val`,
+`Vector.cast_eq_append_assoc`, `Schema.cast_mk`, and the
+composable `Schema.append_assoc_heq`. Ready to consume by
+`Collection.cross_assoc`.
+
+**Still open**: `Collection.cross_assoc` (lift Schema HEq to
+Collection HEq + bilinear err-rule associativity);
 `filter_cross_pushdown_left_*` recovery windows (strict via
 `NoRowErr`, data via `eraseRowErr`, refinement via `SignOK`) —
 blocked on iota reduction of `filterOne`'s match auxiliary, see
