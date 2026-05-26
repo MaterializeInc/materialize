@@ -505,78 +505,118 @@ theorem Expr.exists_safe_of_not_argsAllMightError
 
 /-! ## Coalesce safety
 
-Once `Coalesce.go` is invoked with `seenNull = true`, the result is
-never an error: the empty-list base returns `.null`, and every cons
-case either short-circuits to a `.bool b`, recurses with
-`seenNull = true` unchanged, or updates `firstErr` without ever
-flipping `seenNull` back to `false`.
+`evalCoalesce` is the two-pass form: `Coalesce.firstConcrete` finds
+the leftmost `.bool _` or `.int _` operand; `Coalesce.residue` is
+the fallback when no concrete exists. The safety claim — *an
+`evalCoalesce` call cannot return an error when at least one
+operand is not an error* — splits along the dispatch:
 
-The combined lemma `Coalesce.go_not_err` strengthens that
-observation: if the starting state has either `seenNull = true` or
-at least one not-err element in the remaining list, the result is
-not an error. -/
+* `firstConcrete` returns a `.bool _` / `.int _`, which is never
+  err.
+* When `firstConcrete = none`, every operand is `.null` or `.err _`.
+  The safe witness must then be `.null`, and `residue` returns
+  `.null` whenever any operand is `.null` (the `.null > .err`
+  tiebreaker). -/
 
-theorem Coalesce.go_not_err :
-    ∀ (seenNull : Bool) (firstErr : Option EvalError) (ds : List Datum),
-      seenNull = true ∨ (∃ d ∈ ds, ¬d.IsErr) →
-      ¬(Coalesce.go seenNull firstErr ds).IsErr
-  | true,  _,  [],          _ => by
-    intro hRes
-    -- Coalesce.go true _ [] = .null
-    show False
-    simp only [Coalesce.go, if_true] at hRes
-    cases hRes
-  | false, _,  [],          h => by
-    -- Empty + seenNull=false: only the disjunct ∃ d ∈ [] survives, which is False.
-    cases h with
-    | inl h_true => cases h_true
-    | inr h_ex =>
-      obtain ⟨_, hmem, _⟩ := h_ex
-      cases hmem
-  | _,     _,  .bool b :: _,  _ => by
-    intro hRes
-    -- Coalesce.go _ _ (.bool b :: _) = .bool b
-    show False
-    simp only [Coalesce.go] at hRes
-    cases hRes
-  | _,     _,  .int n :: _,  _ => by
-    intro hRes
-    -- Coalesce.go _ _ (.int n :: _) = .int n
-    show False
-    simp only [Coalesce.go] at hRes
-    cases hRes
-  | _,     firstErr, .null :: rest, _ => by
-    -- Recurse with seenNull=true.
-    show ¬(Coalesce.go true firstErr rest).IsErr
-    exact Coalesce.go_not_err true firstErr rest (Or.inl rfl)
-  | seenNull, firstErr, .err e :: rest, h => by
-    -- Push the witness from (.err e :: rest) into rest, since .err e cannot be the witness.
-    have h_rest : seenNull = true ∨ ∃ d ∈ rest, ¬d.IsErr := by
-      cases h with
-      | inl h_true => exact Or.inl h_true
-      | inr h_ex =>
-        obtain ⟨d, hmem, hsafe⟩ := h_ex
-        cases hmem with
-        | head _      => exact (hsafe trivial).elim
-        | tail _ h_tl => exact Or.inr ⟨d, h_tl, hsafe⟩
-    -- Two cases on firstErr; the recursion shape is the same modulo argument.
-    cases firstErr with
-    | some firstErr' =>
-      show ¬(Coalesce.go seenNull (some firstErr') rest).IsErr
-      exact Coalesce.go_not_err seenNull (some firstErr') rest h_rest
-    | none =>
-      show ¬(Coalesce.go seenNull (some e) rest).IsErr
-      exact Coalesce.go_not_err seenNull (some e) rest h_rest
+/-- A `firstConcrete` hit is a concrete operand, which is not err. -/
+theorem Coalesce.firstConcrete_not_err :
+    ∀ (ds : List Datum) (d : Datum),
+      Coalesce.firstConcrete ds = some d → ¬d.IsErr
+  | [], _, h => by cases h
+  | .bool _ :: _, _, h => by
+    simp only [Coalesce.firstConcrete, Option.some.injEq] at h
+    subst h; intro hErr; cases hErr
+  | .int _ :: _, _, h => by
+    simp only [Coalesce.firstConcrete, Option.some.injEq] at h
+    subst h; intro hErr; cases hErr
+  | .null :: rest, d, h => by
+    simp only [Coalesce.firstConcrete] at h
+    exact Coalesce.firstConcrete_not_err rest d h
+  | .err _ :: rest, d, h => by
+    simp only [Coalesce.firstConcrete] at h
+    exact Coalesce.firstConcrete_not_err rest d h
+
+/-- When `firstConcrete = none`, every operand is `.null` or `.err _`. -/
+theorem Coalesce.firstConcrete_none_no_concrete :
+    ∀ (ds : List Datum),
+      Coalesce.firstConcrete ds = none →
+      ∀ d ∈ ds, d.isNullB = true ∨ d.IsErr
+  | [], _, d, hmem => by cases hmem
+  | .bool _ :: _, h, _, _ => by
+    -- firstConcrete (.bool b :: _) = some (.bool b), contradicts h.
+    simp only [Coalesce.firstConcrete] at h
+    cases h
+  | .int _ :: _, h, _, _ => by
+    simp only [Coalesce.firstConcrete] at h
+    cases h
+  | .null :: rest, h, d, hmem => by
+    simp only [Coalesce.firstConcrete] at h
+    cases hmem with
+    | head _ => exact Or.inl rfl
+    | tail _ htl => exact Coalesce.firstConcrete_none_no_concrete rest h d htl
+  | .err _ :: rest, h, d, hmem => by
+    simp only [Coalesce.firstConcrete] at h
+    cases hmem with
+    | head _ => exact Or.inr True.intro
+    | tail _ htl => exact Coalesce.firstConcrete_none_no_concrete rest h d htl
+
+/-- When a `.null` is present, `residue` returns `.null` (never err). -/
+theorem Coalesce.residue_eq_null_of_null_mem :
+    ∀ (ds : List Datum),
+      (∃ d ∈ ds, d.isNullB = true) → Coalesce.residue ds = .null
+  | [], h => by obtain ⟨_, hmem, _⟩ := h; cases hmem
+  | .null :: _, _ => rfl
+  | .bool _ :: rest, h => by
+    simp only [Coalesce.residue]
+    apply Coalesce.residue_eq_null_of_null_mem rest
+    obtain ⟨d, hmem, hd⟩ := h
+    cases hmem with
+    | head _ => cases hd
+    | tail _ htl => exact ⟨d, htl, hd⟩
+  | .int _ :: rest, h => by
+    simp only [Coalesce.residue]
+    apply Coalesce.residue_eq_null_of_null_mem rest
+    obtain ⟨d, hmem, hd⟩ := h
+    cases hmem with
+    | head _ => cases hd
+    | tail _ htl => exact ⟨d, htl, hd⟩
+  | .err e :: rest, h => by
+    simp only [Coalesce.residue]
+    have h_any : rest.any Datum.isNullB = true := by
+      -- `.err e` is not null, so the null witness must be in `rest`.
+      obtain ⟨d, hmem, hd⟩ := h
+      cases hmem with
+      | head _ => cases hd
+      | tail _ htl =>
+        rw [List.any_eq_true]
+        exact ⟨d, htl, hd⟩
+    rw [if_pos h_any]
 
 /-- The headline lemma: an `evalCoalesce` call cannot return an
 error when at least one operand evaluates to something that is not
-an error. The `null`-beats-`err` tiebreak inside `Coalesce.go` does
-the work. -/
+an error. The dispatch on `firstConcrete` splits cleanly: a hit is
+already concrete (not err); a miss means every operand is `.null`
+or `.err`, the safe witness is therefore `.null`, and `residue`
+returns `.null`. -/
 theorem evalCoalesce_not_err_of_some_safe
     {ds : List Datum} (h : ∃ d ∈ ds, ¬d.IsErr) :
     ¬(evalCoalesce ds).IsErr := by
-  show ¬(Coalesce.go false none ds).IsErr
-  exact Coalesce.go_not_err false none ds (Or.inr h)
+  show ¬(match Coalesce.firstConcrete ds with
+         | some d => d
+         | none => Coalesce.residue ds).IsErr
+  cases hfc : Coalesce.firstConcrete ds with
+  | some d =>
+    exact Coalesce.firstConcrete_not_err ds d hfc
+  | none =>
+    have h_all := Coalesce.firstConcrete_none_no_concrete ds hfc
+    obtain ⟨d, hd_mem, hd_safe⟩ := h
+    have hd_cases := h_all d hd_mem
+    have h_null_in : ∃ d ∈ ds, d.isNullB = true := by
+      cases hd_cases with
+      | inl hd_null => exact ⟨d, hd_mem, hd_null⟩
+      | inr hd_err => exact absurd hd_err hd_safe
+    rw [Coalesce.residue_eq_null_of_null_mem ds h_null_in]
+    intro hErr; cases hErr
 
 /-! ## Error-free environments -/
 
@@ -783,7 +823,7 @@ theorem might_error_sound :
     -- Empty list: `evalCoalesce [] = .null`, immediately not an error.
     match args, hMe, hRes with
     | [], _, hRes' =>
-      simp [evalCoalesce, Coalesce.go] at hRes'
+      simp [evalCoalesce, Coalesce.firstConcrete, Coalesce.residue] at hRes'
       cases hRes'
     | a :: rest, hMe', hRes' =>
       -- Non-empty case. `might_error (.coalesce (a :: rest))` reduces to

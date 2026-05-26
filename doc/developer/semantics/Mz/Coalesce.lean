@@ -84,7 +84,8 @@ theorem coalesce_first_err_wins (e₁ e₂ : EvalError) :
 These nail down the interaction between several `err`s, a `null`,
 and a concrete value. They are intentionally stated as concrete
 equations rather than universal laws so that a regression in
-`Coalesce.go` breaks the offending equation in isolation. -/
+`Coalesce.firstConcrete` / `Coalesce.residue` breaks the offending
+equation in isolation. -/
 
 theorem coalesce_err_err_bool (e₁ e₂ : EvalError) (b : Bool) :
     evalCoalesce [.err e₁, .err e₂, .bool b] = .bool b := rfl

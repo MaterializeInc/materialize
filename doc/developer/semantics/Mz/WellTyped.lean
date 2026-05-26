@@ -108,6 +108,33 @@ def Expr.outputKind {n : Nat} (sch : Schema n) : Expr → ColKind
   | .orN _    => .bool
   | .coalesce _ => .top
 
+/-! ## Bundled output schema
+
+`Expr.outputType` and `Expr.outputKind` are parallel structural
+recursions over `Expr`. Optimizers wanting full output information
+(both `nullable / errable` bits and kind) call both. The bundled
+record below collapses them into a single API call. -/
+
+/-- Bundled per-`Expr` output schema: column-bit metadata
+(`nullable / errable`) plus kind. -/
+structure FullColSchema where
+  col : ColSchema
+  kind : ColKind
+  deriving Inhabited
+
+/-- Compute the bundled output schema for an expression in one
+call. The components agree with `Expr.outputType` and
+`Expr.outputKind`; this is just a packaging convenience. -/
+def Expr.outputSchema {n : Nat} (sch : Schema n) (e : Expr) : FullColSchema :=
+  { col := Expr.outputType sch e
+    kind := Expr.outputKind sch e }
+
+@[simp] theorem Expr.outputSchema_col {n : Nat} (sch : Schema n) (e : Expr) :
+    (Expr.outputSchema sch e).col = Expr.outputType sch e := rfl
+
+@[simp] theorem Expr.outputSchema_kind {n : Nat} (sch : Schema n) (e : Expr) :
+    (Expr.outputSchema sch e).kind = Expr.outputKind sch e := rfl
+
 /-! ## `WellTyped` predicate
 
 Structural recursion on `Expr`. Each operator checks that its
@@ -186,6 +213,35 @@ compatible with any expected.) -/
 def RowSatisfiesKind {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
   ∀ i : Fin n,
     ColKind.compatible (row.get i).kind (sch.kinds.get i) = true
+
+/-! ## Bundled satisfaction predicate
+
+Precision-direction lemmas (`eval_not_satisfies_precise` and its
+successors for arithmetic / comparison) need *both* per-column
+satisfaction predicates — the `nullable / errable` claim of
+`RowSatisfies` and the `kind` claim of `RowSatisfiesKind`. Each
+new lemma would otherwise thread two hypotheses; bundling them
+once collapses the API. -/
+
+/-- A row satisfies the full schema iff it satisfies both the
+column-bit schema (`RowSatisfies`) and the kind schema
+(`RowSatisfiesKind`). Use this as the input hypothesis for any
+precision-direction lemma over `Expr.outputType`. -/
+def RowSatisfiesFull {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
+  RowSatisfies sch row ∧ RowSatisfiesKind sch row
+
+/-- Project to the column-bit half. -/
+theorem RowSatisfiesFull.toSat {n : Nat} {sch : Schema n} {row : RowN n}
+    (h : RowSatisfiesFull sch row) : RowSatisfies sch row := h.1
+
+/-- Project to the kind half. -/
+theorem RowSatisfiesFull.toKind {n : Nat} {sch : Schema n} {row : RowN n}
+    (h : RowSatisfiesFull sch row) : RowSatisfiesKind sch row := h.2
+
+/-- Constructor. -/
+theorem RowSatisfiesFull.mk {n : Nat} {sch : Schema n} {row : RowN n}
+    (hsat : RowSatisfies sch row) (hrk : RowSatisfiesKind sch row) :
+    RowSatisfiesFull sch row := ⟨hsat, hrk⟩
 
 /-! ## Primitive codomain lemmas
 
@@ -387,6 +443,28 @@ theorem Expr.kind_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
     simp only [eval, Expr.outputKind]
     exact kind_evalLt _ _
 
+/-! ## Bundled soundness
+
+`eval_satisfies_outputSchema` packages the column-bit half
+(`eval_satisfies_outputType`) and the kind half (`Expr.kind_of_eval`)
+into one statement. Callers that need both pieces — and especially
+precision-direction lemmas downstream — should consume this bundle
+to avoid threading two hypotheses and two soundness invocations. -/
+
+/-- A `Datum` satisfies a `FullColSchema` iff it satisfies the
+column bits (`DatumSatisfies` on the `nullable / errable` half)
+and the kind side (`ColKind.compatible` on the kind half). -/
+def DatumSatisfiesFull (fcs : FullColSchema) (d : Datum) : Prop :=
+  DatumSatisfies fcs.col d ∧ ColKind.compatible d.kind fcs.kind = true
+
+/-- Bundled soundness: evaluating `e` on a row satisfying the full
+schema produces a `Datum` satisfying `Expr.outputSchema sch e`. -/
+theorem eval_satisfies_outputSchema {n : Nat} (sch : Schema n) (row : RowN n)
+    (hfull : RowSatisfiesFull sch row) (e : Expr) :
+    DatumSatisfiesFull (Expr.outputSchema sch e) (eval row.toList e) :=
+  ⟨eval_satisfies_outputType sch row hfull.toSat e,
+   Expr.kind_of_eval sch row hfull.toKind e⟩
+
 /-! ## Precision direction on `Expr.outputType`
 
 The conservative `outputType (.not a) = { nullable := true,
@@ -411,12 +489,16 @@ its own per-case proof; `.not` is the demonstration. -/
 
 /-- Precise: under well-typing forcing `outputKind a = .bool`,
 `.not a` satisfies the precise schema `outputType a`, not the
-weakened `outputType (.not a)`. -/
+weakened `outputType (.not a)`. Consumes the bundled
+`RowSatisfiesFull` so callers don't need to thread `RowSatisfies`
+and `RowSatisfiesKind` separately. -/
 theorem eval_not_satisfies_precise
     {n : Nat} (sch : Schema n) (row : RowN n)
-    (hsat : RowSatisfies sch row) (hrk : RowSatisfiesKind sch row)
+    (hfull : RowSatisfiesFull sch row)
     (a : Expr) (hkind : Expr.outputKind sch a = .bool) :
     DatumSatisfies (Expr.outputType sch a) (eval row.toList (.not a)) := by
+  have hsat := hfull.toSat
+  have hrk := hfull.toKind
   have ihsat := eval_satisfies_outputType sch row hsat a
   have ihkind := Expr.kind_of_eval sch row hrk a
   rw [hkind] at ihkind

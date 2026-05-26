@@ -258,32 +258,53 @@ def evalOrN : List Datum → Datum
   | []        => .bool false
   | d :: rest => evalOr d (evalOrN rest)
 
-/-! ### Coalesce state machine
+/-! ### Coalesce: two-pass evaluator
 
-`Coalesce.go` carries the `seenNull` sticky bit and the earliest
-`err` payload while walking operands. The first concrete value
-(`.bool _`) short-circuits the walk. -/
+`evalCoalesce` is split into two independent helpers:
 
-def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
-    List Datum → Datum
-  | []              =>
-    if seenNull then .null
-    else
-      match firstErr with
-      | some e => .err e
-      | none   => .null
-  | .bool b :: _    => .bool b
-  | .int n  :: _    => .int n
-  | .null   :: rest => Coalesce.go true firstErr rest
-  | .err e  :: rest =>
-    match firstErr with
-    | some _ => Coalesce.go seenNull firstErr rest
-    | none   => Coalesce.go seenNull (some e) rest
+* `Coalesce.firstConcrete` finds the leftmost `.bool _` or
+  `.int _` in the operand list. This pass realizes the SQL spec
+  "first non-null, non-error operand".
+* `Coalesce.residue` produces the no-concrete fallback: `.null` if
+  any operand was `.null`, else the leftmost `.err _` if any, else
+  `.null` for the empty list.
+
+`evalCoalesce` dispatches between them. Splitting into two passes
+keeps each pass's invariant local — first pass is a simple
+left-to-right search; second pass is a fold with the `.null >
+.err > nothing` precedence — and is a more direct transcription
+of the design doc's *Non-strict functions* clause than the prior
+state-machine encoding. -/
+
+/-- Predicate Bool for `.null`. -/
+def Datum.isNullB : Datum → Bool
+  | .null => true
+  | _ => false
+
+/-- Pass 1: the leftmost concrete (`.bool _` or `.int _`) operand,
+if any. Returns `none` when every operand is `.null` or `.err _`. -/
+def Coalesce.firstConcrete : List Datum → Option Datum
+  | []           => none
+  | .bool b :: _ => some (.bool b)
+  | .int n :: _  => some (.int n)
+  | _ :: rest    => Coalesce.firstConcrete rest
+
+/-- Pass 2: residue when no concrete operand exists. `.null` wins
+over any subsequent `.err _`; the leftmost `.err _` wins over
+subsequent `.err _`s; the empty list yields `.null`. -/
+def Coalesce.residue : List Datum → Datum
+  | []              => .null
+  | .null :: _      => .null
+  | .err e :: rest  =>
+    if rest.any Datum.isNullB then .null else .err e
+  | _ :: rest       => Coalesce.residue rest
 
 /-- `coalesce` returns the first concrete operand, with a
 `null`-beats-`err` tiebreak when none exists. See `Mz/Coalesce.lean`
 for the laws. -/
-def evalCoalesce : List Datum → Datum :=
-  Coalesce.go false none
+def evalCoalesce (ds : List Datum) : Datum :=
+  match Coalesce.firstConcrete ds with
+  | some d => d
+  | none   => Coalesce.residue ds
 
 end Mz
