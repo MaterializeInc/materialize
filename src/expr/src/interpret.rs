@@ -56,17 +56,24 @@ impl<'a> Values<'a> {
             (Values::Within(a0, a1), Values::Within(b0, b1)) => {
                 Values::Within(a0.min(b0), a1.max(b1))
             }
-            (Values::Nested(mut a), Values::Nested(mut b)) => {
-                a.retain(|datum, values| {
-                    if let Some(other_values) = b.remove(datum) {
-                        *values = values.clone().union(other_values);
+            (Values::Nested(a), Values::Nested(mut b)) => {
+                // `Nested(map)` treats keys missing from `map` as fully unconstrained, so a
+                // key present in only one side of the union must be treated as `anything`
+                // on the other side. Because `x ∪ anything = anything`, such keys drop
+                // out of the merged map (the Nested default is already "anything").
+                let mut merged = BTreeMap::new();
+                for (key, a_spec) in a {
+                    if let Some(b_spec) = b.remove(&key) {
+                        let unioned = a_spec.union(b_spec);
+                        if unioned != ResultSpec::anything() {
+                            merged.insert(key, unioned);
+                        }
                     }
-                    *values != ResultSpec::anything()
-                });
-                if a.is_empty() {
+                }
+                if merged.is_empty() {
                     Values::All
                 } else {
-                    Values::Nested(a)
+                    Values::Nested(merged)
                 }
             }
             _ => Values::All,
@@ -1609,6 +1616,125 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(0.into())));
         assert!(range_out.may_contain(Datum::Numeric(200.into())));
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
+    }
+
+    #[mz_ore::test]
+    fn test_nested_union_partial_overlap() {
+        // `Nested(map)` constrains a key only when the key is present in `map`; absent
+        // keys mean "anything". So the union of two Nested specs must drop any key
+        // that's missing from one side, because `x ∪ anything = anything`. Only keys
+        // present in *both* sides survive (with their per-key specs unioned).
+        let a = ResultSpec::map_spec(
+            [
+                ("x".into(), ResultSpec::value(Datum::String("a"))),
+                ("y".into(), ResultSpec::value(Datum::String("b"))),
+                ("c".into(), ResultSpec::value(Datum::String("c"))),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let b = ResultSpec::map_spec(
+            [
+                ("x".into(), ResultSpec::value(Datum::String("a2"))),
+                ("y".into(), ResultSpec::value(Datum::String("b2"))),
+                ("z".into(), ResultSpec::value(Datum::String("z"))),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let unioned = a.union(b);
+
+        // Push the unioned spec through `->> <key>`: keys only in one side must
+        // admit NULL (the other side is unconstrained, so the field could be absent
+        // there); shared keys must include both observed values.
+        let arena = RowArena::new();
+        let relation = ReprRelationType::new(vec![ReprScalarType::Jsonb.nullable(false)]);
+
+        // Key only in `a`: the union must admit NULL.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned.clone());
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("c"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            assert!(interpreter.expr(&expr).range.may_contain(Datum::Null));
+        }
+
+        // Key only in `b`: symmetric.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned.clone());
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("z"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            assert!(interpreter.expr(&expr).range.may_contain(Datum::Null));
+        }
+
+        // Key in both: result must include both observed values.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned);
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("x"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            let x_range = interpreter.expr(&expr).range;
+            assert!(x_range.may_contain(Datum::String("a")));
+            assert!(x_range.may_contain(Datum::String("a2")));
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported foreign call in numeric decoding
+    fn test_case_over_jsonb_columns() {
+        // Regression test for PER-6: when CASE picks between two JSON columns whose
+        // observed keys are disjoint, filter pushdown must not prune parts where
+        // accessing a key only present in one branch might yield NULL in the other.
+        let arena = RowArena::new();
+
+        // `(CASE WHEN col0 THEN col1 ELSE col2 END) ->> 'y' IS NULL`
+        let expr = MirScalarExpr::If {
+            cond: Box::new(MirScalarExpr::column(0)),
+            then: Box::new(MirScalarExpr::column(1)),
+            els: Box::new(MirScalarExpr::column(2)),
+        }
+        .call_binary(
+            MirScalarExpr::literal_ok(Datum::from("y"), ReprScalarType::String),
+            JsonbGetStringStringify,
+        )
+        .call_unary(UnaryFunc::IsNull(IsNull));
+
+        let relation = ReprRelationType::new(vec![
+            ReprScalarType::Bool.nullable(false),
+            ReprScalarType::Jsonb.nullable(false),
+            ReprScalarType::Jsonb.nullable(false),
+        ]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value_between(Datum::False, Datum::True));
+        interpreter.push_column(
+            1,
+            ResultSpec::map_spec(
+                [("x".into(), ResultSpec::value(Datum::String("a")))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        interpreter.push_column(
+            2,
+            ResultSpec::map_spec(
+                [("y".into(), ResultSpec::value(Datum::String("b")))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // When the CASE selects column 1, "y" is absent and `->> 'y'` yields NULL, so
+        // `IS NULL` is True. The filter must not prune a part that could match.
+        assert!(range_out.may_contain(Datum::True));
     }
 
     #[mz_ore::test]
