@@ -8,6 +8,14 @@ It complements the design doc at
 discursive; this file is a layered catalog plus honest notes on what
 each variant buys and what it costs.
 
+**Caveat on design-doc-derived claims.**
+The design doc is itself a work in progress.
+Where this file says "the skeleton does X because the design doc
+says Y", treat that as a current modeling choice, not a settled
+specification — Y itself may change.
+Such claims are flagged inline with "design-doc-derived" so they
+can be re-examined when the design doc evolves.
+
 The model has five layers — `Datum`, `Expression`, `Row`, `Schema`,
 `Collection` — and a separate dimension of error semantics that cuts
 across all of them.
@@ -502,7 +510,7 @@ Current skeleton stays with the unified `.err _` carrier; revisit
 when a downstream forcing function (user-visible `is_panic`,
 sink-time escalation policy) lands.
 
-### Divergence from PostgreSQL: `coalesce` rescues errors
+### Divergence from PostgreSQL: `coalesce` rescues errors (design-doc-derived; not settled)
 
 PG's `coalesce(NULL, 1/0)` evaluates `1/0` (no non-null seen yet)
 and raises an error.
@@ -511,15 +519,19 @@ the "null beats err" tiebreaker promotes `.null` over `.err` when
 no concrete value is reached.
 The all-null case matches PG; the mixed-null-and-err case does not.
 
-This is a deliberate proposal recorded in the design doc's *SQL
-error semantics → Non-strict functions* section: it generalizes
-PG `coalesce` so that an err can be rescued the same way a `null`
-can.
-The consequence — Materialize silently rescues errors PG would
-surface — is the single largest behavioral departure in this
-catalog, and depends on the design doc's rule that errors are
-stronger than `null` for *strict* functions but weaker for
-`coalesce`'s rescue role.
+This follows a proposal in the design doc's *SQL error semantics →
+Non-strict functions* section that generalizes PG `coalesce` so an
+err can be rescued the same way a `null` can.
+The proposal is **not settled** — it is the single largest
+behavioral departure from PG in this catalog, and is worth
+re-litigating.
+Plausible alternatives include matching PG exactly (rescue null,
+surface err), surfacing the err only when no later concrete operand
+exists (still diverges from PG, but less than the current model),
+or splitting the routing by error category once the
+implementation-bug-vs-runtime split lands.
+The skeleton's current behavior reflects the design doc as written;
+it is a candidate, not a commitment.
 
 ### Cell-to-row escalation policy
 
