@@ -3731,3 +3731,241 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
 
     print("OIDC end-to-end auth test passed.")
+
+
+def workflow_clusterd_generation_scheduling(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for CLO-77.
+
+    Clusterd pod scheduling constraints (anti-affinity, topology spread) must
+    only consider pods of the same deploy generation. Otherwise, during a
+    generation rollout, the still-running old-generation pod can block the
+    new-generation pod from scheduling — e.g. when topology spread + a
+    single eligible AZ count the old-gen pod toward `maxSkew`, leaving the
+    new-gen pod Pending and the rollout stuck.
+
+    The kind nodes in `cluster.yaml.tmpl` happen to make this easy to
+    reproduce: only one of the two worker nodes carries
+    `materialize.cloud/swap=true`, so all clusterd pods land in that node's
+    AZ. With topology spread enabled and `maxSkew=1`, the new-generation
+    pod can only schedule there if the spread selector filters to its own
+    generation.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, expect_fail=False)
+
+    gen_label = "cluster.environmentd.materialize.cloud/generation"
+    cluster_id_label = "cluster.environmentd.materialize.cloud/cluster-id"
+
+    # Enable topology spread (off by default on self-hosted via
+    # `cluster_enable_topology_spread=false`). The internal SQL listener
+    # at 6877 has no authenticator, so a plain mz_system connection works.
+    with port_forward_environmentd(6877) as port:
+        with (
+            psycopg.connect(
+                f"host=localhost port={port} user=mz_system sslmode=disable",
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("ALTER SYSTEM SET cluster_enable_topology_spread = true")
+
+    def list_clusterd_statefulsets() -> list[dict[str, Any]]:
+        # `kubectl get -l` matches against statefulset metadata labels, but
+        # clusterd statefulsets only carry labels on the pod template (not
+        # on the statefulset itself), so filter client-side.
+        data = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        return [
+            ss
+            for ss in data["items"]
+            if ss["spec"]["template"]["metadata"]
+            .get("labels", {})
+            .get("environmentd.materialize.cloud/namespace")
+            == "cluster"
+        ]
+
+    # The ALTER SYSTEM above only takes effect for replicas created after
+    # the change, so cycle clusterd to pick up topology spread by forcing
+    # a new generation. `requestRollout` alone is a no-op when nothing
+    # else in the spec changed; `forceRollout` set to the same value
+    # makes orchestratord treat the resources as changed and bump the
+    # generation anyway.
+    initial_request = definition["materialize"]["spec"].get("requestRollout")
+    new_request = str(uuid.uuid4())
+    assert new_request != initial_request
+
+    # Park the rollout at `ReadyToPromote` so both the old- and new-
+    # generation clusterd pods are alive simultaneously while we inspect
+    # them. Without the CLO-77 fix, the new-gen clusterd would never
+    # become ready (pod Pending) and `ReadyToPromote` would never fire.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["requestRollout"] = new_request
+    definition["materialize"]["spec"]["forceRollout"] = new_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "statefulsets,pods",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "wide",
+            ]
+        )
+        raise RuntimeError(
+            "rollout never reached ReadyToPromote — likely a clusterd "
+            "statefulset for the new generation has a pod stuck Pending "
+            "(check that scheduling constraints filter to the same "
+            "generation; see CLO-77)"
+        )
+
+    # Both generations should be live now. Group statefulsets by replica
+    # so we can verify every replica brought up its new generation while
+    # the old one was still running.
+    statefulsets = list_clusterd_statefulsets()
+    assert statefulsets, "no clusterd statefulsets found"
+    by_replica: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for ss in statefulsets:
+        labels = ss["spec"]["template"]["metadata"]["labels"]
+        cluster_id = labels[cluster_id_label]
+        replica_id = labels["cluster.environmentd.materialize.cloud/replica-id"]
+        gen = labels[gen_label]
+        by_replica.setdefault((cluster_id, replica_id), {})[gen] = ss
+
+    # The current orchestratord generation, derived from the parked
+    # Materialize CR — used to compute the expected (old, new) pair per
+    # replica.
+    parked_mz = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ]
+        )
+    )["items"][0]
+    new_gen = int(parked_mz["status"]["activeGeneration"]) + 1
+    old_gen = new_gen - 1
+
+    errors: list[str] = []
+    for (cluster_id, replica_id), gens in sorted(by_replica.items()):
+        replica = f"{cluster_id}/{replica_id}"
+        present = sorted(int(g) for g in gens)
+        if present != [old_gen, new_gen]:
+            errors.append(
+                f"{replica}: expected statefulsets for generations "
+                f"{[old_gen, new_gen]}, got {present}"
+            )
+            continue
+        for gen_value, ss in gens.items():
+            if ss["status"].get("readyReplicas") != 1:
+                errors.append(f"{replica} gen {gen_value}: not ready: {ss['status']}")
+
+        # Each new-generation statefulset's anti-affinity and topology
+        # spread selectors must pin to its own generation. Without that
+        # filter, the new-gen pod's spread/anti-affinity would have
+        # counted the old-gen pod and (depending on capacity) blocked
+        # scheduling.
+        new_ss = gens[str(new_gen)]
+        pod_template = new_ss["spec"]["template"]
+        actual_gen_label = pod_template["metadata"]["labels"].get(gen_label)
+        if actual_gen_label != str(new_gen):
+            errors.append(
+                f"{replica} gen {new_gen}: pod template missing/incorrect "
+                f"{gen_label}: {actual_gen_label!r}"
+            )
+
+        affinity = pod_template["spec"]["affinity"]
+        anti_affinity_terms = affinity["podAntiAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]
+        if not anti_affinity_terms:
+            errors.append(f"{replica} gen {new_gen}: no required pod anti-affinity")
+            continue
+        anti_affinity_exprs = anti_affinity_terms[0]["labelSelector"][
+            "matchExpressions"
+        ]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in anti_affinity_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: anti-affinity does not filter by "
+                f"generation; matchExpressions={anti_affinity_exprs}"
+            )
+
+        topology_spread = pod_template["spec"]["topologySpreadConstraints"]
+        if not topology_spread:
+            errors.append(f"{replica} gen {new_gen}: topology spread not present")
+            continue
+        spread_exprs = topology_spread[0]["labelSelector"]["matchExpressions"]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in spread_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: topology spread does not filter by "
+                f"generation; matchExpressions={spread_exprs}"
+            )
+
+    assert not errors, "clusterd generation scheduling check failed:\n" + "\n".join(
+        errors
+    )
+
+    print(
+        f"verified {len(by_replica)} replica(s) have generations "
+        f"{old_gen} and {new_gen} live and that new-gen selectors filter "
+        f"to generation {new_gen}"
+    )

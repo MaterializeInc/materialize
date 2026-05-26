@@ -2424,6 +2424,20 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-clusterd-generation-scheduling
+        label: Orchestratord clusterd generation scheduling
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: clusterd-generation-scheduling
+              args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
   - id: emulator
     label: Materialize Emulator
     depends_on: build-aarch64
