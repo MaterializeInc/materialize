@@ -11,8 +11,8 @@ with soundness theorem `eval_satisfies_outputType`.
 Per-constructor precision:
 
 * `.lit` / `.col`: precise.
-* `.not a`: preserves both bits of `a` (`evalNot` is strict on
-  `.null` and `.err _`).
+* `.not a`: errable propagates from `a`; nullable is `true`
+  because `evalNot` routes non-boolean operands to `.null`.
 * `.plus` / `.minus` / `.times` / `.eq` / `.lt`: `errable` is the
   OR of the inputs (no spontaneous err on `Int`; the modeled
   `evalPlus`/etc. use unbounded `Int`). `nullable` is conservative
@@ -74,7 +74,12 @@ def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
     if h : i < n then sch.cols.get ⟨i, h⟩
     else { nullable := true, errable := false }
   | .not a =>
-    Expr.outputType sch a
+    -- After tightening evalNot to route .int to .null, the
+    -- output may be .null even when input is non-null (.int
+    -- input → .null output). Conservative `nullable := true`;
+    -- `errable` propagates from input.
+    { nullable := true
+      errable := (Expr.outputType sch a).errable }
   | .ifThen c t e =>
     { nullable := true
       errable :=
@@ -104,7 +109,7 @@ def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
 
 /-! ## `Env.get` on a row that satisfies a schema -/
 
-private theorem Env_get_row_toList_lt
+theorem Env_get_row_toList_lt
     {n : Nat} (row : RowN n) (i : Nat) (h : i < n) :
     Env.get row.toList i = row.get ⟨i, h⟩ := by
   have hLen : row.toList.length = n := row.toList_length
@@ -113,7 +118,7 @@ private theorem Env_get_row_toList_lt
   show row.toList.get ⟨i, hLt⟩ = row.get ⟨i, h⟩
   rcases row with ⟨l, hl⟩; rfl
 
-private theorem Env_get_row_toList_ge
+theorem Env_get_row_toList_ge
     {n : Nat} (row : RowN n) (i : Nat) (h : ¬i < n) :
     Env.get row.toList i = .null := by
   have hLen : row.toList.length = n := row.toList_length
@@ -182,28 +187,13 @@ theorem eval_satisfies_outputType {n : Nat}
       · intro hN; cases hN
       · intro _ h; cases h
   | .not a => by
-    -- `outputType (.not a) = outputType a`. `evalNot` is strict on
-    -- both `.null` and `.err _`, so the recursive call transfers
-    -- both bits.
+    -- `outputType (.not a) = { nullable := true,
+    -- errable := outputType(a).errable }`. Only the errable bit
+    -- needs the IH; nullable is trivially true.
     have iha := eval_satisfies_outputType sch row hsat a
     simp only [eval, Expr.outputType]
     refine ⟨?_, ?_⟩
-    · intro hN
-      have ha_notnull : eval row.toList a ≠ .null := iha.1 hN
-      intro hRes
-      cases h : eval row.toList a with
-      | bool b =>
-        rw [h] at hRes
-        cases b <;> (simp only [evalNot] at hRes; cases hRes)
-      | int _ =>
-        rw [h] at hRes
-        simp only [evalNot] at hRes
-        cases hRes
-      | null  => exact ha_notnull h
-      | err _ =>
-        rw [h] at hRes
-        simp only [evalNot] at hRes
-        cases hRes
+    · intro h; cases h
     · intro hErr
       have ha_noterr : ¬(eval row.toList a).IsErr := iha.2 hErr
       exact evalNot_not_err ha_noterr

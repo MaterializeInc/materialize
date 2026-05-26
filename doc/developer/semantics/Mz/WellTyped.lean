@@ -179,6 +179,206 @@ def RowSatisfiesKind {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
   ∀ i : Fin n,
     ColKind.compatible (row.get i).kind (sch.kinds.get i) = true
 
+/-! ## Primitive codomain lemmas
+
+Each non-`.col` constructor's `outputKind` matches the codomain
+of its primitive evaluator. The proofs are case-bashes on the
+input `Datum` constructors; each branch yields a result whose
+`kind` is compatible with the expected `outputKind`. -/
+
+private theorem kind_evalNot (a : Datum) :
+    ColKind.compatible (evalNot a).kind .bool = true := by
+  cases a <;> rfl
+
+private theorem kind_evalPlus (a b : Datum) :
+    ColKind.compatible (evalPlus a b).kind .int = true := by
+  cases a <;> cases b <;> rfl
+
+private theorem kind_evalMinus (a b : Datum) :
+    ColKind.compatible (evalMinus a b).kind .int = true := by
+  cases a <;> cases b <;> rfl
+
+private theorem kind_evalTimes (a b : Datum) :
+    ColKind.compatible (evalTimes a b).kind .int = true := by
+  cases a <;> cases b <;> rfl
+
+private theorem kind_evalDivide (a b : Datum) :
+    ColKind.compatible (evalDivide a b).kind .int = true := by
+  cases a with
+  | err _ => rfl
+  | null => cases b <;> rfl
+  | bool _ => cases b <;> rfl
+  | int n =>
+    cases b with
+    | err _ => rfl
+    | null => rfl
+    | bool _ => rfl
+    | int m =>
+      show ColKind.compatible
+          (if m = 0 then Datum.err EvalError.divisionByZero
+           else Datum.int (n / m)).kind .int = true
+      by_cases h : m = 0
+      · rw [if_pos h]; rfl
+      · rw [if_neg h]; rfl
+
+private theorem kind_evalEq (a b : Datum) :
+    ColKind.compatible (evalEq a b).kind .bool = true := by
+  cases a <;> cases b <;> rfl
+
+private theorem kind_evalLt (a b : Datum) :
+    ColKind.compatible (evalLt a b).kind .bool = true := by
+  cases a <;> cases b <;> rfl
+
+/-- `evalAnd`'s output kind is always compatible with `.bool`, no
+matter the inputs. The codomain of `evalAnd` is bounded by
+`{.bool _, .null, .err _}` after the tightening that routes
+non-boolean operands to `.null`. -/
+private theorem kind_evalAnd (a b : Datum) :
+    ColKind.compatible (evalAnd a b).kind .bool = true := by
+  cases a with
+  | bool b₁ =>
+    cases b with
+    | bool b₂ => cases b₁ <;> cases b₂ <;> rfl
+    | int _  => cases b₁ <;> rfl
+    | null   => cases b₁ <;> rfl
+    | err _  => cases b₁ <;> rfl
+  | int _ =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+  | null =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+  | err _ =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+
+private theorem kind_evalOr (a b : Datum) :
+    ColKind.compatible (evalOr a b).kind .bool = true := by
+  cases a with
+  | bool b₁ =>
+    cases b with
+    | bool b₂ => cases b₁ <;> cases b₂ <;> rfl
+    | int _  => cases b₁ <;> rfl
+    | null   => cases b₁ <;> rfl
+    | err _  => cases b₁ <;> rfl
+  | int _ =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+  | null =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+  | err _ =>
+    cases b with
+    | bool b₂ => cases b₂ <;> rfl
+    | int _  => rfl
+    | null   => rfl
+    | err _  => rfl
+
+private theorem kind_evalAndN (args : List Datum) :
+    ColKind.compatible (evalAndN args).kind .bool = true := by
+  induction args with
+  | nil => rfl
+  | cons hd tl _ih =>
+    show ColKind.compatible (evalAnd hd (evalAndN tl)).kind .bool = true
+    exact kind_evalAnd hd (evalAndN tl)
+
+private theorem kind_evalOrN (args : List Datum) :
+    ColKind.compatible (evalOrN args).kind .bool = true := by
+  induction args with
+  | nil => rfl
+  | cons hd tl _ih =>
+    show ColKind.compatible (evalOr hd (evalOrN tl)).kind .bool = true
+    exact kind_evalOr hd (evalOrN tl)
+
+/-! ## Kind soundness
+
+Under `RowSatisfiesKind`, every `Expr` evaluates to a `Datum`
+whose kind is compatible with the expression's `outputKind`.
+
+The proof is structural recursion on `Expr`. `.lit` and `.col`
+close from the schema; `.col`'s OOB fallback yields `.null` whose
+kind `.top` is compatible with any `outputKind`. The non-foundational
+constructors close via the primitive-codomain lemmas above —
+their codomains are bounded by `{outputKind, .top}` independent of
+operand structure.
+
+No `WellTyped` hypothesis required: `outputKind` is conservative
+enough on the variadic / conditional cases (`.ifThen`, `.coalesce`
+both fall through to `.top`) that the theorem closes unconditionally
+modulo `RowSatisfiesKind`. The `WellTyped` predicate's value is in
+unlocking *precision* refinements of `outputType` (the
+`nullable := OR-of-inputs` tightening), not in this kind-soundness
+direction. -/
+
+/-- Any datum's kind is compatible with `.top`. -/
+private theorem kind_compat_top (d : Datum) :
+    ColKind.compatible d.kind .top = true := by
+  cases d <;> rfl
+
+theorem Expr.kind_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
+    (hrk : RowSatisfiesKind sch row) :
+    ∀ (e : Expr),
+      ColKind.compatible (eval row.toList e).kind
+        (Expr.outputKind sch e) = true
+  | .lit d => by
+    simp only [eval, Expr.outputKind]
+    cases d <;> rfl
+  | .col i => by
+    simp only [eval, Expr.outputKind]
+    by_cases h : i < n
+    · rw [Env_get_row_toList_lt row i h, dif_pos h]
+      exact hrk ⟨i, h⟩
+    · rw [Env_get_row_toList_ge row i h, dif_neg h]
+      rfl
+  | .not a => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalNot (eval row.toList a)
+  | .ifThen c t e => by
+    simp only [eval, Expr.outputKind]
+    exact kind_compat_top _
+  | .andN args => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalAndN _
+  | .orN args => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalOrN _
+  | .coalesce args => by
+    simp only [eval, Expr.outputKind]
+    exact kind_compat_top _
+  | .plus a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalPlus _ _
+  | .minus a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalMinus _ _
+  | .times a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalTimes _ _
+  | .divide a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalDivide _ _
+  | .eq a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalEq _ _
+  | .lt a b => by
+    simp only [eval, Expr.outputKind]
+    exact kind_evalLt _ _
+
 /-! ## Open follow-ups
 
 * `Expr.kind_of_eval`. Under `RowSatisfiesKind sch row`, the eval

@@ -65,14 +65,18 @@ def evalOr : Datum → Datum → Datum
   | .bool false, .bool false => .bool false
   | _, _                     => .null
 
-/-- NOT evaluation table. Strict on `null` and `err`. Numeric
-operands pass through unchanged so that `evalNot` stays
-involutive on `.int` even though SQL would type-reject it. -/
+/-- NOT evaluation table. Strict on `null` and `err`. Non-boolean
+operands (`.int _`) route to `.null` via the catch-all, matching
+the tightened codomain of `evalAnd` / `evalOr`. The codomain of
+`evalNot` is `{.bool _, .null, .err _}`. Same modeling note as
+for `evalAnd` (`Mz/PrimEval.lean` above): in production a
+type-mismatched operand would be caught by the planner or panic;
+the skeleton's `.null` route is a sound over-approximation. -/
 def evalNot : Datum → Datum
   | .bool b => .bool (!b)
   | .null   => .null
   | .err e  => .err e
-  | .int n  => .int n
+  | .int _  => .null
 
 /-- `IfThen` evaluation table. Modeled strictly; see `Mz/Eval.lean`
 for the discussion of lazy vs strict in a total skeleton. -/

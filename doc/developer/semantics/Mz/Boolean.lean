@@ -83,11 +83,16 @@ theorem not_null  : evalNot .null = .null := rfl
 theorem not_err (e : EvalError) : evalNot (.err e) = .err e := rfl
 
 /-- `Not` is involutive on the boolean fragment and a no-op on `null`
-and `err`. The latter mirrors the strict propagation rule. -/
-theorem not_not (d : Datum) : evalNot (evalNot d) = d := by
+and `err`. The latter mirrors the strict propagation rule.
+
+After the codomain tightening of `evalNot` (non-boolean operands
+route to `.null`), the universal form `evalNot (evalNot d) = d`
+no longer holds on `.int` (the result is `.null`). The hypothesis
+`¬d.IsInt` excludes the case. -/
+theorem not_not (d : Datum) (h : ¬d.IsInt) : evalNot (evalNot d) = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int _  => rfl
+  | int _  => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 

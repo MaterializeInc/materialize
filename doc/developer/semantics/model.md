@@ -178,13 +178,28 @@ Structural type-correctness in `Mz/WellTyped.lean`:
   `WellTypedArgs` / `WellTypedArgsAllBool`.
 * `RowSatisfiesKind sch row` — every cell's kind compatible with
   the schema's declared kind for that column.
+* `Expr.kind_of_eval` — soundness theorem: under
+  `RowSatisfiesKind`, `(eval row.toList e).kind` is compatible
+  with `Expr.outputKind sch e` for every expression. Structural
+  recursion on `Expr`; each non-`.col` arm closes via a
+  primitive-codomain lemma (`kind_evalPlus`, `kind_evalAnd`,
+  etc.) showing that the matching evaluator returns a `Datum`
+  whose kind falls in `{outputKind, .top}` regardless of inputs.
+  Required tightening `evalNot` to route `.int` to `.null` so its
+  codomain is bounded by the boolean fragment; the existing
+  `outputType (.not a)` rule weakened from "preserves both bits"
+  to `{ nullable := true, errable := outputType(a).errable }` as
+  a result.
 
 `WellTyped` is what the optimizer needs to cite to invoke the
 precision direction on `outputType`: under `WellTyped`,
 type-mismatched operands are ruled out, and `outputType`'s
 conservative `nullable := true` for arithmetic can be tightened
 to `nullable := OR-of-inputs.nullable`. The precision direction
-itself is open; the predicate is the gate.
+itself is open; the predicate is the gate, `kind_of_eval` is the
+foundation, and the tightening rides on a per-constructor
+case-analysis that shows well-typed inputs never hit the
+catch-all `.null` route in the primitive evaluators.
 
 Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
 
@@ -635,7 +650,7 @@ Lean evidence accumulated before the restart:
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
-| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `ColKind`/`outputKind` | kind-soundness theorem and precision direction on `outputType` |
+| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `kind_of_eval` soundness | precision direction on `outputType` open |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
 | `LegalEval` (non-det sketch) | `Mz/Legal.lean`            | foundation + binary err-side commutativity | variadic short-circuit; data-side comm; collection lift |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
