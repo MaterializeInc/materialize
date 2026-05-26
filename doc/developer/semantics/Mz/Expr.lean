@@ -1,4 +1,4 @@
-import Mz.Indexed.Datum
+import Mz.Datum
 import Mz.Schema
 
 /-!
@@ -18,9 +18,8 @@ fail to type-check.
 Variadics use a mutual `ExprList` to satisfy Lean's
 nested-inductive restriction. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Schema-indexed expression GADT
 
@@ -48,4 +47,4 @@ mutual
     | cons {k : ColType} : Expr sch k → ExprList sch k → ExprList sch k
 end
 
-end Mz.Indexed
+end Mz

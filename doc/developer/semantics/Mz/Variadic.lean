@@ -1,5 +1,5 @@
-import Mz.Indexed.PrimEval
-import Mz.Indexed.Laws
+import Mz.PrimEval
+import Mz.Laws
 
 /-!
 # Variadic `AND` and `OR` (indexed)
@@ -11,9 +11,8 @@ All `¬d.IsInt` hypotheses present in the untyped model disappear:
 the indexed `Datum .bool` rules out `.int` at the type level.
 -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Cons recurrence -/
 
@@ -96,4 +95,4 @@ theorem evalOrN_true_absorbs :
       rw [htl]
       exact evalOr_true_right_any hd
 
-end Mz.Indexed
+end Mz

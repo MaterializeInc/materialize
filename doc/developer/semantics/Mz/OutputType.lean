@@ -1,5 +1,5 @@
-import Mz.Indexed.Expr
-import Mz.Indexed.Eval
+import Mz.Expr
+import Mz.Eval
 
 /-!
 # Output column schema for indexed `Expr`
@@ -13,9 +13,8 @@ Soundness theorem `eval_satisfies_outputCols`: evaluating `e` on
 a row satisfying `sch` produces a `Datum k` satisfying
 `outputCols sch e`. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-- A `Datum k` satisfies a `ColSchema`. -/
 def DatumSatisfies {k : ColType} (cs : ColSchema) (d : Datum k) : Prop :=
@@ -76,4 +75,4 @@ mutual
     | _, .coalesce _ => { nullable := true, errable := true }
 end
 
-end Mz.Indexed
+end Mz

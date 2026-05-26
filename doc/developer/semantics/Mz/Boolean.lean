@@ -1,4 +1,4 @@
-import Mz.Indexed.PrimEval
+import Mz.PrimEval
 
 /-!
 # Boolean truth tables (indexed)
@@ -11,9 +11,8 @@ All proofs reduce to `rfl`. The codomain of every evaluator is
 already closed to `Datum .bool` by the indexing; no `¬IsInt`
 hypothesis or catch-all `.null` route to consider. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## AND -/
 
@@ -86,4 +85,4 @@ theorem not_not (d : Datum .bool) : evalNot (evalNot d) = d := by
   | null   => rfl
   | err _  => rfl
 
-end Mz.Indexed
+end Mz

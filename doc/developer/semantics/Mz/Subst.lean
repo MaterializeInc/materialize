@@ -1,4 +1,4 @@
-import Mz.Indexed.Eval
+import Mz.Eval
 
 /-!
 # Substitution on indexed `Expr`
@@ -19,9 +19,8 @@ against the env built from the substitutions:
 `eval env_tgt (Expr.subst es e) = eval (fun i => eval env_tgt (es i)) e`.
 -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 mutual
   /-- Substitute column references in `e` using the per-column
@@ -96,4 +95,4 @@ mutual
             eval_subst es env_tgt a, evalList_subst es env_tgt as]
 end
 
-end Mz.Indexed
+end Mz

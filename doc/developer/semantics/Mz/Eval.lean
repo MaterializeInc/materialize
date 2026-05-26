@@ -1,5 +1,5 @@
-import Mz.Indexed.Expr
-import Mz.Indexed.PrimEval
+import Mz.Expr
+import Mz.PrimEval
 
 /-!
 # Big-step evaluator (indexed)
@@ -26,9 +26,8 @@ absorbing operators (`.andN`, `.orN`, `.coalesce`) and for
 `.ifThen`'s inactive arm via the absorption / discard rules in
 `PrimEval`. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-- A typed environment for evaluating expressions over schema
 `sch`. Cell `i` carries a `Datum` of the kind the schema declares
@@ -62,4 +61,4 @@ mutual
     | _, env, .cons a as => eval env a :: evalList env as
 end
 
-end Mz.Indexed
+end Mz

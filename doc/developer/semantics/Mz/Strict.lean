@@ -1,4 +1,4 @@
-import Mz.Indexed.PrimEval
+import Mz.PrimEval
 
 /-!
 # Strict propagation (indexed)
@@ -20,9 +20,8 @@ catch-all `.null` route don't exist in the indexed domains, so
 proofs collapse to the three-case case-split (`.bool` for bool
 ops, `.int` for arithmetic, `.null` and `.err _` universally). -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Strictness predicates -/
 
@@ -169,4 +168,4 @@ theorem evalOr_not_errStrict_right :
   have hh := h (.bool true) .divisionByZero
   simp [evalOr] at hh
 
-end Mz.Indexed
+end Mz

@@ -20,9 +20,8 @@ The untyped counterpart lives in `Mz/Datum.lean` (current main
 model) and continues to compile alongside this file during the
 GADT migration. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-- A scalar value indexed by its `ColType`. -/
 inductive Datum : ColType → Type
@@ -60,4 +59,4 @@ def isNullB {k : ColType} : Datum k → Bool
 
 end Datum
 
-end Mz.Indexed
+end Mz

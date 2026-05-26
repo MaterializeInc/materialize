@@ -16,9 +16,9 @@ specification — Y itself may change.
 Such claims are flagged inline with "design-doc-derived" so they
 can be re-examined when the design doc evolves.
 
-## GADT migration
+## Type structure
 
-The Lean model uses **schema-indexed (GADT) inductive types**:
+The model uses **schema-indexed (GADT) inductive types**:
 
 * `Datum : ColType → Type` — scalar value indexed by its kind.
   `.bool` only inhabits `Datum .bool`; `.int` only inhabits
@@ -29,20 +29,14 @@ The Lean model uses **schema-indexed (GADT) inductive types**:
 * `Update sch` / `Collection sch` — schema-indexed collection
   layer.
 
-The type system enforces kind correctness at construction:
-`Expr.not (.lit (.int 5))` fails to type-check.
+Kind correctness is enforced at construction: `Expr.not (.lit
+(.int 5))` fails to type-check.
 
-The `WellTyped` predicate, the `outputKind` / `RowSatisfiesType`
-predicates, and the `¬d.IsInt` hypotheses on boolean/arithmetic
-laws — all artifacts of the untyped predecessor model — are
-subsumed by the GADT and no longer present. Evaluators have
-closed codomains (no catch-all `_ , _ => .null` routing): `evalAnd`
-operates on `Datum .bool × Datum .bool → Datum .bool`, etc.
-
-This file describes the semantic model. Where the architecture
-diagram below mentions `outputKind` or `WellTyped`, those refer
-to the *concepts* — output type, well-typing — that the GADT
-encodes structurally rather than as separate predicates.
+Evaluators have closed codomains by construction (no catch-all
+`_ , _ => .null` routing): `evalAnd : Datum .bool × Datum .bool
+→ Datum .bool`, etc. Algebraic laws (`not_not`, `evalAnd_idem`,
+absorption, conditional commutativity) are stated without the
+`¬d.IsInt` hypotheses an untyped model would require.
 
 The model has five layers — `Datum`, `Expression`, `Row`, `Schema`,
 `Collection` — and a separate dimension of error semantics that cuts

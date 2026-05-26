@@ -13,7 +13,7 @@ collection (a single collection version in
 alternative error semantics get tried against concrete proof
 obligations before any runtime change.
 
-## Architecture: GADT (indexed) model
+## Architecture
 
 The model is built around **schema-indexed types**:
 
@@ -48,38 +48,35 @@ model required.
    design doc with the broader options analysis.
 3. `transforms.md` — catalog of transforms we want to model and the
    soundness windows under which each holds.
-4. The `Mz/Indexed/*.lean` modules themselves; each carries its own
+4. The `Mz/*.lean` modules themselves; each carries its own
    docstring.
 
 ## Module map
 
-All modules live under `Mz/Indexed/` (the namespace `Mz.Indexed`).
-The non-indexed `Mz/Schema.lean` carries only type-level
-definitions (`ColType`, `ColSchema`, `Schema`, `EvalError`) reused
-by the indexed model.
+All modules live under `Mz/` in the `Mz` namespace. `Mz/Schema.lean`
+carries the type-level definitions (`ColType`, `ColSchema`, `Schema`,
+`EvalError`); the rest of the modules build the indexed model on
+top.
 
-* **Datum layer.** `Indexed.Datum` (`Datum : ColType → Type`),
-  `Indexed.PrimEval` (`evalAnd`, `evalOr`, `evalNot`, arithmetic,
+* **Datum layer.** `Mz.Datum` (`Datum : ColType → Type`),
+  `Mz.PrimEval` (`evalAnd`, `evalOr`, `evalNot`, arithmetic,
   comparison, `evalAndN` / `evalOrN` / `evalCoalesce`).
-* **Algebraic laws.** `Indexed.Boolean` (truth tables),
-  `Indexed.Laws` (identity, idempotence, commutativity),
-  `Indexed.Strict` (err- / null-propagation classes),
-  `Indexed.Variadic` (variadic absorption), `Indexed.Coalesce`
-  (per-kind coalesce equations).
-* **Expression layer.** `Indexed.Expr` (mutual `Expr` / `ExprList`
-  GADT), `Indexed.Eval` (mutual `eval` / `evalList`),
-  `Indexed.Subst` (substitution + soundness),
-  `Indexed.MightError` (analyzer + per-primitive error-free
-  lemmas), `Indexed.OutputType` (per-`Expr` `ColSchema`
-  derivation).
-* **Equivalences.** `Indexed.Equiv` (`Datum.eqErrSet`,
-  `Datum.refines`, compositionality), `Indexed.EquivBounded`
-  (bounded-arithmetic counterexample), `Indexed.Legal`
-  (non-deterministic `LegalEval`).
-* **Collection layer.** `Indexed.Schema` (`EnvSatisfies`),
-  `Indexed.Collection` (`Update sch`, `Collection sch`, `filter`,
-  `project`, `cross` [deferred], `negate`, `unionAll`,
-  `NoRowErr`).
+* **Algebraic laws.** `Mz.Boolean` (truth tables), `Mz.Laws`
+  (identity, idempotence, commutativity), `Mz.Strict` (err- /
+  null-propagation classes), `Mz.Variadic` (variadic absorption),
+  `Mz.Coalesce` (per-kind coalesce equations).
+* **Expression layer.** `Mz.Expr` (mutual `Expr` / `ExprList`
+  GADT), `Mz.Eval` (mutual `eval` / `evalList`), `Mz.Subst`
+  (substitution + soundness), `Mz.MightError` (analyzer +
+  per-primitive error-free lemmas), `Mz.OutputType` (per-`Expr`
+  `ColSchema` derivation; `DatumSatisfies` / `RowSatisfies`
+  satisfaction predicates).
+* **Equivalences.** `Mz.Equiv` (`Datum.eqErrSet`, `Datum.refines`,
+  compositionality), `Mz.EquivBounded` (bounded-arithmetic
+  counterexample), `Mz.Legal` (non-deterministic `LegalEval`).
+* **Collection layer.** `Mz.Collection` (`Update sch`,
+  `Collection sch`, `filter`, `project`, `cross` [deferred],
+  `negate`, `unionAll`, `NoRowErr`).
 
 ## Build
 

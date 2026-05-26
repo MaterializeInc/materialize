@@ -1,4 +1,4 @@
-import Mz.Indexed.PrimEval
+import Mz.PrimEval
 
 /-!
 # Algebraic laws (indexed)
@@ -18,9 +18,8 @@ Compared with the untyped model:
   hypotheses (a real cell-content concern, not a
   type-discipline artifact). -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Identity laws -/
 
@@ -139,4 +138,4 @@ theorem evalTimes_comm_of_no_err
     | err _ => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
 
-end Mz.Indexed
+end Mz

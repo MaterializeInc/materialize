@@ -1,4 +1,4 @@
-import Mz.Indexed.Eval
+import Mz.Eval
 
 /-!
 # `LegalEval` (indexed)
@@ -19,9 +19,8 @@ non-determinism (both `.err _` payloads admissible from
 `(.err _) + (.err _)`); variadic short-circuit, data-side
 commutativity, collection lift deferred. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 inductive LegalEval {n : Nat} {sch : Schema n}
     (env : Env sch) :
@@ -89,4 +88,4 @@ inductive LegalEval {n : Nat} {sch : Schema n}
   | coalesceD {k : ColType} {args : ExprList sch k} :
       LegalEval env (.coalesce args) (eval env (.coalesce args))
 
-end Mz.Indexed
+end Mz

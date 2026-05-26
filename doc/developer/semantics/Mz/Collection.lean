@@ -1,5 +1,5 @@
-import Mz.Indexed.Schema
-import Mz.Indexed.Eval
+import Mz.Schema
+import Mz.Eval
 
 /-!
 # Schema-indexed `Collection`
@@ -30,9 +30,8 @@ type-check at construction time — `project` against the wrong
 schema, `cross` whose result is consumed by a `filter` over a
 different schema, etc. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-- A single update in a schema-indexed collection. -/
 structure Update {n : Nat} (sch : Schema n) where
@@ -144,7 +143,7 @@ theorem unionAll_assoc {sch : Schema n} (a b c : Collection sch) :
 /-- An update is `NoRowErr` when its row-error multiplicity is
 zero. Operational regimes (sources known to produce only valid
 or invalid rows) discharge this on inputs. -/
-def _root_.Mz.Indexed.Update.NoRowErr {sch : Schema n} (rec : Update sch) : Prop :=
+def _root_.Mz.Update.NoRowErr {sch : Schema n} (rec : Update sch) : Prop :=
   rec.err_diff = 0
 
 /-- A collection has `NoRowErr` when every update does. -/
@@ -157,4 +156,4 @@ theorem NoRowErr_nil {sch : Schema n} : NoRowErr ([] : Collection sch) := by
 
 end Collection
 
-end Mz.Indexed
+end Mz

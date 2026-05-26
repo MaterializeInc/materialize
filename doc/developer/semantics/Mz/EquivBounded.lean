@@ -1,5 +1,5 @@
-import Mz.Indexed.PrimEval
-import Mz.Indexed.Equiv
+import Mz.PrimEval
+import Mz.Equiv
 
 /-!
 # Bounded-arithmetic counterexample (indexed)
@@ -14,9 +14,8 @@ under `refines` LHS ⊑ RHS (err refines value); the reverse fails.
 
 Same shape as the untyped version, restricted to `Datum .int`. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 theorem evalPlusBounded_int_int (max n m : Int) :
     evalPlusBounded max (.int n) (.int m)
@@ -96,4 +95,4 @@ theorem evalPlusBounded_assoc_max_not_refines_rev (max : Int) (hmax : 0 ≤ max)
   | inl h => cases h
   | inr h => cases h
 
-end Mz.Indexed
+end Mz

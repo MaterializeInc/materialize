@@ -1,4 +1,4 @@
-import Mz.Indexed.Eval
+import Mz.Eval
 
 /-!
 # `might_error` analyzer + soundness (indexed)
@@ -20,9 +20,8 @@ left:
 * Operator soundness in the err-propagation chain: errs propagate
   through strict primitives. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Per-primitive helper lemmas
 
@@ -222,4 +221,4 @@ end
 def EnvErrFree {n : Nat} {sch : Schema n} (env : Env sch) : Prop :=
   ∀ i : Fin n, ¬(env i).IsErr
 
-end Mz.Indexed
+end Mz

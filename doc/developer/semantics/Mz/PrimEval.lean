@@ -1,4 +1,4 @@
-import Mz.Indexed.Datum
+import Mz.Datum
 
 /-!
 # Primitive scalar evaluators (indexed)
@@ -26,9 +26,8 @@ return `Datum .int`, comparisons return `Datum .bool`. No
 type-mismatch routing, no `¬IsInt` hypotheses on downstream laws.
 -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Binary and ternary boolean evaluators -/
 
@@ -173,4 +172,4 @@ def evalCoalesce {k : ColType} (ds : List (Datum k)) : Datum k :=
   | some d => d
   | none   => Coalesce.residue ds
 
-end Mz.Indexed
+end Mz

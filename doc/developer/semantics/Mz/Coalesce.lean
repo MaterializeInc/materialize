@@ -1,4 +1,4 @@
-import Mz.Indexed.PrimEval
+import Mz.PrimEval
 
 /-!
 # `coalesce` laws (indexed)
@@ -14,9 +14,8 @@ kind admits only `.null` / `.err _` operands; its laws are a
 subset of the bool/int ones (the `.bool` / `.int` rescue rules
 don't fire) and are stated on demand. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Base cases (kind-polymorphic) -/
 
@@ -92,4 +91,4 @@ theorem coalesce_first_err_wins_int (e₁ e₂ : EvalError) :
     evalCoalesce [(.err e₁ : Datum .int), .err e₂] = .err e₁ := by
   simp [evalCoalesce, Coalesce.firstConcrete, Coalesce.residue, Datum.isNullB]
 
-end Mz.Indexed
+end Mz

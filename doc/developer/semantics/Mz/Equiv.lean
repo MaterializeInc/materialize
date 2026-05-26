@@ -1,5 +1,5 @@
-import Mz.Indexed.PrimEval
-import Mz.Indexed.Strict
+import Mz.PrimEval
+import Mz.Strict
 
 /-!
 # Equivalence relations on indexed `Datum`
@@ -11,9 +11,8 @@ Each relation is per-kind: `eqErrSet : Datum k → Datum k → Prop`.
 The indexed signatures of evaluators make compositionality
 mechanical — operands of mismatched kinds are inexpressible. -/
 
-namespace Mz.Indexed
+namespace Mz
 
-open Mz
 
 /-! ## Error-set equivalence -/
 
@@ -131,4 +130,4 @@ theorem Datum.eqErrSet_of_refines_both {k : ColType} {a b : Datum k}
     | inl h => exact Or.inl h.symm
     | inr hb => exact Or.inr ⟨ha, hb⟩
 
-end Mz.Indexed
+end Mz
