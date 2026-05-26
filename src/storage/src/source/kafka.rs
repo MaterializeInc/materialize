@@ -437,65 +437,6 @@ fn render_reader<'scope>(
                 "Kafka source reader starting rehydration with resume upper: {resume_upper:?} and start offsets: {start_offsets:?}"
             );
 
-            let low_watermarks = fetch_partition_info(
-                &consumer,
-                topic.as_str(),
-                config
-                        .config
-                        .parameters
-                        .kafka_timeout_config
-                        .fetch_metadata_timeout,
-                Offset::Beginning, // fetch the low watermark
-            ).unwrap_or_else(|e| {
-                tracing::warn!(
-                    source_id = config.id.to_string(),
-                    worker_id = config.worker_id,
-                    num_workers = config.worker_count,
-                    "Failed to fetch watermarks for topic {topic}: {e}"
-                );
-                let update = HealthStatusUpdate::halting(
-                    format!(
-                        "Failed to fetch watermarks for topic {topic}: {e}"
-                    ),
-                    None,
-                );
-                health_output.give(
-                    &health_cap,
-                    HealthStatusMessage {
-                        id: None,
-                        namespace: StatusNamespace::Kafka,
-                        update: update.clone(),
-                    },
-                );
-                for (output, update) in outputs.iter().repeat_clone(update) {
-                    health_output.give(
-                        &health_cap,
-                        HealthStatusMessage {
-                            id: Some(output.id),
-                            namespace: StatusNamespace::Kafka,
-                            update,
-                        },
-                    );
-                }
-                if let GetPartitionsError::TopicDoesNotExist = e {
-                    // If the topic doesn't exist, that is a definite error
-                    let error = Err(
-                        SourceError{
-                            error:SourceErrorDetails::Initialization(e.to_string().into())
-                        }.into()
-                    );
-                    let time = data_cap.time().clone();
-                    for (output, error) in
-                        outputs.iter().map(|o| o.output_index).repeat_clone(error)
-                    {
-                        let update = ((output, error), time.clone(), Diff::ONE);
-                        data_output
-                            .give(&data_cap, update);
-                    }
-                }
-                BTreeMap::new()
-            });
-
             for ts in resume_upper.elements() {
                 if let Some(pid) = ts.interval().singleton() {
                     let pid = pid.unwrap_exact();
@@ -527,76 +468,135 @@ fn render_reader<'scope>(
                 Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
 
-            for (pid, lwm) in &low_watermarks {
-                if responsible_for_pid(&config, *pid) {
-                    // If a start offset exists for this partition, then either the user specified it
-                    // or we restored it from the resume upper. In either case, if the low watermark is
-                    // greater than the start offset, we know for certain that the offset we need to
-                    // start at has been compacted away or dropped from retention by Kafka. If there
-                    // is no start offset, then we set it to the low watermark and start consuming from
-                    // there, assuming the user doesn't care about the messages that have been compacted away.
-                    if let Some(start_offset) = start_offsets.get_mut(pid) {
-                        tracing::info!(
-                            source_id = config.id.to_string(),
-                            worker_id = config.worker_id,
-                            num_workers = config.worker_count,
-                            "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
+            if mz_storage_types::dyncfgs::KAFKA_LOW_WATERMARK_CHECK
+                .get(config.config.config_set())
+            {
+                let low_watermarks = fetch_partition_info(
+                    &consumer,
+                    topic.as_str(),
+                    config
+                        .config
+                        .parameters
+                        .kafka_timeout_config
+                        .fetch_metadata_timeout,
+                    Offset::Beginning, // fetch the low watermark
+                )
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        source_id = config.id.to_string(),
+                        worker_id = config.worker_id,
+                        num_workers = config.worker_count,
+                        "Failed to fetch watermarks for topic {topic}: {e}"
+                    );
+                    let update = HealthStatusUpdate::halting(
+                        format!("Failed to fetch watermarks for topic {topic}: {e}"),
+                        None,
+                    );
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            id: None,
+                            namespace: StatusNamespace::Kafka,
+                            update: update.clone(),
+                        },
+                    );
+                    for (output, update) in outputs.iter().repeat_clone(update) {
+                        health_output.give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                id: Some(output.id),
+                                namespace: StatusNamespace::Kafka,
+                                update,
+                            },
                         );
-                        if lwm > start_offset {
-                            tracing::error!(
+                    }
+                    if let GetPartitionsError::TopicDoesNotExist = e {
+                        // If the topic doesn't exist, that is a definite error
+                        let error = Err(SourceError {
+                            error: SourceErrorDetails::Initialization(e.to_string().into()),
+                        }
+                        .into());
+                        let time = data_cap.time().clone();
+                        for (output, error) in
+                            outputs.iter().map(|o| o.output_index).repeat_clone(error)
+                        {
+                            let update = ((output, error), time.clone(), Diff::ONE);
+                            data_output.give(&data_cap, update);
+                        }
+                    }
+                    BTreeMap::new()
+                });
+                for (pid, lwm) in &low_watermarks {
+                    if responsible_for_pid(&config, *pid) {
+                        // If a start offset exists for this partition, then either the user specified it
+                        // or we restored it from the resume upper. In either case, if the low watermark is
+                        // greater than the start offset, we know for certain that the offset we need to
+                        // start at has been compacted away or dropped from retention by Kafka. If there
+                        // is no start offset, then we set it to the low watermark and start consuming from
+                        // there, assuming the user doesn't care about the messages that have been compacted away.
+                        if let Some(start_offset) = start_offsets.get_mut(pid) {
+                            tracing::info!(
                                 source_id = config.id.to_string(),
                                 worker_id = config.worker_id,
                                 num_workers = config.worker_count,
-                                "start offset and resume upper {start_offset} for topic {topic} \
-                                partition {pid} is behind the low watermark {lwm}. This likely \
-                                means that the offsets have been compacted away by Kafka."
+                                "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
                             );
-                            let err_str = format!(
-                                "Low watermark {lwm} of kafka topic {topic} partition {pid} \
-                                is past the start offset/resume upper: {start_offset} \
-                                This likely means that the offsets have been compacted away \
-                                by Kafka. Please consider setting a higher start offset or \
-                                adjusting your retention policies to prevent this.",
-                            );
+                            if lwm > start_offset {
+                                tracing::error!(
+                                    source_id = config.id.to_string(),
+                                    worker_id = config.worker_id,
+                                    num_workers = config.worker_count,
+                                    "start offset and resume upper {start_offset} for topic {topic} \
+                                    partition {pid} is behind the low watermark {lwm}. This likely \
+                                    means that the offsets have been compacted away by Kafka."
+                                );
+                                let err_str = format!(
+                                    "Low watermark {lwm} of kafka topic {topic} partition {pid} \
+                                    is past the start offset/resume upper: {start_offset} \
+                                    This likely means that the offsets have been compacted away \
+                                    by Kafka. Please consider setting a higher start offset or \
+                                    adjusting your retention policies to prevent this.",
+                                );
 
-                            let update = HealthStatusUpdate::halting(
-                                err_str.clone(),
-                                None,
-                            );
-                            health_output.give(
-                                &health_cap,
-                                HealthStatusMessage {
-                                    id: None,
-                                    namespace: StatusNamespace::Kafka,
-                                    update: update.clone(),
-                                },
-                            );
-                            let error = Err(
-                                SourceError{
-                                    error:SourceErrorDetails::Initialization(err_str.into())
-                                }.into()
-                            );
-                            let time = data_cap.time().clone();
-                            for (output, error) in
-                                outputs.iter().map(|o| o.output_index).repeat_clone(error)
-                            {
-                                let update = ((output, error), time.clone(), Diff::ONE);
-                                let size = update.fuel_size();
-                                data_output
-                                    .give_fueled(&data_cap, update, size)
-                                    .await;
+                                let update = HealthStatusUpdate::halting(
+                                    err_str.clone(),
+                                    None,
+                                );
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        id: None,
+                                        namespace: StatusNamespace::Kafka,
+                                        update: update.clone(),
+                                    },
+                                );
+                                let error = Err(
+                                    SourceError{
+                                        error:SourceErrorDetails::Initialization(err_str.into())
+                                    }.into()
+                                );
+                                let time = data_cap.time().clone();
+                                for (output, error) in
+                                    outputs.iter().map(|o| o.output_index).repeat_clone(error)
+                                {
+                                    let update = ((output, error), time.clone(), Diff::ONE);
+                                    let size = update.fuel_size();
+                                    data_output
+                                        .give_fueled(&data_cap, update, size)
+                                        .await;
+                                }
+                                return;
                             }
-                            return;
+                        } else {
+                            tracing::warn!(
+                                source_id = config.id.to_string(),
+                                worker_id = config.worker_id,
+                                num_workers = config.worker_count,
+                                "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
+                                resume upper was found for this partition. Setting start offset to low watermark"
+                            );
+                            start_offsets.insert(*pid, *lwm);
                         }
-                    } else {
-                        tracing::warn!(
-                            source_id = config.id.to_string(),
-                            worker_id = config.worker_id,
-                            num_workers = config.worker_count,
-                            "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
-                            resume upper was found for this partition. Setting start offset to low watermark"
-                        );
-                        start_offsets.insert(*pid, *lwm);
                     }
                 }
             }
