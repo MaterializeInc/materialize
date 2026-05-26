@@ -163,6 +163,10 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 | `NoRowErr_negate` | `negate s` preserves `NoRowErr s` | unconditional |
 | `is_null_fold` (open) | `is_null(a) = false` when `a`'s column is non-nullable | `a`'s `outputType.nullable = false` |
 | `non_null_join_key` (open) | join key need not check NULL | both sides' key columns are non-nullable |
+| `schema_filter` (open) | `filter p s` output schema preserves `s.cols`, sets `rowErrFree` from `p`'s err-freedom | `p.might_error = false` over `s` |
+| `schema_project` (open) | `project es s` output schema lifts `Expr.outputType` over the projection vector | unconditional |
+| `schema_cross` (open) | `cross l r` output schema is `Schema.append l_sch r_sch` | unconditional |
+| `cellErrFree_propagation` (open) | `cellErrFree` of output of `filter` / `project` / `cross` from `cellErrFree` inputs, modulo per-cell err analysis on projection expressions | per-operator |
 
 ## Output-schema propagation
 
@@ -190,6 +194,23 @@ Per-constructor precision (`Mz/OutputType.lean`):
 * `.andN` / `.orN` / `.coalesce` — conservative weakest schema.
   Tighter rules need mutual recursion mirroring
   `Expr.argsMightError` (open follow-up).
+
+Open output-schema obligations:
+
+* Variadic `.andN` / `.orN` / `.coalesce` — mutual recursion to
+  express `errable := args.any errable` (or, for `.coalesce`,
+  `errable := args.all errable` with the rescue rule).
+* `.divide` static-divisor tightening — when the divisor is a
+  statically-safe literal, `errable := false`. Overlaps with
+  `might_error`'s `divisorIsSafe` analysis.
+* Cell-error-free row schema: an analogue of `NoRowErr` for the
+  per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
+  (row-level err multiplicity).
+* Precision direction on `Expr.outputType` per non-foundational
+  constructor — `eval_not_satisfies_precise` in `Mz/WellTyped.lean`
+  is the demonstration; arithmetic / comparison constructors
+  follow the same pattern (each needs its own per-case proof under
+  `WellTyped`).
 
 ## Constructor-level laws
 

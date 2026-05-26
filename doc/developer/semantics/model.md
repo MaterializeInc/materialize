@@ -19,6 +19,62 @@ scope at this layer.
 After the layers, this doc summarizes the equivalence relations the
 optimizer can pick from and the rewrites each enables.
 
+## Architecture: how the pieces fit
+
+The model has four kinds of object, each at a layer of the
+catalog:
+
+* **Analyses** live at the `Expr` layer.
+  `Expr.outputType`, `Expr.outputKind`, `Expr.WellTyped`, and
+  `Expr.might_error` consume an expression and a `Schema n` and
+  produce per-expression schema facts (errable bit, kind, type
+  correctness, error reachability).
+* **Schema facts** live at the `Schema n` / `Collection n` layer.
+  `Schema.cellErrFree`, `Schema.rowErrFree`, `RowSatisfies`,
+  `Collection.NoRowErr`.
+  Combinators (`Schema.append`, `NoRowErr_filter`,
+  `NoRowErr_unionAll`, …) propagate facts through operators.
+* **Preconditions** sit on operator rewrites.
+  `filter_cross_pushdown_left_strict` requires `NoRowErr`.
+  `filter_cross_pushdown_left_refines` weakens that to `SignOK`.
+  Future schema-driven scalar folds require `WellTyped` and an
+  `outputType` precision bit.
+* **Relations** pick which rewrites are admissible.
+  `=` is the strict surface; `eqErrSet`, `refines`, `LegalEquiv`
+  are progressive relaxations.
+  Each precondition discharged by a schema fact unlocks a rewrite
+  under one or more relations.
+
+The load-bearing dependency graph: *analyses → schema facts →
+preconditions → relation-tagged rewrites*.
+
+```mermaid
+flowchart TD
+  E[Expr] --> OT[outputType]
+  E --> OK[outputKind]
+  E --> WT[WellTyped]
+  E --> ME[might_error]
+  S[Schema n] --> RS[RowSatisfies / RowSatisfiesKind]
+  OT --> SF[Schema facts]
+  OK --> SF
+  WT --> SF
+  ME --> SF
+  RS --> SF
+  SF --> P1[NoRowErr precondition]
+  SF --> P2[SignOK precondition]
+  SF --> P3[WellTyped + outputType precision]
+  P1 --> R1[= pushdown]
+  P2 --> R2[refines pushdown]
+  P3 --> R3[schema-driven scalar folds]
+  C[Collection n] -.lift.-> R1
+  C -.lift.-> R2
+  L[LegalEval] -.sketch.-> R4[LegalEquiv rewrites]
+```
+
+The catalog below walks the layers (Datum → Expression → Row →
+Schema → Collection); the summary table at the end groups the
+relations and the rewrites they admit.
+
 ## Datum
 
 `Datum` is the cell-level value type.
@@ -235,24 +291,10 @@ Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
   consumes the matching strictness lemma from `Mz/MightError.lean`
   (`evalNot_not_err`, `evalPlus_not_err`, etc.).
 
-Open obligations on the schema side:
-
-* Variadic `.andN`/`.orN`/`.coalesce` — mutual recursion mirroring
-  `Expr.argsMightError` to express `errable := args.any errable`
-  (or, for `.coalesce`, `errable := args.all errable` with the
-  rescue rule).
-* `.divide` static-divisor tightening — when the divisor is a
-  statically-safe literal, `errable := false`. Overlaps with
-  `might_error`'s `divisorIsSafe` analysis.
-* Cell-error-free row schema: an analogue of `NoRowErr` for the
-  per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
-  (row-level err multiplicity) — both are honest schema facts and
-  both gate different rewrites.
-* Schema propagation through collection operators: `filter`
-  preserves the input schema (with `rowErrFree` adjusted by
-  predicate err-freedom); `project` produces the output schema by
-  lifting `outputType` over the projection vector; `cross` produces
-  `Schema.append`.
+Open obligations on the schema side are listed in
+`transforms.md` (sections *Schema-driven rewrites* and
+*Output-schema propagation*); that file is the canonical register
+of what is and isn't mechanized at the schema layer.
 
 ## Collection
 
@@ -444,117 +486,21 @@ sinks for type errors, which would force the `.err` route as the
 right model — or if the error-category split lands, which would
 remove the `errable`-pollution concern entirely.
 
-### Implementations of the error-category split
+### Error-category split (forking decision, deferred)
 
-Three places to land the distinction between implementation-bug
-errors (panic) and data-dependent runtime errors.
-
-#### (A) New `Datum` constructor `.panic`
-
-A fifth `Datum` variant alongside `.bool`, `.int`, `.null`,
-`.err`.
-
-**Gains.**
-Absolute distinction at the cell level.
-`Datum.IsErr` / `Datum.IsPanic` split cleanly.
-Under `WellTyped`, `eval e ≠ .panic` is a provable invariant
-giving the optimizer a strong "no implementation bug at this
-point" guarantee.
-Schema bits separate: `errable` tracks `.err _` (data-dependent),
-a separate `panicable` (or implicit "always false under
-WellTyped") tracks `.panic`.
-
-**Costs.**
-Cascade through every case-bash in the skeleton.
-`evalNot` / `evalAnd` / `evalOr` / `evalPlus` etc. each grow a
-`.panic` arm.
-~30–50 existing theorems in `Mz/Strict.lean` / `Mz/Boolean.lean`
-/ `Mz/Laws.lean` / `Mz/MightError.lean` / `Mz/Equiv.lean` /
-`Mz/WellTyped.lean` each grow case-bash arms.
-The four-valued absorption lattice becomes five-valued
-(`PANIC > FALSE > ERROR > NULL > TRUE`?
-or `.panic` as absorbing top?), requiring re-verification of
-every absorption proof.
-`refines` and `eqErrSet` need placement decisions
-(`.panic` below `.err` for "even more bottom", or above for
-"absorbing top").
-`might_error` splits into `might_error` / `might_panic` — two
-analyzers.
-
-#### (B) Collection-scoped absorbing marker
-
-`.panic` lives only at the *collection* scope, encoded as the
-absorbing element on the diff (`DiffWithGlobal.panic`).
-Cell-level expressions don't produce `.panic`; operators
-escalate cell-level mishaps to the collection scope when they
-detect an implementation bug.
-
-**Gains.**
-No `Datum` cascade.
-`Datum` stays four-valued; all existing theorems unchanged.
-Honest: implementation bugs aren't per-row; they poison the
-dataflow at the timestamp where they appear.
-Slots into the design doc's existing `DiffWithGlobal`
-absorbing-marker structure (currently spec-only post-restart).
-`might_error` stays focused on the data-dependent category.
-
-**Costs.**
-Requires mechanizing the absorbing-diff machinery (deferred at
-restart).
-Cell-level `evalNot (.int 5)` still needs a routing decision —
-`.null` (current) or `.err typeMismatch` (alternative);
-collection scope kicks in only when an operator escalates a
-cell-level mishap to "this whole collection is invalid".
-Doesn't help at the `Expr` layer where most analysis happens —
-collection scope is reached via operator escalation, not by
-`eval` directly.
-
-#### (C) `EvalError.implementationBug` variant
-
-Same `Datum.err _` carrier, new payload kind.
-`IsPanic` becomes a discriminator on the payload:
-`IsPanic := match (.err e) => e matches .implementationBug
-| _ => False`.
-
-**Gains.**
-Minimal cascade.
-`Datum.err _` already exists; the discrimination lives in the
-`EvalError` sum.
-Cell-level routing stays uniform —
-`evalNot (.int _) = .err .implementationBug`.
-`might_error` analyzes only the non-bug variants by definition.
-
-**Costs.**
-Conflates at the carrier level — readers see `.err _` everywhere,
-the distinction lives in the payload (easy to miss).
-`coalesce`'s rescue rule must distinguish bug-errs from
-runtime-errs (don't rescue panic).
-`Coalesce.go` updates.
-Existing `evalPlus_errPropagating` etc. now propagate both
-categories under one tag — proofs unchanged, but the *meaning*
-of `.err`-propagation is now overloaded.
-
-#### Recommendation
-
-(C) as the cheap immediate step, (B) as the eventual right
-model, (A) only if a forcing function appears.
-
-(C) gives the category distinction without cascading through
-every theorem.
-The semantic story stays single-tagged but the optimizer can
-reason about "is this err a bug or runtime?" via the payload.
-Future refactor to (B) is additive: once the absorbing-diff
-machinery is mechanized, bug-errs at cell-scope can escalate to
-the collection scope at operator boundaries.
-
-(A) buys the strongest type-level distinction but the
-proof-engineering cost is real.
-Worth it only if downstream tooling needs the bit at the
-`Datum` level — e.g., a user-facing `is_panic(x)` predicate
-distinct from `is_error(x)`, or schema-level `panicable` columns.
-
-No code change in the current skeleton; the alternatives are
-documented as forking decisions.
+Materialize's runtime conflates two error categories under one
+`EvalError` carrier: implementation bugs (planner type errors,
+internal-invariant violations) versus data-dependent runtime errors
+(overflow, division-by-zero, decode failure).
+A future split lets `errable`, `COALESCE` rescue, and operator
+escalation distinguish them.
+Three placements are documented in the design doc's
+*Alternatives → Error-category split (open future)* section:
+new `Datum.panic` (A), collection-scoped absorbing marker (B),
+`EvalError.implementationBug` payload variant (C).
+Current skeleton stays with the unified `.err _` carrier; revisit
+when a downstream forcing function (user-visible `is_panic`,
+sink-time escalation policy) lands.
 
 ### Divergence from PostgreSQL: `coalesce` rescues errors
 
@@ -763,33 +709,33 @@ deterministic `eval` is one legal outcome
 (`legal_of_eval : LegalEval env e (eval env e)`); other admissible
 outcomes correspond to other strategies.
 
-Posture sketched as the right object for SQL-faithful equivalence
-in the design doc. The skeleton's `Mz/Legal.lean` lands the
-foundation:
+**Scope of the current implementation.**
+The mechanized `LegalEval` covers binary err-payload
+non-determinism only: `Ok` via the deterministic primitive plus
+`ErrL` / `ErrR` admit either err payload symmetrically for each
+binary op.
+Variadic short-circuit (`FALSE AND (1/0)` admitting both outcomes),
+collection-level lift, and data-side commutativity are deferred.
+This is the foundation, not a SQL-faithful relational eval yet —
+the cases where the relational form matters most (short-circuit
+absorption, bounded-int associativity over chains) are still to do.
+
+What's mechanized in `Mz/Legal.lean`:
 
 * `LegalEval` inductive with rules for `.lit`, `.col`, `.not`,
-  `.ifThen` (SQL-pinned), and binary arithmetic / comparison
-  (three rules per op: `Ok` via deterministic primitive, `ErrL` /
-  `ErrR` to admit either err payload symmetrically).
-* `.andN` / `.orN` / `.coalesce` are deterministic for now (one
-  legal outcome via `eval`). Variadic short-circuit admissibility
-  (the canonical case `FALSE AND (1/0)` admitting both
-  `.bool false` and `.err _`) is the principal follow-up.
-* `legal_of_eval` — soundness: the deterministic `eval` produces
-  a legal outcome.
-* `legal_plus_err_either` — motivating theorem: both err payloads
-  of `(.err e₁) + (.err e₂)` are admissible. Demonstrates the
-  relational form recovering an equivalence the deterministic
-  eval loses (left-bias on `evalPlus`).
+  `.ifThen` (SQL-pinned), and binary arithmetic / comparison.
+* `.andN` / `.orN` / `.coalesce` deterministic via `eval` (one
+  legal outcome only).
+* `legal_of_eval` — the deterministic `eval` produces a legal
+  outcome.
+* `legal_plus_err_either` — both err payloads of
+  `(.err e₁) + (.err e₂)` are admissible.
 * `LegalEquiv` / `LegalSubsume` — set-equality / set-inclusion
-  candidate equivalence relations on `Expr`. `LegalEquiv` is the
-  strongest; `LegalSubsume` matches "no spurious errors" posture.
+  candidate equivalence relations on `Expr`.
 * `plus_comm_legal_errL_to_errR` / `_errR_to_errL` — err-side
-  commutativity of `.plus`. Demonstrates that the relational
-  form trivializes the obligation that strict equality on
-  deterministic eval fails (the left-bias).
+  commutativity of `.plus`.
 
-Open follow-ups on `LegalEval`:
+Open follow-ups before this becomes the SQL-faithful posture:
 
 * Variadic short-circuit admissibility (`.andN` / `.orN`).
 * Data-side commutativity of binary ops (needs primitive
@@ -817,24 +763,37 @@ Lean evidence accumulated before the restart:
   re-derives: the err side does not commute with cross under any
   encoding that multiplies err multiplicity against data multiplicity.
 
-## Summary table
+## Summary tables
+
+### Active mechanized layers and relations
+
+Relations and analyses a planner can cite today.
 
 | Layer / variant            | Mechanization                | Sound under                | Open under                                |
 | -------------------------- | ---------------------------- | -------------------------- | ----------------------------------------- |
 | `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
 | `Expr.eval`                | `Mz/Eval.lean`               | `=` (on unbounded `Int`)   | strict eval order (no non-determinism); bounded-int counter at `Mz/EquivBounded.lean` |
 | `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
-| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines`     |
+| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines` |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
-| `eraseRowErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
 | `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `kind_of_eval` soundness | precision direction on `outputType` open |
-| Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
-| `LegalEval` (non-det sketch) | `Mz/Legal.lean`            | foundation + binary err-side commutativity | variadic short-circuit; data-side comm; collection lift |
-| Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
+
+### Sketches and history
+
+Relations that are mechanized as foundations / interior lemmas but
+not yet usable as user-facing surfaces, plus historical encodings
+preserved for the design-doc record.
+
+| Layer / variant            | Status                       | What it buys                                | What's missing                            |
+| -------------------------- | ---------------------------- | ------------------------------------------- | ----------------------------------------- |
+| `eraseRowErr`              | `Mz/Collection.lean`, interior lemma | filter / cross pushdown — data side only | not user-facing; must pair with err-side argument |
+| `LegalEval`                | `Mz/Legal.lean`, foundation  | binary err-payload non-determinism, err-side commutativity | variadic short-circuit, data-side comm, collection lift |
+| Per-payload `(Int×ErrCnt)` | branch history               | `=` on commutative-monoid                    | pushdown over cross provably unsound      |
+| Collection-scoped diff     | spec-only (design doc §"Global-scoped errors") | absorbing-marker semantics for global failures | not mechanized                            |
 
 The remaining open obligations live primarily on the err side of
 operators that mix updates — `cross`, `join`, aggregates over erred
