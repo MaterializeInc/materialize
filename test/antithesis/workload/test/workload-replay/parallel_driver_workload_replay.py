@@ -64,7 +64,6 @@ import psycopg
 from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
-    CONNECT_TIMEOUT_S,
     PGDATABASE,
     PGHOST,
     PGPORT_INTERNAL,
@@ -97,6 +96,13 @@ MAX_QUERIES = env_int("WR_MAX_QUERIES", 60)
 # fault injection.  3 s is short enough to keep the worker pool
 # churning yet long enough that fast queries don't trip on it.
 STATEMENT_TIMEOUT_MS = env_int("WR_STATEMENT_TIMEOUT_MS", 3000)
+# Per-attempt psql connect timeout.  Helper-default is 30 s (sized for
+# long-running drivers); for the workload-replay short 60 s invocation
+# that's half the budget eaten on a single failed connect.  A 10 s
+# timeout fail-fasts inside a fault window, lets the worker loop
+# observe the fault and retry on the next cycle, and the helper's
+# overall retry budget still bounds total wall-clock.
+WORKER_CONNECT_TIMEOUT_S = env_int("WR_CONNECT_TIMEOUT_S", 10)
 # Cadence for the in-run progress log line.  A 60s invocation with no
 # output between start and end is hard to triage when faults stall the
 # worker pool; emitting a merged-stats snapshot every PROGRESS_INTERVAL_S
@@ -107,12 +113,28 @@ STATEMENT_TIMEOUT_MS = env_int("WR_STATEMENT_TIMEOUT_MS", 3000)
 PROGRESS_INTERVAL_S = env_float("WR_PROGRESS_INTERVAL_S", 15.0)
 
 
-def _set_session(cur: psycopg.Cursor[Any], q: dict[str, Any]) -> None:
-    """Apply the captured per-query session settings.
+def _set_session(
+    cur: psycopg.Cursor[Any],
+    q: dict[str, Any],
+    last: dict[str, Any],
+) -> None:
+    """Apply the captured per-query session settings, skipping no-op SETs.
 
     Each query in the workload YAML records the cluster, database,
     search_path, and isolation level it was executed against.  Mirror
     them here so the catalog snapshot the SUT sees matches the capture.
+
+    The bundled capture has 212 distinct queries that share three of
+    the four session-shape fields (cluster, database, transaction
+    isolation are identical for every query — only search_path varies).
+    Re-issuing every SET on every query meant 6 round-trips per query
+    even on the common path; under fault windows where each round-trip
+    can stall the per-query budget eats up before any query runs.
+    `last` caches the values already applied on this connection so
+    we only emit a SET when the value changes (or on first use after
+    connect, when every key is missing).  `statement_timeout` is
+    applied once per connection rather than per query for the same
+    reason: it's a stable constant for the whole driver lifetime.
 
     Materialize's `SET` does not accept extended-protocol parameters,
     so every value is inlined via psycopg's `SQL.format(Literal(...))`
@@ -120,24 +142,33 @@ def _set_session(cur: psycopg.Cursor[Any], q: dict[str, Any]) -> None:
     `materialize.workload_replay.replay.run_query`).
     """
     iso = q.get("transaction_isolation")
-    if iso:
+    if iso and last.get("transaction_isolation") != iso:
         cur.execute(SQL("SET transaction_isolation = {}").format(Literal(iso)))
+        last["transaction_isolation"] = iso
     cluster = q.get("cluster")
-    if cluster:
+    if cluster and last.get("cluster") != cluster:
         cur.execute(SQL("SET cluster = {}").format(Literal(cluster)))
+        last["cluster"] = cluster
     database = q.get("database")
-    if database:
+    if database and last.get("database") != database:
         cur.execute(SQL("SET database = {}").format(Literal(database)))
+        last["database"] = database
     search_path = q.get("search_path") or []
     if search_path:
         # `search_path` is a comma-separated list of bare identifiers
         # in PG syntax; we trust the capture's values rather than
         # quoting because the captured paths are all bare identifiers.
         joined = ",".join(search_path)
-        cur.execute(f"SET search_path = {joined}".encode())
-    # statement_timeout is set unconditionally to keep one slow query
-    # from hogging the worker thread for the whole invocation budget.
-    cur.execute(SQL("SET statement_timeout = {}").format(Literal(STATEMENT_TIMEOUT_MS)))
+        if last.get("search_path") != joined:
+            cur.execute(f"SET search_path = {joined}".encode())
+            last["search_path"] = joined
+    if not last.get("statement_timeout"):
+        # statement_timeout is a stable constant for this driver — set
+        # it once on first use and trust the connection lifetime.
+        cur.execute(
+            SQL("SET statement_timeout = {}").format(Literal(STATEMENT_TIMEOUT_MS))
+        )
+        last["statement_timeout"] = STATEMENT_TIMEOUT_MS
 
 
 _PARAM_PLACEHOLDER = "$"
@@ -189,8 +220,13 @@ def _run_one(
     conn: psycopg.Connection,
     q: dict[str, Any],
     stats: dict[str, int],
+    session_cache: dict[str, Any],
 ) -> None:
     """Execute one captured query.  Updates `stats` in place.
+
+    `session_cache` is per-connection state used by `_set_session` to
+    skip no-op SETs (see that function's docstring); cleared by the
+    worker on reconnect.
 
     Errors are classified into three buckets:
       * Looks-like-fault (network-level disconnect, broker timeout, …)
@@ -202,7 +238,7 @@ def _run_one(
     """
     with conn.cursor() as cur:
         try:
-            _set_session(cur, q)
+            _set_session(cur, q, session_cache)
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             if looks_like_fault(msg):
@@ -277,7 +313,7 @@ def _worker(
                 user=PGUSER_INTERNAL,
                 dbname=PGDATABASE,
                 autocommit=True,
-                connect_timeout=CONNECT_TIMEOUT_S,
+                connect_timeout=WORKER_CONNECT_TIMEOUT_S,
             )
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
@@ -289,13 +325,17 @@ def _worker(
             stats.setdefault("first_unexpected", f"connect: {msg}")
             return
 
+        # Per-connection session-state cache used by `_set_session` to
+        # skip no-op SETs.  Reset on each new connection since the
+        # SUT-side session state is fresh.
+        session_cache: dict[str, Any] = {}
         try:
             while time.time() < end_time and not stop_event.is_set():
                 try:
                     q = q_queue.get_nowait()
                 except queue.Empty:
                     return
-                _run_one(conn, q, stats)
+                _run_one(conn, q, stats, session_cache)
                 # `_run_one` may have left the connection in an aborted
                 # state if a fault landed mid-statement; psycopg's
                 # `closed` flag tells us when to reconnect.
