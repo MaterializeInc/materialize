@@ -1,5 +1,6 @@
 import Mz.Schema
 import Mz.Eval
+import Mz.Equiv
 
 /-!
 # Schema-indexed `Collection`
@@ -153,6 +154,133 @@ def NoRowErr {sch : Schema n} (s : Collection sch) : Prop :=
 theorem NoRowErr_nil {sch : Schema n} : NoRowErr ([] : Collection sch) := by
   unfold NoRowErr
   intro _ hmem; cases hmem
+
+/-! ## NoRowErr propagation through operators
+
+If inputs have `NoRowErr`, do the outputs of schema-preserving
+operators? Two answers depending on the operator:
+
+* `negate`, `unionAll`, `project` preserve `NoRowErr` unconditionally.
+* `filter` preserves it when the predicate is statically err-free
+  on the schema (i.e., `Expr.might_error p = false` plus an
+  err-free row condition).  Migration of data multiplicity to
+  err multiplicity is the load-bearing concern.  -/
+
+theorem NoRowErr_negate {sch : Schema n} {s : Collection sch}
+    (h : NoRowErr s) : NoRowErr (negate s) := by
+  intro rec hrec
+  unfold negate at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec', hrec'_mem, hrec'_eq⟩ := hrec
+  have h_rec' := h rec' hrec'_mem
+  show rec.err_diff = 0
+  rw [← hrec'_eq]
+  show -rec'.err_diff = 0
+  rw [h_rec']
+  rfl
+
+theorem NoRowErr_unionAll {sch : Schema n} {a b : Collection sch}
+    (ha : NoRowErr a) (hb : NoRowErr b) : NoRowErr (unionAll a b) := by
+  intro rec hrec
+  unfold unionAll at hrec
+  rcases List.mem_append.mp hrec with hL | hR
+  · exact ha rec hL
+  · exact hb rec hR
+
+theorem NoRowErr_project {sch_in : Schema n} {sch_out : Schema m}
+    (es : (i : Fin m) → Expr sch_in (sch_out.types.get i))
+    {s : Collection sch_in} (h : NoRowErr s) :
+    NoRowErr (project es s) := by
+  intro rec hrec
+  unfold project at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec', hrec'_mem, hrec'_eq⟩ := hrec
+  have h_rec' := h rec' hrec'_mem
+  show rec.err_diff = 0
+  rw [← hrec'_eq]
+  show rec'.err_diff = 0
+  exact h_rec'
+
+/-! ## Row refinement
+
+Pointwise refinement on `Env sch` cells. Lifts `Datum.refines` to
+the row level. -/
+
+/-- A row refines another iff every cell does. -/
+def Row.refines {n : Nat} {sch : Schema n} (a b : Env sch) : Prop :=
+  ∀ i : Fin n, (a i).refines (b i)
+
+theorem Row.refines_refl {n : Nat} {sch : Schema n} (a : Env sch) :
+    Row.refines a a := fun _ => Datum.refines_refl _
+
+theorem Row.refines_trans {n : Nat} {sch : Schema n} {a b c : Env sch}
+    (h₁ : Row.refines a b) (h₂ : Row.refines b c) :
+    Row.refines a c := fun i => Datum.refines_trans (h₁ i) (h₂ i)
+
+theorem Row.refines_of_eq {n : Nat} {sch : Schema n} {a b : Env sch}
+    (h : a = b) : Row.refines a b := h ▸ Row.refines_refl a
+
+/-! ## Update refinement (Smyth-style)
+
+`a.refines b` iff:
+* rows refine pointwise
+* data multiplicities agree
+* err multiplicity is at least as large on the LHS (errors are
+  "more defined" on the bottom). -/
+
+def _root_.Mz.Update.refines {n : Nat} {sch : Schema n} (a b : Update sch) : Prop :=
+  Row.refines a.row b.row ∧ a.diff = b.diff ∧ a.err_diff ≥ b.err_diff
+
+theorem _root_.Mz.Update.refines_refl {n : Nat} {sch : Schema n} (a : Update sch) :
+    a.refines a :=
+  ⟨Row.refines_refl _, rfl, Int.le_refl _⟩
+
+theorem _root_.Mz.Update.refines_trans {n : Nat} {sch : Schema n}
+    {a b c : Update sch} (h₁ : a.refines b) (h₂ : b.refines c) :
+    a.refines c := by
+  obtain ⟨hr₁, hd₁, he₁⟩ := h₁
+  obtain ⟨hr₂, hd₂, he₂⟩ := h₂
+  exact ⟨Row.refines_trans hr₁ hr₂, hd₁.trans hd₂, le_trans he₂ he₁⟩
+
+theorem _root_.Mz.Update.refines_of_eq {n : Nat} {sch : Schema n}
+    {a b : Update sch} (h : a = b) : a.refines b :=
+  h ▸ Update.refines_refl a
+
+/-! ## Collection refinement
+
+Lift via `List.Forall₂` — pointwise update refinement at matching
+positions. Collections refine when they have the same length and
+each index-aligned pair refines. -/
+
+def refines {n : Nat} {sch : Schema n} :
+    Collection sch → Collection sch → Prop :=
+  List.Forall₂ Update.refines
+
+theorem refines_refl {n : Nat} {sch : Schema n}
+    (s : Collection sch) : refines s s := by
+  induction s with
+  | nil => exact List.Forall₂.nil
+  | cons hd tl ih => exact List.Forall₂.cons (Update.refines_refl hd) ih
+
+theorem refines_trans {n : Nat} {sch : Schema n}
+    {a b c : Collection sch}
+    (h₁ : refines a b) (h₂ : refines b c) :
+    refines a c := by
+  induction a generalizing b c with
+  | nil =>
+    cases h₁
+    cases h₂
+    exact List.Forall₂.nil
+  | cons hd tl ih =>
+    cases h₁ with
+    | cons hh ht =>
+      cases h₂ with
+      | cons hh' ht' =>
+        exact List.Forall₂.cons (Update.refines_trans hh hh') (ih ht ht')
+
+theorem refines_of_eq {n : Nat} {sch : Schema n}
+    {a b : Collection sch} (h : a = b) : refines a b :=
+  h ▸ refines_refl a
 
 end Collection
 
