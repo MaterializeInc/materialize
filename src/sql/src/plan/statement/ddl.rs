@@ -2837,7 +2837,7 @@ pub fn plan_create_materialized_view(
                 }
                 RefreshOptionValue::AtCreation => {
                     soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
-                    sql_bail!("INTERNAL ERROR: REFRESH AT CREATION should have been purified away")
+                    bail_internal!("REFRESH AT CREATION should have been purified away")
                 }
                 RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
                     transform_ast::transform(scx, &mut time)?; // Desugar the expression
@@ -2880,6 +2880,9 @@ pub fn plan_create_materialized_view(
                     let interval = interval.duration()?;
                     if u64::try_from(interval.as_millis()).is_err() {
                         sql_bail!("REFRESH interval too large");
+                    }
+                    if interval.as_micros() < 1000 {
+                        sql_bail!("REFRESH interval must be at least 1 ms")
                     }
 
                     let mut aligned_to = match aligned_to {

@@ -748,6 +748,11 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT
 query error invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELECT * FROM t2;
 
+query error REFRESH interval must be at least 1 ms
+CREATE MATERIALIZED VIEW mv_bad
+  WITH (REFRESH EVERY '999 microseconds')
+  AS SELECT 1;
+
 # This tests that we don't forget to purify EXPLAIN CREATE MATERIALIZED VIEW
 statement ok
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
