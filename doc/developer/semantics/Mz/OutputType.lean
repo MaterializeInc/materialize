@@ -1,6 +1,7 @@
 import Mz.Expr
 import Mz.Eval
 import Mz.MightError
+import Mz.Coalesce
 
 /-!
 # Output column schema for indexed `Expr`
@@ -191,5 +192,26 @@ a corollary of the schema-driven analysis on the input collection. -/
 theorem EnvErrFree_of_RowSatisfies {n : Nat} {sch : Schema n} (env : Env sch)
     (hsat : RowSatisfies sch env) (hcell : sch.cellErrFree) : EnvErrFree env :=
   fun i => (hsat i).2 (hcell i)
+
+/-! ## Coalesce collapse (schema-rider)
+
+If the first arg of `coalesce` has a schema marking both
+`nullable := false` and `errable := false`, then on a row
+satisfying `sch` that arg evaluates to a concrete `Datum` (not
+`.null`, not `.err _`), and `coalesce` short-circuits to it. The
+remaining args are evaluated lazily by `firstConcrete` and never
+consulted — so the equation holds for any tail. -/
+
+theorem coalesce_collapse {n : Nat} {sch : Schema n} {k : ColType}
+    (a : Expr sch k) (rest : ExprList sch k)
+    (env : Env sch) (hsat : RowSatisfies sch env)
+    (hN : (Expr.outputCols a).nullable = false)
+    (hE : (Expr.outputCols a).errable = false) :
+    eval env (Expr.coalesce (ExprList.cons a rest)) = eval env a := by
+  have hd := eval_satisfies_outputCols env hsat a
+  have hdN : ¬(eval env a).IsNull := hd.1 hN
+  have hdE : ¬(eval env a).IsErr := hd.2 hE
+  show evalCoalesce (eval env a :: evalList env rest) = eval env a
+  exact evalCoalesce_cons_concrete _ _ hdN hdE
 
 end Mz

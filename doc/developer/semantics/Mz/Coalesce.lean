@@ -91,4 +91,30 @@ theorem coalesce_first_err_wins_int (e₁ e₂ : EvalError) :
     evalCoalesce [(.err e₁ : Datum .int), .err e₂] = .err e₁ := by
   simp [evalCoalesce, Coalesce.firstConcrete, Coalesce.residue, Datum.isNullB]
 
+/-! ## Concrete-head collapse
+
+When the head of the operand list is concrete (`.bool _` for kind
+`.bool`, `.int _` for kind `.int`), `firstConcrete` short-circuits
+and `evalCoalesce` returns it verbatim. The `.top` kind is
+vacuously covered — `Datum .top` has no concrete inhabitant. -/
+
+theorem Coalesce.firstConcrete_cons_concrete {k : ColType}
+    (d : Datum k) (rest : List (Datum k))
+    (hN : ¬d.IsNull) (hE : ¬d.IsErr) :
+    Coalesce.firstConcrete (d :: rest) = some d := by
+  cases d with
+  | bool _ => simp [Coalesce.firstConcrete]
+  | int _  => simp [Coalesce.firstConcrete]
+  | null   => exact absurd trivial hN
+  | err _  => exact absurd trivial hE
+
+theorem evalCoalesce_cons_concrete {k : ColType}
+    (d : Datum k) (rest : List (Datum k))
+    (hN : ¬d.IsNull) (hE : ¬d.IsErr) :
+    evalCoalesce (d :: rest) = d := by
+  show (match Coalesce.firstConcrete (d :: rest) with
+        | some d' => d'
+        | none => Coalesce.residue (d :: rest)) = d
+  rw [Coalesce.firstConcrete_cons_concrete d rest hN hE]
+
 end Mz
