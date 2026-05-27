@@ -304,6 +304,18 @@ impl Coordinator {
                         .await;
                     ctx.retire(res);
                 }
+                Plan::CreateApi(plan) => {
+                    let res = self
+                        .sequence_create_api(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(res);
+                }
+                Plan::CreateMetric(plan) => {
+                    let res = self
+                        .sequence_create_metric(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(res);
+                }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);

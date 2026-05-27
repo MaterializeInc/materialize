@@ -1385,6 +1385,8 @@ impl Coordinator {
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
                     | Statement::CreateNetworkPolicy(_)
+                    | Statement::CreateApi(_)
+                    | Statement::CreateMetric(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)

@@ -669,7 +669,12 @@ pub fn plan_alter_default_privileges(
         ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
-        ObjectType::Sink | ObjectType::ClusterReplica | ObjectType::Role | ObjectType::Func => {
+        ObjectType::Sink
+        | ObjectType::ClusterReplica
+        | ObjectType::Role
+        | ObjectType::Func
+        | ObjectType::Api
+        | ObjectType::Metric => {
             sql_bail!("{object_type}S do not have privileges")
         }
         ObjectType::Cluster | ObjectType::Database

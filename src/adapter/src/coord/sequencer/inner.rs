@@ -962,6 +962,95 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_api(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateApiPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::CreateApiPlan {
+            name,
+            api,
+            if_not_exists,
+        } = plan;
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let api = mz_catalog::memory::objects::Api {
+            create_sql: api.create_sql,
+            global_id,
+            cluster_id: api.cluster_id,
+            resolved_ids,
+        };
+        let ops = vec![catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::Api(api),
+            owner_id: *session.current_role_id(),
+        }];
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedApi),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "api",
+                });
+                Ok(ExecuteResponse::CreatedApi)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_create_metric(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateMetricPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::CreateMetricPlan {
+            name,
+            metric,
+            if_not_exists,
+        } = plan;
+        // `resolved_ids` already contains `api_id` and `values_from`: both
+        // appear in the persisted AST as `ResolvedItemName::Item`, which the
+        // dependency visitor picks up during name resolution. The catalog
+        // dependency graph then refuses `DROP VIEW`/`DROP API` without
+        // CASCADE and cleans up the metric on CASCADE.
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let metric = mz_catalog::memory::objects::Metric {
+            create_sql: metric.create_sql,
+            global_id,
+            api_id: metric.api_id,
+            metric_type: metric.metric_type,
+            help: metric.help,
+            values_from: metric.values_from,
+            value_column: metric.value_column,
+            resolved_ids,
+        };
+        let ops = vec![catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::Metric(metric),
+            owner_id: *session.current_role_id(),
+        }];
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedMetric),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "metric",
+                });
+                Ok(ExecuteResponse::CreatedMetric)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    #[instrument]
     pub(super) async fn sequence_alter_network_policy(
         &mut self,
         session: &Session,
