@@ -30,7 +30,7 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,
+    CompactScalarSeq, CompactScalars, ExplainConfig, ExprHumanizer, Indices, PlanRenderingContext,
 };
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
@@ -254,22 +254,46 @@ impl Plan {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
-                        write!(f, "{}→Differential Join", ctx.indent)?;
-                        write!(f, " %{}", plan.source_relation)?;
-                        for dsp in &plan.stage_plans {
-                            write!(f, " » %{}", dsp.lookup_relation)?;
-                        }
+                        let label = if plan.has_cross_stage() {
+                            "→Differential Cross Join"
+                        } else {
+                            "→Differential Join"
+                        };
+                        write!(f, "{}{label} ", ctx.indent)?;
+                        fmt_join_chain(
+                            f,
+                            ctx.humanizer,
+                            &mode,
+                            inputs,
+                            plan.source_relation,
+                            plan.source_key.as_ref(),
+                            plan.stage_plans
+                                .iter()
+                                .map(|s| (s.lookup_relation, &s.lookup_key)),
+                        )?;
                         writeln!(f, "{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
-                        write!(f, "{}→Delta Join", ctx.indent)?;
+                        let label = if plan.has_cross_stage() {
+                            "→Delta Cross Join"
+                        } else {
+                            "→Delta Join"
+                        };
+                        write!(f, "{}{label}", ctx.indent)?;
                         for dpp in &plan.path_plans {
-                            write!(f, " [%{}", dpp.source_relation)?;
-
-                            for dsp in &dpp.stage_plans {
-                                write!(f, " » %{}", dsp.lookup_relation)?;
-                            }
+                            write!(f, " [")?;
+                            fmt_join_chain(
+                                f,
+                                ctx.humanizer,
+                                &mode,
+                                inputs,
+                                dpp.source_relation,
+                                Some(&dpp.source_key),
+                                dpp.stage_plans
+                                    .iter()
+                                    .map(|s| (s.lookup_relation, &s.lookup_key)),
+                            )?;
                             write!(f, "]")?;
                         }
                         writeln!(f, "{annotations}")?;
@@ -987,6 +1011,85 @@ impl AvailableCollections {
     }
 }
 
+/// Format a join implementation chain like `%0:t[#0{a}] » %1:u[#0{c}] » %2[×]`.
+///
+/// Each position is rendered as `%pos:name` when an underlying [`PlanNode::Get`] can be
+/// dug out of the corresponding input plan (see [`humanize_input_name`]),
+/// otherwise just `%pos`. `[×]` (U+00D7) marks a cross product (empty lookup
+/// key). A `None` `source_key` renders the source position with no bracketed
+/// suffix.
+fn fmt_join_chain<'a, I>(
+    f: &mut fmt::Formatter<'_>,
+    humanizer: &dyn ExprHumanizer,
+    mode: &HumanizedExplain,
+    inputs: &[Plan],
+    source_relation: usize,
+    source_key: Option<&'a Vec<MirScalarExpr>>,
+    stages: I,
+) -> fmt::Result
+where
+    I: IntoIterator<Item = (usize, &'a Vec<MirScalarExpr>)>,
+{
+    write!(
+        f,
+        "{}",
+        humanize_input_name(humanizer, &inputs[source_relation], source_relation)
+    )?;
+    if let Some(key) = source_key {
+        fmt_join_key_brackets(f, mode, key)?;
+    }
+    for (lookup_relation, lookup_key) in stages {
+        write!(
+            f,
+            " » {}",
+            humanize_input_name(humanizer, &inputs[lookup_relation], lookup_relation)
+        )?;
+        fmt_join_key_brackets(f, mode, lookup_key)?;
+    }
+    Ok(())
+}
+
+/// Render `[k1, k2, …]` for a non-empty join key, or `[×]` for a cross product.
+fn fmt_join_key_brackets(
+    f: &mut fmt::Formatter<'_>,
+    mode: &HumanizedExplain,
+    key: &Vec<MirScalarExpr>,
+) -> fmt::Result {
+    if key.is_empty() {
+        write!(f, "[×]")
+    } else {
+        let key = CompactScalars(mode.seq(key, None));
+        write!(f, "[{key}]")
+    }
+}
+
+/// Render a join input as `%pos:name` if we can dig a `Get` out of `plan`,
+/// otherwise just `%pos`. Mirrors `dig_name_from_expr` in
+/// `src/expr/src/explain/text.rs` for the MIR `EXPLAIN OPTIMIZED PLAN` output.
+fn humanize_input_name(humanizer: &dyn ExprHumanizer, plan: &Plan, pos: usize) -> String {
+    fn dig(humanizer: &dyn ExprHumanizer, plan: &Plan) -> Option<String> {
+        use crate::plan::PlanNode::*;
+        match &plan.node {
+            Get { id, .. } => match id {
+                Id::Local(lid) => Some(lid.to_string()),
+                Id::Global(gid) => Some(
+                    humanizer
+                        .humanize_id_unqualified(*gid)
+                        .unwrap_or_else(|| gid.to_string()),
+                ),
+            },
+            // Transparent wrappers: keep digging.
+            ArrangeBy { input, .. } => dig(humanizer, input),
+            Mfp { input, .. } => dig(humanizer, input),
+            _ => None,
+        }
+    }
+    match dig(humanizer, plan) {
+        Some(name) => format!("%{pos}:{name}"),
+        None => format!("%{pos}"),
+    }
+}
+
 impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     fn fmt_text(
         &self,
@@ -1001,31 +1104,30 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     }
 }
 impl LinearJoinPlan {
+    /// True iff at least one stage is a cross product (empty lookup key).
+    fn has_cross_stage(&self) -> bool {
+        self.stage_plans.iter().any(|s| s.lookup_key.is_empty())
+    }
+
     #[allow(clippy::needless_pass_by_ref_mut)]
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        for (i, plan) in self.stage_plans.iter().enumerate().rev() {
-            let lookup_relation = &plan.lookup_relation;
-            write!(f, "{}Join stage {i} in %{lookup_relation}", ctx.indent)?;
-            if !plan.lookup_key.is_empty() {
-                let lookup_key = CompactScalarSeq(&plan.lookup_key);
-                writeln!(f, " with lookup key {lookup_key}",)?;
-            } else {
-                writeln!(f)?;
-            }
-            if plan.closure.maps_or_filters() {
-                ctx.indented(|ctx| plan.closure.fmt_default_text(f, ctx))?;
+        // Per-stage closures (natural 0..N order). The header chain already
+        // shows each stage's position + key, so we only emit a block when
+        // there's a non-identity closure to attribute to that stage.
+        for stage in self.stage_plans.iter() {
+            if stage.closure.maps_or_filters() {
+                writeln!(f, "{}after %{}:", ctx.indent, stage.lookup_relation)?;
+                ctx.indented(|ctx| stage.closure.fmt_default_text(f, ctx))?;
             }
         }
         if let Some(final_closure) = &self.final_closure {
             if final_closure.maps_or_filters() {
-                ctx.indented(|ctx| {
-                    writeln!(f, "{}Final closure:", ctx.indent)?;
-                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
-                })?;
+                writeln!(f, "{}Final closure:", ctx.indent)?;
+                ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))?;
             }
         }
         Ok(())
@@ -1158,13 +1260,31 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
     }
 }
 impl DeltaJoinPlan {
+    /// True iff any stage in any path is a cross product.
+    fn has_cross_stage(&self) -> bool {
+        self.path_plans
+            .iter()
+            .any(|p| p.stage_plans.iter().any(|s| s.lookup_key.is_empty()))
+    }
+
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        for (i, plan) in self.path_plans.iter().enumerate() {
-            writeln!(f, "{}Delta join path for input %{i}", ctx.indent)?;
+        // The header chain already shows each path's positions + keys, so we
+        // only print a `path %src:` block when at least one of its stage
+        // closures or its final closure is non-identity.
+        for plan in self.path_plans.iter() {
+            let has_stage_closure = plan.stage_plans.iter().any(|s| s.closure.maps_or_filters());
+            let has_final_closure = plan
+                .final_closure
+                .as_ref()
+                .is_some_and(|c| c.maps_or_filters());
+            if !has_stage_closure && !has_final_closure {
+                continue;
+            }
+            writeln!(f, "{}path %{}:", ctx.indent, plan.source_relation)?;
             ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
@@ -1204,36 +1324,16 @@ impl DeltaPathPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        for (
-            i,
-            DeltaStagePlan {
-                lookup_key,
-                lookup_relation,
-                closure,
-                ..
-            },
-        ) in self.stage_plans.iter().enumerate()
-        {
-            if !lookup_key.is_empty() {
-                let lookup_key = CompactScalarSeq(lookup_key);
-                writeln!(
-                    f,
-                    "{}stage {i} for %{lookup_relation}: lookup key {lookup_key}",
-                    ctx.indent
-                )?;
-            } else {
-                writeln!(f, "{}stage %{i} for  %{lookup_relation}", ctx.indent)?;
-            }
-            if closure.maps_or_filters() {
-                ctx.indented(|ctx| closure.fmt_default_text(f, ctx))?;
+        for stage in self.stage_plans.iter() {
+            if stage.closure.maps_or_filters() {
+                writeln!(f, "{}after %{}:", ctx.indent, stage.lookup_relation)?;
+                ctx.indented(|ctx| stage.closure.fmt_default_text(f, ctx))?;
             }
         }
         if let Some(final_closure) = &self.final_closure {
             if final_closure.maps_or_filters() {
-                ctx.indented(|ctx| {
-                    writeln!(f, "{}Final closure:", ctx.indent)?;
-                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
-                })?;
+                writeln!(f, "{}Final closure:", ctx.indent)?;
+                ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))?;
             }
         }
         Ok(())
@@ -1362,7 +1462,8 @@ impl JoinClosure {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         if !self.before.is_identity() {
-            mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
+            mode.expr(self.before.deref(), None)
+                .fmt_default_text(f, ctx)?;
         }
         if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
