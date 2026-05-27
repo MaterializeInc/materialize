@@ -27,6 +27,7 @@ use differential_dataflow::trace::implementations::merge_batcher::container::Int
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
@@ -164,18 +165,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // Bucket the keyed `(key, val)` stream when lowering chose `TemporalBucketing`.
             // `Reduce` builds its own arrangement via `KeyValPlan`, bypassing
             // `ensure_collections`, so the strategy is plumbed through `PlanNode::Reduce`
-            // rather than inferred at the arrangement site. `apply_bucketing_strategy` is a
-            // no-op for `Direct`.
-            //
-            // Unlike `ensure_collections`, there's only one bucketing call site here, so we
-            // don't need to track an `already_bucketed` flag. If a second site is ever added
-            // in this function, it must consult `_bucketed`.
-            let (key_val_collection, _bucketed) = crate::render::context::apply_bucketing_strategy(
-                key_val_input.as_collection(),
+            // rather than inferred at the arrangement site. No-op for `Direct`.
+            let key_val_collection = key_val_input.as_collection();
+            let key_val_collection = if matches!(
                 temporal_bucketing_strategy,
-                self.as_of_frontier.clone(),
-                &self.config_set,
-            );
+                ArrangementStrategy::TemporalBucketing
+            ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+            {
+                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                    .get(&self.config_set)
+                    .try_into()
+                    .expect("must fit");
+                T::maybe_apply_temporal_bucketing(
+                    key_val_collection.inner,
+                    self.as_of_frontier.clone(),
+                    summary,
+                )
+            } else {
+                key_val_collection
+            };
 
             // Render the reduce plan
             self.render_reduce_plan(reduce_plan, key_val_collection, err, key_arity, mfp_after)

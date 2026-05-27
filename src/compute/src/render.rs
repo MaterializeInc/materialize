@@ -123,12 +123,12 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
+use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
@@ -1311,12 +1311,21 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     // Apply per-input temporal bucketing. No-op for `Direct`.
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
-                    let (os, _bucketed) = context::apply_bucketing_strategy(
-                        os,
-                        strategy,
-                        self.as_of_frontier.clone(),
-                        &self.config_set,
-                    );
+                    let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing)
+                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+                    {
+                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                            .get(&self.config_set)
+                            .try_into()
+                            .expect("must fit");
+                        T::maybe_apply_temporal_bucketing(
+                            os.inner,
+                            self.as_of_frontier.clone(),
+                            summary,
+                        )
+                    } else {
+                        os
+                    };
                     oks.push(os);
                     errs.push(es);
                 }

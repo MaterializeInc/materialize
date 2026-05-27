@@ -24,6 +24,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -95,12 +96,19 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        let (ok_input, _bucketed) = crate::render::context::apply_bucketing_strategy(
-            ok_input,
+        let ok_input = if matches!(
             temporal_bucketing_strategy,
-            self.as_of_frontier.clone(),
-            &self.config_set,
-        );
+            ArrangementStrategy::TemporalBucketing
+        ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+        {
+            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                .get(&self.config_set)
+                .try_into()
+                .expect("must fit");
+            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
+        } else {
+            ok_input
+        };
 
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();
