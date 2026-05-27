@@ -943,21 +943,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
 
-                let (plan, has_future_updates) = if !keys
+                let plan = if !keys
                     .arranged
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    let plan = self.arrange_by(
+                    self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(vec![required_arrangement]),
                         &keys,
                         arity,
                         input_future,
-                    );
-                    (plan, false)
+                    )
                 } else {
-                    (plan, input_future)
+                    plan
                 };
 
                 let output_keys = threshold_plan.keys();
@@ -970,7 +969,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     keys: output_keys,
-                    has_future_updates,
+                    // Threshold builds its own output arrangement whose
+                    // MergeBatcher absorbs future-stamped updates, so no
+                    // future updates flow out.
+                    has_future_updates: false,
                 }
             }
             MirRelationExpr::Union { base, inputs } => {
