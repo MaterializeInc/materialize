@@ -1408,6 +1408,31 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
+                // PER-16: refuse to insert a rollup at a seqno that GC has
+                // already physically removed. `apply_unbatched_idempotent_cmd`
+                // replays the captured `(rollup_seqno, rollup)` tuple on
+                // every retry. If the original CAS committed indeterminately
+                // and a concurrent GC then removed the rollup, the retry
+                // would otherwise observe an empty map entry and re-insert
+                // the same `PartialRollupKey` at the same seqno, producing
+                // a second Insert (and, later, a second Delete) for that
+                // key in the diff stream and tripping the `assert!` in
+                // `find_removable_blobs`.
+                //
+                // We use the smallest seqno currently in `self.rollups` as
+                // the GC watermark. GC's `remove_rollups` always keeps the
+                // latest rollup `<= seqno_since` and removes the older
+                // ones, so the surviving minimum is strictly above every
+                // seqno that has been removed. (Unlike `last_gc_req`, this
+                // is only advanced by an actual physical removal, not by
+                // `maybe_gc` deciding to *request* one — `last_gc_req` runs
+                // ahead of removals and would falsely reject legitimate
+                // late `add_rollup` calls for older seqnos.)
+                if let Some(min_kept) = self.rollups.keys().next() {
+                    if rollup_seqno < *min_kept {
+                        return Continue(false);
+                    }
+                }
                 self.active_rollup = None;
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
@@ -4422,5 +4447,74 @@ pub(crate) mod tests {
             let parsed = RunId::from_str(&runid_str);
             prop_assert_eq!(parsed, Ok(runid));
         });
+    }
+
+    /// Regression for PER-16. `add_rollup` must refuse to (re-)insert a
+    /// rollup at a seqno that GC has already physically removed.
+    /// Without this guard, an `apply_unbatched_idempotent_cmd` retry of
+    /// `add_rollup` that runs after a concurrent GC removed the rollup's
+    /// original map entry will re-insert it under the same key, producing
+    /// duplicate Insert events in the diff stream and (later) duplicate
+    /// Delete events that trip the `assert!` in `gc.rs`'s
+    /// `find_removable_blobs`.
+    ///
+    /// This test reaches the bug state via the public
+    /// `add_rollup` → `add_rollup` (newer) → `remove_rollups` (the older
+    /// one) → `add_rollup` (retry of the older one) sequence, mirroring
+    /// how a delayed retry of an indeterminate add_rollup commit can race
+    /// a concurrent GC pass that has since added a newer rollup and
+    /// removed the older one.
+    #[mz_ore::test]
+    fn add_rollup_idempotent_across_gc_removal() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let older_seqno = SeqNo(10);
+        let older = HollowRollup {
+            key: PartialRollupKey::new(older_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let newer_seqno = SeqNo(20);
+        let newer = HollowRollup {
+            key: PartialRollupKey::new(newer_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let add_older = |state: &mut StateCollections<u64>| state.add_rollup((older_seqno, &older));
+
+        // First attempt commits the older rollup.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        // A repeat at the same seqno with the same key is the pre-existing
+        // idempotent no-op and should report applied=true.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        assert_eq!(state.collections.rollups.len(), 1);
+
+        // The shard keeps making progress and a later command commits a
+        // newer rollup. This is what gives GC something to keep when it
+        // later removes the older entry.
+        assert_eq!(
+            state.collections.add_rollup((newer_seqno, &newer)),
+            Continue(true),
+        );
+
+        // The GC worker, having found a kept rollup at `newer_seqno`,
+        // commits the removal of the older one. State.rollups now only
+        // contains the kept rollup; the older entry is gone.
+        let _ = state
+            .collections
+            .remove_rollups(&[(older_seqno, older.key.clone())]);
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert!(state.collections.rollups.contains_key(&newer_seqno));
+
+        // The retry replays the same captured `(older_seqno, older)`
+        // tuple. Even though no entry references the key anymore,
+        // re-inserting it must be refused: `older_seqno` falls below the
+        // smallest live rollup seqno, which is the GC watermark.
+        assert_eq!(add_older(&mut state.collections), Continue(false));
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert_eq!(state.collections.rollups.len(), 1);
     }
 }
