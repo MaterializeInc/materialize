@@ -78,9 +78,19 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 - All identifiers in `create_sql` definitions and queries
 
 *Literals (`--literals`, enabled by default):*
-- String literals in SQL → `'literal_1'`, `'literal_2'`, ...
-- String default values in table/source/child columns
-- String literals in queries
+- Query SQL is redacted with Materialize's own parser (`mz-sql-anonymize`),
+  replacing all literals — strings, numbers, hex strings, intervals — with
+  `'<REDACTED>'`. If the helper binary is not built, the tool falls back to a
+  regex that only catches single-quoted strings (and prints a warning).
+- `create_sql` strings (including connection hosts/users, sink topics, source
+  options, and column defaults) → `'literal_1'`, `'literal_2'`, ... via regex.
+  The parser is not used here because `to_ast_string_redacted()` intentionally
+  does not redact DDL option strings.
+
+For exact, parser-based query redaction, build the helper once:
+```bash
+cargo build --release -p mz-sql-anonymize
+```
 
 **Usage:**
 ```bash
@@ -90,9 +100,11 @@ bin/mz-workload-anonymize <file> [OPTIONS]
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-o, --output` | Path to write output | overwrites input file |
+| `-o, --output` | Path to write output (`-` for stdout); required unless `--in-place` | — |
+| `--in-place` | Overwrite the input file (destroys the original capture) | off |
 | `--identifiers` / `--no-identifiers` | Anonymize object names | enabled |
-| `--literals` / `--no-literals` | Anonymize string literals | enabled |
+| `--literals` / `--no-literals` | Anonymize literals | enabled |
+| `--verify` / `--no-verify` | Re-scan output for leaks and refuse to write if any are found | enabled |
 
 **Examples:**
 ```bash

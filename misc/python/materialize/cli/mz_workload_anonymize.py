@@ -8,13 +8,59 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import json
+import os
 import re
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from materialize import MZ_ROOT
+
+
+def _locate_redactor() -> list[str] | None:
+    """Locate the mz-sql-anonymize helper binary, if it has been built.
+
+    Honors MZ_SQL_ANONYMIZE_BIN, then looks for a release or debug build in the
+    Cargo target directory. Returns the argv prefix to run it, or None.
+    """
+    override = os.environ.get("MZ_SQL_ANONYMIZE_BIN")
+    if override and Path(override).exists():
+        return [override]
+    for profile in ("release", "debug"):
+        candidate = MZ_ROOT / "target" / profile / "mz-sql-anonymize"
+        if candidate.exists():
+            return [str(candidate)]
+    return None
+
+
+def redact_literals_via_parser(sqls: list[str]) -> list[str | None] | None:
+    """Redact literals in each SQL string using Materialize's own parser.
+
+    Returns a list aligned with the input, where each element is the redacted
+    SQL or None if that statement could not be parsed. Returns None for the
+    whole batch if the helper binary is unavailable or errors, signaling the
+    caller to fall back to regex-based redaction.
+    """
+    cmd = _locate_redactor()
+    if cmd is None:
+        return None
+    proc = subprocess.run(
+        cmd,
+        input=json.dumps(sqls),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        print(
+            f"warning: {cmd[0]} failed, falling back to regex redaction:\n{proc.stderr}",
+            file=sys.stderr,
+        )
+        return None
+    return json.loads(proc.stdout)
 
 
 def keywords() -> set[str]:
@@ -55,9 +101,10 @@ def verify_anonymized(
 
     This is a backstop for the heuristic text substitution, not a proof: it
     catches whole-word survivals of original identifiers and any single-quoted
-    literal that was not reduced to a 'literal_N' placeholder. It cannot detect
+    literal that was not reduced to a placeholder ('<REDACTED>' from the
+    parser-based path, or 'literal_N' from the regex fallback). It cannot detect
     sensitive data hidden in dollar-quoted strings, comments, or numeric
-    literals, which the anonymizer does not handle.
+    literals when the regex fallback is in use.
 
     Cluster create_sql is exempt from the literal check: its literals (SIZE,
     replication factor, availability zones) are non-sensitive configuration that
@@ -78,7 +125,7 @@ def verify_anonymized(
             identifier_checks.append((original, pattern))
 
     string_literal = re.compile(r"'(?:[^']|'')*'")
-    placeholder = re.compile(r"^'literal_\d+'$")
+    placeholder = re.compile(r"^'(?:literal_\d+|<REDACTED>)'$")
 
     for location, sql in _iter_sql(new):
         for original, pattern in identifier_checks:
@@ -331,6 +378,11 @@ def main() -> int:
         if args.identifiers:
             d[entry] = pattern.sub(lambda m: mapping[m.group(0)], d[entry])
 
+    # DDL create_sql is redacted with the blanket regex: option strings like
+    # connection hosts, sink topics, and source options must be scrubbed, and
+    # the parser's to_ast_string_redacted() intentionally does NOT redact those
+    # (it only redacts expression/value literals, treating DDL options as
+    # config). Query SQL is handled separately, via the parser (see below).
     def replace_literals(d: dict[str, Any], entry: str) -> None:
         if args.literals:
             d[entry] = anonymize_literals_in_sql(d[entry])
@@ -390,6 +442,7 @@ def main() -> int:
                 # Sink create_sql carries topic names, broker lists, and
                 # bucket/path URLs as string literals; anonymize them.
                 replace_literals(sink, "create_sql")
+    query_literal_targets: list[dict[str, Any]] = []
     for query in workload["queries"]:
         if args.identifiers:
             query["cluster"] = mapping.get(query["cluster"], query["cluster"])
@@ -399,8 +452,32 @@ def main() -> int:
             ]
             replace_identifiers(query, "sql")
         if args.literals:
-            replace_literals(query, "sql")
+            query_literal_targets.append(query)
         new["queries"].append(query)
+
+    # Redact literals in query SQL with Materialize's own parser, in one batch.
+    # The parser handles every literal form the dialect supports (numbers, hex
+    # strings, intervals, dollar-quoted and escape strings) where the regex only
+    # caught single-quoted strings. Fall back to the regex per-statement when
+    # the helper binary is unavailable or cannot parse a given statement.
+    if query_literal_targets:
+        sqls = [q["sql"] for q in query_literal_targets]
+        redacted = redact_literals_via_parser(sqls)
+        if redacted is None:
+            print(
+                "warning: mz-sql-anonymize helper not found; using regex literal "
+                "redaction for queries, which misses numbers, dollar-quoted "
+                "strings, and comments. Build it for exact redaction:\n"
+                "    cargo build --release -p mz-sql-anonymize",
+                file=sys.stderr,
+            )
+            for q in query_literal_targets:
+                q["sql"] = anonymize_literals_in_sql(q["sql"])
+        else:
+            for q, red in zip(query_literal_targets, redacted):
+                q["sql"] = (
+                    red if red is not None else anonymize_literals_in_sql(q["sql"])
+                )
 
     if args.verify:
         problems = verify_anonymized(new, mapping, args)

@@ -1,0 +1,18 @@
+[package]
+name = "mz-sql-anonymize"
+description = "A small CLI that redacts literals from SQL using Materialize's own parser."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mz-sql-anonymize"
+path = "src/main.rs"
+
+[dependencies]
+mz-sql-parser = { path = "../sql-parser", default-features = false }
+serde_json.workspace = true
