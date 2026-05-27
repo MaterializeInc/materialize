@@ -298,3 +298,154 @@ SELECT a.k, b.x, b.y, b.k, c.k
 FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
 ----
 1  NULL  NULL  NULL  NULL
+
+# Additional cases covered by the non-crossing bail-out, plus a few
+# "good path" cases that VOJ should handle via augmentation. Each
+# query is run with the variadic lowering disabled (baseline) and
+# enabled (verify VOJ doesn't diverge from the SQL-correct result).
+
+# Auxiliary table for cases that need a two-column right.
+statement ok
+CREATE TABLE d (k1 int, k2 int)
+
+statement ok
+INSERT INTO d VALUES (1, 2), (5, 5)
+
+# --- baselines (VOJ disabled) ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO false
+----
+COMPLETE 0
+
+# B. LHS-LHS in the inner ON, referencing the inner left relation `b`.
+# Without bail-out: iter 1 augmentation ignores b.x = b.y, so the b rows
+# with b.x != b.y (i.e., (3,7,200) and (5,6,1)) get filtered away by
+# the post-filter and never appear with the expected NULL c.k.
+query IIIII rowsort
+SELECT b.x, b.y, b.k, a.k, c.k
+FROM (b LEFT JOIN a ON b.x = b.y AND b.k = a.k) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL
+5  5  100  NULL  100
+5  6  1  NULL  NULL
+
+# C. LHS-LHS in the outer ON, referencing body columns folded in from
+# the first right. Iter 1 matches a.k=1 against b.k=1 from (5,6,1), so
+# the body row is (1, 5, 6, 1). Iter 2's ON has b.k = c.k AND b.x = b.y;
+# without bail-out the b.x = b.y conjunct kills every product row,
+# including the augmented one that should yield (1, 5, 6, 1, NULL).
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k AND b.x = b.y
+----
+1  5  6  1  NULL
+
+# D. RHS-RHS in the outer ON. Without bail-out the augmented d row has
+# (d.k1 = val, d.k2 = NULL), so d.k1 = d.k2 evaluates to NULL and the
+# augmented row gets filtered out.
+query IIIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1, d.k2
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND d.k1 = d.k2
+----
+1  5  6  1  NULL  NULL
+
+# Positive cases: crossing-only equations that VOJ should actually
+# handle via augmentation.
+
+# E. Simple two-join chain, both joins bound to `a`.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON a.k = c.k
+----
+1  5  6  1  NULL
+
+# F. Iter 2 bound to the prior right (`b`) rather than to `a`. The
+# body row (1, 5, 6, 1) has b.k = 1, which is not in c.k, so the
+# augmentation should add an augmented (c.k = 1) row that matches it.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k
+----
+1  5  6  1  NULL
+
+# G. Multi-column crossing equation in iter 1, single-column in iter 2.
+# Exercises tuple-shaped left_vals / right_vals: only b row (5,5,100)
+# matches d row (5,5), the rest get augmented null d cols.
+query IIIIII rowsort
+SELECT b.x, b.y, b.k, d.k1, d.k2, c.k
+FROM (b LEFT JOIN d ON b.x = d.k1 AND b.y = d.k2) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL  NULL
+5  5  100  5  5  100
+5  6  1  NULL  NULL  NULL
+
+# H. Duplicate LHS column (`a.k = d.k1 AND a.k = d.k2`). Bound to `a`,
+# left_vals is a tuple of two copies of a.k, right_vals is (d.k1, d.k2).
+# For a.k = 1, the tuple (1, 1) is not in d's (d.k1, d.k2) = {(1,2),(5,5)},
+# so a.k = 1 should be unmatched and d cols should be NULL.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND a.k = d.k2
+----
+1  5  6  1  NULL
+
+# --- same queries with VOJ enabled; results must match the baselines ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true
+----
+COMPLETE 0
+
+# B.
+query IIIII rowsort
+SELECT b.x, b.y, b.k, a.k, c.k
+FROM (b LEFT JOIN a ON b.x = b.y AND b.k = a.k) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL
+5  5  100  NULL  100
+5  6  1  NULL  NULL
+
+# C.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k AND b.x = b.y
+----
+1  5  6  1  NULL
+
+# D.
+query IIIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1, d.k2
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND d.k1 = d.k2
+----
+1  5  6  1  NULL  NULL
+
+# E.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON a.k = c.k
+----
+1  5  6  1  NULL
+
+# F.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k
+----
+1  5  6  1  NULL
+
+# G.
+query IIIIII rowsort
+SELECT b.x, b.y, b.k, d.k1, d.k2, c.k
+FROM (b LEFT JOIN d ON b.x = d.k1 AND b.y = d.k2) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL  NULL
+5  5  100  5  5  100
+5  6  1  NULL  NULL  NULL
+
+# H.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND a.k = d.k2
+----
+1  5  6  1  NULL
