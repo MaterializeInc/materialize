@@ -8440,6 +8440,7 @@ dependencies = [
  "mysql_async",
  "mysql_common",
  "mz-arrow-util",
+ "mz-aws-glue-schema-registry",
  "mz-build-info",
  "mz-ccsr",
  "mz-cluster",
