@@ -4189,13 +4189,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
@@ -4224,13 +4218,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
