@@ -64,6 +64,11 @@ pub struct PersistClientCache {
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
+    /// gRPC channel to the in-envd persist committer. When
+    /// `persist_consensus_use_committer` is on, `open_consensus` returns an
+    /// `RpcConsensus` backed by this channel; otherwise it falls through to
+    /// the direct CockroachDB path.
+    committer_channel: std::sync::Mutex<Option<tonic::transport::Channel>>,
 }
 
 #[derive(Debug)]
@@ -99,7 +104,18 @@ impl PersistClientCache {
             state_cache,
             pubsub_sender: pubsub_client.sender,
             _pubsub_receiver_task,
+            committer_channel: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Configure the gRPC channel used to reach the in-envd persist committer.
+    /// Has effect only when the `persist_consensus_use_committer` LD flag is on
+    /// and only for `Consensus` opens that happen *after* this call.
+    pub fn set_committer_channel(&self, channel: tonic::transport::Channel) {
+        *self
+            .committer_channel
+            .lock()
+            .expect("committer_channel lock poisoned") = Some(channel);
     }
 
     /// A test helper that returns a [PersistClientCache] disconnected from
@@ -142,6 +158,7 @@ impl PersistClientCache {
             state_cache,
             pubsub_sender,
             _pubsub_receiver_task,
+            committer_channel: std::sync::Mutex::new(None),
         }
     }
 
@@ -203,17 +220,28 @@ impl PersistClientCache {
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let consensus = ConsensusConfig::try_from(
-                    x.key(),
-                    Box::new(self.cfg.clone()),
-                    self.metrics.postgres_consensus.clone(),
-                    Arc::clone(&self.cfg().configs),
-                )?;
-                let consensus =
-                    retry_external(&self.metrics.retries.external.consensus_open, || {
-                        consensus.clone().open()
-                    })
-                    .await;
+                let use_committer =
+                    crate::cfg::PERSIST_CONSENSUS_USE_COMMITTER.get(&self.cfg().configs);
+                let committer_channel = self
+                    .committer_channel
+                    .lock()
+                    .expect("committer_channel lock poisoned")
+                    .clone();
+                let consensus: Arc<dyn Consensus> =
+                    if use_committer && let Some(channel) = committer_channel {
+                        Arc::new(crate::rpc_consensus::RpcConsensus::new(channel))
+                    } else {
+                        let consensus = ConsensusConfig::try_from(
+                            x.key(),
+                            Box::new(self.cfg.clone()),
+                            self.metrics.postgres_consensus.clone(),
+                            Arc::clone(&self.cfg().configs),
+                        )?;
+                        retry_external(&self.metrics.retries.external.consensus_open, || {
+                            consensus.clone().open()
+                        })
+                        .await
+                    };
                 let consensus =
                     Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
                 let consensus = Arc::new(Tasked(consensus));
