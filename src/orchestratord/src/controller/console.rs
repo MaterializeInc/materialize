@@ -73,6 +73,8 @@ pub struct Config {
 struct AppConfig {
     version: String,
     auth: AppConfigAuth,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    balancerd_dns_names: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -221,6 +223,7 @@ impl Context {
     }
 
     fn create_console_app_configmap_object(&self, console: &Console) -> ConfigMap {
+        let balancerd_dns_names = console.spec.balancerd.dns_names.clone();
         let version: String = console
             .spec
             .console_image_ref
@@ -230,6 +233,7 @@ impl Context {
             .to_owned();
         let app_config_json = serde_json::to_string(&AppConfig {
             version,
+            balancerd_dns_names,
             auth: AppConfigAuth {
                 mode: console.spec.authenticator_kind,
             },
