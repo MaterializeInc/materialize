@@ -18,7 +18,9 @@ pub use crate::avro::encode::{
     AvroEncoder, AvroSchemaGenerator, DocTarget, encode_datums_as_avro,
     encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
 };
-pub use crate::avro::schema::{AvroSchemaResolver, parse_schema, schema_to_relationdesc};
+pub use crate::avro::schema::{
+    AvroSchemaResolver, WriterSchemaKey, WriterSchemas, parse_schema, schema_to_relationdesc,
+};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))

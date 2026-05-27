@@ -82,12 +82,21 @@ impl Decoder {
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        let csr_avro = AvroSchemaResolver::new(
-            reader_schema,
-            reader_reference_schemas,
-            ccsr_client,
-            confluent_wire_format,
-        )?;
+        // Map the legacy (ccsr_client, confluent_wire_format) pair to the
+        // unified `WriterSchemas` enum. `(Some, false)` is rejected by the
+        // planner today; treat it as an internal error.
+        let writer_schemas = match (ccsr_client, confluent_wire_format) {
+            (None, false) => crate::avro::WriterSchemas::None,
+            (client, true) => crate::avro::WriterSchemas::confluent(client)?,
+            (Some(_), false) => {
+                anyhow::bail!(
+                    "internal error: Avro decoder received a CSR client but \
+                     confluent_wire_format = false"
+                )
+            }
+        };
+        let csr_avro =
+            AvroSchemaResolver::new(reader_schema, reader_reference_schemas, writer_schemas)?;
 
         Ok(Decoder {
             csr_avro,

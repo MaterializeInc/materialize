@@ -53,6 +53,7 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::avro::is_null;
 
@@ -360,75 +361,143 @@ mod tests {
     }
 }
 
+/// Identifier carried in a wire-format header that points at the writer's
+/// schema. Different schema registries key their writer schemas differently:
+/// Confluent uses a sequential `i32`, AWS Glue uses a UUID. Callers do not
+/// have to care which kind of key they're holding — the resolver routes it
+/// back to the matching cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriterSchemaKey {
+    Confluent(i32),
+    Glue(Uuid),
+}
+
+impl fmt::Display for WriterSchemaKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriterSchemaKey::Confluent(id) => write!(f, "Confluent schema id {}", id),
+            WriterSchemaKey::Glue(uuid) => write!(f, "Glue schema-version {}", uuid),
+        }
+    }
+}
+
+/// Source of writer schemas for an [`AvroSchemaResolver`].
+///
+/// Mirrors the `WireFormat<C>` enum on the catalog side: a source can run
+/// without any wire-format framing, with Confluent framing (optionally
+/// without a registry to fetch from), or with Glue framing. The Glue
+/// variant is defined in Stage 4b for shape stability; its cache is filled
+/// in by Stage 4c.
+///
+/// Dispatch lives directly on this enum — no `WriterSchemaFetcher` trait.
+/// With a closed variant set, no `dyn` use (lifetimes preclude it), and
+/// per-variant cache keys (`i32` vs. `Uuid`), trait dispatch was adding
+/// public surface and defensive `unreachable!()` arms without buying
+/// polymorphism. Each arm here owns its variant's key type by
+/// construction; mis-routing is impossible.
+pub enum WriterSchemas {
+    /// No wire-format framing. The resolver always returns the reader
+    /// schema and never consumes header bytes.
+    None,
+    /// Confluent framing. `cache: None` means strip-and-discard the
+    /// schema id (no registry attached); `cache: Some` means fetch from
+    /// the cache.
+    Confluent { cache: Option<SchemaCache> },
+    /// AWS Glue framing. Cache shape mirrors `Confluent`. Currently
+    /// unreachable from planning; wired up in Stage 4c.
+    #[allow(dead_code)]
+    Glue { cache: Option<GlueSchemaCache> },
+}
+
+impl fmt::Debug for WriterSchemas {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tag = match self {
+            WriterSchemas::None => "none",
+            WriterSchemas::Confluent { cache: None } => "confluent (no cache)",
+            WriterSchemas::Confluent { cache: Some(_) } => "confluent",
+            WriterSchemas::Glue { cache: None } => "glue (no cache)",
+            WriterSchemas::Glue { cache: Some(_) } => "glue",
+        };
+        f.debug_tuple("WriterSchemas").field(&tag).finish()
+    }
+}
+
+impl WriterSchemas {
+    /// Build the Confluent variant from an optional CCSR client. `None`
+    /// means "Confluent framing but no registry to fetch from" — the
+    /// resolver will strip the header and fall back to the reader schema.
+    pub fn confluent(ccsr_client: Option<mz_ccsr::Client>) -> anyhow::Result<Self> {
+        let cache = ccsr_client.map(SchemaCache::new).transpose()?;
+        Ok(WriterSchemas::Confluent { cache })
+    }
+}
+
 pub struct AvroSchemaResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache>,
-    confluent_wire_format: bool,
+    writer_schemas: WriterSchemas,
 }
 
 impl AvroSchemaResolver {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
-        confluent_wire_format: bool,
+        writer_schemas: WriterSchemas,
     ) -> anyhow::Result<Self> {
         // parse_schema handles incremental parsing of references (dependencies first)
         let reader_schema = parse_schema(reader_schema, reader_reference_schemas)?;
-        let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
-            confluent_wire_format,
         })
     }
 
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)>> {
-        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
-            Some(cache) => {
-                debug_assert!(
-                    self.confluent_wire_format,
-                    "We should have set 'confluent_wire_format' everywhere \
-                     that can lead to this branch"
-                );
-                // XXX(guswynn): use destructuring assignments when they are stable
-                let (schema_id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes)
-                {
+    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<WriterSchemaKey>)>> {
+        let (resolved_schema, key) = match &mut self.writer_schemas {
+            WriterSchemas::None => (&self.reader_schema, None),
+
+            WriterSchemas::Confluent { cache: None } => {
+                // Validate the header (so we surface producer/consumer
+                // framing mismatches early) and discard the schema id —
+                // there is no registry to look it up in.
+                match crate::confluent::extract_avro_header(bytes) {
+                    Ok((_id, adjusted_bytes)) => {
+                        bytes = adjusted_bytes;
+                        (&self.reader_schema, None)
+                    }
+                    Err(err) => return Ok(Err(err)),
+                }
+            }
+
+            WriterSchemas::Confluent { cache: Some(cache) } => {
+                let (id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
                     Ok(ok) => ok,
                     Err(err) => return Ok(Err(err)),
                 };
                 bytes = adjusted_bytes;
                 let result = cache
-                    .get(schema_id, &self.reader_schema)
-                    // The outer Result describes transient errors so use ? here to propagate
+                    .get(id, &self.reader_schema)
                     .await?
-                    .with_context(|| format!("failed to resolve Avro schema (id = {})", schema_id));
+                    .with_context(|| format!("failed to resolve Avro schema (id = {id})"));
                 let schema = match result {
                     Ok(schema) => schema,
                     Err(err) => return Ok(Err(err)),
                 };
-                (schema, Some(schema_id))
+                (schema, Some(WriterSchemaKey::Confluent(id)))
             }
 
-            // If we haven't been asked to use a schema registry, we have no way
-            // to discover the writer's schema. That's ok; we'll just use the
-            // reader's schema and hope it lines up.
-            None => {
-                if self.confluent_wire_format {
-                    // validate and just move the bytes buffer ahead
-                    let (_, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
-                        Ok(ok) => ok,
-                        Err(err) => return Ok(Err(err)),
-                    };
-                    bytes = adjusted_bytes;
-                }
-                (&self.reader_schema, None)
+            // Glue paths land in Stage 4c. Until then no planner path
+            // constructs `WriterSchemas::Glue`, so reaching here is a bug.
+            WriterSchemas::Glue { .. } => {
+                unreachable!(
+                    "AWS Glue source decoding lands in Stage 4c; planner cannot yet \
+                     produce this variant"
+                )
             }
         };
-        Ok(Ok((bytes, resolved_schema, schema_id)))
+        Ok(Ok((bytes, resolved_schema, key)))
     }
 }
 
@@ -436,20 +505,25 @@ impl fmt::Debug for AvroSchemaResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("AvroSchemaResolver")
             .field("reader_schema", &self.reader_schema)
-            .field(
-                "write_schema",
-                if self.writer_schemas.is_some() {
-                    &"some"
-                } else {
-                    &"none"
-                },
-            )
+            .field("writer_schemas", &self.writer_schemas)
             .finish()
     }
 }
 
+/// Glue-side analogue of [`SchemaCache`]. Stage 4b ships only the type
+/// shell; the actual fetch logic (calling
+/// `mz_aws_glue_schema_registry::Client::get_schema_version_by_id`) is added
+/// in Stage 4c when the planner can construct `WriterSchemas::Glue`.
 #[derive(Debug)]
-struct SchemaCache {
+pub struct GlueSchemaCache {
+    // Stage 4c populates this with a Glue client and an in-memory schema
+    // map. Keeping the type opaque (no public constructor yet) prevents
+    // anyone outside this module from constructing a `WriterSchemas::Glue`
+    // before the fetch path is wired up.
+    _private: (),
+}
+#[derive(Debug)]
+pub struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
     ccsr_client: Arc<mz_ccsr::Client>,
 }
