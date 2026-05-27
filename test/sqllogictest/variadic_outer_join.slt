@@ -198,3 +198,28 @@ SELECT a.k, b.k, b.x, c.k
 FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
 ----
 1  NULL  NULL  NULL
+
+statement ok
+INSERT INTO b VALUES (5, 6, 1)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO false
+----
+COMPLETE 0
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL  NULL
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true
+----
+COMPLETE 0
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL  NULL
