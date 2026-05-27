@@ -42,6 +42,7 @@ pub use crate::scalar::columns::Columns;
 pub use crate::scalar::eval::Eval;
 use crate::scalar::func::variadic::{And, Or};
 use crate::scalar::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+pub use crate::scalar::optimizable::OptimizableExpr;
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::visit::{Visit, VisitChildren};
 
@@ -49,6 +50,7 @@ pub mod columns;
 pub mod eval;
 pub mod func;
 pub mod like_pattern;
+pub mod optimizable;
 mod reduce;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
@@ -1166,39 +1168,6 @@ impl MirScalarExpr {
     }
 }
 
-impl Columns for MirScalarExpr {
-    fn is_column(&self) -> bool {
-        matches!(self, MirScalarExpr::Column(_col, _name))
-    }
-
-    fn as_column(&self) -> Option<usize> {
-        if let MirScalarExpr::Column(c, _) = self {
-            Some(*c)
-        } else {
-            None
-        }
-    }
-
-    fn support_into(&self, support: &mut BTreeSet<usize>) {
-        self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i, _) = e {
-                support.insert(*i);
-            }
-        });
-    }
-
-    fn visit_columns<F>(&mut self, mut action: F)
-    where
-        F: FnMut(&mut usize),
-    {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(col, _) = e {
-                action(col);
-            }
-        });
-    }
-}
-
 impl Eval for MirScalarExpr {
     fn eval<'a>(
         &'a self,
@@ -1252,6 +1221,51 @@ impl Eval for MirScalarExpr {
                 cond.could_error() || then.could_error() || els.could_error()
             }
         }
+    }
+}
+
+impl Columns for MirScalarExpr {
+    fn column(c: usize) -> Self {
+        MirScalarExpr::column(c)
+    }
+
+    fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_col, _name))
+    }
+
+    fn as_column(&self) -> Option<usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    fn as_column_mut(&mut self) -> Option<&mut usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    fn support_into(&self, support: &mut BTreeSet<usize>) {
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Column(i, _) = e {
+                support.insert(*i);
+            }
+        });
+    }
+
+    fn visit_columns<F>(&mut self, mut action: F)
+    where
+        F: FnMut(&mut usize),
+    {
+        self.visit_pre_mut(|e| {
+            if let MirScalarExpr::Column(col, _) = e {
+                action(col);
+            }
+        });
     }
 }
 
