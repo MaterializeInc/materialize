@@ -1004,18 +1004,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .collect()
                 };
 
-                // If the Union itself buckets each input (consolidating Union
-                // with `TemporalBucketing` strategies), the future-stamped
-                // updates are absorbed here and we should clear the outer
-                // flag for those legs. Otherwise, propagate `any_future`.
                 let has_future_updates = if consolidate_output {
-                    lowered_inputs
-                        .iter()
-                        .zip_eq(temporal_bucketing_strategies.iter())
-                        .any(|(l, s)| {
-                            l.has_future_updates
-                                && !matches!(s, ArrangementStrategy::TemporalBucketing)
-                        })
+                    // The MergeBatcher will hold back future updates (regardless of whether we are
+                    // bucketing here or not).
+                    false
                 } else {
                     lowered_inputs.iter().any(|l| l.has_future_updates)
                 };
