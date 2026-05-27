@@ -164,5 +164,5 @@ To remove the restriction for an agent, a superuser can reset the parameter (or
 set it to `false`):
 
 ```mzsql
-ALTER ROLE mcp_agent RESET restrict_to_user_objects;
+ALTER ROLE my_agent RESET restrict_to_user_objects;
 ```
