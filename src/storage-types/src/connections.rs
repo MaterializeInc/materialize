@@ -1606,12 +1606,6 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
 ///
 /// AWS credentials, region, and endpoint are inherited from the referenced
 /// [`AwsConnection`]; this struct only carries the per-registry settings.
-///
-/// NOTE: Stage 1 of the GSR rollout. The client crate
-/// (`mz-aws-glue-schema-registry`) does not exist yet; `validate` is a
-/// no-op until Stage 3 retrofits a real `GetRegistry` ping. The connection
-/// can be created and inspected, but cannot yet be attached to a source or
-/// sink.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct GlueSchemaRegistryConnection<C: ConnectionAccess = InlinedConnection> {
     /// The referenced AWS connection that supplies credentials, region, and
@@ -1638,11 +1632,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GlueSchemaRegistryConnection, R
 
 impl<C: ConnectionAccess> GlueSchemaRegistryConnection<C> {
     fn validate_by_default(&self) -> bool {
-        // Stage 1 of the AWS Glue Schema Registry rollout: the client crate
-        // does not exist yet, and the no-op `validate` below succeeds
-        // unconditionally. Default-validating preserves the API contract so
-        // that Stage 3's real `GetRegistry` ping slots in without
-        // behavioral change.
+        // Matches CSR: default-validate so a bad registry name fails at
+        // `CREATE CONNECTION` rather than surfacing later on first use.
+        // Users can still opt out with `WITH (VALIDATE = false)`.
         true
     }
 }
@@ -1651,14 +1643,33 @@ impl GlueSchemaRegistryConnection {
     async fn validate(
         &self,
         _id: CatalogItemId,
-        _storage_configuration: &StorageConfiguration,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        // Stage 1: no-op. Real validation arrives in Stage 3 when the
-        // Glue client crate exists. Until then a `CREATE CONNECTION`
-        // succeeds even against a registry that doesn't exist; the
-        // failure will surface on first use (which is itself gated until
-        // source/sink integration lands in Stages 4/5).
-        std::future::ready(Ok(())).await
+        let enforce_external_addresses =
+            crate::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set());
+        let sdk_config = self
+            .aws_connection
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                self.aws_connection.connection_id,
+                // We are in a normal tokio context during validation.
+                InTask::No,
+                enforce_external_addresses,
+            )
+            .await?;
+        let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+        match client.get_registry(&self.registry_name).await {
+            Ok(_) => Ok(()),
+            Err(mz_aws_glue_schema_registry::GetRegistryError::NotFound) => Err(anyhow!(
+                "AWS Glue Schema Registry {:?} does not exist in the configured account/region",
+                self.registry_name
+            )),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "failed to validate AWS Glue Schema Registry connection (registry={:?})",
+                self.registry_name
+            ))),
+        }
     }
 }
 
