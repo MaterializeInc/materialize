@@ -155,6 +155,155 @@ impl PersistCommitter {
     }
 }
 
+// gRPC service wiring.
+
+use std::pin::Pin;
+
+use bytes::Bytes;
+use futures::Stream;
+use tokio_stream::wrappers::BroadcastStream;
+use tonic::{Request, Response, Status, async_trait};
+
+use crate::proto::proto_persist_consensus_server::{
+    ProtoPersistConsensus, ProtoPersistConsensusServer,
+};
+use crate::proto::{
+    ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
+    ProtoListKeysRequest, ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse,
+    ProtoSubscribeMessage, ProtoSubscribeRequest, ProtoTruncateRequest, ProtoTruncateResponse,
+    ProtoVersionedData, proto_subscribe_message,
+};
+
+type SubscribeStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<ProtoSubscribeMessage, Status>> + Send>>;
+
+fn to_proto(v: VersionedData) -> ProtoVersionedData {
+    ProtoVersionedData {
+        seqno: v.seqno.0,
+        data: v.data.to_vec(),
+    }
+}
+
+fn from_proto(p: ProtoVersionedData) -> VersionedData {
+    VersionedData {
+        seqno: SeqNo(p.seqno),
+        data: Bytes::from(p.data),
+    }
+}
+
+fn external_to_status(e: ExternalError) -> Status {
+    Status::internal(e.to_string())
+}
+
+#[async_trait]
+impl ProtoPersistConsensus for PersistCommitter {
+    async fn head(
+        &self,
+        request: Request<ProtoHeadRequest>,
+    ) -> std::result::Result<Response<ProtoHeadResponse>, Status> {
+        let shard = request.into_inner().shard;
+        let current = self.head_inner(&shard).await.map_err(external_to_status)?;
+        Ok(Response::new(ProtoHeadResponse {
+            current: current.map(to_proto),
+        }))
+    }
+
+    async fn scan(
+        &self,
+        request: Request<ProtoScanRequest>,
+    ) -> std::result::Result<Response<ProtoScanResponse>, Status> {
+        let r = request.into_inner();
+        let limit = usize::try_from(r.limit).unwrap_or(usize::MAX);
+        let versions = self
+            .scan_inner(&r.shard, SeqNo(r.from), limit)
+            .await
+            .map_err(external_to_status)?;
+        Ok(Response::new(ProtoScanResponse {
+            versions: versions.into_iter().map(to_proto).collect(),
+        }))
+    }
+
+    async fn compare_and_set(
+        &self,
+        request: Request<ProtoCompareAndSetRequest>,
+    ) -> std::result::Result<Response<ProtoCompareAndSetResponse>, Status> {
+        let r = request.into_inner();
+        let new = from_proto(
+            r.new
+                .ok_or_else(|| Status::invalid_argument("missing new VersionedData"))?,
+        );
+        let result = self
+            .cas_inner(&r.shard, new)
+            .await
+            .map_err(external_to_status)?;
+        let committed = matches!(result, CaSResult::Committed);
+        Ok(Response::new(ProtoCompareAndSetResponse { committed }))
+    }
+
+    async fn truncate(
+        &self,
+        request: Request<ProtoTruncateRequest>,
+    ) -> std::result::Result<Response<ProtoTruncateResponse>, Status> {
+        let r = request.into_inner();
+        let deleted = self
+            .truncate_inner(&r.shard, SeqNo(r.seqno))
+            .await
+            .map_err(external_to_status)?;
+        Ok(Response::new(ProtoTruncateResponse {
+            deleted: deleted.map(|n| u64::try_from(n).unwrap_or(u64::MAX)),
+        }))
+    }
+
+    async fn list_keys(
+        &self,
+        _request: Request<ProtoListKeysRequest>,
+    ) -> std::result::Result<Response<ProtoListKeysResponse>, Status> {
+        let keys = self.list_keys_inner().await.map_err(external_to_status)?;
+        Ok(Response::new(ProtoListKeysResponse { keys }))
+    }
+
+    type SubscribeStream = SubscribeStream;
+
+    async fn subscribe(
+        &self,
+        request: Request<ProtoSubscribeRequest>,
+    ) -> std::result::Result<Response<Self::SubscribeStream>, Status> {
+        let shard = request.into_inner().shard;
+        let (snapshot, rx, token) = self
+            .subscribe_inner(&shard)
+            .await
+            .map_err(external_to_status)?;
+        let snapshot_proto = snapshot.map(to_proto).unwrap_or_default();
+        let stream = async_stream::try_stream! {
+            yield ProtoSubscribeMessage {
+                kind: Some(proto_subscribe_message::Kind::Snapshot(snapshot_proto)),
+            };
+            let mut rx = BroadcastStream::new(rx);
+            while let Some(item) = futures::StreamExt::next(&mut rx).await {
+                match item {
+                    Ok(v) => yield ProtoSubscribeMessage {
+                        kind: Some(proto_subscribe_message::Kind::Diff(to_proto(v))),
+                    },
+                    Err(_lagged) => {
+                        // Lagged: subscriber must resync via Head. Drop and continue.
+                        continue;
+                    }
+                }
+            }
+            // Token is moved into the stream and dropped when the stream ends.
+            drop(token);
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+impl PersistCommitter {
+    /// Build a tonic service from this committer for `Server::builder().add_service(...)`.
+    pub fn into_service(self) -> ProtoPersistConsensusServer<PersistCommitter> {
+        ProtoPersistConsensusServer::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

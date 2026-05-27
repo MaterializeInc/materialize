@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-stream.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
@@ -23,6 +24,7 @@ prost.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
 tonic.workspace = true
 tonic-prost.workspace = true
 tracing.workspace = true
