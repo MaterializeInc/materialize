@@ -79,12 +79,15 @@ It is the only persist-client-side change; once a `PersistClientCache` decides t
 
 **Write path (`compare_and_set`):**
 
-1. Caller invokes `Consensus::compare_and_set(shard, expected, new)` on the persist client.
-2. `RpcConsensus` sends `CompareAndSet { shard, expected, new }` to the committer.
+1. Caller invokes `Consensus::compare_and_set(shard, new)` on the persist client.
+   The expected sequence number is implicit in `new.seqno - 1`, matching the underlying `Consensus` trait.
+2. `RpcConsensus` sends `CompareAndSet { shard, new }` to the committer.
 3. The committer forwards the call to its `PostgresConsensus` unconditionally.
    CRDB arbitrates.
-4. On success, the committer updates the cache for `shard` (monotonic merge), then publishes the new `VersionedData` to every subscriber of that shard.
-5. On failure, the committer updates the cache from the returned current state (still monotonic merge) and forwards the failure to the caller.
+4. On `Committed`, the committer updates the cache for `shard` (monotonic merge), then publishes the new `VersionedData` to every subscriber of that shard.
+5. On `ExpectationMismatch`, the underlying trait does not return the current state.
+   The committer replies to the caller with the mismatch and concurrently spawns a fire-and-forget `head()` against CRDB to refresh the cache so the caller's follow-up `fetch_current_state` can be served from cache.
+   A per-shard mutex around this refresh prevents concurrent mismatches from stampeding the underlying store.
 
 We do not fast-reject CaS against the cache.
 With two `environmentd` instances briefly coexisting during failover, the cache may lag CRDB, and a cache-based reject could incorrectly fail a legitimate CaS.
@@ -108,6 +111,18 @@ This is identical to the behavior persist already handles when two clients race.
 It is used for state replay on shard open, returns arbitrarily large result sets, and runs cold.
 Caching it has limited value and unbounded memory cost.
 
+**Read path (`list_keys`):**
+
+`list_keys` is an administrative operation that enumerates every shard ever created.
+The committer forwards it to CRDB unchanged and collects the streaming result into a vector for the gRPC response.
+It is not on the hot path and is rarely called.
+
+**Read path (`truncate`):**
+
+`truncate` is forwarded to CRDB.
+The underlying trait returns `Result<Option<usize>, _>` — the count is `None` when the backing store cannot report one — so the gRPC response uses an `optional uint64` field.
+The cache is unaffected because truncation only removes historical sequence numbers, not the current head.
+
 **Subscribe path:**
 
 When a clusterd's `PersistClient` opens a shard, it opens a `Subscribe(shard)` server-stream to the committer.
@@ -124,6 +139,7 @@ The cache is necessarily best-effort because the committer is not always the onl
 
 To bound staleness, the committer refreshes cached shards on a TTL (default 5s, `persist_committer_cache_refresh_interval`) whenever the shard has active subscribers.
 The TTL refresh issues a `head` to CRDB, monotonic-merges the result, and broadcasts any diff.
+A second refresh trigger fires on every `ExpectationMismatch` from CaS, since that strongly signals the cache is behind whoever just wrote.
 Combined with monotonic insert and the no-fast-reject CaS rule, the cache cannot serve a stale value that causes incorrect behavior; it can only delay observation of newer state by at most the TTL.
 
 ### Connectivity and failover

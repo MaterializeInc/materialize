@@ -6,6 +6,21 @@
 
 **Architecture:** New crate `mz-persist-committer` runs inside `environmentd`. It exposes the `Consensus` trait over a gRPC service (`ProtoPersistConsensus`) and owns the only `PostgresConsensus` pool. Clusterds use a new `RpcConsensus` client that implements the `Consensus` trait against the service. A monotonic in-memory `ShardCache` short-circuits `head` reads. Rollout is behind LD flags.
 
+**Real `Consensus` trait reference** (see `src/persist/src/location.rs:414`):
+
+```rust
+pub trait Consensus: Debug + Send + Sync {
+    fn list_keys(&self) -> ResultStream<'_, String>;
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
+    async fn compare_and_set(&self, key: &str, new: VersionedData) -> Result<CaSResult, ExternalError>;
+    async fn scan(&self, key: &str, from: SeqNo, limit: usize) -> Result<Vec<VersionedData>, ExternalError>;
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError>;
+}
+pub enum CaSResult { Committed, ExpectationMismatch }
+```
+
+**Important:** `compare_and_set` does NOT take an `expected` argument (it is implicit in `new.seqno - 1`) and does NOT return current state on mismatch. Tasks 5, 6, 9 below have been corrected to match this signature; earlier task drafts that mentioned an `expected` parameter or a `Result<(), Option<VersionedData>>` return type are obsolete.
+
 **Tech stack:** Rust, tonic (gRPC), prost (protobuf), tokio, `mz-persist`, `mz-persist-client`, deadpool-postgres.
 
 **Spec:** [`doc/developer/design/20260527_persist_committer.md`](../../../doc/developer/design/20260527_persist_committer.md)
