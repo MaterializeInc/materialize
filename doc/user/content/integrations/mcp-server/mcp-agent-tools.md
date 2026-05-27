@@ -137,7 +137,7 @@ To prevent an agent from querying the system catalog objects (`mz_catalog.*`,
 When the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query) is
 enabled, a role can, by default, query any object for which it has `SELECT`
 privileges, including system catalog objects (`mz_catalog.*`, `mz_internal.*`,
-`pg_catalog.*`, and `information_schema.*`). 
+`pg_catalog.*`, and `information_schema.*`).
 
 To prevent an agent role from reading system catalog objects, a **superuser**
 can set the `restrict_to_user_objects` parameter to `true` on both the
