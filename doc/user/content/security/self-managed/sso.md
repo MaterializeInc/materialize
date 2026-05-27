@@ -55,7 +55,7 @@ https://<your-console-domain>/auth/callback
 http://localhost:9876/callback
 ```
 
-Replace `<your-console-domain>` with the domain where your Materialize console
+Replace `<your-console-domain>` with the domain where your Materialize Console
 is accessible. The `http://localhost:9876/callback` URI is used by
 [`oauth2c`](#get-a-token-using-cli-tools) to fetch ID tokens from the command
 line; you can omit it if no one in your org will use the CLI flow.
@@ -63,7 +63,7 @@ line; you can omit it if no one in your org will use the CLI flow.
 {{< tabs >}}
 {{< tab "Okta" >}}
 
-The following steps create the OIDC application for the **Materialize console**
+The following steps create the OIDC application for the **Materialize Console**
 (browser-based login). If you also need service accounts, you will create
 additional applications in the [Service accounts](#service-accounts) section.
 
@@ -102,7 +102,7 @@ additional applications in the [Service accounts](#service-accounts) section.
    access to Materialize.
 
    When a user authenticates via SSO, Materialize uses a JWT claim to determine
-   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
+   the role name. See [Mapping IdP users to Materialize roles](#mapping-idp-users-to-materialize-roles) for more details.
 
 1. Configure the authorization server. In the Okta Admin Console, go to
    **Security** > **API** and click on the authorization server you want to
@@ -174,7 +174,7 @@ additional applications in the [Service accounts](#service-accounts) section.
    Materialize.
 
    When a user authenticates via SSO, Materialize uses a JWT claim to determine
-   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
+   the role name. See [Mapping IdP users to Materialize roles](#mapping-idp-users-to-materialize-roles) for more details.
 
 {{< /tab >}}
 {{< tab "Generic OIDC" >}}
@@ -196,7 +196,7 @@ additional applications in the [Service accounts](#service-accounts) section.
 1. Assign users or groups that should have access to Materialize.
 
    When a user authenticates via SSO, Materialize uses a JWT claim to determine
-   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
+   the role name. See [Mapping IdP users to Materialize roles](#mapping-idp-users-to-materialize-roles) for more details.
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -247,7 +247,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.18.0 # Use v26.18.0 or later
+  environmentdImageRef: materialize/environmentd:v26.26.0 # Use v26.26.0 or later
   backendSecretName: materialize-backend
   authenticatorKind: Oidc
   requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
@@ -265,7 +265,7 @@ details on rollout configuration.
 Configure the OIDC system parameters to connect Materialize to your identity
 provider. You can use either a
 [ConfigMap](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap)
-or SQL commands, but it is strongly recommended to use a ConfigMap.
+or SQL commands, but it is strongly recommended to use a ConfigMap. See [Configure via Configmap](#configure-via-configmap) for more details.
 
 ### OIDC system parameters
 
@@ -284,7 +284,7 @@ Materialize, including tokens issued for other applications. **Always set
 `oidc_audience` in production environments.**
 {{</ warning >}}
 
-### Mapping IdP Users to Materialize Roles
+### Mapping IdP users to Materialize roles
 
 When a user authenticates into Materialize, their role name is the value of the JWT claim keyed by `oidc_authentication_claim`.
 
@@ -303,7 +303,7 @@ Their role name will be `alice@your-org.com`.
 
 For ID tokens (human users), a common claim is `email`. For access tokens from the [Client Credentials flow](#client-credentials-flow), ensure this claim exists in the token.
 
-If a user tries to login and the role doesn't exist, the role will be auto-provisioned. See [Auto-provisioned roles](#auto-provisioned-roles) for more details.
+If a user tries to log in and the role doesn't exist, the role will be auto-provisioned. See [Auto-provisioned roles](#auto-provisioned-roles) for more details.
 
 ### Configure via ConfigMap
 
@@ -365,33 +365,26 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 
 ## Step 4. Verify the configuration
 
-1. Navigate to your Materialize console. You should see an option to sign in
+1. Navigate to your Materialize Console. You should see an option to sign in
    via your identity provider via "Use single sign-on".
 
-   ![Materialize console login screen showing the SSO sign-in
-   option](/images/console/console-self-managed-sso.png "Materialize console login screen
+   ![Materialize Console login screen showing the SSO sign-in
+   option](/images/console/console-self-managed-sso.png "Materialize Console login screen
    with SSO option")
 
 1. Sign in through your IdP. After successful authentication, you are redirected
-   back to the Materialize console.
+   back to the Materialize Console.
 
-1. To confirm which role you've signed in as via SSO, open the [SQL Shell](/console/sql-shell/) in the Materialize console. In the welcome message, you should see the role name labelled under "User". This is derived from the `oidc_authentication_claim` claim in your identity token:
+1. To confirm which role you've signed in as via SSO, open the [SQL Shell](/console/sql-shell/) in the Materialize Console. In the welcome message, you should see the role name labeled under "User". This is derived from the `oidc_authentication_claim` claim in your identity token:
 
-![Materialize console Shell](/images/console/console.png "Materialize console Shell")
+![Materialize Console Shell](/images/console/console.png "Materialize Console Shell")
 
 ## Connecting via SQL clients
 
-To connect to Materialize using a SQL client like `psql`, you need an OIDC ID token and the `oidc_auth_enabled=true` connection option.
+To connect to Materialize using a SQL client like `psql`, you need an OIDC ID token.
 
 If your client doesn't support OAuth, you can
 create a role with a SQL password instead. See [SQL password authentication](#sql-password-authentication-recommended-for-non-oauth-clients).
-
-{{< important >}}
-The `oidc_auth_enabled=true` connection option is **required** for OIDC
-authentication over the PostgreSQL wire protocol. Without it, Materialize
-defaults to password authentication.
-{{</ important >}}
-
 
 ### Get a token using CLI tools
 
@@ -417,7 +410,7 @@ This is useful when configuring a non-interactive client like dbt or Terraform.
 
     ```shell
     oauth2c <ISSUER_URL> \
-      --client-id <ISSUER_URL> \
+      --client-id <YOUR_CLIENT_ID> \
       --response-types code \
       --response-mode form_post \
       --grant-type authorization_code \
@@ -433,12 +426,18 @@ This is useful when configuring a non-interactive client like dbt or Terraform.
 ID tokens expire (typically within an hour). Re-run the command above when
 your token expires.
 
+### Get a token from the Materialize console
+
+Clicking "Connect" in the Materialize console will provide you with an ID token that you can use to connect.
+
+![Materialize Console connect instructions for OIDC](/images/console/console-connect-oidc.png "Materialize Console connect screen for OIDC")
+
+
 ### Connect with psql
 
 Use the ID token as your password:
 
 ```shell
-PGOPTIONS='-c oidc_auth_enabled=true' \
 PGPASSWORD="<your-id-token>" \
 psql -h <materialize-host> -p 6875 -U <username> materialize
 ```
@@ -473,7 +472,6 @@ the role with a name matching the expected JWT claim value:
 ```mzsql
 CREATE ROLE "alice@your-org.com" WITH LOGIN;
 ```
-Learn how to manage pre-provisioned roles in
 To configure privileges for pre-provisioned roles, see [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
 ### Auditing auto-provisioned roles
@@ -579,7 +577,6 @@ username and password to obtain an ID token.
 1. Extract the `id_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<id-token>" \
    psql -h <materialize-host> -p 6875 -U svc-materialize@your-org.com materialize
    ```
@@ -612,7 +609,6 @@ username and password to obtain an ID token.
 1. Extract the `id_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<id-token>" \
    psql -h <materialize-host> -p 6875 -U svc-materialize@your-org.com materialize
    ```
@@ -642,7 +638,6 @@ username and password to obtain an ID token.
 1. Extract the `id_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<id-token>" \
    psql -h <materialize-host> -p 6875 -U svc-materialize@your-org.com materialize
    ```
@@ -735,7 +730,7 @@ human-readable name.
       ```
 
    *If you have multiple service accounts using Client Credentials, each needs
-   its own Okta application.
+   its own Okta application.*
 
 1. Fetch an access token:
 
@@ -752,7 +747,6 @@ human-readable name.
 1. Extract the `access_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<access-token>" \
    psql -h <materialize-host> -p 6875 -U <service-account-name> materialize
    ```
@@ -801,7 +795,6 @@ human-readable name.
 1. Extract the `access_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<access-token>" \
    psql -h <materialize-host> -p 6875 -U <service-account-name> materialize
    ```
@@ -839,7 +832,6 @@ human-readable name.
 1. Extract the `access_token` from the JSON response and use it to connect:
 
    ```shell
-   PGOPTIONS='-c oidc_auth_enabled=true' \
    PGPASSWORD="<access-token>" \
    psql -h <materialize-host> -p 6875 -U <service-account-name> materialize
    ```
@@ -877,7 +869,6 @@ DROP ROLE <username>;
 | "Invalid token" error on psql connection | Wrong or expired JWT token | Obtain a fresh token; verify `oidc_issuer` matches the token's `iss` claim |
 | "Audience validation failed" | Client ID not in `oidc_audience` | Add the client ID to `oidc_audience`: `ALTER SYSTEM SET oidc_audience = '["your-client-id"]'` |
 | User gets wrong role name | `oidc_authentication_claim` set to wrong claim | Verify the claim name and check the JWT contents (e.g., using [jwt.io](https://jwt.io)) |
-| psql falls back to password auth | Missing `oidc_auth_enabled=true` | Add `PGOPTIONS='-c oidc_auth_enabled=true'` to your connection command |
 
 To inspect the current OIDC configuration, login as `mz_system` and run the following SQL:
 
