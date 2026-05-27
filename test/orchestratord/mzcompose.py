@@ -191,6 +191,28 @@ def get_clusterd_data() -> dict[str, Any]:
     )
 
 
+def get_console_app_config(namespace="materialize-environment") -> dict[str, Any]:
+    """Return the parsed contents of the console's `app-config.json` configmap."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "configmap",
+                "-l",
+                "materialize.cloud/app=console",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )
+    items = data["items"]
+    assert len(items) == 1, f"Expected exactly one console configmap, but got {items}"
+    return json.loads(items[0]["data"]["app-config.json"])
+
+
 def ensure_kind_version() -> None:
     kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
     assert kind_version >= Version.parse(
@@ -1560,6 +1582,48 @@ class ConsoleResources(Modification):
             ), f"Expected console resources {expected}, but got {resources}"
 
         retry(check_pods, 360)
+
+
+class BalancerdExternalDnsNames(Modification):
+    # The operator surfaces the balancerd external certificate's DNS names to
+    # the console's `app-config.json` as `balancerd_dns_names`, so the console
+    # knows which hostnames balancerd serves.
+    DNS_NAMES = ["balancerd.example.com"]
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, cls.DNS_NAMES]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["balancerdExternalCertificateSpec"] = {
+                "dnsNames": self.value,
+            }
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # `balancerd_dns_names` was added to the console app config in v26.27;
+        # older orchestratord builds don't surface the cert spec's DNS names.
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.27.0-dev.0"
+        ):
+            return
+        # Without a console there's no app config to inspect.
+        if not mods[ConsoleEnabled]:
+            return
+
+        def check() -> None:
+            app_config = get_console_app_config()
+            actual = app_config.get("balancerd_dns_names")
+            assert (
+                actual == self.value
+            ), f"Expected balancerd_dns_names {self.value}, but got {actual}: {app_config}"
+
+        # The console is reconciled last and the configmap update is async.
+        retry(check, 360)
 
 
 class AuthenticatorKind(Modification):
