@@ -17,6 +17,7 @@ use tokio::sync::broadcast;
 
 const DEFAULT_BUFFER: usize = 64;
 
+#[derive(Debug)]
 pub struct SubscriberRegistry {
     channels: Mutex<BTreeMap<String, broadcast::Sender<VersionedData>>>,
     buffer: usize,
