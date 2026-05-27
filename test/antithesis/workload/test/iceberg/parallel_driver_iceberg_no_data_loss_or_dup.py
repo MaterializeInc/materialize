@@ -158,14 +158,20 @@ def _wait_for_sink_progress(
     comes from the iceberg-side `batch_id` query.
 
     None as `starting_committed` means the stats row wasn't populated
-    yet at driver entry; we fall back to the loose "any non-None
-    progress" gate in that case so the driver still makes forward
-    progress through the boundary condition.
+    yet at driver entry; we treat it as 0 and apply the same
+    `current >= expected_count` gate.  An earlier version of this
+    function fell back to "any populated stats row counts as progress"
+    when `starting_committed` was None, but that gate cleared
+    immediately on `current=0` while the sink was still mid-flush and
+    produced false-positive count-mismatch failures (observed shapes:
+    `messages_committed start=None now=0` followed by a count check
+    that returned 6 of 10 expected rows).  An unpopulated stats row is
+    indistinguishable from `0` for gate purposes, so use that as the
+    baseline.
     """
     deadline = time.monotonic() + CATCHUP_TIMEOUT_S
-    target = (
-        starting_committed + expected_count if starting_committed is not None else None
-    )
+    baseline = starting_committed if starting_committed is not None else 0
+    target = baseline + expected_count
     while time.monotonic() < deadline:
         try:
             current = helper_iceberg.messages_committed()
@@ -176,23 +182,12 @@ def _wait_for_sink_progress(
         if current is None:
             time.sleep(POLL_INTERVAL_S)
             continue
-        if target is not None:
-            if current >= target:
-                LOG.info(
-                    "sink progress: messages_committed start=%d now=%d target=%d",
-                    starting_committed,
-                    current,
-                    target,
-                )
-                return True
-        else:
-            # starting_committed was None at entry; any populated stats
-            # row counts as progress (legacy fallback for the early-
-            # lifecycle boundary).
+        if current >= target:
             LOG.info(
-                "sink progress: messages_committed start=None now=%d "
-                "(stats row populated; skipping target gate)",
+                "sink progress: messages_committed start=%s now=%d target=%d",
+                starting_committed,
                 current,
+                target,
             )
             return True
         time.sleep(POLL_INTERVAL_S)

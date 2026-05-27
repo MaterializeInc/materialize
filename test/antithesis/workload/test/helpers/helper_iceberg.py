@@ -28,6 +28,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import time
+from typing import Callable
 
 import helper_testdrive
 import psycopg
@@ -272,6 +275,163 @@ class IcebergCheckResult:
         self.exit_code = exit_code
 
 
+# Between retries of a duckdb verify, give the sink at least one more
+# COMMIT INTERVAL (2s for our setup) to flush.  Anything shorter just
+# re-fires the same one-shot duckdb query without giving the sink a
+# chance to make new progress.
+_VERIFY_RETRY_INTERVAL_S = 3.0
+
+# Per-attempt subprocess cap.  Each duckdb verify runs CREATE SECRET +
+# ATTACH + one SELECT — empirically <10s in steady state and ~6s during
+# the observed failure-mode runs.  60s gives ample headroom while
+# ensuring a hung subprocess can't burn the entire retry budget.
+_VERIFY_PER_ATTEMPT_TIMEOUT_S = 60.0
+
+
+# Parses the integer immediately following the `actual (N rows):` line
+# in testdrive's count-mismatch output.  Used to short-circuit the
+# count retry loop when `actual > expected` — see
+# `_count_actual_overshoots`.
+_COUNT_ACTUAL_RE = re.compile(r"actual \(1 rows\):\s*\n\s*(\d+)")
+
+
+def _count_actual_overshoots(expected: int) -> Callable[[str], bool]:
+    """Build a stdout-parser that returns True when testdrive reported
+    `actual > expected` for the count check.
+
+    The count-check `.td` runs `SELECT COUNT(*) … = expected`, so the
+    only possible mismatch shapes are `actual < expected` (catchup
+    race, recoverable by waiting) and `actual > expected` (duplicate
+    rows — the SS-148 target — never recoverable by waiting).  We pass
+    this parser as the retry loop's `overshoot_check` so the duplicate
+    case fails fast with the first observed counts intact, instead of
+    burning the full catchup budget re-observing the same overshoot.
+    """
+
+    def check(stdout: str) -> bool:
+        m = _COUNT_ACTUAL_RE.search(stdout)
+        if m is None:
+            return False
+        try:
+            return int(m.group(1)) > expected
+        except ValueError:
+            return False
+
+    return check
+
+
+def _run_verify_once(
+    td: str,
+    *,
+    label: str,
+    timeout_s: float,
+) -> IcebergCheckResult:
+    """Run a duckdb verify inline `.td` exactly once.  Used by the
+    per-row check, which only runs after the count check has already
+    passed and therefore can't be a catchup race — a mismatch at that
+    point is a real correctness issue (extra/missing/wrong rows), so
+    there's nothing to gain from retrying."""
+    per_attempt = min(_VERIFY_PER_ATTEMPT_TIMEOUT_S, max(15.0, timeout_s))
+    result = helper_testdrive.run_inline(td, label=label, timeout_s=per_attempt)
+    return IcebergCheckResult(
+        matched=result.succeeded,
+        looks_transient=result.looks_transient,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.exit_code,
+    )
+
+
+def _run_verify_with_retry(
+    td_template: str,
+    *,
+    label: str,
+    timeout_s: float,
+    overshoot_check: Callable[[str], bool] | None = None,
+) -> IcebergCheckResult:
+    """Run a duckdb verify inline `.td` repeatedly until it succeeds, the
+    budget is exhausted, a transient (fault-injection-shaped) failure
+    is observed, or the optional `overshoot_check` parser signals that
+    the mismatch shape won't recover with more waiting.
+
+    `testdrive`'s `duckdb-query` directive is one-shot — it runs the
+    SELECT exactly once and fails the script if the row set doesn't
+    match.  Per-batch verification therefore needs the retry loop here,
+    on top: the sink's `messages_committed` gate is necessarily-but-not-
+    sufficient (see `_wait_for_sink_progress` in
+    `parallel_driver_iceberg_no_data_loss_or_dup.py`), so a count
+    mismatch on the first iceberg-side query is more often "not flushed
+    yet" than a real correctness gap.  Retrying on a real *undercount*
+    is safe — if the sink genuinely lost data the retry keeps
+    undercounting and we still fail at the deadline.  But for
+    mismatches that *can't* recover (duplicate rows, where actual >
+    expected), `overshoot_check` lets the caller bail immediately so
+    the SS-148 signal isn't delayed by a 120s wait that won't change
+    the answer.
+
+    Transient (fault-injected) failures short-circuit immediately so
+    the caller can demote to a `sometimes(False, …)` rather than
+    burning the budget on a polaris/minio outage that's outside the
+    property's scope.
+    """
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    result = None
+    while True:
+        attempt += 1
+        per_attempt = min(_VERIFY_PER_ATTEMPT_TIMEOUT_S, max(15.0, deadline - time.monotonic()))
+        result = helper_testdrive.run_inline(
+            td_template,
+            label=f"{label} attempt={attempt}",
+            timeout_s=per_attempt,
+        )
+        if result.succeeded:
+            return IcebergCheckResult(
+                matched=True,
+                looks_transient=False,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+            )
+        if result.looks_transient:
+            return IcebergCheckResult(
+                matched=False,
+                looks_transient=True,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+            )
+        if overshoot_check is not None and overshoot_check(result.stdout):
+            LOG.info(
+                "%s attempt %d: actual exceeds expected, short-circuiting retry "
+                "(duplicate rows won't disappear)",
+                label,
+                attempt,
+            )
+            return IcebergCheckResult(
+                matched=False,
+                looks_transient=False,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+            )
+        if time.monotonic() + _VERIFY_RETRY_INTERVAL_S >= deadline:
+            LOG.info(
+                "%s: persistent mismatch after %d attempt(s) in %.0fs budget",
+                label,
+                attempt,
+                timeout_s,
+            )
+            return IcebergCheckResult(
+                matched=False,
+                looks_transient=False,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+            )
+        time.sleep(_VERIFY_RETRY_INTERVAL_S)
+
+
 def verify_iceberg_count(
     batch_id: str,
     expected: int,
@@ -281,11 +441,15 @@ def verify_iceberg_count(
     """Assert `SELECT COUNT(*) FROM <iceberg table> WHERE batch_id = bid`
     equals `expected`.
 
-    Runs a one-shot testdrive script that opens the S3 secret and feeds
-    `duckdb-query` an inline expected-rows block.  testdrive itself
-    fails the run if the observed count differs; we map the exit code
-    back to an `IcebergCheckResult` so the caller can pick `always` vs.
-    `sometimes`.
+    Runs a testdrive script that opens the S3 secret and feeds
+    `duckdb-query` an inline expected-rows block, retrying through
+    transient under-count mismatches until `timeout_s` elapses.  See
+    `_run_verify_with_retry` for why retry is required even though the
+    caller already waited for `messages_committed` to advance.
+
+    `overshoot_check` short-circuits the retry when `actual > expected`
+    (duplicate rows — the SS-148 target), so a real correctness signal
+    isn't delayed by the catchup budget.
     """
     td = (
         _duckdb_secret_block()
@@ -295,17 +459,11 @@ def verify_iceberg_count(
         + f"WHERE batch_id = '{batch_id}'\n"
         + f"{expected}\n"
     )
-    result = helper_testdrive.run_inline(
+    return _run_verify_with_retry(
         td,
         label=f"iceberg/verify-count batch_id={batch_id}",
         timeout_s=timeout_s,
-    )
-    return IcebergCheckResult(
-        matched=result.succeeded,
-        looks_transient=result.looks_transient,
-        stdout=result.stdout,
-        stderr=result.stderr,
-        exit_code=result.exit_code,
+        overshoot_check=_count_actual_overshoots(expected),
     )
 
 
@@ -323,6 +481,13 @@ def verify_iceberg_rows_match(
     order and feeds it to `duckdb-query` as the expected-rows block;
     duckdb prints rows sorted by ORDER BY id, so we sort `expected` the
     same way.
+
+    Runs exactly once — by the time this is called, the count check
+    has already confirmed catchup, so a per-row mismatch (extra rows,
+    missing rows, wrong values) cannot be a catchup race and retrying
+    only delays surfacing a real bug.  Transient (fault-injected)
+    failures still short-circuit via `looks_transient` so the caller
+    can demote to `sometimes(False, …)`.
     """
     rows_sorted = sorted(expected.items())
     expected_block = "\n".join(f"{rid} {val}" for rid, val in rows_sorted)
@@ -335,15 +500,8 @@ def verify_iceberg_rows_match(
         + expected_block
         + "\n"
     )
-    result = helper_testdrive.run_inline(
+    return _run_verify_once(
         td,
         label=f"iceberg/verify-rows batch_id={batch_id} rows={len(expected)}",
         timeout_s=timeout_s,
-    )
-    return IcebergCheckResult(
-        matched=result.succeeded,
-        looks_transient=result.looks_transient,
-        stdout=result.stdout,
-        stderr=result.stderr,
-        exit_code=result.exit_code,
     )

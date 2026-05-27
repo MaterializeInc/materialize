@@ -181,6 +181,28 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # wording above so future Polaris driver versions / different inner
     # transports don't re-escape tolerance under the same fault profile.
     "sql-state '08006'",
+    # ---- Polaris 401 under slowed/torn OAuth handshakes -------------
+    # When Antithesis injects a `Slowed` network partition between the
+    # workload container and polaris, the duckdb iceberg extension's
+    # OAuth POST occasionally races with the followup `/v1/config`
+    # request: the token response arrives late or truncated, duckdb
+    # sends an invalid/empty Bearer to `/v1/config?warehouse=…`, and
+    # polaris responds 401.  Surface form (verbatim from the duckdb
+    # iceberg extension):
+    #   error: executing DuckDB query: ATTACH 'default_catalog' AS polaris …:
+    #   Invalid Configuration Error: Request to
+    #   'http://polaris:8181/api/catalog/v1/config?warehouse=default_catalog'
+    #   returned a non-200 status code (Unauthorized_401), with reason: Unauthorized
+    # Observed correlated 1:1 with an active `partition`/`Slowed` fault
+    # in the failure window; not observed when polaris is reachable.
+    # Pattern matches both the duckdb extension wording and any future
+    # 401 surface that includes "Unauthorized_401" or the bare reason
+    # string.  Intentionally narrow ("Unauthorized_401" with the
+    # underscore form duckdb prints) rather than the bare word
+    # "Unauthorized" to avoid swallowing genuine permission errors from
+    # other surfaces.
+    "Unauthorized_401",
+    "non-200 status code (Unauthorized",
 )
 
 
