@@ -748,11 +748,18 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     let nanos = lhs.nanosecond();
     let lhs = lhs.with_nanosecond(0).unwrap();
     let rhs = rhs.local_minus_utc();
-    lhs.checked_add_signed(match chrono::Duration::try_seconds(i64::from(rhs)) {
-        Some(dur) => dur,
-        None => return None,
-    })
-    .map(|dt| dt.with_nanosecond(nanos).unwrap())
+    let dt = lhs.checked_add_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
+    // chrono represents a leap second as `nanos >= 1_000_000_000`, but only on a
+    // second-of-minute of 59. If the offset shifted us off `:59`, we can't keep
+    // the leap-second representation: the resulting `NaiveTime` would be
+    // unconstructable via `from_num_seconds_from_midnight_opt` and would panic
+    // when round-tripped through `Row` encoding. In that case, fold the leap
+    // second into the next regular second.
+    if nanos >= 1_000_000_000 && dt.second() != 59 {
+        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
+    } else {
+        Some(dt.with_nanosecond(nanos).unwrap())
+    }
 }
 
 #[derive(
