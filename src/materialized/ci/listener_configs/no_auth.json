@@ -27,7 +27,8 @@
         "profiling": false,
         "mcp_agent": true,
         "mcp_developer": true,
-        "console_config": true
+        "console_config": true,
+        "endpoint_api": true
       }
     },
     "internal": {
@@ -43,7 +44,8 @@
         "profiling": true,
         "mcp_agent": true,
         "mcp_developer": true,
-        "console_config": false
+        "console_config": false,
+        "endpoint_api": true
       }
     }
   }
