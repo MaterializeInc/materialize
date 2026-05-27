@@ -14,7 +14,7 @@ export const MODERN_CONSOLE_STORAGE_KEY = "mz-modern-console-enabled";
 
 const modernConsoleEnabledAtom = atomWithStorage<boolean>(
   MODERN_CONSOLE_STORAGE_KEY,
-  false,
+  true,
 );
 
 export const useModernConsoleEnabled = () =>
