@@ -14,10 +14,12 @@ import time
 import urllib.error
 import urllib.request
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Service as UpService
 from materialize.mzcompose.helpers.iceberg import (
     setup_polaris_for_iceberg,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -31,6 +33,21 @@ SERVICES = [
     Minio(),
     PolarisBootstrap(),
     Polaris(),
+    Service(
+        "polaris-proxy",
+        {
+            "image": "python:3.11-slim",
+            "command": ["python", "-u", "polaris_proxy.py"],
+            "working_dir": "/workdir",
+            "volumes": [".:/workdir"],
+            "ports": [8181],
+            "environment": [
+                "UPSTREAM_HOST=polaris",
+                "UPSTREAM_PORT=8181",
+                "PROXY_PORT=8181",
+            ],
+        },
+    ),
     Materialized(
         depends_on=["minio"],
         sanity_restart=False,
@@ -49,8 +66,8 @@ def _setup(c: Composition) -> str:
     c.up(
         "postgres",
         "materialized",
-        Service("polaris-bootstrap", idle=True),
-        Service("polaris", idle=True),
+        UpService("polaris-bootstrap", idle=True),
+        UpService("polaris", idle=True),
     )
     _, key = setup_polaris_for_iceberg(c)
     return key
@@ -340,6 +357,52 @@ def workflow_commit_conflict(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "commit-conflict-verify.td",
+    )
+
+
+def workflow_idempotent_retry(c: Composition) -> None:
+    """Regression test: dropping a single catalog commit response must not
+    fence the sink off or cause duplicate row commits."""
+    key = _setup(c)
+    c.invoke("up", "--detach", "--wait", "--no-recreate", "polaris-proxy")
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "idempotent-retry-setup.td",
+    )
+
+    proxy_base = f"http://localhost:{c.port('polaris-proxy', 8181)}"
+
+    def proxy_post(path: str) -> None:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{proxy_base}{path}", data=b"", method="POST")
+        ) as resp:
+            resp.read()
+
+    time.sleep(15)
+    proxy_post("/__control/drop_next_commit")
+
+    for i in range(10):
+        c.sql(f"INSERT INTO retry_src VALUES ({i + 4}, 'row_{i + 4}')")
+        time.sleep(1)
+
+    time.sleep(60)
+
+    status_rows = c.sql_query(
+        "SELECT s.status, COALESCE(s.error, '') "
+        "FROM mz_internal.mz_sink_statuses s "
+        "JOIN mz_sinks ON s.id = mz_sinks.id "
+        "WHERE mz_sinks.name = 'retry_sink'"
+    )
+    assert status_rows, "retry_sink not found in mz_sink_statuses"
+    status, error = status_rows[0]
+    assert status == "running", f"retry_sink is {status!r} (error={error!r})"
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "idempotent-retry-verify.td",
     )
 
 
