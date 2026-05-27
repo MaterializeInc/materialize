@@ -1013,7 +1013,7 @@ impl AvailableCollections {
 
 /// Format a join implementation chain like `%0:t[#0{a}] » %1:u[#0{c}] » %2[×]`.
 ///
-/// Each position is rendered as `%pos:name` when an underlying [`Get`] can be
+/// Each position is rendered as `%pos:name` when an underlying [`PlanNode::Get`] can be
 /// dug out of the corresponding input plan (see [`humanize_input_name`]),
 /// otherwise just `%pos`. `[×]` (U+00D7) marks a cross product (empty lookup
 /// key). A `None` `source_key` renders the source position with no bracketed
