@@ -7020,6 +7020,7 @@ dependencies = [
  "itertools 0.14.0",
  "maplit",
  "mz-avro",
+ "mz-aws-glue-schema-registry",
  "mz-build-tools",
  "mz-ccsr",
  "mz-ore",
