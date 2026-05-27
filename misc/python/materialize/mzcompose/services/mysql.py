@@ -15,7 +15,10 @@ from materialize.mzcompose.service import (
 
 
 def create_mysql_server_args(
-    server_id: str, is_master: bool, binlog_row_metadata: str = "full"
+    server_id: str,
+    is_master: bool,
+    binlog_row_metadata: str = "full",
+    max_connections: int = 1000,
 ) -> list[str]:
     args = [
         "--log-bin=mysql-bin",
@@ -25,7 +28,7 @@ def create_mysql_server_args(
         "--binlog-row-image=full",
         f"--binlog-row-metadata={binlog_row_metadata}",
         f"--server-id={server_id}",
-        "--max-connections=500",
+        f"--max-connections={max_connections}",
     ]
 
     if not is_master:
