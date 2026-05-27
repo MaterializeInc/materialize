@@ -25,6 +25,16 @@ export const buildAvailableClusterReplicaSizesQuery = () => {
       .select("size")
       // We don't want to show the mz_probe size in the UI
       .where("size", "not like", "mz_%")
+      // Group sizes by family (legacy cc, t-shirt, M.1, D.1, ...) so related
+      // sizes stay contiguous, then sort by cost within each family.
+      .orderBy(
+        sql<string>`CASE
+          WHEN size ~ '^[0-9]+([a-zA-Z]*cc[xX]?|C)$' THEN '0_legacy'
+          WHEN size LIKE '%-%' THEN '1_' || split_part(size, '-', 1)
+          ELSE '2_tshirt'
+        END`,
+      )
+      .orderBy("credits_per_hour")
   );
 };
 /**
