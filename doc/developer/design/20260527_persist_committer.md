@@ -235,11 +235,16 @@ This defeats the connection-reduction goal at the worst possible moment (envd fa
 * How does the committer interact with the existing `StateCache` inside each `PersistClient`?
   Both are caches with similar semantics; we should confirm the marginal benefit of the committer-side cache empirically before committing to it long-term.
 * What is the right transport for the in-process committer client used by `environmentd` itself?
-  A tonic in-memory channel works but has serialization cost; a direct trait dispatch avoids that.
-  We will prototype both and measure.
+  Decision (v1): a tonic in-memory channel.
+  This keeps `environmentd` on the same `RpcConsensus` code path as clusterds; the serialization overhead is acceptable for v1 and can be revisited if profiling shows it matters.
 * Should we add per-shard authentication or rate limiting?
   Today persist clients are trusted in-cluster, so we propose no authn for v1, but the gRPC service is the natural place to add it later if needed.
 * What is the migration plan for environments where some clusterds still hold direct CRDB pools during the LD flag rollout?
   The design tolerates it (monotonic cache + no fast-reject), but we should document the supported overlap window.
 * How exactly does a clusterd discover the leader `environmentd` for its committer gRPC channel?
-  The proposal assumes reuse of the existing controller leader-discovery mechanism used during zero-downtime upgrade, but the exact integration point (e.g. shared resolver, separate gRPC target negotiated at handshake) needs to be pinned down with the cluster orchestration owners.
+  Decision (v1): a new `--persist-committer-url` clap argument on clusterd, supplied by the orchestrator at process launch.
+  This mirrors how other envd-provided endpoints reach clusterd today.
+  On leader failover, the orchestrator restarts clusterd with a new URL; hot-reload via the controller channel is a follow-up.
+* How does `environmentd` expose the committer gRPC service?
+  Decision (v1): a dedicated new listener on a configurable port (default `6878`).
+  Multiplexing onto the existing controller port was rejected to keep the committer's lifecycle independent of controller protocol churn.
