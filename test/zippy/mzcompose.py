@@ -47,6 +47,11 @@ from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.mz_actions import Mz0dtDeploy
@@ -63,7 +68,7 @@ def create_mzs(
             name=mz_name,
             external_blob_store=True,
             blob_store_is_azure=azurite,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             sanity_restart=False,
             metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
@@ -95,6 +100,7 @@ SERVICES = [
     Debezium(redpanda=True),
     Postgres(),
     Cockroach(),
+    Toxiproxy(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
@@ -238,6 +244,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults,
         ),
     ):
+        setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
         c.up("materialized")
 
         c.sql(
@@ -282,5 +289,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             actions=args.actions,
             max_execution_time=args.max_execution_time,
         )
+        # Setup is done; inject consensus latency only around the
+        # actual Zippy actions.
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         print("Running test...")
         test.run(c)

@@ -9,7 +9,7 @@
 
 import json
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from materialize import MZ_ROOT
 from materialize.checks.actions import Action
@@ -33,6 +33,15 @@ class MzcomposeAction(Action):
 
 
 class StartMz(MzcomposeAction):
+    # Composition setup (e.g. test/platform-checks/mzcompose.py
+    # workflow_default) can set this class-level attribute to override
+    # the external_metadata_store value StartMz uses when spinning up
+    # materialized. Set to "toxiproxy" to route the consensus connection
+    # through a pre-configured toxiproxy proxy, or False to disable
+    # external metadata storage entirely. Defaults to True, preserving
+    # the long-standing hardcoded behavior.
+    external_metadata_store_default: ClassVar[str | bool] = True
+
     def __init__(
         self,
         scenario: "Scenario",
@@ -100,7 +109,7 @@ class StartMz(MzcomposeAction):
             # TODO: Switch to default (CockroachOrPostgresMetadata) when
             # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
             metadata_store="postgres-metadata",
-            external_metadata_store=True,
+            external_metadata_store=StartMz.external_metadata_store_default,
             external_blob_store=True,
             blob_store_is_azure=self.scenario.features.azurite_enabled(),
             environment_extra=self.environment_extra,

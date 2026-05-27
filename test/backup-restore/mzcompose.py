@@ -19,6 +19,11 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -26,12 +31,13 @@ SERVICES = [
     Mc(),
     Materialized(
         external_blob_store=True,
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         sanity_restart=False,
         metadata_store="cockroach",
     ),
     Testdrive(no_reset=True, metadata_store="cockroach"),
     Persistcli(),
+    Toxiproxy(),
 ]
 
 
@@ -42,7 +48,9 @@ def workflow_default(c: Composition) -> None:
     c.enable_minio_versioning()
 
     # Start Materialize, and set up some basic state in it
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("materialized", Service("testdrive", idle=True))
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.testdrive(dedent("""
                 > DROP TABLE IF EXISTS numbers;
                 > CREATE TABLE IF NOT EXISTS numbers (id BIGINT);

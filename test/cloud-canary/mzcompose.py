@@ -37,6 +37,11 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
 
@@ -203,7 +208,7 @@ SERVICES = [
         # in order to ensure a perfect match to the container that should be
         # deployed to the cloud
         image=f"materialize/environmentd:{VERSION}",
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         persist_blob_url="file:///mzdata/persist/blob",
         options=[
             "--orchestrator=process",
@@ -219,6 +224,7 @@ SERVICES = [
         environment=ENVIRONMENT,
         app_password=APP_PASSWORD or "",
     ),
+    Toxiproxy(),
 ]
 
 
@@ -340,7 +346,9 @@ def wait_for_cloud(c: Composition) -> None:
 
 def version_check(c: Composition) -> None:
     print("Obtaining mz_version() string from local instance ...")
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("materialized")
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     # Remove the ($HASH) suffix because it can be different. The reason is that
     # the dockerhub devel-$HASH tag is just a link to the mzbuild-$CODEHASH. So
     # if the code has not changed, the environmentd image of the previous

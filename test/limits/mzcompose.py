@@ -45,6 +45,11 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -1892,12 +1897,13 @@ SERVICES = [
             "secrets:/secrets",
         ],
         sanity_restart=False,
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         metadata_store="cockroach",
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
         support_external_clusterd=True,
     ),
     Mz(app_password=""),
+    Toxiproxy(),
 ]
 
 for cluster_id in range(1, MAX_CLUSTERS + 1):
@@ -1919,6 +1925,7 @@ service_names = [
     "balancerd",
     "frontegg-mock",
     "cockroach",
+    "toxiproxy",
     "clusterd_1_1_1",
     "clusterd_1_1_2",
     "clusterd_1_2_1",
@@ -1930,7 +1937,9 @@ service_names = [
 
 
 def setup(c: Composition, workers: int) -> None:
+    setup_consensus_toxiproxy(c, metadata_store="cockroach")
     c.up(*service_names)
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     setup_sql_server_testing(c)
 
     c.sql(
@@ -2291,6 +2300,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     assert args.replicas <= MAX_REPLICAS, "SERVICES have to be static"
     assert args.nodes <= MAX_NODES, "SERVICES have to be static"
 
+    setup_consensus_toxiproxy(c, metadata_store="cockroach")
     c.up(
         "zookeeper",
         "kafka",
@@ -2300,6 +2310,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "frontegg-mock",
         Service("testdrive", idle=True),
     )
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
 
     # Construct the requied Clusterd instances and peer them into clusters
     node_names = []

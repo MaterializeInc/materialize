@@ -108,6 +108,10 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
@@ -163,6 +167,7 @@ SERVICES = [
     Clusterd(),
     Testdrive(),
     Mz(app_password=""),
+    Toxiproxy(),
 ]
 
 
@@ -368,7 +373,7 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         metadata_store="cockroach",
         external_blob_store=True,
         blob_store_is_azure=azurite,
@@ -394,8 +399,8 @@ def start_overridden_mz_clusterd_and_cockroach(
     first_run: bool,
 ) -> None:
     with c.override(mz, clusterd):
+        setup_consensus_toxiproxy(c, metadata_store="cockroach")
         c.up(
-            "cockroach",
             "materialized",
             "clusterd",
             *(["balancerd"] if balancerd else []),

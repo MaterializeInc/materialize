@@ -45,6 +45,11 @@ from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.ui import UIError
 
 # Pre-bug release: catalog 80.
@@ -63,7 +68,7 @@ SERVICES = [
     PostgresMetadata(),
     Minio(setup_materialize=True),
     Materialized(
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         external_blob_store=True,
         metadata_store="postgres-metadata",
         sanity_restart=False,
@@ -73,6 +78,7 @@ SERVICES = [
         no_reset=True,
     ),
     Mz(app_password=""),
+    Toxiproxy(),
 ]
 
 
@@ -81,7 +87,7 @@ def _mz(image: str | None) -> Materialized:
         name="materialized",
         image=image,
         metadata_store="postgres-metadata",
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         external_blob_store=True,
         sanity_restart=False,
         # Set the default replication factor since
@@ -149,10 +155,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
     """v26.17 -> v26.18 (expect failure) -> v26.24 (expect success on user1, but failure on user2 and user3) -> current (expect repair)."""
-    c.up("postgres-metadata", "minio")
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
+    c.up("minio")
 
     # Pre-bug release. Role rows written in the v80 catalog format.
     _start_at(c, PRE_BUG_VERSION)
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.testdrive(dedent("""
             > CREATE ROLE user1 WITH LOGIN PASSWORD 'password';
             > CREATE ROLE user2 WITH LOGIN PASSWORD 'password';
@@ -231,9 +239,11 @@ def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_stale_rows(c: Composition, parser: WorkflowArgumentParser) -> None:
     """v26.17 -> current (only cause negative diff here) -> current."""
-    c.up("postgres-metadata", "minio")
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
+    c.up("minio")
 
     _start_at(c, PRE_BUG_VERSION)
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.testdrive(dedent("""
             > CREATE ROLE user1 WITH LOGIN PASSWORD 'password';
             """))

@@ -27,6 +27,11 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
     VersionsFromDocs,
@@ -44,6 +49,7 @@ SERVICES = [
     Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     Cockroach(setup_materialize=True, in_memory=True),
+    Toxiproxy(),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),
@@ -59,7 +65,7 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         validate_catalog_store=False,
         volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
         metadata_store="cockroach",
@@ -190,6 +196,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql")
 
     mz_service = "materialized"
@@ -208,7 +215,7 @@ def test_upgrade_from_version(
                 if version >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             system_parameter_defaults=system_parameter_defaults,
             deploy_generation=deploy_generation,
             restart="on-failure",
@@ -225,7 +232,7 @@ def test_upgrade_from_version(
             name=mz_service,
             options=list(mz_options.values()),
             volumes_extra=["secrets:/share/secrets"],
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             system_parameter_defaults=system_parameter_defaults,
             restart="on-failure",
             sanity_restart=False,
@@ -247,6 +254,10 @@ def test_upgrade_from_version(
         f"create-in-{version_glob}-{filter}.td",
         mz_service=mz_service,
     )
+
+    # v_old state is in place; inject consensus latency now so it hits
+    # the actual upgrade(s), not the initial object creation.
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
 
     mz_service = "materialized2"
     deploy_generation += 1
@@ -280,7 +291,7 @@ def test_upgrade_from_version(
                         if version >= start_version
                     ],
                     volumes_extra=["secrets:/share/secrets"],
-                    external_metadata_store=True,
+                    external_metadata_store="toxiproxy",
                     system_parameter_defaults=system_parameter_defaults,
                     deploy_generation=deploy_generation,
                     restart="on-failure",
@@ -310,7 +321,7 @@ def test_upgrade_from_version(
         name=mz_service,
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         system_parameter_defaults=system_parameter_defaults,
         deploy_generation=deploy_generation,
         restart="on-failure",
@@ -325,7 +336,7 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             validate_catalog_store=True,
             volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
             metadata_store="cockroach",

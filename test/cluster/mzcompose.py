@@ -51,7 +51,11 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
@@ -3744,13 +3748,15 @@ def workflow_test_incident_70(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             external_blob_store=True,
             sanity_restart=False,
         ),
         Minio(setup_materialize=True),
     ):
+        setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
         c.up("minio", "materialized")
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
 
         c.sql(
             f"ALTER SYSTEM SET max_connections = {num_conns + 5};",

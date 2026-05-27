@@ -17,11 +17,16 @@ from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 
 SERVICES = [
     CockroachOrPostgresMetadata(),
-    Materialized(propagate_crashes=True, external_metadata_store=True),
+    Materialized(propagate_crashes=True, external_metadata_store="toxiproxy"),
     Testdrive(no_reset=True, default_timeout="5s"),
+    Toxiproxy(),
 ]
 
 
@@ -38,6 +43,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def setup(c: Composition) -> None:
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("materialized", Service("testdrive", idle=True))
 
 

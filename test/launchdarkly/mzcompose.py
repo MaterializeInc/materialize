@@ -35,6 +35,11 @@ from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.ui import UIError
 
 # Access keys required for interacting with LaunchDarkly.
@@ -54,6 +59,7 @@ LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
 SERVICES = [
     CockroachOrPostgresMetadata(),
+    Toxiproxy(),
     Materialized(
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -63,7 +69,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
         },
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
     ),
     Testdrive(no_reset=True, seed=1),
 ]
@@ -86,11 +92,13 @@ def workflow_default(c: Composition) -> None:
     )
 
     try:
+        setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
         c.up(Service("testdrive", idle=True))
 
         # Assert that the default max_result_size is served when sync is disabled.
-        with c.override(Materialized(external_metadata_store=True)):
+        with c.override(Materialized(external_metadata_store="toxiproxy")):
             c.up("materialized")
+            set_consensus_latency(c, latency_ms=500, jitter_ms=200)
             c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
             c.stop("materialized")
 
@@ -126,7 +134,7 @@ def workflow_default(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
                 },
-                external_metadata_store=True,
+                external_metadata_store="toxiproxy",
             )
         ):
             c.up("materialized")
@@ -135,7 +143,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that the last value is persisted and available upon restart,
         # even if the parameter sync loop is not running.
-        with c.override(Materialized(external_metadata_store=True)):
+        with c.override(Materialized(external_metadata_store="toxiproxy")):
             c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
             c.stop("materialized")

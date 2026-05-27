@@ -35,6 +35,10 @@ from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
@@ -74,6 +78,7 @@ SERVICES = [
     CockroachOrPostgresMetadata(),
     Minio(setup_materialize=True),
     Testdrive(default_timeout="60s"),
+    Toxiproxy(),
 ]
 
 
@@ -318,7 +323,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_old = Materialized(
             name="materialized",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info"
@@ -328,7 +333,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_new = Materialized(
             name="materialized",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info",
@@ -338,6 +343,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         with c.override(mz_old, create_mysql(mysql_version)):
+            setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
             c.up("materialized", "mysql")
 
             print(f"Running {file} with mz_old")
@@ -373,7 +379,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.kill("materialized", wait=True)
                 c.kill("mysql", wait=True)
                 c.kill(METADATA_STORE, wait=True)
+                c.kill("toxiproxy", wait=True)
                 c.rm("materialized")
                 c.rm(METADATA_STORE)
                 c.rm("mysql")
+                c.rm("toxiproxy")
                 c.rm_volumes("mzdata")

@@ -38,6 +38,10 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
@@ -63,6 +67,7 @@ SERVICES = [
     Materialized(),
     Materialized(name="materialized2"),
     Clusterd(name="clusterd1", scratch_directory="/mzdata/source_data"),
+    Toxiproxy(),
 ]
 
 
@@ -125,7 +130,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=["16875:6875", "16877:6877"],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             system_parameter_defaults=get_default_system_parameters(),
             additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
             sanity_restart=False,
@@ -136,13 +141,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=["26875:6875", "26877:6877"],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             system_parameter_defaults=get_default_system_parameters(),
             additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
             sanity_restart=False,
             support_external_clusterd=True,
         ),
     ):
+        setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
         c.up(*services)
         setup_sql_server_testing(c)
 

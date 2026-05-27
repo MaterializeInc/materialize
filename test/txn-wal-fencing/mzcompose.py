@@ -25,6 +25,11 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 
 
 class Operation(Enum):
@@ -91,6 +96,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     Azurite(),
     CockroachOrPostgresMetadata(),
+    Toxiproxy(),
     # Overriden below
     Materialized(name="mz_first"),
     Materialized(name="mz_second"),
@@ -174,7 +180,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
     c.silent = True
 
     c.down(destroy_volumes=True)
-    c.up(c.metadata_store())
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
 
     mzs = {
         "mz_first": workload.txn_wal_first,
@@ -185,7 +191,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
         *[
             Materialized(
                 name=mz_name,
-                external_metadata_store=True,
+                external_metadata_store="toxiproxy",
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
                 sanity_restart=False,
@@ -215,6 +221,10 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
                 """,
                 service="mz_first",
             )
+
+        # Setup is done; inject consensus latency now so it hits the
+        # fencing race rather than the table/MV creation loop.
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
 
         print("+++ Running workload ...")
         start = time.time()
