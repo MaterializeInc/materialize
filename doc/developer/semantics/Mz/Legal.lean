@@ -104,32 +104,31 @@ theorem legal_of_eval {n : Nat} {sch : Schema n} (env : Env sch) :
   | _, .eq a b       => LegalEval.eqOk (legal_of_eval env a) (legal_of_eval env b)
   | _, .lt a b       => LegalEval.ltOk (legal_of_eval env a) (legal_of_eval env b)
   | _, .ifThen c t e =>
-    -- ifThen reduces to evalIfThen on eval c; depends on the value.
-    -- Cases on (eval env c); each lands on a distinct constructor.
+    -- ifThen dispatches lazily on eval env c.
     match h : eval env c with
     | .bool true  =>
       have hc : LegalEval env c (.bool true) := h ▸ legal_of_eval env c
       have : eval env (.ifThen c t e) = eval env t := by
-        show evalIfThen (eval env c) (eval env t) (eval env e) = eval env t
-        rw [h]; rfl
+        conv_lhs => unfold eval
+        rw [h]
       this ▸ LegalEval.ifTrue hc (legal_of_eval env t)
     | .bool false =>
       have hc : LegalEval env c (.bool false) := h ▸ legal_of_eval env c
       have : eval env (.ifThen c t e) = eval env e := by
-        show evalIfThen (eval env c) (eval env t) (eval env e) = eval env e
-        rw [h]; rfl
+        conv_lhs => unfold eval
+        rw [h]
       this ▸ LegalEval.ifFalse hc (legal_of_eval env e)
     | .null        =>
       have hc : LegalEval env c .null := h ▸ legal_of_eval env c
       have : eval env (.ifThen c t e) = .null := by
-        show evalIfThen (eval env c) (eval env t) (eval env e) = .null
-        rw [h]; rfl
+        conv_lhs => unfold eval
+        rw [h]
       this ▸ LegalEval.ifNull hc
     | .err er      =>
       have hc : LegalEval env c (.err er) := h ▸ legal_of_eval env c
       have : eval env (.ifThen c t e) = .err er := by
-        show evalIfThen (eval env c) (eval env t) (eval env e) = .err er
-        rw [h]; rfl
+        conv_lhs => unfold eval
+        rw [h]
       this ▸ LegalEval.ifErr hc
   | _, .andN args    => LegalEval.andND
   | _, .orN args     => LegalEval.orND

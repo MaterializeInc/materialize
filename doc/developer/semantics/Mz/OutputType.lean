@@ -151,7 +151,12 @@ theorem eval_satisfies_outputCols {n : Nat} {sch : Schema n}
     · intro hErr
       simp only [Bool.or_eq_false_iff] at hErr
       obtain ⟨⟨hc, ht⟩, he⟩ := hErr
-      exact evalIfThen_not_err (ihc.2 hc) (iht.2 ht) (ihe.2 he)
+      cases hev : eval env c with
+      | bool b => cases b
+                  · exact ihe.2 he
+                  · exact iht.2 ht
+      | null => intro hRes; cases hRes
+      | err _ => exact absurd (by rw [hev]; trivial) (ihc.2 hc)
   | _, .plus a b => by
     have iha := eval_satisfies_outputCols env hsat a
     have ihb := eval_satisfies_outputCols env hsat b

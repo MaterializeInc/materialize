@@ -364,7 +364,7 @@ mutual
     | _, .not a, h => by
       simp only [Expr.might_error] at h
       have iha := might_error_sound env hEnv a h
-      show ¬(evalNot (eval env a)).IsErr
+      unfold eval
       exact evalNot_not_err iha
     | _, .plus a b, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
@@ -402,8 +402,13 @@ mutual
       have ihc := might_error_sound env hEnv c h.1.1
       have iht := might_error_sound env hEnv t h.1.2
       have ihe := might_error_sound env hEnv e h.2
-      show ¬(evalIfThen (eval env c) (eval env t) (eval env e)).IsErr
-      exact evalIfThen_not_err ihc iht ihe
+      unfold eval
+      cases hev : eval env c with
+      | bool b => cases b
+                  · exact ihe
+                  · exact iht
+      | null => intro hRes; cases hRes
+      | err _ => exact absurd (by rw [hev]; trivial) ihc
     | _, .andN args, h => by
       simp only [Expr.might_error] at h
       have ih_args := args_might_error_sound env hEnv args h

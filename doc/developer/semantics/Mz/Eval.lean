@@ -17,12 +17,35 @@ The environment is a typed lookup function:
 returns a `Datum` whose kind agrees with the schema's declared
 type for that column.
 
-Mutual `eval` + `evalList` to handle variadic `ExprList`.
+## Laziness
 
-Laziness modeling note: strict surface evaluation realizes the
-spec's lazy semantics for absorbing operators (`.andN`, `.orN`,
-`.coalesce`) and for `.ifThen`'s inactive arm via the absorption
-/ discard rules in `PrimEval`. -/
+`.ifThen c t e` dispatches inline on `eval env c` and only
+evaluates the selected branch. Eager dispatch through a
+`Datum`-level `evalIfThen` primitive would compute both `t` and
+`e` regardless — wasteful, and under `Datum.err _` semantics
+risks producing an err in the discarded branch.
+
+The variadic constructors `.andN` / `.orN` / `.coalesce`
+delegate to `evalList` + the corresponding combinator
+(`evalAndN` / `evalOrN` / `evalCoalesce`). This form is eager
+(builds the full `List (Datum k)` first) but result-faithful to
+the spec:
+
+* `evalAndN` is a right-fold via `evalAnd`; `evalAnd .bool false _`
+  is the first pattern (FALSE absorbs every other input including
+  `.err _`). So the eager form produces the same value as a
+  left-to-right lazy short-circuit on `.bool false` would. Same
+  story for `evalOrN` with `.bool true`.
+* `evalCoalesce` is a two-pass form (`Coalesce.firstConcrete` +
+  `Coalesce.residue`); the spec's `null > err` residue rule
+  requires scanning operands after an err head to detect a later
+  null, so structural laziness beyond "stop on first concrete"
+  has no win.
+
+The eager variadic shape stays for proof scaffolding (`evalAndN`
+/ `evalOrN` / `evalCoalesce` on `List (Datum k)` carry the
+absorption / residue laws); refactoring to `ExprList`-direct
+lazy forms is queued. -/
 
 namespace Mz
 
@@ -34,7 +57,8 @@ def Env {n : Nat} (sch : Schema n) : Type :=
   (i : Fin n) → Datum (sch.types.get i)
 
 mutual
-  /-- Big-step evaluation. Mutual with `evalList`. -/
+  /-- Big-step evaluation. Mutual with `evalList` for the variadic
+  constructors. `.ifThen` dispatches lazily inline. -/
   def eval {n : Nat} {sch : Schema n} :
       {k : ColType} → Env sch → Expr sch k → Datum k
     | _, _, .lit d        => d
@@ -49,7 +73,11 @@ mutual
     | _, env, .andN args  => evalAndN (evalList env args)
     | _, env, .orN args   => evalOrN (evalList env args)
     | _, env, .ifThen c t e =>
-      evalIfThen (eval env c) (eval env t) (eval env e)
+      match eval env c with
+      | .bool true  => eval env t
+      | .bool false => eval env e
+      | .null       => .null
+      | .err err    => .err err
     | _, env, .coalesce args => evalCoalesce (evalList env args)
 
   /-- Evaluate an `ExprList` to a `List (Datum k)`. -/
