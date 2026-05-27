@@ -1,0 +1,245 @@
+# Persist committer
+
+* Associated: (issue/epic TBD)
+
+## The problem
+
+Every Materialize process that talks to persist opens its own connection pool to the consensus database (CockroachDB).
+Each `PersistClientCache` instantiates a `PostgresConsensus` with a default pool size of 50 connections (`CONSENSUS_CONNECTION_POOL_MAX_SIZE` in `src/persist-client/src/cfg.rs`).
+In an environment with one `environmentd` and N `clusterd` replicas, the consensus DB sees up to `(N + 1) * 50` open connections, and that grows linearly with replica count.
+As deployments scale, this pressures CRDB connection limits, increases scheduling overhead inside each clusterd, and amplifies tail latency under contention.
+The connection budget is the constraint we want to relieve.
+
+There is no open issue tracking this work yet; this document opens the discussion.
+
+## Success criteria
+
+A successful design reduces the number of CRDB connections opened per environment from `O(replicas)` to `O(envds)` without regressing persist correctness, latency, or availability.
+Reads and writes against consensus continue to satisfy the existing `Consensus` trait contract.
+Rollout is gated by a runtime flag so the change can be enabled per environment and rolled back without redeploying.
+Existing persist test suites pass against the new transport with no semantic changes.
+
+## Out of scope
+
+* The persist Blob layer (S3/MinIO).
+  Blob uses cheap HTTP connections and does not exhibit the same pressure.
+* Coalescing or merging the *payloads* of `compare_and_set` requests across callers.
+  Caller-provided new-state depends on caller-observed old-state, so payload merging is not semantically sound.
+* Cross-environment consensus sharing.
+  Each environment retains its own consensus DB.
+* A standalone `persistd` binary.
+  The committer ships inside `environmentd` for v1.
+
+## Solution proposal
+
+### Overview
+
+Introduce a **persist committer**: an in-process service hosted by `environmentd` that owns the single `PostgresConsensus` connection pool for the environment and exposes the `Consensus` trait over a new gRPC service.
+Clusterds (and `environmentd` itself) use a new RPC-backed `Consensus` implementation that routes every operation to the committer.
+The committer maintains a small in-memory cache of the latest head per shard to serve `head` reads without round-tripping to CRDB.
+The cache is advisory: CRDB remains the single source of truth, every `compare_and_set` is forwarded unconditionally, and cache state only ever moves forward in sequence number.
+
+```mermaid
+flowchart LR
+  subgraph envd[envd leader]
+    Committer[PersistCommitter]
+    Cache[ShardCache]
+    Pool[Postgres pool ~50 conn]
+    Committer --- Cache
+    Committer --- Pool
+    EnvdClient[envd PersistClient] -- in-process --> Committer
+  end
+  C1[clusterd 1] -- gRPC --> Committer
+  C2[clusterd 2] -- gRPC --> Committer
+  CN[clusterd N] -- gRPC --> Committer
+  Pool -- TCP --> CRDB[(CockroachDB)]
+```
+
+### Components
+
+The committer lives in a new `mz-persist-committer` crate.
+It composes the existing `PostgresConsensus`, a per-shard cache, and a tonic gRPC server.
+
+**`PersistCommitter`** owns the only `Arc<dyn Consensus>` backed by CRDB in the environment.
+It accepts RPC requests, consults the cache, dispatches to the underlying `Consensus`, and broadcasts updates to subscribers.
+
+**`ShardCache`** is a `BTreeMap<ShardId, Arc<Mutex<CachedState>>>` where `CachedState` holds the latest observed `VersionedData` and the set of active subscribers.
+Inserts compare sequence numbers and only move forward, never backward.
+The map is bounded by `persist_committer_max_cached_shards`; entries with zero subscribers are LRU-evicted when the cap is reached.
+
+**`ProtoPersistConsensus`** is the new gRPC service.
+It exposes four unary RPCs mirroring the `Consensus` trait — `Head`, `Scan`, `CompareAndSet`, `Truncate` — plus a server-streaming `Subscribe(ShardId)` that pushes `VersionedData` diffs.
+The diff wire format matches the existing `ProtoPubSubMessage::PushDiff` so the cluster-side persist subscriber can reuse decoders.
+
+**`RpcConsensus`** is a new `Consensus` implementation in `mz-persist-client` that wraps a tonic channel.
+It is the only persist-client-side change; once a `PersistClientCache` decides to use it, every existing persist consumer is unaffected.
+`environmentd` uses the same `RpcConsensus`, but its tonic channel is an in-process channel that short-circuits TCP.
+
+### Data flow
+
+**Write path (`compare_and_set`):**
+
+1. Caller invokes `Consensus::compare_and_set(shard, expected, new)` on the persist client.
+2. `RpcConsensus` sends `CompareAndSet { shard, expected, new }` to the committer.
+3. The committer forwards the call to its `PostgresConsensus` unconditionally.
+   CRDB arbitrates.
+4. On success, the committer updates the cache for `shard` (monotonic merge), then publishes the new `VersionedData` to every subscriber of that shard.
+5. On failure, the committer updates the cache from the returned current state (still monotonic merge) and forwards the failure to the caller.
+
+We do not fast-reject CaS against the cache.
+With two `environmentd` instances briefly coexisting during failover, the cache may lag CRDB, and a cache-based reject could incorrectly fail a legitimate CaS.
+Forwarding every write keeps CRDB authoritative.
+
+**Read path (`head`):**
+
+1. Caller invokes `Consensus::head(shard)`.
+2. `RpcConsensus` sends `Head { shard }` to the committer.
+3. If the cache has an entry, the committer returns the cached `VersionedData`.
+   Otherwise it reads CRDB, populates the cache, and returns the value.
+4. On cache miss, the committer marks the shard warm and begins delivering diffs to any subsequent subscriber.
+
+Stale cache reads are safe because the cache moves forward monotonically.
+A caller that reads sequence number N from cache when CRDB holds N+1 simply learns about N+1 on its next CaS failure, then retries.
+This is identical to the behavior persist already handles when two clients race.
+
+**Read path (`scan`):**
+
+`scan` always falls through to CRDB.
+It is used for state replay on shard open, returns arbitrarily large result sets, and runs cold.
+Caching it has limited value and unbounded memory cost.
+
+**Subscribe path:**
+
+When a clusterd's `PersistClient` opens a shard, it opens a `Subscribe(shard)` server-stream to the committer.
+The committer registers the subscriber, sends the current cached `VersionedData` as the first message, then streams every subsequent `VersionedData` update produced by its own CaS commits.
+The subscription tears down when the clusterd closes the shard or the gRPC stream.
+
+### Cache freshness with multiple writers
+
+The cache is necessarily best-effort because the committer is not always the only writer to CRDB:
+
+* During zero-downtime upgrade, two `environmentd` instances briefly coexist and both run a committer.
+* During rollout, some clusterds may still hold direct CRDB connections (`persist_consensus_use_committer = off`).
+* External tooling (backups, admin scripts) may read or write directly.
+
+To bound staleness, the committer refreshes cached shards on a TTL (default 5s, `persist_committer_cache_refresh_interval`) whenever the shard has active subscribers.
+The TTL refresh issues a `head` to CRDB, monotonic-merges the result, and broadcasts any diff.
+Combined with monotonic insert and the no-fast-reject CaS rule, the cache cannot serve a stale value that causes incorrect behavior; it can only delay observation of newer state by at most the TTL.
+
+### Connectivity and failover
+
+Each `environmentd` runs its own committer.
+Clusterds connect to the leader `environmentd` (the same one that issues controller commands) and reconnect to the new leader during failover, reusing the existing leader-discovery mechanism.
+In-flight RPCs against the demoted committer fail with a retryable error, and the persist client's existing `next_listen_batch_retryer` handles the backoff.
+The new leader's cache starts empty and warms naturally on first access.
+
+The brief overlap window during failover is safe because CRDB arbitrates CaS regardless of which committer issues it, and cache monotonicity holds within each committer independently.
+
+### Error handling
+
+When the committer is unreachable from a clusterd, `RpcConsensus` returns `ExternalError::Indeterminate("committer unreachable")`, the same error class persist already returns when CRDB itself is unreachable.
+The persist client retries with existing exponential backoff.
+The replica makes no progress until reconnect, which matches today's behavior when CRDB is down; controllers are also unreachable in that scenario, so the cluster is effectively idle anyway.
+
+When the committer cannot reach CRDB, the underlying `PostgresConsensus` error propagates verbatim to in-flight RPCs.
+Subscribe streams stay open and continue to serve cached reads under the monotonic guarantee.
+
+Overload is bounded by a per-shard outstanding-request queue (default 1024).
+Beyond the limit the server returns `RESOURCE_EXHAUSTED`, which the client treats as a retryable backoff signal.
+
+### Configuration
+
+All flags are LaunchDarkly-backed and evaluated dynamically:
+
+* `persist_consensus_use_committer` (bool, default `false`):
+  selects `RpcConsensus` over `PostgresConsensus` at `PersistClientCache` construction time.
+* `persist_committer_cache_enabled` (bool, default `true` once the previous flag is on):
+  disables the in-memory cache while keeping the RPC path.
+  Acts as a safety valve if the cache turns out to be a regression source.
+* `persist_committer_max_cached_shards` (usize, default `10000`):
+  hard cap on cache size; LRU evicts shards with no subscribers.
+* `persist_committer_cache_refresh_interval` (duration, default `5s`):
+  TTL for periodic re-`head` of subscribed shards.
+
+### Metrics
+
+New metrics, exposed by `environmentd`:
+
+* `mz_persist_committer_rpc_total{op, result}` and `mz_persist_committer_rpc_duration_seconds{op}`:
+  per-RPC counters and histograms.
+* `mz_persist_committer_cache_hits_total{op}` / `_misses_total{op}`:
+  measures how often the cache short-circuits reads.
+* `mz_persist_committer_cached_shards` (gauge) and `mz_persist_committer_subscribers{shard}` (gauge):
+  cache footprint.
+* `mz_persist_committer_inflight_rpcs` (gauge) and `mz_persist_committer_queue_depth{shard}` (gauge):
+  overload visibility.
+* `mz_persist_consensus_pool_connections{state}` (gauge):
+  open/idle/wait, missing today, useful regardless of this work.
+
+The headline metric for rollout is the count of active CRDB connections per environment, which should drop from `O(replicas)` to `O(envds)` after enable.
+
+### Testing strategy
+
+The `Consensus` trait abstraction lets us reuse every existing persist correctness test against `RpcConsensus` simply by parameterizing the test harness on the trait implementation.
+On top of that:
+
+* Unit tests in `mz-persist-committer` verify monotonic-insert (random-order property test), per-shard mutex serialization, and cache eviction semantics.
+* An mzcompose composition under `test/persist-committer/` runs `environmentd` plus several `clusterd` replicas, exercises CaS contention, kills the committer mid-flight, and verifies retry semantics.
+* A platform check (`mz-platform-checks`) verifies that shard state survives `environmentd` restart with the committer enabled.
+* Parallel-workload runs with the committer enabled surface panics or deadlocks under concurrent DDL/DML.
+
+## Minimal viable prototype
+
+The minimal viable prototype runs in `mzcompose` and consists of:
+
+1. Skeleton `mz-persist-committer` crate with the gRPC service defined and a pass-through `PostgresConsensus` (no cache).
+2. `RpcConsensus` implementing the `Consensus` trait against the gRPC service.
+3. `PersistClientCache` wired to choose between `PostgresConsensus` and `RpcConsensus` based on the LD flag.
+4. An mzcompose check that opens a shard from two clusterds with the flag on, verifies CaS arbitration, and confirms CRDB connection count is bounded.
+
+Caching, TTL refresh, and metrics layer on after the prototype demonstrates the basic transport works.
+
+## Alternatives
+
+**Dumb RPC proxy without caching.**
+Same gRPC surface, no `ShardCache`.
+Achieves the connection-reduction goal because all CRDB traffic funnels through one pool.
+Adds one network hop to every `head`, which is non-trivial because persist clients call `head` often during state-machine convergence.
+We chose the caching variant to keep tail latency closer to today's behavior; the cache can be disabled via flag if it turns out to be a regression source.
+
+**Caching committer with same-shard write serialization.**
+Like the proposal, plus a per-shard mutex that serializes inbound CaS at the committer so that N concurrent attempts from N clusterds do not all hit CRDB only for N-1 to fail.
+This reduces CRDB CaS retry traffic but adds tail-latency variance on hot shards.
+We defer this to a follow-up.
+The proposal's per-shard `Arc<Mutex<CachedState>>` is held only across cache updates, not across the CaS itself, so adding serialization would require extending the critical section, not introducing new locking.
+We can flip serialization on once we have metrics that justify it.
+
+**Piggyback on the existing `ProtoPersistPubSub` stream.**
+Reuse the bidirectional pubsub channel to carry consensus requests and responses.
+Saves one TCP connection per clusterd but conflates two protocols, complicates reconnect logic, and entangles the pubsub stream's backpressure with consensus latency.
+A dedicated gRPC service is cleaner and matches the existing pattern.
+
+**Piggyback on the compute or storage controller channel.**
+Reuse the controller RPC to carry persist consensus.
+Couples persist availability to controller protocol churn and forces every controller channel change to consider persist implications.
+The prompt itself flagged this as harder, and we agree.
+
+**Per-replica fallback to a direct CRDB connection.**
+When the committer is unreachable, open a local pool.
+This defeats the connection-reduction goal at the worst possible moment (envd failover triggers a thundering herd of N clusterds each opening 50 connections), so we reject it in favor of stall-with-backoff.
+
+## Open questions
+
+* What is the appropriate default cache TTL?
+  5s is a starting guess; we should measure CaS-retry rates with multiple values during rollout.
+* How does the committer interact with the existing `StateCache` inside each `PersistClient`?
+  Both are caches with similar semantics; we should confirm the marginal benefit of the committer-side cache empirically before committing to it long-term.
+* What is the right transport for the in-process committer client used by `environmentd` itself?
+  A tonic in-memory channel works but has serialization cost; a direct trait dispatch avoids that.
+  We will prototype both and measure.
+* Should we add per-shard authentication or rate limiting?
+  Today persist clients are trusted in-cluster, so we propose no authn for v1, but the gRPC service is the natural place to add it later if needed.
+* What is the migration plan for environments where some clusterds still hold direct CRDB pools during the LD flag rollout?
+  The design tolerates it (monotonic cache + no fast-reject), but we should document the supported overlap window.
+* How exactly does a clusterd discover the leader `environmentd` for its committer gRPC channel?
+  The proposal assumes reuse of the existing controller leader-discovery mechanism used during zero-downtime upgrade, but the exact integration point (e.g. shared resolver, separate gRPC target negotiated at handshake) needs to be pinned down with the cluster orchestration owners.
