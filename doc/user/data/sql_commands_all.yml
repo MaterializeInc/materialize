@@ -110,6 +110,10 @@ rows:
   - command: "[`COPY TO`](/sql/copy-to)"
     labels:
       - "copy"
+  - command: "[`CREATE API`](/sql/create-api)"
+    object: "API"
+    labels:
+      - "object"
   - command: "[`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)"
     object: "Cluster Replica"
     labels:
@@ -132,6 +136,10 @@ rows:
       - "object"
   - command: "[`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)"
     object: "Materialized View"
+    labels:
+      - "object"
+  - command: "[`CREATE METRIC`](/sql/create-metric)"
+    object: "Metric"
     labels:
       - "object"
   - command: "[`CREATE NETWORK POLICY`](/sql/create-network-policy)"
@@ -188,6 +196,10 @@ rows:
     object: "session state"
     labels:
       - "session"
+  - command: "[`DROP API`](/sql/drop-api)"
+    object: "API"
+    labels:
+      - "object"
   - command: "[`DROP CLUSTER REPLICA`](/sql/drop-cluster-replica)"
     object: "Cluster Replica"
     labels:
@@ -210,6 +222,10 @@ rows:
       - "object"
   - command: "[`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)"
     object: "Materialized View"
+    labels:
+      - "object"
+  - command: "[`DROP METRIC`](/sql/drop-metric)"
+    object: "Metric"
     labels:
       - "object"
   - command: "[`DROP NETWORK POLICY`](/sql/drop-network-policy)"

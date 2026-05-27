@@ -1,0 +1,37 @@
+- name: "syntax"
+  code: |
+    CREATE METRIC [IF NOT EXISTS] <name>
+      IN API <api_name> AS (
+        TYPE '<metric_type>',
+        HELP '<help_text>',
+        VALUES FROM <relation>,
+        VALUE COLUMN '<column_name>'
+      );
+  syntax_elements:
+    - name: "`IF NOT EXISTS`"
+      description: |
+        If specified, do not generate an error if a metric of the same name
+        already exists.
+    - name: "`<name>`"
+      description: |
+        The identifier for the metric. This identifier is also the name
+        emitted in the Prometheus exposition.
+    - name: "`IN API <api_name>`"
+      description: |
+        The [API](../create-api) that exposes this metric.
+    - name: "`TYPE '<metric_type>'`"
+      description: |
+        The Prometheus metric type. Only `'gauge'` is supported today.
+    - name: "`HELP '<help_text>'`"
+      description: |
+        A human-readable description, emitted as the `# HELP` line in the
+        exposition.
+    - name: "`VALUES FROM <relation>`"
+      description: |
+        The view, materialized view, source, or table whose rows are scraped
+        each time the API is queried. Every row becomes one sample; columns
+        other than the value column become Prometheus label values.
+    - name: "`VALUE COLUMN '<column_name>'`"
+      description: |
+        The column of `<relation>` containing the numeric metric value. Must
+        be castable to `f64`.
