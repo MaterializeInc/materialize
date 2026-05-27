@@ -165,12 +165,12 @@ select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interv
 query T
 SELECT timezone('+00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
-2024-07-01 00:00:01
+2024-06-30 23:59:59
 
 query T
 SELECT timezone('-00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
-2024-06-30 23:59:59
+2024-07-01 00:00:01
 
 ### to_char
 
