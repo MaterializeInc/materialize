@@ -176,7 +176,7 @@ pub(crate) fn attempt_left_join_magic(
         // then we can fish out values from that input. If it equates values
         // across multiple inputs, we would need to fish out valid tuples and
         // no idea how we would get those w/o doing a join or a cartesian product.
-        let (mut equations, mut non_crossing_equations) =
+        let (equations, non_crossing_equations) =
             if let Some(list) = decompose_left_to_right_equations(&on, oa + ba) {
                 list
             } else {
