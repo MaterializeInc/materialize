@@ -2331,6 +2331,215 @@ WHERE
     }
 });
 
+pub static MZ_APIS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+    name: "mz_apis",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::MV_MZ_APIS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+        )
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "The unique ID of the API."),
+        ("oid", "A PostgreSQL-compatible oid for the API."),
+        (
+            "schema_id",
+            "The ID of the schema to which the API belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        ("name", "The name of the API."),
+        (
+            "cluster_id",
+            "The ID of the cluster used to peek the API's metric source views. Corresponds to `mz_clusters.id`.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the API. Corresponds to `mz_roles.id`.",
+        ),
+        ("privileges", "The privileges belonging to the API."),
+    ]),
+    sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'api'",
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "api",
+        description: "A user-defined HTTP API endpoint exposing Prometheus metrics.",
+        links: &const { [
+            OntologyLink {
+                name: "in_schema",
+                target: "schema",
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+            },
+            OntologyLink {
+                name: "on_cluster",
+                target: "cluster",
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+            },
+            OntologyLink {
+                name: "owned_by",
+                target: "role",
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+            },
+        ] },
+        column_semantic_types: &const {[
+            ("id", SemanticType::CatalogItemId),
+            ("oid", SemanticType::OID),
+            ("schema_id", SemanticType::SchemaId),
+            ("cluster_id", SemanticType::ClusterId),
+            ("owner_id", SemanticType::RoleId),
+        ]},
+    }),
+}
+});
+
+pub static MZ_METRICS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_metrics",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_METRICS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("api_id", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("help", SqlScalarType::String.nullable(false))
+            .with_column("values_from", SqlScalarType::String.nullable(false))
+            .with_column("value_column", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The unique ID of the metric."),
+            ("oid", "A PostgreSQL-compatible oid for the metric."),
+            (
+                "schema_id",
+                "The ID of the schema to which the metric belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the metric."),
+            (
+                "api_id",
+                "The ID of the API the metric is attached to. Corresponds to `mz_catalog.mz_apis.id`.",
+            ),
+            (
+                "type",
+                "The Prometheus metric type (e.g. `gauge`).",
+            ),
+            (
+                "help",
+                "The Prometheus HELP text emitted in the exposition.",
+            ),
+            (
+                "values_from",
+                "The ID of the relation the metric reads rows from. Corresponds to `mz_catalog.mz_relations.id`.",
+            ),
+            (
+                "value_column",
+                "The name of the column in `values_from` that holds the metric value; the other columns become labels.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the metric. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL api_id,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL help,
+    ASSERT NOT NULL values_from,
+    ASSERT NOT NULL value_column,
+    ASSERT NOT NULL owner_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'api_id' AS api_id,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'metric_type' AS type,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'help' AS help,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'values_from' AS values_from,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'value_column' AS value_column,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'metric'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "metric",
+            description: "A user-defined Prometheus metric attached to an API.",
+            links: &const { [
+                OntologyLink {
+                    name: "in_schema",
+                    target: "schema",
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "in_api",
+                    target: "api",
+                    properties: LinkProperties::fk("api_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "values_from",
+                    target: "relation",
+                    properties: LinkProperties::fk("values_from", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "owned_by",
+                    target: "role",
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                },
+            ] },
+            column_semantic_types: &const {[
+                ("id", SemanticType::CatalogItemId),
+                ("oid", SemanticType::OID),
+                ("schema_id", SemanticType::SchemaId),
+                ("api_id", SemanticType::CatalogItemId),
+                ("values_from", SemanticType::CatalogItemId),
+                ("owner_id", SemanticType::RoleId),
+            ]},
+        }),
+    }
+});
+
 pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_cluster_replicas",
@@ -2544,7 +2753,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
             ),
             (
                 "object_type",
-                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+                "The type of the affected object: `api`, `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
             ),
             (
                 "details",
@@ -2623,6 +2832,8 @@ SELECT
         WHEN '16' THEN 'system'
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
+        WHEN '19' THEN 'api'
+        WHEN '20' THEN 'metric'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -2816,6 +3027,8 @@ SELECT
         WHEN '15' THEN 'function'
         -- variant 16 reserved/unused in mz_catalog_protos::ObjectType.
         WHEN '17' THEN 'network policy'
+        WHEN '18' THEN 'api'
+        WHEN '19' THEN 'metric'
     END AS object_type,
     mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
     mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
@@ -3117,7 +3330,11 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, NULL::text, privileges FROM mz_catalog.mz_secrets
+UNION ALL
+    SELECT id, oid, schema_id, name, 'api', owner_id, cluster_id, privileges FROM mz_catalog.mz_apis
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_metrics",
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "object",
@@ -3182,6 +3399,16 @@ UNION ALL
                         name: "union_includes",
                         target: "secret",
                         properties: LinkProperties::union_disc("type", "secret"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "api",
+                        properties: LinkProperties::union_disc("type", "api"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "metric",
+                        properties: LinkProperties::union_disc("type", "metric"),
                     },
                     OntologyLink {
                         name: "in_schema",
@@ -3471,6 +3698,8 @@ mod tests {
                 ProtoObjectType::Schema => Some(SqlObjectType::Schema),
                 ProtoObjectType::Func => Some(SqlObjectType::Func),
                 ProtoObjectType::NetworkPolicy => Some(SqlObjectType::NetworkPolicy),
+                ProtoObjectType::Api => Some(SqlObjectType::Api),
+                ProtoObjectType::Metric => Some(SqlObjectType::Metric),
             }
         }
 
@@ -3496,6 +3725,8 @@ mod tests {
             ProtoObjectType::Schema,
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
+            ProtoObjectType::Api,
+            ProtoObjectType::Metric,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

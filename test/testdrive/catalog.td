@@ -546,6 +546,7 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                  cluster             comment
 --------------------------------------------------
+mz_apis               mz_catalog_server   ""
 mz_audit_events       mz_catalog_server   ""
 mz_clusters           mz_catalog_server   ""
 mz_cluster_replicas   mz_catalog_server   ""
@@ -553,6 +554,7 @@ mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
+mz_metrics            mz_catalog_server   ""
 mz_role_members       mz_catalog_server   ""
 mz_role_parameters    mz_catalog_server   ""
 mz_roles              mz_catalog_server   ""

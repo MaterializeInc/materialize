@@ -40,7 +40,7 @@ Field           | Type                         | Meaning
 ----------------|------------------------------|--------
 `id`            | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
 `event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.
-`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.
+`object_type`   | [`text`]                     | The type of the affected object: `api`, `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.
 `details`       | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.
@@ -703,4 +703,6 @@ Field          | Type                 | Meaning
 [`uint8 list`]: /sql/types/list
 [`uint4`]: /sql/types/uint4
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_apis -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_metrics -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

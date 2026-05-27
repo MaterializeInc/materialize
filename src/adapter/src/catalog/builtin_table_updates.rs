@@ -379,6 +379,8 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }
+            // TODO: emit mz_apis / mz_metrics rows once those builtin tables exist.
+            CatalogItem::Api(_) | CatalogItem::Metric(_) => vec![],
         };
 
         if !entry.item().is_temporary() {

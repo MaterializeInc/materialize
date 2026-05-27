@@ -3337,6 +3337,8 @@ SELECT
         WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
         WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
         WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
+        WHEN obj ? 'Api'              THEN mz_internal.parse_catalog_id(obj->'Api')
+        WHEN obj ? 'Metric'           THEN mz_internal.parse_catalog_id(obj->'Metric')
     END                                                              AS id,
     CASE
         WHEN obj ? 'Table'            THEN 'table'
@@ -3355,6 +3357,8 @@ SELECT
         WHEN obj ? 'Cluster'          THEN 'cluster'
         WHEN obj ? 'ClusterReplica'   THEN 'cluster-replica'
         WHEN obj ? 'NetworkPolicy'    THEN 'network-policy'
+        WHEN obj ? 'Api'              THEN 'api'
+        WHEN obj ? 'Metric'           THEN 'metric'
     END                                                              AS object_type,
     (sub->'ColumnPos')::int4                                          AS object_sub_id,
     comment

@@ -850,6 +850,8 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    Api(Api),
+    Metric(Metric),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -1650,6 +1652,56 @@ impl Connection {
     }
 }
 
+/// A user-defined HTTP endpoint that exposes a configured format
+/// (currently only Prometheus). Metrics are attached via [`Metric`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Api {
+    /// Parse-able SQL that defines this API.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this API from outside the catalog.
+    pub global_id: GlobalId,
+    /// Cluster the API's metric queries run on.
+    pub cluster_id: ClusterId,
+    /// Other objects this API depends on. Always empty today; reserved for
+    /// future formats that may reference catalog state directly.
+    pub resolved_ids: ResolvedIds,
+}
+
+impl Api {
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
+/// A Prometheus metric attached to an [`Api`]. Reads from a view; one
+/// column holds the value, the rest become labels.
+#[derive(Debug, Clone, Serialize)]
+pub struct Metric {
+    /// Parse-able SQL that defines this metric.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this metric from outside the catalog.
+    pub global_id: GlobalId,
+    /// The API this metric is registered with.
+    pub api_id: CatalogItemId,
+    /// Prometheus metric type (e.g. "gauge").
+    pub metric_type: String,
+    /// HELP text emitted in the Prometheus exposition.
+    pub help: String,
+    /// The view that produces metric rows. Resolved at plan time.
+    pub values_from: CatalogItemId,
+    /// Name of the column in `values_from` that holds the metric value;
+    /// other columns are emitted as labels.
+    pub value_column: String,
+    /// Catalog objects this metric depends on (the API and the view).
+    pub resolved_ids: ResolvedIds,
+}
+
+impl Metric {
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
@@ -1731,6 +1783,8 @@ impl CatalogItem {
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
+            CatalogItem::Api(_) => CatalogItemType::Api,
+            CatalogItem::Metric(_) => CatalogItemType::Metric,
         }
     }
 
@@ -1749,6 +1803,8 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Api(api) => api.global_id,
+            CatalogItem::Metric(metric) => metric.global_id,
             CatalogItem::Table(table) => {
                 return itertools::Either::Left(table.collections.values().copied());
             }
@@ -1771,6 +1827,8 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Api(api) => api.global_id,
+            CatalogItem::Metric(metric) => metric.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
         }
     }
@@ -1841,7 +1899,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => false,
         }
     }
 
@@ -1867,7 +1927,9 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::Type(_) => None,
+            | CatalogItem::Type(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         }
     }
 
@@ -1934,6 +1996,8 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::Api(api) => &api.resolved_ids,
+            CatalogItem::Metric(metric) => &metric.resolved_ids,
         }
     }
 
@@ -1960,6 +2024,8 @@ impl CatalogItem {
             }
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
+            CatalogItem::Api(_) => {}
+            CatalogItem::Metric(_) => {}
         }
         uses
     }
@@ -1978,7 +2044,9 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         }
     }
 
@@ -1996,7 +2064,9 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => (),
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => (),
         }
     }
 
@@ -2020,7 +2090,9 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => {
                 unreachable!("only views, indexes, and tables can be temporary")
             }
         }
@@ -2102,6 +2174,16 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::Api(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Api(i))
+            }
+            CatalogItem::Metric(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Metric(i))
+            }
         }
     }
 
@@ -2172,6 +2254,16 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::Api(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Api(i))
+            }
+            CatalogItem::Metric(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Metric(i))
+            }
         }
     }
 
@@ -2233,6 +2325,16 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Connection(i)
+            }
+            CatalogItem::Api(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Api(i)
+            }
+            CatalogItem::Metric(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Metric(i)
             }
         }
     }
@@ -2411,7 +2513,9 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. })
+            | CatalogItem::Api(Api { create_sql, .. })
+            | CatalogItem::Metric(Metric { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2446,7 +2550,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         }
     }
 
@@ -2467,6 +2573,8 @@ impl CatalogItem {
                 | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
+            CatalogItem::Api(api) => Some(api.cluster_id),
+            CatalogItem::Metric(_) => None,
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2491,7 +2599,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         }
     }
 
@@ -2512,7 +2622,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => return None,
         };
         Some(cw)
     }
@@ -2536,7 +2648,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => return None,
         };
         Some(custom_logical_compaction_window.unwrap_or(CompactionWindow::Default))
     }
@@ -2556,7 +2670,9 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => false,
         }
     }
 
@@ -2612,6 +2728,10 @@ impl CatalogItem {
                 connection.global_id,
                 BTreeMap::new(),
             ),
+            CatalogItem::Api(api) => (api.create_sql.clone(), api.global_id, BTreeMap::new()),
+            CatalogItem::Metric(metric) => {
+                (metric.create_sql.clone(), metric.global_id, BTreeMap::new())
+            }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
@@ -2657,6 +2777,8 @@ impl CatalogItem {
             CatalogItem::Connection(connection) => {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
+            CatalogItem::Api(api) => (api.create_sql, api.global_id, BTreeMap::new()),
+            CatalogItem::Metric(metric) => (metric.create_sql, metric.global_id, BTreeMap::new()),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
@@ -2676,6 +2798,8 @@ impl CatalogItem {
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
+            CatalogItem::Api(api) => return Some(api.global_id),
+            CatalogItem::Metric(metric) => return Some(metric.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2880,7 +3004,9 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Api(_)
+            | CatalogItem::Metric(_) => None,
         }
     }
 
@@ -3009,6 +3135,8 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
+            Api => CommentObjectId::Api(self.id),
+            Metric => CommentObjectId::Metric(self.id),
         }
     }
 }
@@ -3951,6 +4079,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
+            CatalogItem::Api(Api { create_sql, .. }) => create_sql,
+            CatalogItem::Metric(Metric { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }

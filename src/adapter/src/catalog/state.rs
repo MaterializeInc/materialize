@@ -30,8 +30,8 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    Api, CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, Metric,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
@@ -464,11 +464,18 @@ impl CatalogState {
                         queue.push_back(on_item_id);
                     }
                 }
+                CatalogItem::Metric(metric) => {
+                    let values_from = metric.values_from;
+                    if seen.insert(values_from) {
+                        queue.push_back(values_from);
+                    }
+                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => (),
+                | CatalogItem::Secret(_)
+                | CatalogItem::Api(_) => (),
             }
         }
 
@@ -1555,6 +1562,24 @@ impl CatalogState {
                 details,
                 resolved_ids,
             }),
+            Plan::CreateApi(mz_sql::plan::CreateApiPlan { api, .. }) => CatalogItem::Api(Api {
+                create_sql: api.create_sql,
+                global_id,
+                cluster_id: api.cluster_id,
+                resolved_ids,
+            }),
+            Plan::CreateMetric(mz_sql::plan::CreateMetricPlan { metric, .. }) => {
+                CatalogItem::Metric(Metric {
+                    create_sql: metric.create_sql,
+                    global_id,
+                    api_id: metric.api_id,
+                    metric_type: metric.metric_type,
+                    help: metric.help,
+                    values_from: metric.values_from,
+                    value_column: metric.value_column,
+                    resolved_ids,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {
@@ -1922,7 +1947,9 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()],
+            | CatalogItemType::Connection
+            | CatalogItemType::Api
+            | CatalogItemType::Metric => schema.items[builtin.name()],
         }
     }
 
@@ -2744,7 +2771,9 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::Api(id)
+            | CommentObjectId::Metric(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2773,7 +2802,9 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::Api(id)
+            | CommentObjectId::Metric(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()
