@@ -24,6 +24,7 @@ serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 tonic.workspace = true
+tonic-prost.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

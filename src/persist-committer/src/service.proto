@@ -1,0 +1,59 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_persist_committer;
+
+message ProtoVersionedData {
+  uint64 seqno = 1;
+  bytes data = 2;
+}
+
+message ProtoHeadRequest { string shard = 1; }
+message ProtoHeadResponse { optional ProtoVersionedData current = 1; }
+
+message ProtoCompareAndSetRequest {
+  string shard = 1;
+  optional uint64 expected = 2;
+  ProtoVersionedData new = 3;
+}
+message Empty {}
+message ProtoCompareAndSetResponse {
+  oneof result {
+    Empty committed = 1;
+    ProtoVersionedData mismatch = 2;
+  }
+}
+
+message ProtoScanRequest {
+  string shard = 1;
+  uint64 from = 2;
+  uint64 limit = 3;
+}
+message ProtoScanResponse { repeated ProtoVersionedData versions = 1; }
+
+message ProtoTruncateRequest { string shard = 1; uint64 seqno = 2; }
+message ProtoTruncateResponse { uint64 deleted = 1; }
+
+message ProtoSubscribeRequest { string shard = 1; }
+message ProtoSubscribeMessage {
+  oneof kind {
+    ProtoVersionedData snapshot = 1;
+    ProtoVersionedData diff = 2;
+  }
+}
+
+service ProtoPersistConsensus {
+  rpc Head(ProtoHeadRequest) returns (ProtoHeadResponse);
+  rpc Scan(ProtoScanRequest) returns (ProtoScanResponse);
+  rpc CompareAndSet(ProtoCompareAndSetRequest) returns (ProtoCompareAndSetResponse);
+  rpc Truncate(ProtoTruncateRequest) returns (ProtoTruncateResponse);
+  rpc Subscribe(ProtoSubscribeRequest) returns (stream ProtoSubscribeMessage);
+}
