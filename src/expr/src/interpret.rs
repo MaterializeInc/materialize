@@ -1020,14 +1020,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
         for bound in &plan.lower_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result =
-                mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
             results.push(result);
         }
         for bound in &plan.upper_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result =
-                mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
         let mut result = self.variadic(&And.into(), results);
@@ -1546,10 +1544,7 @@ mod tests {
         // "not-a-uuid" is in the stats range and definitely doesn't parse as a UUID.
         interpreter.push_column(
             0,
-            ResultSpec::value_between(
-                Datum::String("not-a-uuid"),
-                Datum::String("not-a-uuid"),
-            ),
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
         );
         let spec = interpreter.mfp_filter(&mfp);
         assert!(
@@ -1558,6 +1553,61 @@ mod tests {
              fallibility, otherwise persist filter pushdown can wrongly discard \
              a part that produces error rows",
         );
+    }
+
+    /// Proptest companion to [`test_mfp_unreferenced_fallible_expression`]:
+    /// directly verifies the fallibility claim of [`ColumnSpecs::mfp_filter`]
+    /// against the runtime MFP semantics. For a random expression placed in
+    /// `MapFilterProject::expressions` (i.e. as an unreferenced Map step), if
+    /// evaluating the expression on a row drawn from the stats range produces
+    /// an error at runtime, then the interpreter's summary must report
+    /// `may_fail()`. Without the `expressions.any(|s| s.range.fallible)` patch
+    /// in `mfp_filter`, the AND over an empty predicate list collapses to
+    /// `True` and the runtime error is wrongly ruled out.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_filter_fallibility_equivalence() {
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
+
+            let input_arity = relation_type.column_types.len();
+            let mfp = MapFilterProject {
+                expressions: vec![expr.clone()],
+                predicates: vec![],
+                projection: (0..input_arity).collect(),
+                input_arity,
+            };
+
+            let arena = RowArena::new();
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+            let summary = interpreter.mfp_filter(&mfp);
+
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                if expr.eval(&datums, &arena).is_err() {
+                    prop_assert!(
+                        summary.range.may_fail(),
+                        "mfp_filter must surface the fallibility of an \
+                         unreferenced MFP expression: row {:?} errored at \
+                         runtime but the interpreter ruled out errors",
+                        row,
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
+        });
     }
 
     #[mz_ore::test]
