@@ -981,6 +981,59 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         ColumnSpec { col_type, range }
     }
+
+    /// Override the default implementations of [Self::mfp_filter] and
+    /// [Self::mfp_plan_filter] so that the fallibility of MFP expressions
+    /// surfaces in the result, even when the expression's result column isn't
+    /// referenced by a predicate or temporal bound.
+    ///
+    /// The runtime MFP evaluator runs every expression once all the preceding
+    /// predicates pass (see [`crate::SafeMfpPlan::evaluate_inner`]), so an
+    /// expression that errors on the actual data will turn the whole row into
+    /// an `Err` — even if no predicate or bound mentions that expression. The
+    /// default `mfp_filter` / `mfp_plan_filter` only AND together the
+    /// predicates and bounds, so the AND result misses the expression's
+    /// `fallible` flag and persist filter pushdown can wrongly discard a part
+    /// that actually produces error rows. See database-issues#9656.
+    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
+        let predicates = mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mut result = self.variadic(&And.into(), predicates);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
+    }
+
+    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
+        let mut results: Vec<_> = plan
+            .mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
+        for bound in &plan.lower_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        for bound in &plan.upper_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        let mut result = self.variadic(&And.into(), results);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
+    }
 }
 
 /// An interpreter that returns whether or not a particular expression is "pushdownable".
@@ -1447,6 +1500,108 @@ mod tests {
                 }
             }
 
+            Ok(())
+        }
+
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
+        });
+    }
+
+    /// Regression test for database-issues#9656.
+    ///
+    /// The interpreter must surface the fallibility of MFP expressions that
+    /// aren't referenced by any predicate or temporal bound. The runtime MFP
+    /// evaluator runs every expression once predicates pass, so an expression
+    /// that errors on the actual data makes the whole row an `Err` — and
+    /// `filter_result` must keep the part to emit that error.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_unreferenced_fallible_expression() {
+        use crate::scalar::func::CastStringToUuid;
+
+        // MFP: one expression that always errors on the input range, and one
+        // predicate that always passes. The expression's result column is
+        // *not* referenced by the predicate, so the default interpreter
+        // implementation would AND together just `True` and miss the
+        // fallibility.
+        let mfp = MapFilterProject {
+            expressions: vec![MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastStringToUuid(CastStringToUuid),
+                expr: Box::new(MirScalarExpr::column(0)),
+            }],
+            predicates: vec![(
+                1,
+                MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+            )],
+            projection: vec![0, 1],
+            input_arity: 1,
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        // "not-a-uuid" is in the stats range and definitely doesn't parse as a UUID.
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
+        );
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(
+            spec.range.may_fail(),
+            "an MFP expression that errors on the stats range must propagate \
+             fallibility, otherwise persist filter pushdown can wrongly discard \
+             a part that produces error rows",
+        );
+    }
+
+    /// Proptest companion to [`test_mfp_unreferenced_fallible_expression`]:
+    /// directly verifies the fallibility claim of [`ColumnSpecs::mfp_filter`]
+    /// against the runtime MFP semantics. For a random expression placed in
+    /// `MapFilterProject::expressions` (i.e. as an unreferenced Map step), if
+    /// evaluating the expression on a row drawn from the stats range produces
+    /// an error at runtime, then the interpreter's summary must report
+    /// `may_fail()`. Without the `expressions.any(|s| s.range.fallible)` patch
+    /// in `mfp_filter`, the AND over an empty predicate list collapses to
+    /// `True` and the runtime error is wrongly ruled out.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_filter_fallibility_equivalence() {
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
+
+            let input_arity = relation_type.column_types.len();
+            let mfp = MapFilterProject {
+                expressions: vec![expr.clone()],
+                predicates: vec![],
+                projection: (0..input_arity).collect(),
+                input_arity,
+            };
+
+            let arena = RowArena::new();
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+            let summary = interpreter.mfp_filter(&mfp);
+
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                if expr.eval(&datums, &arena).is_err() {
+                    prop_assert!(
+                        summary.range.may_fail(),
+                        "mfp_filter must surface the fallibility of an \
+                         unreferenced MFP expression: row {:?} errored at \
+                         runtime but the interpreter ruled out errors",
+                        row,
+                    );
+                }
+            }
             Ok(())
         }
 
