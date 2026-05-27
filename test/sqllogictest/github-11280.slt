@@ -1,0 +1,50 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#11280: wrong results from a `FlatMap` whose
+# input is only available as an arrangement on a non-leading column. The MFP
+# above the table function references input columns at positions
+# `0..input_arity`, which are in arrangement order rather than logical order.
+# Previously, lowering forwarded the arrangement to the `FlatMap` without
+# permuting those references, so the MFP's projection picked up the wrong
+# columns.
+
+statement ok
+CREATE TABLE t (a INT, b INT, c INT)
+
+statement ok
+INSERT INTO t VALUES (1, 2, 3), (10, 20, 30)
+
+statement ok
+CREATE INDEX idx_c ON t(c)
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1  2  3  1
+10  20  30  1
+
+# Same shape, but with the index on a different non-leading column.
+statement ok
+DROP INDEX idx_c
+
+statement ok
+CREATE INDEX idx_b ON t(b)
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1  2  3  1
+10  20  30  1
+
+# A predicate on an input column referenced by the MFP.
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1 AND t.a = 1
+----
+1  2  3  1

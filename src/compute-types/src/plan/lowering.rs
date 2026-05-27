@@ -601,20 +601,32 @@ impl Context {
                         has_future_updates: input_future,
                     } = self.lower_mir_expr(flat_map_input)?;
                     // This stage can absorb arbitrary MFP instances.
-                    let mfp = mfp.take();
+                    let mut mfp = mfp.take();
                     let mut exprs = exprs.clone();
-                    let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement()
-                    {
-                        // We don't permute the MFP here, because it runs _after_ the table function,
-                        // whose output is in a fixed order.
-                        //
-                        // We _do_, however, need to permute the `expr`s that provide input to the
-                        // `func`.
-                        let permutation = permutation.iter().cloned().enumerate().collect();
+                    // Prefer the unarranged collection when present: it presents input columns
+                    // in logical order, so no permutation is required.
+                    let input_key = if keys.raw {
+                        None
+                    } else if let Some((k, permutation, _)) = keys.arbitrary_arrangement() {
+                        // Reading from this arrangement exposes input columns in arrangement
+                        // order (key columns followed by thinned value columns). We must
+                        // permute every reference to an input column accordingly: the
+                        // `expr`s feeding the table function arguments, and the `mfp` running
+                        // after the table function (which still references input columns at
+                        // positions `0..input_arity`). Table-function output columns at
+                        // positions `input_arity..` are appended after the table function in
+                        // a fixed order, so we leave those references alone.
+                        let perm_map: BTreeMap<usize, usize> =
+                            permutation.iter().cloned().enumerate().collect();
                         for expr in &mut exprs {
-                            expr.permute_map(&permutation);
+                            expr.permute_map(&perm_map);
                         }
-
+                        let input_arity = permutation.len();
+                        let mfp_input_arity = mfp.input_arity;
+                        mfp.permute_fn(
+                            |c| if c < input_arity { permutation[c] } else { c },
+                            mfp_input_arity,
+                        );
                         Some(k.clone())
                     } else {
                         None
@@ -629,7 +641,7 @@ impl Context {
                         plan: PlanNode::FlatMap {
                             input_key,
                             input: Box::new(input),
-                            exprs: exprs.clone(),
+                            exprs,
                             func: func.clone(),
                             mfp_after: mfp,
                         }
