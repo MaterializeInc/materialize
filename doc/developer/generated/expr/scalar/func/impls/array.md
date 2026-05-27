@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/array.rs
-revision: 61475c0097
+revision: 5d046b3ab6
 ---
 
 # mz-expr::scalar::func::impls::array

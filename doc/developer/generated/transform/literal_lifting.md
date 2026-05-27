@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/literal_lifting.rs
-revision: 703a0c27c8
+revision: 5d046b3ab6
 ---
 
 # mz-transform::literal_lifting

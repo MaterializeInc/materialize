@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/builder_async.rs
-revision: 5427dc5764
+revision: be619e53d8
 ---
 
 # timely-util::builder_async

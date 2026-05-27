@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-revision: ed294863cf
+revision: 5a511a1f59
 ---
 
 # mz-expr::scalar::func
@@ -18,3 +18,4 @@ Submodules define the function enum infrastructure and per-type implementations:
 - `encoding` -- binary encoding.
 
 `UnaryFunc`, `BinaryFunc`, `VariadicFunc`, and `UnmaterializableFunc` are re-exported and referenced by `MirScalarExpr`.
+Several timestamp/date/interval arithmetic functions have corrected `is_monotone` annotations: `add_timestamp_interval`, `add_timestamp_tz_interval`, `sub_timestamp_interval`, `sub_timestamp_tz_interval` are `(false, false)`; `add_date_interval` and `sub_date_interval` are `(true, false)` (monotone in the date argument but not in the interval argument); `date_bin_timestamp` and `date_bin_timestamp_tz` are `(false, true)` (not monotone in stride, but monotone in source). These corrections reflect that `Interval` lex order (months, days, micros) does not respect calendar-aware arithmetic with day-clamping.

@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections/string_or_secret.rs
-revision: a375623c5b
+revision: c0559e3dbe
 ---
 
 # storage-types::connections::string_or_secret

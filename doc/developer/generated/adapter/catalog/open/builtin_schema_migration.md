@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration.rs
-revision: 4d59d67c50
+revision: 3a37dd15d5
 ---
 
 # adapter::catalog::open::builtin_schema_migration
@@ -11,3 +11,4 @@ The `MIGRATIONS` list declares per-version migration steps; `Migration::run` app
 `CatalogItemType::MaterializedView` is supported alongside `Table` and `Source` as a valid target for schema migrations, as reflected by entries in the `MIGRATIONS` list that migrate several `mz_catalog` and `mz_internal` materialized views including `mz_databases`, `mz_schemas`, `mz_role_members`, `mz_network_policies`, `mz_network_policy_rules`, `mz_cluster_workload_classes`, `mz_internal_cluster_replicas`, `mz_pending_cluster_replicas`, `mz_materialized_views`, `mz_connections`, and `mz_secrets`.
 When applying replacement migrations, `mz_storage_usage_by_shard` is excluded from data-destroying replacement plans to preserve billing data.
 When the source and target versions differ and the source version is a dev build, `Migration::run` forces evolution-mode migration even without an explicit `force_migration` config, avoiding version-based filter failures in dev environments.
+In forced dev-to-dev migrations, `migrate_evolve_one` skips builtins that do not yet have a shard registered. Brand-new builtins in a given version may not have their shards allocated until the leader completes bootstrap; excluding them avoids "missing shard ID" errors on read-only replicas.

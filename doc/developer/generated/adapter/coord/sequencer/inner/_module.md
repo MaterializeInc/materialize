@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: 3df8ae2fd8
+revision: 5d046b3ab6
 ---
 
 # adapter::coord::sequencer::inner

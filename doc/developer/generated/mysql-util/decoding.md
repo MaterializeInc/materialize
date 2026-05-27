@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/decoding.rs
-revision: 47a81d6e64
+revision: cad9b4f546
 ---
 
 # mysql-util::decoding

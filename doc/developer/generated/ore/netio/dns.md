@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/netio/dns.rs
-revision: 122dfd0789
+revision: 98469193f5
 ---
 
 # mz-ore::netio::dns
