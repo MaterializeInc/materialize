@@ -30,7 +30,7 @@ import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
 import { NAV_HOVER_STYLES } from "~/layouts/constants";
-import { shellPath } from "~/platform/v2/routeHelpers";
+import { SHELL_SLUG, shellPath } from "~/platform/v2/routeHelpers";
 import { catalogVisibleAtom } from "~/store/catalog";
 import { useRegionSlug } from "~/store/environments";
 import { MonitorIcon } from "~/svg/Monitor";
@@ -83,17 +83,24 @@ const getNavItems = ({
   catalogVisible: boolean;
   setCatalogVisible: (value: boolean) => void;
 }): NavItemType[] => {
+  const onWorksheet = new RegExp(`/regions/[^/]+/${SHELL_SLUG}(/|$)`).test(
+    location.pathname,
+  );
   return [
     {
       href: shellPath(regionSlug),
       icon: <ShellIcon />,
       label: "SQL Worksheet",
     },
-    {
-      icon: <DataIcon />,
-      label: "Data",
-      onClick: () => setCatalogVisible(!catalogVisible),
-    },
+    ...(onWorksheet
+      ? [
+          {
+            icon: <DataIcon />,
+            label: "Data Catalog",
+            onClick: () => setCatalogVisible(!catalogVisible),
+          },
+        ]
+      : []),
     {
       href: `/regions/${regionSlug}/clusters`,
       icon: <ClustersIcon />,
