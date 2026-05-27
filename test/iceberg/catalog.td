@@ -302,6 +302,12 @@ SELECT id, val FROM iceberg_scan('s3://test-bucket/default_namespace/smallint_ta
 # Materialize's arrow schema for maps uses field names entries/keys/values,
 # while iceberg-rust uses key_value/key/value. The metadata merge must align
 # them positionally so the value field's extension metadata survives.
+#
+# This is an indirect regression test: there is no testdrive primitive that
+# inspects parquet extension metadata, so we exercise the bug's observable
+# failure mode instead. If the positional merge regresses, ArrowBuilder
+# rejects the recordbatch with "Field 'value' missing extension metadata",
+# the sink stalls before writing, and the iceberg_scan below sees no data.
 > CREATE TABLE attrs(id int, props map[text => text]);
 
 > INSERT INTO attrs VALUES
