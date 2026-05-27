@@ -64,6 +64,8 @@ pub enum Statement<T: AstInfo> {
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
+    CreateApi(CreateApiStatement<T>),
+    CreateMetric(CreateMetricStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
@@ -143,6 +145,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::CreateNetworkPolicy(stmt) => f.write_node(stmt),
+            Statement::CreateApi(stmt) => f.write_node(stmt),
+            Statement::CreateMetric(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
@@ -250,6 +254,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
+        StatementKind::CreateApi => "create_api",
+        StatementKind::CreateMetric => "create_metric",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterRetainHistory => "alter_retain_history",
@@ -2087,6 +2093,124 @@ impl<T: AstInfo> AstDisplay for CreateNetworkPolicyStatement<T> {
     }
 }
 impl_display_t!(CreateNetworkPolicyStatement);
+
+/// The serialization format produced by an API endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ApiFormat {
+    Prometheus,
+}
+
+impl AstDisplay for ApiFormat {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ApiFormat::Prometheus => f.write_str("PROMETHEUS"),
+        }
+    }
+}
+impl_display!(ApiFormat);
+
+/// A `CREATE API` statement.
+///
+/// Creates an HTTP endpoint that exposes the configured format. The endpoint
+/// is served on every HTTP listener whose config enables the
+/// `custom_metrics` route. Metrics are then attached to the API via
+/// `CREATE METRIC`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateApiStatement<T: AstInfo> {
+    pub if_not_exists: bool,
+    pub name: UnresolvedItemName,
+    pub format: ApiFormat,
+    pub in_cluster: Option<T::ClusterName>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateApiStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE API ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" FORMAT ");
+        f.write_node(&self.format);
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+    }
+}
+impl_display_t!(CreateApiStatement);
+
+/// A `CREATE METRIC` statement.
+///
+/// Attaches a Prometheus metric to a previously-created `API`. The metric's
+/// values are produced by reading from a view; one column of that view holds
+/// the numeric value, and the remaining columns become metric labels.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMetricStatement<T: AstInfo> {
+    pub if_not_exists: bool,
+    pub name: UnresolvedItemName,
+    /// Resolved at name-resolution time so the persisted SQL uses an
+    /// ID-form reference, which keeps the metric pointing at the right
+    /// API across renames and lets `mz_sql::names::dependencies` discover
+    /// the dependency for catalog rehydration ordering.
+    pub in_api: T::ItemName,
+    pub options: Vec<MetricOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateMetricStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE METRIC ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" IN API ");
+        f.write_node(&self.in_api);
+        f.write_str(" AS (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateMetricStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MetricOption<T: AstInfo> {
+    pub name: MetricOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MetricOptionName {
+    /// SQL spelling: `TYPE`. Renamed from `Type` to avoid the Rust keyword
+    /// collision that bites the `generate_extracted_config!` snake-cased field.
+    Ty,
+    Help,
+    ValuesFrom,
+    ValueColumn,
+}
+
+impl WithOptionName for MetricOptionName {
+    fn redact_value(&self) -> bool {
+        match self {
+            MetricOptionName::Ty
+            | MetricOptionName::Help
+            | MetricOptionName::ValuesFrom
+            | MetricOptionName::ValueColumn => false,
+        }
+    }
+}
+
+impl AstDisplay for MetricOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            MetricOptionName::Ty => f.write_str("TYPE"),
+            MetricOptionName::Help => f.write_str("HELP"),
+            MetricOptionName::ValuesFrom => f.write_str("VALUES FROM"),
+            MetricOptionName::ValueColumn => f.write_str("VALUE COLUMN"),
+        }
+    }
+}
+impl_display_for_with_option!(MetricOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NetworkPolicyOption<T: AstInfo> {
@@ -4337,6 +4461,8 @@ pub enum ObjectType {
     Func,
     Subsource,
     NetworkPolicy,
+    Api,
+    Metric,
 }
 
 impl ObjectType {
@@ -4352,7 +4478,9 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::Subsource => true,
+            | ObjectType::Subsource
+            | ObjectType::Api
+            | ObjectType::Metric => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4383,6 +4511,8 @@ impl AstDisplay for ObjectType {
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::Api => "API",
+            ObjectType::Metric => "METRIC",
         })
     }
 }
