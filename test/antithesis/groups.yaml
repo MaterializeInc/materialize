@@ -68,6 +68,13 @@ default_anytime:
   # legacy property names that were 9× unfound across the May 25
   # batch because no driver was actively polling for them.
   - defaults/anytime_replica_status
+  # Continuous internal-error escape probe: runs a rotating set of valid
+  # catalog/arithmetic queries and asserts none ever return Materialize's
+  # `internal error` class, plus scans source/sink statuses for objects
+  # stuck in an internal-error state.  Turns silent internal errors —
+  # panics-adjacent optimizer/runtime invariant violations that don't
+  # crash — into caught findings.
+  - defaults/anytime_internal_error_scan
 
 # Setup / driver scripts auto-added to every group.  The catalog,
 # persist, and reclock SUT-anchored properties don't need any
@@ -92,6 +99,16 @@ default_drivers:
   # spurious events ever appear.  Customer-facing streaming-read
   # API; zero coverage today.
   - defaults/singleton_driver_subscribe_correctness
+  # Differential query oracle: base table vs non-materialized view vs
+  # materialized view of the same aggregate, compared at one consistent
+  # timestamp.  Catches incremental-maintenance / optimizer wrong-results
+  # — the silent-correctness bug class no other driver exercises.
+  - defaults/parallel_driver_differential_query
+  # Cross-replica result consistency: the same indexed view read from
+  # each replica of antithesis_cluster must agree.  Catches replica
+  # divergence / non-deterministic execution.  Self-skips in
+  # single-replica groups.
+  - defaults/parallel_driver_cross_replica_consistency
 
 groups:
   kafka:

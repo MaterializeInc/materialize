@@ -120,7 +120,9 @@ class Observation(NamedTuple):
     upper: int | None
 
 
-def _parse_explain_timestamp_json(payload: str) -> tuple[int, int, int | None, int | None] | None:
+def _parse_explain_timestamp_json(
+    payload: str,
+) -> tuple[int, int, int | None, int | None] | None:
     """Pull (chosen_ts, oracle_read_ts, since, upper) out of an EXPLAIN
     TIMESTAMP AS JSON payload. Returns None if the payload shape is
     unexpected (e.g. `NoTimestamp` variant for a timestamp-independent
@@ -273,7 +275,9 @@ def main() -> int:
 
     deadline = time.monotonic() + FINAL_READ_TIMEOUT_S
     final: Observation | None = _fresh_observation(expected_final, prefix)
-    while (final is None or final.count < expected_final) and time.monotonic() < deadline:
+    while (
+        final is None or final.count < expected_final
+    ) and time.monotonic() < deadline:
         time.sleep(FINAL_READ_POLL_S)
         final = _fresh_observation(expected_final, prefix)
 

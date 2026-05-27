@@ -132,9 +132,7 @@ def _exec(conn: psycopg.Connection, sql: str) -> tuple[bool, str | None]:
     """Execute `sql`; return (ok, err_msg_or_None)."""
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}".encode()
-            )
+            cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}".encode())
             cur.execute(sql.encode())
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
@@ -145,9 +143,7 @@ def _select_markers(conn: psycopg.Connection, table: str) -> set[str] | None:
     """Return the marker set currently visible on `conn`, or None on fault."""
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}".encode()
-            )
+            cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}".encode())
             cur.execute(f"SELECT marker FROM {table}".encode())
             return {str(row[0]) for row in cur.fetchall()}
     except Exception as exc:  # noqa: BLE001
