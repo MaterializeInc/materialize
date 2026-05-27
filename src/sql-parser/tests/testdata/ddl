@@ -3575,3 +3575,38 @@ DROP NETWORK POLICY if exists q
 DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
+
+parse-statement
+CREATE API db.s.a FORMAT PROMETHEUS
+----
+CREATE API db.s.a FORMAT PROMETHEUS
+=>
+CreateApi(CreateApiStatement { if_not_exists: false, name: UnresolvedItemName([Ident("db"), Ident("s"), Ident("a")]), format: Prometheus, in_cluster: None })
+
+parse-statement
+CREATE API IF NOT EXISTS a FORMAT PROMETHEUS IN CLUSTER c
+----
+CREATE API IF NOT EXISTS a FORMAT PROMETHEUS IN CLUSTER c
+=>
+CreateApi(CreateApiStatement { if_not_exists: true, name: UnresolvedItemName([Ident("a")]), format: Prometheus, in_cluster: Some(Unresolved(Ident("c"))) })
+
+parse-statement
+CREATE METRIC db.s.leads IN API db.s.a AS (TYPE 'gauge', HELP 'lead counts', VALUES FROM db.s.v, VALUE COLUMN 'count')
+----
+CREATE METRIC db.s.leads IN API db.s.a AS (TYPE = 'gauge', HELP = 'lead counts', VALUES FROM = db.s.v, VALUE COLUMN = 'count')
+=>
+CreateMetric(CreateMetricStatement { if_not_exists: false, name: UnresolvedItemName([Ident("db"), Ident("s"), Ident("leads")]), in_api: Name(UnresolvedItemName([Ident("db"), Ident("s"), Ident("a")])), options: [MetricOption { name: Ty, value: Some(Value(String("gauge"))) }, MetricOption { name: Help, value: Some(Value(String("lead counts"))) }, MetricOption { name: ValuesFrom, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("s"), Ident("v")])))) }, MetricOption { name: ValueColumn, value: Some(Value(String("count"))) }] })
+
+parse-statement
+DROP API db.s.a
+----
+DROP API db.s.a
+=>
+DropObjects(DropObjectsStatement { object_type: Api, if_exists: false, names: [Item(UnresolvedItemName([Ident("db"), Ident("s"), Ident("a")]))], cascade: false })
+
+parse-statement
+DROP METRIC IF EXISTS db.s.m CASCADE
+----
+DROP METRIC IF EXISTS db.s.m CASCADE
+=>
+DropObjects(DropObjectsStatement { object_type: Metric, if_exists: true, names: [Item(UnresolvedItemName([Ident("db"), Ident("s"), Ident("m")]))], cascade: true })

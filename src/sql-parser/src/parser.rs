@@ -2010,6 +2010,12 @@ impl<'a> Parser<'a> {
         } else if self.peek_keywords(&[NETWORK, POLICY]) {
             self.parse_create_network_policy()
                 .map_parser_err(StatementKind::CreateNetworkPolicy)
+        } else if self.peek_keyword(API) {
+            self.parse_create_api()
+                .map_parser_err(StatementKind::CreateApi)
+        } else if self.peek_keyword(METRIC) {
+            self.parse_create_metric()
+                .map_parser_err(StatementKind::CreateMetric)
         } else {
             let index = self.index;
 
@@ -4764,7 +4770,9 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::Api
+            | ObjectType::Metric => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -4864,6 +4872,76 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateNetworkPolicy(
             CreateNetworkPolicyStatement { name, options },
         ))
+    }
+
+    fn parse_create_api(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(API)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        self.expect_keyword(FORMAT)?;
+        let format = match self.expect_one_of_keywords(&[PROMETHEUS])? {
+            PROMETHEUS => ApiFormat::Prometheus,
+            v => panic!("found unreachable keyword {}", v),
+        };
+        let in_cluster = self.parse_optional_in_cluster()?;
+        Ok(Statement::CreateApi(CreateApiStatement {
+            if_not_exists,
+            name,
+            format,
+            in_cluster,
+        }))
+    }
+
+    fn parse_create_metric(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(METRIC)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        self.expect_keywords(&[IN, API])?;
+        // `in_api` and `values_from` are parsed as `parse_raw_name` so the
+        // name resolver fills in IDs. Persisting them in ID-form keeps the
+        // metric pointing at the right API/view across renames and lets
+        // catalog rehydration discover the dependency for sort ordering.
+        let in_api = self.parse_raw_name()?;
+        self.expect_keyword(AS)?;
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_metric_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Statement::CreateMetric(CreateMetricStatement {
+            if_not_exists,
+            name,
+            in_api,
+            options,
+        }))
+    }
+
+    fn parse_metric_option(&mut self) -> Result<MetricOption<Raw>, ParserError> {
+        // VALUES FROM is parsed eagerly as an item reference (rather than the
+        // generic option-value path) so the name resolver can fill in an ID;
+        // see `parse_create_metric` for why ID-form matters here.
+        if self.parse_keywords(&[VALUES, FROM]) {
+            let _ = self.consume_token(&Token::Eq);
+            return Ok(MetricOption {
+                name: MetricOptionName::ValuesFrom,
+                value: Some(WithOptionValue::Item(self.parse_raw_name()?)),
+            });
+        }
+        let name = if self.parse_keyword(TYPE) {
+            MetricOptionName::Ty
+        } else if self.parse_keyword(HELP) {
+            MetricOptionName::Help
+        } else if self.parse_keywords(&[VALUE, COLUMN]) {
+            MetricOptionName::ValueColumn
+        } else {
+            return self.expected(
+                self.peek_pos(),
+                "TYPE, HELP, VALUES FROM, or VALUE COLUMN",
+                self.peek_token(),
+            );
+        };
+        Ok(MetricOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_network_policy_option(&mut self) -> Result<NetworkPolicyOption<Raw>, ParserError> {
@@ -5568,12 +5646,14 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Unsupported ALTER on {object_type}")
-            )
-            .map_no_statement_parser_err(),
+            ObjectType::Func | ObjectType::Subsource | ObjectType::Api | ObjectType::Metric => {
+                parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    format!("Unsupported ALTER on {object_type}")
+                )
+                .map_no_statement_parser_err()
+            }
         }
     }
 
@@ -6328,7 +6408,9 @@ impl<'a> Parser<'a> {
             | ObjectType::Schema
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::NetworkPolicy => {
+            | ObjectType::NetworkPolicy
+            | ObjectType::Api
+            | ObjectType::Metric => {
                 unreachable!("parse_alter_views called with unsupported object type: {object_type}")
             }
         };
@@ -7167,7 +7249,9 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func
+            | ObjectType::Api
+            | ObjectType::Metric => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -7987,7 +8071,7 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::Func => {
+                ObjectType::Func | ObjectType::Api | ObjectType::Metric => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -9541,7 +9625,8 @@ impl<'a> Parser<'a> {
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
-            | ObjectType::Subsource => {
+            | ObjectType::Subsource
+            | ObjectType::Metric => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -9555,7 +9640,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Schema
-            | ObjectType::NetworkPolicy => Ok(object_type),
+            | ObjectType::NetworkPolicy
+            | ObjectType::Api => Ok(object_type),
         }
     }
 
@@ -9579,6 +9665,8 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 NETWORK,
+                API,
+                METRIC,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9613,6 +9701,8 @@ impl<'a> Parser<'a> {
                     }
                     ObjectType::NetworkPolicy
                 }
+                API => ObjectType::Api,
+                METRIC => ObjectType::Metric,
                 _ => unreachable!(),
             },
         )
@@ -9637,6 +9727,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                API,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9665,6 +9756,7 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                API => ObjectType::Api,
                 _ => unreachable!(),
             },
         )

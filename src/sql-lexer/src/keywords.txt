@@ -41,6 +41,7 @@ Analysis
 Analyze
 And
 Any
+Api
 Append
 Apply
 Arity
@@ -208,6 +209,7 @@ Groups
 Having
 Header
 Headers
+Help
 Hints
 History
 Hold
@@ -267,6 +269,7 @@ Like
 Limit
 Linear
 List
+Listener
 Load
 Local
 Locally
@@ -287,6 +290,7 @@ Membership
 Memory
 Message
 Metadata
+Metric
 Minute
 Minutes
 Mock
@@ -363,6 +367,7 @@ Privatelink
 Privileges
 Progress
 Projection
+Prometheus
 Protobuf
 Protocol
 Public
