@@ -47,36 +47,69 @@ from __future__ import annotations
 import time
 
 import helper_logging
+import psycopg
 from antithesis.assertions import sometimes
 from helper_fault_tolerance import looks_like_fault
-from helper_pg import query_retry
+from helper_pg import (
+    PGDATABASE,
+    PGHOST,
+    PGPORT,
+    PGUSER,
+    query_retry,
+)
 
 LOG = helper_logging.setup_logging("anytime.replica_status")
 
-# Probe cadence.  Short enough to catch sub-second fault windows from
-# the orchestrator's `MIN_ON=20s, MAX_ON=40s` cycle; long enough that
-# many concurrent invocations don't drown the SUT in introspection
-# queries.  The persist-invariants probe uses 2s — same cadence keeps
-# triage time-axes alignable across the two anytime probes.
-POLL_INTERVAL_S = 2.0
+# Probe cadence.  1s rather than the persist-invariants probe's 2s: a
+# clusterd kill/restart can resolve inside a single 2s window, and the
+# point-in-time `mz_cluster_replica_statuses` poll would miss it.  The
+# durable-history query below is the real safety net (it sees offline
+# events the live poll missed), but a tighter cadence still helps the
+# online/offline-transition observation.
+POLL_INTERVAL_S = 1.0
 # Per-launch wall-clock budget.  Anytime drivers are re-launched after
 # they exit; a long launch covers more of one timeline but its `seen`
 # state is lost between launches.  10 minutes covers ~7+ fault-ON/OFF
 # cycles, which is plenty to witness a transition across a single
 # launch.
 RUNTIME_S = 600.0
+# Direct-connect timeout for the SELECT-1 liveness probe.  Deliberately
+# short and NON-retrying (unlike helper_pg.query_retry) so the probe
+# actually *observes* a connect failure during a fault window — the
+# whole point of the "recovered after a previous connect failure"
+# coverage anchor.  query_retry would mask the transient by retrying
+# through the fault, so the recovery transition would never be seen.
+PROBE_CONNECT_TIMEOUT_S = 3
 
 # `antithesis_cluster` is the universal cluster bootstrapped by
 # workload-entrypoint.sh in every group's topology.  Probes scope
 # here so noise from per-driver scratch clusters doesn't show up.
 CLUSTER_NAME = "antithesis_cluster"
 
+# Point-in-time view: the replica's current status.  Used for the
+# online liveness anchor and the live offline→online transition.
 _QUERY_STATUSES = (
     "SELECT r.replica_id, r.process_id, r.status "
     "FROM mz_internal.mz_cluster_replica_statuses r "
     "JOIN mz_cluster_replicas cr ON r.replica_id = cr.id "
     "JOIN mz_clusters c ON cr.cluster_id = c.id "
     f"WHERE c.name = '{CLUSTER_NAME}'"
+)
+
+# Durable history: every status transition with a wall-clock
+# `occurred_at`.  This is the robust offline detector — a clusterd
+# blip that the point-in-time poll missed still leaves an `offline`
+# row here that any later successful poll observes.  Scoped to events
+# at/after this probe launch so we attribute the transition to this
+# timeline rather than a stale one from before the probe started.
+_QUERY_OFFLINE_HISTORY = (
+    "SELECT count(*) "
+    "FROM mz_internal.mz_cluster_replica_status_history h "
+    "JOIN mz_cluster_replicas cr ON h.replica_id = cr.id "
+    "JOIN mz_clusters c ON cr.cluster_id = c.id "
+    "WHERE c.name = '{cluster}' "
+    "  AND h.status != 'online' "
+    "  AND h.occurred_at >= '{since}'"
 )
 
 
@@ -93,26 +126,61 @@ def _poll_statuses() -> list[tuple[str, int, str]] | None:
     return [(str(r[0]), int(r[1]), str(r[2])) for r in rows]
 
 
-def _select_one() -> bool | None:
-    """Return True on success, False on fault-shape failure, None on
-    non-fault error (probe-side issue worth surfacing — caller raises).
+def _count_offline_since(since_iso: str) -> int | None:
+    """Count offline history events for the cluster since `since_iso`.
+
+    Returns the count, or None on a fault-shaped failure (the caller
+    just skips that poll — the durable rows are still there for the
+    next one).
     """
+    q = _QUERY_OFFLINE_HISTORY.format(cluster=CLUSTER_NAME, since=since_iso)
     try:
-        rows = query_retry("SELECT 1")
+        rows = query_retry(q)
     except Exception as exc:  # noqa: BLE001
         if looks_like_fault(str(exc)):
-            return False
+            return None
         raise
-    return len(rows) == 1 and int(rows[0][0]) == 1
+    return int(rows[0][0]) if rows else 0
+
+
+def _select_one_no_retry() -> bool:
+    """Open a fresh, non-retrying connection and run SELECT 1.
+
+    Returns True on success, False on any failure (fault-shaped or
+    otherwise).  Intentionally does NOT use helper_pg.query_retry: the
+    recovery anchor needs to observe the transient connect failure that
+    a retry loop would paper over.
+    """
+    try:
+        with psycopg.connect(
+            host=PGHOST,
+            port=PGPORT,
+            user=PGUSER,
+            dbname=PGDATABASE,
+            connect_timeout=PROBE_CONNECT_TIMEOUT_S,
+            autocommit=True,
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(b"SELECT 1")
+                row = cur.fetchone()
+                return row is not None and int(row[0]) == 1
+    except Exception:  # noqa: BLE001
+        # Any failure — connect refused/timeout during a fault window,
+        # or a server-initiated drop — counts as an observed failure.
+        return False
 
 
 def main() -> int:
     deadline = time.time() + RUNTIME_S
+    # Wall-clock launch time, ISO-formatted for the history query's
+    # `occurred_at >=` filter.  mz timestamps `occurred_at` in UTC.
+    since_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 
     saw_non_online = False
     saw_online = False
     saw_offline_to_online_transition = False
     last_status: dict[tuple[str, int], str] = {}
+    offline_events_seen = 0
 
     saw_connect_fault = False
     saw_recovery_after_connect_fault = False
@@ -120,6 +188,8 @@ def main() -> int:
     polls = 0
     while time.time() < deadline:
         polls += 1
+
+        # (1) Point-in-time status: online liveness + live offline→online.
         status_rows = _poll_statuses()
         if status_rows is not None:
             for replica_id, process_id, status in status_rows:
@@ -133,19 +203,30 @@ def main() -> int:
                         saw_offline_to_online_transition = True
                 last_status[key] = status
 
-        select_ok = _select_one()
-        if select_ok is False:
+        # (2) Durable history: catches offline events the 1s poll missed.
+        # A clusterd blip that resolved between two polls still left an
+        # `offline` row here, so any later successful query observes it.
+        offline_count = _count_offline_since(since_iso)
+        if offline_count is not None and offline_count > 0:
+            saw_non_online = True
+            offline_events_seen = offline_count
+
+        # (3) Non-retrying SELECT 1 to observe connect-failure→recovery.
+        select_ok = _select_one_no_retry()
+        if not select_ok:
             saw_connect_fault = True
-        elif select_ok is True and saw_connect_fault:
+        elif select_ok and saw_connect_fault:
             saw_recovery_after_connect_fault = True
 
         time.sleep(POLL_INTERVAL_S)
 
     LOG.info(
         "replica-status probe complete: polls=%d saw_non_online=%s "
-        "saw_offline_to_online=%s saw_connect_fault=%s saw_recovery=%s",
+        "offline_events_seen=%d saw_offline_to_online=%s saw_connect_fault=%s "
+        "saw_recovery=%s",
         polls,
         saw_non_online,
+        offline_events_seen,
         saw_offline_to_online_transition,
         saw_connect_fault,
         saw_recovery_after_connect_fault,
@@ -160,6 +241,7 @@ def main() -> int:
         {
             "polls": polls,
             "replicas_observed": len(last_status),
+            "offline_events_seen": offline_events_seen,
             "cluster_name": CLUSTER_NAME,
         },
     )
