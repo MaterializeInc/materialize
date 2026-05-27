@@ -7,4 +7,190 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Placeholder.
+//! Monotonic in-memory cache of per-shard consensus head state.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use mz_persist::location::VersionedData;
+
+/// Per-shard cached state plus a refcount of active subscribers.
+#[derive(Debug)]
+pub struct CachedState {
+    pub current: Option<VersionedData>,
+    pub subscribers: usize,
+    /// Monotonically increasing access tick used by LRU eviction.
+    pub last_access: u64,
+}
+
+#[derive(Debug)]
+pub struct ShardCache {
+    inner: Mutex<Inner>,
+    max_shards: usize,
+}
+
+#[derive(Debug)]
+struct Inner {
+    map: BTreeMap<String, Arc<Mutex<CachedState>>>,
+    tick: u64,
+}
+
+impl ShardCache {
+    pub fn new(max_shards: usize) -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                map: BTreeMap::new(),
+                tick: 0,
+            }),
+            max_shards,
+        }
+    }
+
+    pub fn insert(&self, shard: &str, new: VersionedData) {
+        let entry = self.entry(shard);
+        let mut guard = entry.lock().expect("ShardCache lock poisoned");
+        match &guard.current {
+            Some(cur) if cur.seqno >= new.seqno => {}
+            _ => guard.current = Some(new),
+        }
+        guard.last_access = self.bump_tick();
+    }
+
+    pub fn get(&self, shard: &str) -> Option<VersionedData> {
+        let inner = self.inner.lock().expect("ShardCache lock poisoned");
+        let entry = inner.map.get(shard)?.clone();
+        drop(inner);
+        let guard = entry.lock().expect("ShardCache lock poisoned");
+        guard.current.clone()
+    }
+
+    pub fn subscribe(&self, shard: &str) -> SubscriberToken {
+        let entry = self.entry(shard);
+        {
+            let mut guard = entry.lock().expect("ShardCache lock poisoned");
+            guard.subscribers += 1;
+        }
+        SubscriberToken { entry }
+    }
+
+    pub fn shards_with_subscribers(&self) -> Vec<String> {
+        let inner = self.inner.lock().expect("ShardCache lock poisoned");
+        inner
+            .map
+            .iter()
+            .filter_map(|(k, v)| {
+                let g = v.lock().expect("ShardCache lock poisoned");
+                if g.subscribers > 0 {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn entry(&self, shard: &str) -> Arc<Mutex<CachedState>> {
+        let mut inner = self.inner.lock().expect("ShardCache lock poisoned");
+        if let Some(e) = inner.map.get(shard) {
+            return e.clone();
+        }
+        if inner.map.len() >= self.max_shards {
+            self.evict_one_locked(&mut inner);
+        }
+        let tick = inner.tick;
+        let entry = Arc::new(Mutex::new(CachedState {
+            current: None,
+            subscribers: 0,
+            last_access: tick,
+        }));
+        inner.map.insert(shard.to_string(), entry.clone());
+        entry
+    }
+
+    fn evict_one_locked(&self, inner: &mut Inner) {
+        let victim = inner
+            .map
+            .iter()
+            .filter_map(|(k, v)| {
+                let g = v.lock().expect("ShardCache lock poisoned");
+                if g.subscribers == 0 {
+                    Some((k.clone(), g.last_access))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(_, tick)| *tick)
+            .map(|(k, _)| k);
+        if let Some(k) = victim {
+            inner.map.remove(&k);
+        }
+    }
+
+    fn bump_tick(&self) -> u64 {
+        let mut inner = self.inner.lock().expect("ShardCache lock poisoned");
+        inner.tick += 1;
+        inner.tick
+    }
+}
+
+pub struct SubscriberToken {
+    entry: Arc<Mutex<CachedState>>,
+}
+
+impl Drop for SubscriberToken {
+    fn drop(&mut self) {
+        let mut guard = self.entry.lock().expect("ShardCache lock poisoned");
+        guard.subscribers = guard.subscribers.saturating_sub(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use mz_persist::location::{SeqNo, VersionedData};
+
+    fn v(seqno: u64) -> VersionedData {
+        VersionedData {
+            seqno: SeqNo(seqno),
+            data: Bytes::from(vec![seqno as u8]),
+        }
+    }
+
+    #[mz_ore::test]
+    fn insert_advances_forward() {
+        let c = ShardCache::new(10);
+        c.insert("s1", v(5));
+        c.insert("s1", v(7));
+        assert_eq!(c.get("s1").unwrap().seqno, SeqNo(7));
+    }
+
+    #[mz_ore::test]
+    fn insert_never_goes_backward() {
+        let c = ShardCache::new(10);
+        c.insert("s1", v(7));
+        c.insert("s1", v(5));
+        assert_eq!(c.get("s1").unwrap().seqno, SeqNo(7));
+    }
+
+    #[mz_ore::test]
+    fn lru_evicts_unsubscribed() {
+        let c = ShardCache::new(2);
+        c.insert("a", v(1));
+        c.insert("b", v(1));
+        c.insert("c", v(1));
+        assert!(c.get("c").is_some());
+        let surviving = c.get("a").is_some() as u8 + c.get("b").is_some() as u8;
+        assert_eq!(surviving, 1);
+    }
+
+    #[mz_ore::test]
+    fn subscribers_pin_cache_entry() {
+        let c = ShardCache::new(2);
+        let _token = c.subscribe("a");
+        c.insert("a", v(1));
+        c.insert("b", v(1));
+        c.insert("c", v(1));
+        assert!(c.get("a").is_some());
+    }
+}
