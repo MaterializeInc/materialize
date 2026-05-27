@@ -7,14 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  Box,
-  ButtonProps,
-  chakra,
-  Stack,
-  Text,
-  useTheme,
-} from "@chakra-ui/react";
+import { ButtonProps } from "@chakra-ui/button";
+import { Box, chakra, Stack, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";

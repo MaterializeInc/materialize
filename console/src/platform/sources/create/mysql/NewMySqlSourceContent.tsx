@@ -30,8 +30,7 @@ import { ObjectToastDescription } from "~/components/Toast";
 import { getSecretFromOption } from "~/forms/secretsFormControlAccessors";
 import { useToast } from "~/hooks/useToast";
 import { connectionQueryKeys } from "~/platform/connections/queries";
-import { regionPath } from "~/platform/routeHelpers";
-import { useOpenCatalogMonitor } from "~/store/catalog";
+import { regionPath, useBuildSourcePath } from "~/platform/routeHelpers";
 import { currentEnvironmentState, useRegionSlug } from "~/store/environments";
 import { assert } from "~/util";
 
@@ -98,7 +97,7 @@ const NewMySqlSourceContent = ({
   const navigate = useNavigate();
   const [environment] = useAtom(currentEnvironmentState);
   const regionSlug = useRegionSlug();
-  const openCatalogMonitor = useOpenCatalogMonitor();
+  const sourcePath = useBuildSourcePath();
   const queryClient = useQueryClient();
 
   const { runSql: createSource } = useCreateMySqlSource();
@@ -178,13 +177,14 @@ const NewMySqlSourceContent = ({
                   />
                 ),
               });
-              openCatalogMonitor({
-                id,
-                databaseName,
-                schemaName,
-                objectName: state.name,
-                objectType: "source",
-              });
+              navigate(
+                sourcePath({
+                  id,
+                  name: state.name,
+                  schemaName,
+                  databaseName,
+                }),
+              );
             } catch (e) {
               Sentry.captureException(e);
               navigate(`${regionPath(regionSlug)}/sources/`);

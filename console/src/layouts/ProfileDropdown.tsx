@@ -31,6 +31,7 @@ import { useSegment } from "~/analytics/segment";
 import { apiClient } from "~/api/apiClient";
 import { getCurrentTenant, useCurrentOrganization } from "~/api/auth";
 import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
+import ModernConsoleSwitcher from "~/components/ModernConsoleSwitcher";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import {
@@ -333,6 +334,7 @@ const ProfileDropdown = ({
       <MenuList pb={2}>
         <UserInfoMenuItem />
         <ThemeSwitcher />
+        <ModernConsoleSwitcher />
         <AppConfigSwitch
           cloudConfigElement={({ runtimeConfig }) => {
             if (runtimeConfig.isImpersonating) return null;

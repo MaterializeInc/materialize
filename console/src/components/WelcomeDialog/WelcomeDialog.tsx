@@ -20,6 +20,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useAtom } from "jotai";
 import React, { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -27,6 +28,10 @@ import { Modal } from "~/components/Modal";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import WelcomeHeaderImg from "~/img/welcome-banner.png";
 import { newConnectionPath, shellPath } from "~/platform/routeHelpers";
+import {
+  setStoredSidebarVisibility,
+  shellStateAtom,
+} from "~/platform/shell/store/shell";
 import {
   Environment,
   useEnvironmentsWithHealth,
@@ -43,6 +48,8 @@ const WelcomeDialogContent = () => {
   const navigate = useNavigate();
   const [showModal, setShowModal] = React.useState(false);
   const [welcomeDialogSeen, setWelcomeDialogSeen] = useWelcomeDialog();
+
+  const [, setShellState] = useAtom(shellStateAtom);
 
   const hasEnabledRegion = [...environments.values()].some(
     (environment: Environment) =>
@@ -128,6 +135,11 @@ const WelcomeDialogContent = () => {
               onClick={() => {
                 navigate(shellPath(regionSlug));
                 dismissWelcomeDialog();
+                setShellState((prevState) => ({
+                  ...prevState,
+                  tutorialVisible: true,
+                }));
+                setStoredSidebarVisibility(true);
               }}
             >
               Begin Quickstart

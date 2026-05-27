@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { VStack } from "@chakra-ui/layout";
 import {
   Button,
   FormControl,
@@ -19,7 +20,6 @@ import {
   PopoverTrigger,
   Text,
   useTheme,
-  VStack,
 } from "@chakra-ui/react";
 import { max, min, parse, subHours } from "date-fns";
 import React, { ChangeEvent, useCallback, useMemo, useRef } from "react";

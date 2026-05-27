@@ -7,23 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useAtomValue } from "jotai";
+import { atom, useAtomValue } from "jotai";
 import React from "react";
 
 import {
   buildClustersQuery,
   Cluster,
 } from "~/api/materialize/cluster/clusterList";
-import { createCatalogStore } from "~/store/createCatalogStore";
+import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  buildSubscribeQuery,
+  useGlobalUpsertSubscribe,
+} from "~/api/materialize/useSubscribe";
 
-const store = createCatalogStore<Cluster>({
-  query: () =>
-    buildClustersQuery({ queryOwnership: false, includeSystemObjects: true }),
-  upsertKey: "id",
+export const allClusters = atom<SubscribeState<Cluster>>({
+  data: [],
+  error: undefined,
+  snapshotComplete: false,
 });
 
-export const allClusters = store.atom;
-export const useSubscribeToAllClusters = store.useSubscribe;
+export function useSubscribeToAllClusters() {
+  const subscribe = React.useMemo(() => {
+    return buildSubscribeQuery(
+      buildClustersQuery({ queryOwnership: false, includeSystemObjects: true }),
+      {
+        upsertKey: "id",
+      },
+    );
+  }, []);
+
+  return useGlobalUpsertSubscribe({
+    atom: allClusters,
+    subscribe,
+    select: (row) => row.data,
+    upsertKey: (row) => row.data.id,
+  });
+}
 
 export function useAllClusters() {
   const result = useAtomValue(allClusters);

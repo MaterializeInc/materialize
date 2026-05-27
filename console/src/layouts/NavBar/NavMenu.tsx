@@ -17,7 +17,6 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
-import { useAtom } from "jotai";
 import React from "react";
 import { Location, useLocation } from "react-router-dom";
 
@@ -30,7 +29,6 @@ import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
 import { shellPath } from "~/platform/routeHelpers";
-import { catalogVisibleAtom } from "~/store/catalog";
 import { useRegionSlug } from "~/store/environments";
 import { MonitorIcon } from "~/svg/Monitor";
 import AdminIcon from "~/svg/nav/AdminIcon";
@@ -45,17 +43,13 @@ import { NAV_HOVER_STYLES } from "../constants";
 import { HideIfEnvironmentDisabled, NavItem } from "./NavItem";
 
 export type NavItemType = {
-  /** Route to navigate to. Omit for button-only items (e.g., toggles). */
-  href?: string;
+  href: string;
   state?: object;
   icon?: JSX.Element;
   label: string;
   navItems?: NavItemType[];
-  /** Optional click handler, used in place of or in addition to navigation. */
   onClick?: () => void;
   forceShow?: boolean;
-  /** Override active state for items without an `href`. */
-  isActive?: boolean;
 };
 
 const getNavItems = ({
@@ -68,8 +62,6 @@ const getNavItems = ({
   canViewRoles,
   isRbacEnabled,
   location,
-  catalogVisible,
-  setCatalogVisible,
 }: {
   regionSlug: string;
   flags: ReturnType<typeof useFlags>;
@@ -80,19 +72,17 @@ const getNavItems = ({
   canViewRoles: boolean;
   isRbacEnabled: boolean;
   location: Location;
-  catalogVisible: boolean;
-  setCatalogVisible: (value: boolean) => void;
 }): NavItemType[] => {
   return [
     {
       href: shellPath(regionSlug),
       icon: <ShellIcon />,
-      label: "SQL Worksheet",
+      label: "SQL Shell",
     },
     {
       icon: <DataIcon />,
       label: "Data",
-      onClick: () => setCatalogVisible(!catalogVisible),
+      href: `/regions/${regionSlug}/objects`,
     },
     {
       href: `/regions/${regionSlug}/clusters`,
@@ -225,7 +215,6 @@ const useCloudNavMenuItems = ({
   const canViewLicenseKeys = flags["license-keys-3833"];
   const isRbacEnabled = flags["rbac-ui-9904"];
   const { isSuperUser } = useIsSuperUser();
-  const [catalogVisible, setCatalogVisible] = useAtom(catalogVisibleAtom);
 
   return getNavItems({
     regionSlug,
@@ -237,8 +226,6 @@ const useCloudNavMenuItems = ({
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
     isRbacEnabled,
-    catalogVisible,
-    setCatalogVisible,
   });
 };
 
@@ -249,7 +236,6 @@ const useSelfManagedNavMenuItems = () => {
   const canViewLicenseKeys = flags["license-keys-3833"];
   const isRbacEnabled = flags["rbac-ui-9904"];
   const { isSuperUser } = useIsSuperUser();
-  const [catalogVisible, setCatalogVisible] = useAtom(catalogVisibleAtom);
 
   return getNavItems({
     regionSlug,
@@ -263,8 +249,6 @@ const useSelfManagedNavMenuItems = () => {
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
     isRbacEnabled,
-    catalogVisible,
-    setCatalogVisible,
   });
 };
 

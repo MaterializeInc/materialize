@@ -12,9 +12,8 @@ import { atomWithStorage } from "jotai/utils";
 import React, { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { monitorPath, shellPath } from "~/platform/routeHelpers";
-import type { CatalogSelection } from "~/platform/worksheet/CatalogPanel";
-import { allObjects } from "~/store/allObjects";
+import { monitorPath, shellPath } from "~/platform/v2/routeHelpers";
+import type { CatalogSelection } from "~/platform/v2/worksheet/CatalogPanel";
 import {
   type CatalogColumn,
   useObjectColumns,
@@ -27,6 +26,7 @@ import {
 } from "~/store/catalogDependencies";
 import { type CatalogIndex, useObjectIndexes } from "~/store/catalogIndexes";
 import { useRegionSlug } from "~/store/environments";
+import { allObjects } from "~/store-v2/allObjects";
 
 /** Whether the data catalog panel is visible. Persisted to localStorage. */
 export const catalogVisibleAtom = atomWithStorage(

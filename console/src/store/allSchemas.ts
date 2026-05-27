@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useAtomValue } from "jotai";
+import { atom, useAtomValue } from "jotai";
 import React from "react";
 
 import { isSystemId } from "~/api/materialize";
@@ -15,15 +15,30 @@ import {
   buildAllSchemaListQuery,
   SchemaWithOptionalDatabase,
 } from "~/api/materialize/schemaList";
-import { createCatalogStore } from "~/store/createCatalogStore";
+import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  buildSubscribeQuery,
+  useGlobalUpsertSubscribe,
+} from "~/api/materialize/useSubscribe";
 
-const store = createCatalogStore<SchemaWithOptionalDatabase>({
-  query: buildAllSchemaListQuery,
-  upsertKey: "id",
+export const allSchemas = atom<SubscribeState<SchemaWithOptionalDatabase>>({
+  data: [],
+  error: undefined,
+  snapshotComplete: false,
 });
 
-export const allSchemas = store.atom;
-export const useSubscribeToAllSchemas = store.useSubscribe;
+export function useSubscribeToAllSchemas() {
+  const subscribe = React.useMemo(() => {
+    return buildSubscribeQuery(buildAllSchemaListQuery(), { upsertKey: "id" });
+  }, []);
+
+  return useGlobalUpsertSubscribe({
+    atom: allSchemas,
+    subscribe,
+    select: (row) => row.data,
+    upsertKey: (row) => row.data.id,
+  });
+}
 
 export function useAllSchemas(options?: { includeSystemSchemas?: boolean }) {
   const includeSystemSchemas = options?.includeSystemSchemas ?? true;

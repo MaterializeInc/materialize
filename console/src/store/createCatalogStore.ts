@@ -23,11 +23,11 @@ import React from "react";
 import type {
   SubscribeRow,
   SubscribeState,
-} from "~/api/materialize/SubscribeManager";
+} from "~/api/materialize-v2/SubscribeManager";
 import {
   buildSubscribeQuery,
   useGlobalUpsertSubscribe,
-} from "~/api/materialize/useSubscribe";
+} from "~/api/materialize-v2/useSubscribe";
 
 interface CatalogStoreOptions<T extends object> {
   /** Returns the SQL query to subscribe to. Called once inside `useMemo`. */

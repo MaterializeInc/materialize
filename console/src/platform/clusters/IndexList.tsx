@@ -23,7 +23,7 @@ import {
   useTheme,
 } from "@chakra-ui/react";
 import React from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useMaybeCurrentOrganizationId } from "~/api/auth";
 import {
@@ -33,7 +33,6 @@ import {
 } from "~/api/materialize";
 import { Replica } from "~/api/materialize/cluster/clusterList";
 import { Index } from "~/api/materialize/cluster/indexesList";
-import type { SupportedObjectType } from "~/api/materialize/types";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import IndexListEmptyState from "~/components/IndexListEmptyState";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -51,10 +50,8 @@ import { useFlags } from "~/hooks/useFlags";
 import useLocalStorage from "~/hooks/useLocalStorage";
 import { InfoIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
-import { NULL_DATABASE_NAME } from "~/platform/constants";
 import { useBuildIndexPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
-import { useOpenCatalogDetail } from "~/store/catalog";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { assert } from "~/util";
@@ -202,9 +199,9 @@ interface IndexTableProps {
 }
 
 const IndexTable = (props: IndexTableProps) => {
+  const navigate = useNavigate();
   const flags = useFlags();
   const indexPath = useBuildIndexPath();
-  const openCatalogDetail = useOpenCatalogDetail();
   const dataflowVisualizerEnabled = flags["visualization-features"];
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -236,13 +233,7 @@ const IndexTable = (props: IndexTableProps) => {
                 onClick={(e) => {
                   if (rowIsClickable) {
                     e.preventDefault();
-                    openCatalogDetail({
-                      id: i.relationId,
-                      databaseName: i.databaseName ?? NULL_DATABASE_NAME,
-                      schemaName: i.schemaName ?? "",
-                      objectName: i.relationName,
-                      objectType: i.relationType as SupportedObjectType,
-                    });
+                    navigate(indexPath(i));
                   }
                 }}
                 cursor={rowIsClickable ? "pointer" : "auto"}

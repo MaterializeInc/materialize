@@ -25,16 +25,17 @@ import React from "react";
 import { Link, LinkProps } from "react-router-dom";
 
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
-import type { SupportedObjectType } from "~/api/materialize/types";
 import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
 import { ConnectorStatusPill } from "~/components/StatusPill";
 import {
   formatLagInfoDetailed,
   formatObjectType,
 } from "~/platform/clusters/format";
-import { relativeClusterPath } from "~/platform/routeHelpers";
+import {
+  relativeClusterPath,
+  useBuildSourcePath,
+} from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
-import { useOpenCatalogDetail } from "~/store/catalog";
 import { useRegionSlug } from "~/store/environments";
 import ExternalLinkIcon from "~/svg/ExternalLinkIcon";
 import { MaterializeTheme } from "~/theme";
@@ -96,7 +97,7 @@ const WorkflowGraphSidebar = ({
   lagInfo,
 }: WorkflowGraphSidebarProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const openCatalogDetail = useOpenCatalogDetail();
+  const sourcePath = useBuildSourcePath();
 
   if (!selectedNode) return;
 
@@ -154,46 +155,12 @@ const WorkflowGraphSidebar = ({
             selectedNode.sourceType !== "subsource" ? (
               <SidebarItem pl="4" pr="5" py="1">
                 <SidebarItemLabel>Type</SidebarItemLabel>
-                <SidebarClickable
-                  onClick={() =>
-                    openCatalogDetail({
-                      id: selectedNode.id,
-                      databaseName: selectedNode.databaseName ?? "",
-                      schemaName: selectedNode.schemaName ?? "",
-                      objectName: selectedNode.name,
-                      objectType: selectedNode.type as SupportedObjectType,
-                      clusterId: selectedNode.clusterId ?? undefined,
-                      clusterName: selectedNode.clusterName ?? undefined,
-                    })
-                  }
-                >
+                <SidebarButton to={sourcePath(selectedNode)}>
                   <SidebarItemValue>
                     {formatObjectType(selectedNode)}
                   </SidebarItemValue>
                   <ExternalLinkIcon ml="1" position="relative" top="-1px" />
-                </SidebarClickable>
-              </SidebarItem>
-            ) : selectedNode.sinkStatus ? (
-              <SidebarItem pl="4" pr="5" py="1">
-                <SidebarItemLabel>Type</SidebarItemLabel>
-                <SidebarClickable
-                  onClick={() =>
-                    openCatalogDetail({
-                      id: selectedNode.id,
-                      databaseName: selectedNode.databaseName ?? "",
-                      schemaName: selectedNode.schemaName ?? "",
-                      objectName: selectedNode.name,
-                      objectType: "sink",
-                      clusterId: selectedNode.clusterId ?? undefined,
-                      clusterName: selectedNode.clusterName ?? undefined,
-                    })
-                  }
-                >
-                  <SidebarItemValue>
-                    {formatObjectType(selectedNode)}
-                  </SidebarItemValue>
-                  <ExternalLinkIcon ml="1" position="relative" top="-1px" />
-                </SidebarClickable>
+                </SidebarButton>
               </SidebarItem>
             ) : (
               <SidebarItem>
@@ -388,34 +355,6 @@ export const SidebarButton = ({ children, ...props }: BoxProps & LinkProps) => {
 
   return (
     <Box as={Link} target="_blank" minWidth="0" {...props}>
-      <HStack
-        gap="0"
-        px="1"
-        py="1"
-        position="relative"
-        right="-8px"
-        rounded="md"
-        _hover={{
-          backgroundColor: colors.background.tertiary,
-        }}
-      >
-        {children}
-      </HStack>
-    </Box>
-  );
-};
-
-const SidebarClickable = ({
-  children,
-  onClick,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-
-  return (
-    <Box minWidth="0" cursor="pointer" onClick={onClick}>
       <HStack
         gap="0"
         px="1"

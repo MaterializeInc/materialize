@@ -22,7 +22,7 @@ import {
   useTheme,
 } from "@chakra-ui/react";
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { useSegment } from "~/analytics/segment";
 import { createNamespace } from "~/api/materialize";
@@ -72,7 +72,6 @@ import docUrls from "~/mz-doc-urls.json";
 import { sortConnectors } from "~/platform/connectors/sort";
 import { connectorHealthStatus } from "~/platform/connectors/utils";
 import { useBuildSourcePath } from "~/platform/routeHelpers";
-import { useOpenCatalogMonitor } from "~/store/catalog";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { prettyConnectorType } from "~/util";
@@ -259,9 +258,8 @@ interface SourceTableProps {
 }
 
 export const SourceTable = (props: SourceTableProps) => {
-  const openCatalogMonitor = useOpenCatalogMonitor();
-  // Still needed for the "View workflow" link (P1 migration item)
   const sourcePath = useBuildSourcePath();
+  const navigate = useNavigate();
   const { colors } = useTheme<MaterializeTheme>();
 
   return (
@@ -296,17 +294,7 @@ export const SourceTable = (props: SourceTableProps) => {
         {props.sources.map((s) => (
           <Tr
             key={s.id}
-            onClick={() =>
-              openCatalogMonitor({
-                id: s.id,
-                databaseName: s.databaseName ?? "",
-                schemaName: s.schemaName,
-                objectName: s.name,
-                objectType: "source",
-                clusterId: s.clusterId,
-                clusterName: s.clusterName,
-              })
-            }
+            onClick={() => navigate(sourcePath(s))}
             cursor="pointer"
           >
             <Td {...truncateMaxWidth} py="2">

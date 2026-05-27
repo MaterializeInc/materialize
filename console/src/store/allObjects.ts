@@ -7,22 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useAtomValue } from "jotai";
+import { atom, useAtomValue } from "jotai";
 import React from "react";
 
 import {
   buildAllObjectsQuery,
   DatabaseObject,
 } from "~/api/materialize/objects";
-import { createCatalogStore } from "~/store/createCatalogStore";
+import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  buildSubscribeQuery,
+  useGlobalUpsertSubscribe,
+} from "~/api/materialize/useSubscribe";
 
-const store = createCatalogStore<DatabaseObject>({
-  query: buildAllObjectsQuery,
-  upsertKey: "id",
+export const allObjects = atom<SubscribeState<DatabaseObject>>({
+  data: [],
+  error: undefined,
+  snapshotComplete: false,
 });
 
-export const allObjects = store.atom;
-export const useSubscribeToAllObjects = store.useSubscribe;
+export function useSubscribeToAllObjects() {
+  const subscribe = React.useMemo(() => {
+    return buildSubscribeQuery(buildAllObjectsQuery(), { upsertKey: "id" });
+  }, []);
+
+  return useGlobalUpsertSubscribe({
+    atom: allObjects,
+    subscribe,
+    select: (row) => row.data,
+    upsertKey: (row) => row.data.id,
+  });
+}
 
 export function useAllObjects() {
   const result = useAtomValue(allObjects);

@@ -17,6 +17,7 @@ import {
   addUpdateListener,
   clearExtensions,
 } from "@codemirror-toolkit/extensions";
+import { useAtomValue } from "jotai";
 import React, {
   forwardRef,
   useCallback,
@@ -26,6 +27,7 @@ import React, {
   useRef,
 } from "react";
 
+import { currentPromptValue } from "~/platform/shell/store/prompt";
 import { MaterializeTheme } from "~/theme";
 import { FocusableElement } from "~/utils/focusableElement";
 
@@ -96,6 +98,31 @@ function useAdditionalExtensions({
   ]);
 }
 
+/**
+ * When this component remounts – like when we navigate away from the Shell –  we
+ * need to re-initialize CodeMirror with the prompt text.
+ */
+function useInitializePromptOnMount() {
+  const initialized = useRef(false);
+  const currentView = useView();
+
+  const currentPrompt = useAtomValue(currentPromptValue);
+
+  useEffect(() => {
+    if (!currentView || initialized.current) return;
+    currentView.dispatch({
+      changes: {
+        from: 0,
+        to: currentView.state.doc.length,
+        insert: currentPrompt,
+      },
+      selection: { anchor: currentPrompt.length },
+    });
+
+    initialized.current = true;
+  }, [currentView, currentPrompt]);
+}
+
 const Editor = forwardRef<FocusableElement, EditorProps>(
   (
     {
@@ -118,6 +145,7 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
         }
       });
     });
+    useInitializePromptOnMount();
     useAdditionalExtensions({ lineNumbers, placeholder, onCommand, onKeyDown });
 
     // Override the prompt's default focus behavior to focus via CodeMirror's API
