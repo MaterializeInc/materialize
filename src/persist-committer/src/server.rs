@@ -22,6 +22,7 @@ use mz_persist::location::{CaSResult, Consensus, ExternalError, SeqNo, Versioned
 use tracing::warn;
 
 use crate::cache::ShardCache;
+use crate::metrics::CommitterMetrics;
 use crate::subscribe::SubscriberRegistry;
 
 /// In-envd persist consensus committer.
@@ -34,6 +35,7 @@ pub struct PersistCommitter {
     consensus: Arc<dyn Consensus + Send + Sync>,
     cache: Arc<ShardCache>,
     registry: Arc<SubscriberRegistry>,
+    metrics: CommitterMetrics,
 }
 
 impl PersistCommitter {
@@ -41,19 +43,29 @@ impl PersistCommitter {
         consensus: Arc<dyn Consensus + Send + Sync>,
         cache: Arc<ShardCache>,
         registry: Arc<SubscriberRegistry>,
+        metrics: CommitterMetrics,
     ) -> Self {
         Self {
             consensus,
             cache,
             registry,
+            metrics,
         }
     }
 
     /// Read the latest `VersionedData` for `shard`, populating the cache on miss.
     pub async fn head_inner(&self, shard: &str) -> Result<Option<VersionedData>, ExternalError> {
         if let Some(cached) = self.cache.get(shard) {
+            self.metrics
+                .cache_hits_total
+                .with_label_values(&["head"])
+                .inc();
             return Ok(Some(cached));
         }
+        self.metrics
+            .cache_misses_total
+            .with_label_values(&["head"])
+            .inc();
         let head = self.consensus.head(shard).await?;
         if let Some(v) = &head {
             self.cache.insert(shard, v.clone());
@@ -322,7 +334,8 @@ mod tests {
         let consensus = Arc::new(MemConsensus::default());
         let cache = Arc::new(ShardCache::new(100));
         let registry = Arc::new(SubscriberRegistry::new());
-        let committer = PersistCommitter::new(consensus.clone(), cache, registry);
+        let metrics = CommitterMetrics::for_tests();
+        let committer = PersistCommitter::new(consensus.clone(), cache, registry, metrics);
         (consensus, committer)
     }
 
@@ -341,7 +354,8 @@ mod tests {
         let cache = Arc::new(ShardCache::new(100));
         cache.insert("s1", v(5, 0xCC));
         let registry = Arc::new(SubscriberRegistry::new());
-        let committer = PersistCommitter::new(consensus, cache, registry);
+        let committer =
+            PersistCommitter::new(consensus, cache, registry, CommitterMetrics::for_tests());
         let got = committer.head_inner("s1").await.unwrap();
         assert_eq!(got.unwrap().seqno, SeqNo(5));
     }
