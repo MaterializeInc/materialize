@@ -7210,6 +7210,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-persist-committer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "mz-build-tools",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-proto",
+ "prometheus",
+ "prost",
+ "prost-build",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mz-persist-proc"
 version = "0.1.0"
 dependencies = [
