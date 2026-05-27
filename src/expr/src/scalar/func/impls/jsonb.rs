@@ -18,7 +18,10 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{AstInfo, Format, FormatSpecifier, RawClusterName, RawItemName};
+use mz_sql_parser::ast::{
+    AstInfo, Format, FormatSpecifier, MetricOptionName, RawClusterName, RawItemName, Value,
+    WithOptionValue,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -518,6 +521,69 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
             CreateSink(_) => "sink",
             CreateIndex(_) => "index",
             CreateType(_) => "type",
+            CreateApi(stmt) => {
+                let cluster_id = match stmt.in_cluster {
+                    Some(RawClusterName::Resolved(s)) => s,
+                    _ => return Err("missing IN CLUSTER".into()),
+                };
+                info.insert("cluster_id", json!(cluster_id));
+                "api"
+            }
+            CreateMetric(stmt) => {
+                let api_id = match stmt.in_api {
+                    RawItemName::Id(id, _, _) => id,
+                    RawItemName::Name(_) => return Err("missing IN API id".into()),
+                };
+                info.insert("api_id", json!(api_id));
+                let mut metric_type = None;
+                let mut help = None;
+                let mut value_column = None;
+                let mut values_from = None;
+                for opt in stmt.options {
+                    match (opt.name, opt.value) {
+                        (MetricOptionName::Ty, Some(WithOptionValue::Value(Value::String(s)))) => {
+                            metric_type = Some(s);
+                        }
+                        (
+                            MetricOptionName::Help,
+                            Some(WithOptionValue::Value(Value::String(s))),
+                        ) => {
+                            help = Some(s);
+                        }
+                        (
+                            MetricOptionName::ValueColumn,
+                            Some(WithOptionValue::Value(Value::String(s))),
+                        ) => {
+                            value_column = Some(s);
+                        }
+                        (
+                            MetricOptionName::ValuesFrom,
+                            Some(WithOptionValue::Item(RawItemName::Id(id, _, _))),
+                        ) => {
+                            values_from = Some(id);
+                        }
+                        _ => {}
+                    }
+                }
+                // The planner enforces that all four options are present
+                // and well-typed; an item that survived planning must have
+                // all four. Returning an `EvalError` keeps the `mz_metrics`
+                // view well-defined if someone hand-edits the catalog.
+                info.insert(
+                    "metric_type",
+                    json!(metric_type.ok_or("CREATE METRIC: missing TYPE")?),
+                );
+                info.insert("help", json!(help.ok_or("CREATE METRIC: missing HELP")?));
+                info.insert(
+                    "value_column",
+                    json!(value_column.ok_or("CREATE METRIC: missing VALUE COLUMN")?),
+                );
+                info.insert(
+                    "values_from",
+                    json!(values_from.ok_or("CREATE METRIC: missing VALUES FROM")?),
+                );
+                "metric"
+            }
             _ => return Err("not a CREATE item statement".into()),
         };
         info.insert("type", json!(item_type));

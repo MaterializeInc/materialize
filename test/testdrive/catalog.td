@@ -554,13 +554,15 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                cluster             comment
 ------------------------------------------------
+mz_apis             mz_catalog_server   ""
 mz_connections      mz_catalog_server   ""
 mz_databases        mz_catalog_server   ""
+mz_materialized_views mz_catalog_server ""
+mz_metrics          mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
 mz_secrets          mz_catalog_server   ""
 mz_sources          mz_catalog_server   ""
-mz_materialized_views mz_catalog_server ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 

@@ -155,6 +155,8 @@ pub enum ObjectType {
     Table,
     Type,
     View,
+    Api,
+    Metric,
 }
 
 impl ObjectType {
@@ -178,6 +180,8 @@ impl ObjectType {
             ObjectType::Table => "Table",
             ObjectType::Type => "Type",
             ObjectType::View => "View",
+            ObjectType::Api => "Api",
+            ObjectType::Metric => "Metric",
         }
     }
 }
