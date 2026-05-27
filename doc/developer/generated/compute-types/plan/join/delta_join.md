@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/join/delta_join.rs
-revision: da6dea38ae
+revision: 5d046b3ab6
 ---
 
 # compute-types::plan::join::delta_join

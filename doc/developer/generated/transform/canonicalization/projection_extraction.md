@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/canonicalization/projection_extraction.rs
-revision: da91c9a7f1
+revision: 5d046b3ab6
 ---
 
 # mz-transform::canonicalization::projection_extraction

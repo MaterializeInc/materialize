@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/reduction_pushdown.rs
-revision: 23126118ae
+revision: 5d046b3ab6
 ---
 
 # mz-transform::reduction_pushdown

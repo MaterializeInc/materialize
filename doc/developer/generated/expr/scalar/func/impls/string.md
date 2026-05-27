@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-revision: 8c6830eb59
+revision: 5d046b3ab6
 ---
 
 # mz-expr::scalar::func::impls::string

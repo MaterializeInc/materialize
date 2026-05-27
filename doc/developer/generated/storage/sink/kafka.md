@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/kafka.rs
-revision: 39acefa861
+revision: 5d046b3ab6
 ---
 
 # mz-storage::sink::kafka

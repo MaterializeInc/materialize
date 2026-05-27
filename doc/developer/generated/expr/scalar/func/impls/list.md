@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/list.rs
-revision: 3e0299fb00
+revision: 5d046b3ab6
 ---
 
 # mz-expr::scalar::func::impls::list
