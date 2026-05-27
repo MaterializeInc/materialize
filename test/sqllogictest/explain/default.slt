@@ -453,10 +453,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1[#0] » %0[#0{a}]
+      →Differential Join %1[#0] » %0:t[#0{a}]
         →Arranged materialize.public.t
         →Distinct GroupAggregate
-          →Differential Cross Join %0[×] » %1[×]
+          →Differential Cross Join %0[×] » %1:mv[×]
             after %1:
               Project: #0
               Filter: (#0{a} < #1{a})
@@ -471,11 +471,11 @@ Explained Query:
                 Project: #0
                   →Read materialize.public.mv
   →Return
-    →Differential Join %1[#0] » %0[#1]
+    →Differential Join %1[#0] » %0:l0[#1]
       →Arrange (#1)
         →Stream l0
       →Distinct GroupAggregate
-        →Differential Cross Join %0[×] » %1[×]
+        →Differential Cross Join %0[×] » %1:mv[×]
           after %1:
             Project: #0
             Filter: (#0{b} > #1{b})
@@ -516,7 +516,7 @@ Explained Query:
     cte l3 =
       →Consolidating Monotonic Top1
         Group By #0
-        →Differential Join %0[#0] » %1[#1{b}]
+        →Differential Join %0:l2[#0] » %1:iv[#1{b}]
           after %1:
             Filter: (#0{b}) IS NOT NULL
           →Arranged l2
@@ -524,12 +524,12 @@ Explained Query:
     cte l4 =
       →Consolidating Monotonic Top1
         Group By #0
-        →Differential Join %0[#0] » %1[#1{b}]
+        →Differential Join %0:l2[#0] » %1:mv[#1{b}]
           →Arranged l2
           →Arrange (#1{b})
             →Read materialize.public.mv
   →Return
-    →Delta Join [%0[#0] » %1[#0] » %2[#0]] [%1[#0] » %2[#0] » %0[#0]] [%2[#0] » %1[#0] » %0[#0]]
+    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %2[#0] » %0:l0[#0]] [%2[#0] » %1[#0] » %0:l0[#0]]
       →Arrange (#0)
         →Stream l0
       →Arrange (#0)
@@ -594,7 +594,7 @@ Explained Query:
           Project: #1
             →Read l0
     cte l3 =
-      →Delta Join [%0[#1{b}] » %1[#1{b}] » %2[#0{b}]] [%1[#1{b}] » %0[#1{b}] » %2[#0{b}]] [%2[#0{b}] » %0[#1{b}] » %1[#1{b}]]
+      →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l2[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l2[#0{b}]] [%2:l2[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
         →Arranged l1
         →Arranged l1
         →Arranged l2
@@ -605,7 +605,7 @@ Explained Query:
         Map: null, null
           →Consolidating Union
             →Negate Diffs
-              →Differential Join %1[#0] » %0[#0{b}]
+              →Differential Join %1[#0] » %0:l2[#0{b}]
                 →Arranged l2
                 →Distinct GroupAggregate
                   →Fused with Child Map/Filter/Project
@@ -641,7 +641,7 @@ Explained Query:
             →Arranged materialize.public.t
               Key: (#0{a})
   →Return
-    →Differential Cross Join %0[×] » %1[×]
+    →Differential Cross Join %0:l0[×] » %1:l0[×]
       after %1:
         Project: #2
         Map: (#0{v} + #1{v})
@@ -761,7 +761,7 @@ Explained Query:
       →Arrange (empty key)
         →Stream l0
     cte l2 =
-      →Differential Join %1[#0] » %0[#0{a}]
+      →Differential Join %1[#0] » %0:t[#0{a}]
         after %0:
           Project: #0, #2, #1
           Filter: (#0 != #1{m})
@@ -770,13 +770,13 @@ Explained Query:
           Aggregations: max
           Key:
             Project: #0
-          →Differential Cross Join %0[×] » %1[×]
+          →Differential Cross Join %0[×] » %1:l1[×]
             →Arrange (empty key)
               →Distinct GroupAggregate
                 →Stream l0
             →Arranged l1
   →Return
-    →Differential Join %1[#0] » %0[#0]
+    →Differential Join %1[#0] » %0:l2[#0]
       after %0:
         Project: #0, #2, #3, #1
         Filter: (#0 != #1{m})
@@ -786,7 +786,7 @@ Explained Query:
         Aggregations: max
         Key:
           Project: #0
-        →Differential Cross Join %0[×] » %1[×]
+        →Differential Cross Join %0[×] » %1:l1[×]
           →Arrange (empty key)
             →Distinct GroupAggregate
               →Fused with Child Map/Filter/Project
@@ -815,7 +815,7 @@ Explained Query:
             →Arranged materialize.public.t
               Key: (#0{a})
   →Return
-    →Differential Cross Join %0[×] » %1[×]
+    →Differential Cross Join %0:l0[×] » %1:l0[×]
       →Arranged l0
       →Arranged l0
 
@@ -847,7 +847,7 @@ Explained Query:
       →Arrange (#1{b})
         →Stream l0
   →Return
-    →Delta Join [%0[#1{b}] » %1[#1{b}] » %2[#0{b}]] [%1[#1{b}] » %0[#1{b}] » %2[#0{b}]] [%2[#0{b}] » %0[#1{b}] » %1[#1{b}]]
+    →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l0[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l0[#0{b}]] [%2:l0[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
       →Arranged l1
       →Arranged l1
       →Arrange (#0{b})
@@ -887,7 +887,7 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Differential Join %0[#0{a}] » %1[#0{c}] » %2[#0{e}, #1{f}]
+  →Differential Join %0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}, #1{f}]
     after %1:
       Filter: (#0{a}) IS NOT NULL
     →Arranged materialize.public.t
@@ -915,7 +915,7 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Differential Join %0[#0{a}] » %1[#0{c}] » %2[#0{e}, #1{f}]
+  →Differential Join %0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}, #1{f}]
     after %1:
       Filter: (#0{a}) IS NOT NULL
     →Arranged materialize.public.t
@@ -941,7 +941,7 @@ EXPLAIN WITH(humanized expressions)
 SELECT a, b, c, d FROM t, u
 ----
 Explained Query:
-  →Differential Cross Join %0[×] » %1[×]
+  →Differential Cross Join %0:t[×] » %1:u[×]
     →Arrange (empty key)
       →Arranged materialize.public.t
     →Arrange (empty key)
@@ -961,7 +961,7 @@ EXPLAIN WITH(humanized expressions)
 SELECT a, b, c, d, e, f FROM t, u, v WHERE a = c
 ----
 Explained Query:
-  →Differential Cross Join %0[#0{a}] » %1[#0{c}] » %2[×]
+  →Differential Cross Join %0:t[#0{a}] » %1:u[#0{c}] » %2:v[×]
     after %1:
       Filter: (#0{a}) IS NOT NULL
     →Arranged materialize.public.t
@@ -996,7 +996,7 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0[#1{b}] » %1[#0{c}] » %2[#0{e}]] [%1[#0{c}] » %0[#1{b}] » %2[#0{e}]] [%2[#0{e}] » %1[#1{d}] » %0[#1{b}]]
+  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
     path %0:
       after %1:
         Project: #1, #0, #2
@@ -1034,7 +1034,7 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0[#1{b}] » %1[#0{c}] » %2[#0{e}]] [%1[#0{c}] » %0[#1{b}] » %2[#0{e}]] [%2[#0{e}] » %1[#1{d}] » %0[#1{b}]]
+  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
     path %0:
       after %1:
         Project: #1, #0, #2
@@ -1072,7 +1072,7 @@ FROM t, u, v
 WHERE a = c and b = e
 ----
 Explained Query:
-  →Delta Join [%0[#0{a}] » %1[#0{c}] » %2[#0{e}]] [%1[#0{c}] » %0[#0{a}] » %2[#0{e}]] [%2[#0{e}] » %0[#1{b}] » %1[#0{c}]]
+  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#0{a}] » %2:v[#0{e}]] [%2:v[#0{e}] » %0:t[#1{b}] » %1:u[#0{c}]]
     path %1:
       after %0:
         Project: #0, #2, #1
@@ -1111,7 +1111,7 @@ Explained Query:
         Aggregations: max
         Key:
           Project: ()
-        →Differential Join %1[#0] » %0[#0{a}]
+        →Differential Join %1[#0] » %0:t[#0{a}]
           →Arranged materialize.public.t
           →Arrange (#0)
             →Constant (1 row)
@@ -1141,7 +1141,7 @@ Explained Query:
     Aggregations: max
     Key:
       Project: #0
-    →Differential Join %1[#0, #1] » %0[#0{a}, #1{b}]
+    →Differential Join %1[#0, #1] » %0:t[#0{a}, #1{b}]
       →Arranged materialize.public.t
       →Arrange (#0, #1)
         →Constant (3 rows)
@@ -1202,7 +1202,7 @@ Explained Query:
       →Arrange (#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16})
         →Read materialize.public.r
   →Return
-    →Differential Join %0[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}] » %1[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}]
+    →Differential Join %0:l0[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}] » %1:l0[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}]
       →Arranged l0
       →Arranged l0
 
@@ -1353,7 +1353,7 @@ FROM t, u
 WHERE t.b = u.c;
 ----
 Explained Query:
-  →Differential Join %1[#0{c}] » %0[#1{b}]
+  →Differential Join %1:u[#0{c}] » %0:t[#1{b}]
     →Arrange (#1{b})
       →Read materialize.public.t
     →Arranged materialize.public.u
@@ -1375,7 +1375,7 @@ FROM t, u
 WHERE t.b = u.d;
 ----
 Explained Query:
-  →Differential Join %1[#1{d}] » %0[#1{b}]
+  →Differential Join %1:u[#1{d}] » %0:t[#1{b}]
     →Arrange (#1{b})
       →Read materialize.public.t
     →Arranged materialize.public.u
@@ -1408,7 +1408,7 @@ FROM t, u
 WHERE t.a = u.c
 ----
 Explained Query:
-  →Differential Join %0[#0{a}] » %1[#0{c}]
+  →Differential Join %0:t[#0{a}] » %1:u[#0{c}]
     →Arranged materialize.public.t
     →Arrange (#0{c})
       →Fused with Child Map/Filter/Project
@@ -1437,7 +1437,7 @@ Explained Query:
     cte l0 =
       →Arranged materialize.public.t
   →Return
-    →Delta Join [%0[#0{a}] » %1[#0{a}] » %2[#0{a}]] [%1[#0{a}] » %0[#0{a}] » %2[#0{a}]] [%2[#0{a}] » %0[#0{a}] » %1[#0{a}]]
+    →Delta Join [%0:l0[#0{a}] » %1:l0[#0{a}] » %2:l0[#0{a}]] [%1:l0[#0{a}] » %0:l0[#0{a}] » %2:l0[#0{a}]] [%2:l0[#0{a}] » %0:l0[#0{a}] » %1:l0[#0{a}]]
       path %1:
         after %0:
           Project: #0, #2, #0, #1
@@ -1475,7 +1475,7 @@ Explained Query:
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0[#0{a}] » %1[#0{a}]
+        →Differential Join %0:l0[#0{a}] » %1:l0[#0{a}]
           after %1:
             Project: #3, #4
             Filter: (#0{a}) IS NOT NULL
@@ -1516,7 +1516,7 @@ Explained Query:
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0[#1{b}] » %1[#1{b}]
+        →Differential Join %0:l0[#1{b}] » %1:l0[#1{b}]
           after %1:
             Project: #3, #4
             Map: (#1{a} + #2{a}), (#0{b} + #0{b})
@@ -1564,7 +1564,7 @@ Explained Query:
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0[#1{b}] » %1[#1{b}]
+        →Differential Join %0:l0[#1{b}] » %1:l0[#1{b}]
           after %1:
             Project: #3, #4
             Map: (#1{a} + #2{a}), (#0{b} + #0{b})
@@ -1597,7 +1597,7 @@ UNION
 Explained Query:
   →Distinct GroupAggregate
     →Union
-      →Differential Join %0[#1{b}] » %1[(#1{b} + 1)]
+      →Differential Join %0:t_non_null[#1{b}] » %1:t_non_null[(#1{b} + 1)]
         after %1:
           Project: #4, #5
           Map: (#1{a} + #2{a}), (#0{b} + #3{b})
@@ -1629,7 +1629,7 @@ Explained Query:
     →Union
       →Unarranged Raw Stream
         →Arranged materialize.public.t
-      →Differential Join %1[#0] » %0[#0{a}]
+      →Differential Join %1[#0] » %0:t[#0{a}]
         →Arranged materialize.public.t
         →Arrange (#0)
           →Constant (1 row)
@@ -1662,11 +1662,11 @@ Explained Query:
   →Union
     →Unarranged Raw Stream
       →Arranged materialize.public.t
-    →Differential Join %1[#0] » %0[#1{b}]
+    →Differential Join %1[#0] » %0:t[#1{b}]
       →Arranged materialize.public.t
       →Arrange (#0)
         →Constant (1 row)
-    →Differential Join %1[#0] » %0[#0{a}]
+    →Differential Join %1[#0] » %0:t[#0{a}]
       →Arranged materialize.public.t
       →Arrange (#0)
         →Constant (1 row)
@@ -1675,7 +1675,7 @@ Explained Query:
       Filter: (#1{c} = 3)
         →Arranged materialize.public.u
           Key: (#1{d})
-    →Differential Join %1[#0] » %0[#1{d}]
+    →Differential Join %1[#0] » %0:u[#1{d}]
       →Arranged materialize.public.u
       →Arrange (#0)
         →Constant (1 row)
@@ -1831,7 +1831,7 @@ FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  →Differential Join %1[#0{a}] » %0[#0{x}]
+  →Differential Join %1:t6[#0{a}] » %0:t5[#0{x}]
     →Arrange (#0{x})
       →Read materialize.public.t5
     →Arrange (#0{a})
@@ -1853,7 +1853,7 @@ FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  →Differential Join %1[#0{a}] » %0[#0{x}]
+  →Differential Join %1:t6[#0{a}] » %0:t5[#0{x}]
     →Arrange (#0{x})
       →Read materialize.public.t5
     →Arrange (#0{a})
@@ -2020,7 +2020,7 @@ Explained Query:
               Project: ()
                 →Read l0
   →Return
-    →Differential Cross Join %0[×] » %1[×]
+    →Differential Cross Join %0:t4[×] » %1[×]
       after %1:
         Project: #3, #2
         Map: (#0{a} + #1{b})
@@ -2066,7 +2066,7 @@ EXPLAIN
 SELECT * FROM tnn JOIN unn USING (x, y);
 ----
 Explained Query:
-  →Differential Join %0[#2{y}, #1{x}] » %1[#0{y}, #1{x}]
+  →Differential Join %0:tnn[#2{y}, #1{x}] » %1:unn[#0{y}, #1{x}]
     →Arrange (#2{y}, #1{x})
       →Fused with Parent Map/Filter/Project
         Project: #2, #0, #1

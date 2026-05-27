@@ -30,7 +30,7 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,
+    CompactScalarSeq, CompactScalars, ExplainConfig, ExprHumanizer, Indices, PlanRenderingContext,
 };
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
@@ -262,7 +262,9 @@ impl Plan {
                         write!(f, "{}{label} ", ctx.indent)?;
                         fmt_join_chain(
                             f,
+                            ctx.humanizer,
                             &mode,
+                            inputs,
                             plan.source_relation,
                             plan.source_key.as_ref(),
                             plan.stage_plans
@@ -283,7 +285,9 @@ impl Plan {
                             write!(f, " [")?;
                             fmt_join_chain(
                                 f,
+                                ctx.humanizer,
                                 &mode,
+                                inputs,
                                 dpp.source_relation,
                                 Some(&dpp.source_key),
                                 dpp.stage_plans
@@ -1007,13 +1011,18 @@ impl AvailableCollections {
     }
 }
 
-/// Format a join implementation chain like `%0[#0{a}] » %1[#0{c}] » %2[×]`.
+/// Format a join implementation chain like `%0:t[#0{a}] » %1:u[#0{c}] » %2[×]`.
 ///
-/// `[×]` (U+00D7) marks a cross product (empty lookup key). A `None` `source_key`
-/// renders the source position with no bracketed suffix.
+/// Each position is rendered as `%pos:name` when an underlying [`Get`] can be
+/// dug out of the corresponding input plan (see [`humanize_input_name`]),
+/// otherwise just `%pos`. `[×]` (U+00D7) marks a cross product (empty lookup
+/// key). A `None` `source_key` renders the source position with no bracketed
+/// suffix.
 fn fmt_join_chain<'a, I>(
     f: &mut fmt::Formatter<'_>,
+    humanizer: &dyn ExprHumanizer,
     mode: &HumanizedExplain,
+    inputs: &[Plan],
     source_relation: usize,
     source_key: Option<&'a Vec<MirScalarExpr>>,
     stages: I,
@@ -1021,12 +1030,20 @@ fn fmt_join_chain<'a, I>(
 where
     I: IntoIterator<Item = (usize, &'a Vec<MirScalarExpr>)>,
 {
-    write!(f, "%{source_relation}")?;
+    write!(
+        f,
+        "{}",
+        humanize_input_name(humanizer, &inputs[source_relation], source_relation)
+    )?;
     if let Some(key) = source_key {
         fmt_join_key_brackets(f, mode, key)?;
     }
     for (lookup_relation, lookup_key) in stages {
-        write!(f, " » %{lookup_relation}")?;
+        write!(
+            f,
+            " » {}",
+            humanize_input_name(humanizer, &inputs[lookup_relation], lookup_relation)
+        )?;
         fmt_join_key_brackets(f, mode, lookup_key)?;
     }
     Ok(())
@@ -1043,6 +1060,33 @@ fn fmt_join_key_brackets(
     } else {
         let key = CompactScalars(mode.seq(key, None));
         write!(f, "[{key}]")
+    }
+}
+
+/// Render a join input as `%pos:name` if we can dig a `Get` out of `plan`,
+/// otherwise just `%pos`. Mirrors `dig_name_from_expr` in
+/// `src/expr/src/explain/text.rs` for the MIR `EXPLAIN OPTIMIZED PLAN` output.
+fn humanize_input_name(humanizer: &dyn ExprHumanizer, plan: &Plan, pos: usize) -> String {
+    fn dig(humanizer: &dyn ExprHumanizer, plan: &Plan) -> Option<String> {
+        use crate::plan::PlanNode::*;
+        match &plan.node {
+            Get { id, .. } => match id {
+                Id::Local(lid) => Some(lid.to_string()),
+                Id::Global(gid) => Some(
+                    humanizer
+                        .humanize_id_unqualified(*gid)
+                        .unwrap_or_else(|| gid.to_string()),
+                ),
+            },
+            // Transparent wrappers: keep digging.
+            ArrangeBy { input, .. } => dig(humanizer, input),
+            Mfp { input, .. } => dig(humanizer, input),
+            _ => None,
+        }
+    }
+    match dig(humanizer, plan) {
+        Some(name) => format!("%{pos}:{name}"),
+        None => format!("%{pos}"),
     }
 }
 
