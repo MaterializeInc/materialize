@@ -616,10 +616,8 @@ impl Context {
                         // positions `0..input_arity`). Table-function output columns at
                         // positions `input_arity..` are appended after the table function in
                         // a fixed order, so we leave those references alone.
-                        let perm_map: BTreeMap<usize, usize> =
-                            permutation.iter().cloned().enumerate().collect();
                         for expr in &mut exprs {
-                            expr.permute_map(&perm_map);
+                            expr.permute(permutation);
                         }
                         let input_arity = permutation.len();
                         let mfp_input_arity = mfp.input_arity;
