@@ -53,6 +53,7 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::avro::is_null;
 
@@ -360,75 +361,125 @@ mod tests {
     }
 }
 
+/// Identifier carried in a wire-format header that points at the writer's
+/// schema. Different schema registries key their writer schemas differently:
+/// Confluent uses a sequential `i32`, AWS Glue uses a UUID. Callers do not
+/// have to care which kind of key they're holding — the resolver routes it
+/// back to the matching cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriterSchemaKey {
+    Confluent(i32),
+    Glue(Uuid),
+}
+
+impl fmt::Display for WriterSchemaKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriterSchemaKey::Confluent(id) => write!(f, "Confluent schema id {}", id),
+            WriterSchemaKey::Glue(uuid) => write!(f, "Glue schema-version {}", uuid),
+        }
+    }
+}
+
+/// Provides writer schemas to an [`AvroSchemaResolver`].
+///
+/// Mirrors the `WireFormat<C>` enum on the catalog side: a decoder can run
+/// without any wire-format framing or with Confluent framing (optionally
+/// without a registry to fetch from). Each variant owns its cache type by
+/// construction, so the resolver cannot mis-route a key to the wrong
+/// cache.
+pub enum WriterSchemaProvider {
+    /// No wire-format framing. The resolver always returns the reader
+    /// schema and never consumes header bytes.
+    None,
+    /// Confluent framing. `cache: None` means strip-and-discard the
+    /// schema id (no registry attached); `cache: Some` means fetch from
+    /// the cache.
+    Confluent { cache: Option<SchemaCache> },
+}
+
+impl fmt::Debug for WriterSchemaProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tag = match self {
+            WriterSchemaProvider::None => "none",
+            WriterSchemaProvider::Confluent { cache: None } => "confluent (no cache)",
+            WriterSchemaProvider::Confluent { cache: Some(_) } => "confluent",
+        };
+        f.debug_tuple("WriterSchemaProvider").field(&tag).finish()
+    }
+}
+
+impl WriterSchemaProvider {
+    /// Build the Confluent variant from an optional CCSR client. `None`
+    /// means "Confluent framing but no registry to fetch from" — the
+    /// resolver will strip the header and fall back to the reader schema.
+    pub fn confluent(ccsr_client: Option<mz_ccsr::Client>) -> Self {
+        let cache = ccsr_client.map(SchemaCache::new);
+        WriterSchemaProvider::Confluent { cache }
+    }
+}
+
 pub struct AvroSchemaResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache>,
-    confluent_wire_format: bool,
+    writer_schemas: WriterSchemaProvider,
 }
 
 impl AvroSchemaResolver {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
-        confluent_wire_format: bool,
+        writer_schemas: WriterSchemaProvider,
     ) -> anyhow::Result<Self> {
         // parse_schema handles incremental parsing of references (dependencies first)
         let reader_schema = parse_schema(reader_schema, reader_reference_schemas)?;
-        let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
-            confluent_wire_format,
         })
     }
 
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)>> {
-        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
-            Some(cache) => {
-                debug_assert!(
-                    self.confluent_wire_format,
-                    "We should have set 'confluent_wire_format' everywhere \
-                     that can lead to this branch"
-                );
-                // XXX(guswynn): use destructuring assignments when they are stable
-                let (schema_id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes)
-                {
+    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<WriterSchemaKey>)>> {
+        let (resolved_schema, key) = match &mut self.writer_schemas {
+            WriterSchemaProvider::None => (&self.reader_schema, None),
+
+            WriterSchemaProvider::Confluent { cache: None } => {
+                // Validate the header (so we surface producer/consumer
+                // framing mismatches early) and discard the schema id —
+                // there is no registry to look it up in.
+                match crate::confluent::extract_avro_header(bytes) {
+                    Ok((_id, adjusted_bytes)) => {
+                        bytes = adjusted_bytes;
+                        (&self.reader_schema, None)
+                    }
+                    Err(err) => return Ok(Err(err)),
+                }
+            }
+
+            WriterSchemaProvider::Confluent { cache: Some(cache) } => {
+                let (id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
                     Ok(ok) => ok,
                     Err(err) => return Ok(Err(err)),
                 };
                 bytes = adjusted_bytes;
                 let result = cache
-                    .get(schema_id, &self.reader_schema)
-                    // The outer Result describes transient errors so use ? here to propagate
+                    .get(id, &self.reader_schema)
+                    // The outer Result describes transient errors so use ?
+                    // here to propagate; the inner Result is the cached
+                    // permanent outcome (parsed schema or parse error) and
+                    // is handled below.
                     .await?
-                    .with_context(|| format!("failed to resolve Avro schema (id = {})", schema_id));
+                    .with_context(|| format!("failed to resolve Avro schema (id = {id})"));
                 let schema = match result {
                     Ok(schema) => schema,
                     Err(err) => return Ok(Err(err)),
                 };
-                (schema, Some(schema_id))
-            }
-
-            // If we haven't been asked to use a schema registry, we have no way
-            // to discover the writer's schema. That's ok; we'll just use the
-            // reader's schema and hope it lines up.
-            None => {
-                if self.confluent_wire_format {
-                    // validate and just move the bytes buffer ahead
-                    let (_, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
-                        Ok(ok) => ok,
-                        Err(err) => return Ok(Err(err)),
-                    };
-                    bytes = adjusted_bytes;
-                }
-                (&self.reader_schema, None)
+                (schema, Some(WriterSchemaKey::Confluent(id)))
             }
         };
-        Ok(Ok((bytes, resolved_schema, schema_id)))
+        Ok(Ok((bytes, resolved_schema, key)))
     }
 }
 
@@ -436,30 +487,27 @@ impl fmt::Debug for AvroSchemaResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("AvroSchemaResolver")
             .field("reader_schema", &self.reader_schema)
-            .field(
-                "write_schema",
-                if self.writer_schemas.is_some() {
-                    &"some"
-                } else {
-                    &"none"
-                },
-            )
+            .field("writer_schemas", &self.writer_schemas)
             .finish()
     }
 }
 
+/// Cache of writer schemas fetched from a Confluent Schema Registry. Held
+/// inside [`WriterSchemaProvider::Confluent`]; the type is named pub because that
+/// variant's field is reachable through the pub enum, but it has no pub
+/// constructor or methods — only [`WriterSchemaProvider::confluent`] can build one.
 #[derive(Debug)]
-struct SchemaCache {
+pub struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
     ccsr_client: Arc<mz_ccsr::Client>,
 }
 
 impl SchemaCache {
-    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
-        Ok(SchemaCache {
+    fn new(ccsr_client: mz_ccsr::Client) -> SchemaCache {
+        SchemaCache {
             cache: BTreeMap::new(),
             ccsr_client: Arc::new(ccsr_client),
-        })
+        }
     }
 
     /// Looks up the writer schema for ID. If the schema is literally identical
