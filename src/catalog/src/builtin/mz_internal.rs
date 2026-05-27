@@ -5350,7 +5350,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "hydration",
-            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Agents should back off and retry when `hydrated` is false rather than treating an empty read as final.",
+            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. A read against a non-hydrated data product blocks until the dataflow catches up (it never returns partial data); when `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added. Check this before reading to avoid a blocking read.",
         ),
     ]),
     sql: r#"

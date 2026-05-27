@@ -572,7 +572,7 @@ readiness summary that lets agents tell "still warming up" apart from
 | `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
-| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Agents should back off and retry when `hydrated` is false rather than treating an empty read as final. |
+| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. A read against a non-hydrated data product blocks until the dataflow catches up (it never returns partial data); when `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added. Check this before reading to avoid a blocking read. |
 
 ## `mz_object_dependencies`
 

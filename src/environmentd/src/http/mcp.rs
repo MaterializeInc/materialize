@@ -69,10 +69,10 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
 // Details uses the full view, which also exposes a `hydration` JSON column
-// (`{hydrated, replica_count, hydrated_replica_count}`) so agents can decide
-// whether to back off and retry vs treat empty reads as final. See DEX-30
-// and the comments on `mz_mcp_data_product_details` in
-// `src/catalog/src/builtin/mz_internal.rs`.
+// (`{hydrated, replica_count, hydrated_replica_count}`) so agents can tell
+// whether a read would block waiting for hydration, and whether the
+// cluster even has a replica to make progress. See DEX-30 and the comments
+// on `mz_mcp_data_product_details` in `src/catalog/src/builtin/mz_internal.rs`.
 const DETAILS_QUERY_PREFIX: &str =
     "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
 
@@ -664,10 +664,12 @@ fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
             "you only need to set the `cluster` parameter if you intentionally want the ",
             "read to run on a different cluster (e.g. one with larger or more replicas). ",
             "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
-            "`replica_count`, and `hydrated_replica_count` fields: if `hydrated` is false, ",
-            "the dataflow is still warming up. Back off and retry rather than looping on ",
-            "empty results — an empty answer from a not-yet-hydrated product is not the ",
-            "same as a genuinely empty result.",
+            "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
+            "partial data: a read against a not-yet-hydrated product blocks until the ",
+            "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
+            "before reading: if it is false and `replica_count` is greater than 0, the ",
+            "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
+            "cluster has no replicas and the read cannot make progress until one is added.",
         ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
@@ -724,7 +726,7 @@ async fn handle_tools_list(
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
                     title: Some("Get Data Product Details".to_string()),
-                    description: "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is fully hydrated across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, what data you can query, and whether the data product is ready to serve fresh results. Use this after finding a data product from get_data_products() to understand how to query it; if `hydrated` is false, back off and retry rather than treating empty reads as final.".to_string(),
+                    description: "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.".to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
