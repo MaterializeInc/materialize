@@ -17,7 +17,6 @@ bytes.workspace = true
 futures.workspace = true
 mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-persist = { path = "../persist" }
-mz-persist-client = { path = "../persist-client" }
 mz-proto = { path = "../proto" }
 prometheus.workspace = true
 prost.workspace = true

@@ -93,6 +93,7 @@ pub mod operators {
 }
 pub mod read;
 pub mod rpc;
+pub mod rpc_consensus;
 pub mod schema;
 pub mod stats;
 pub mod usage;
