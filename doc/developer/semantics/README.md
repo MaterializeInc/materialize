@@ -86,7 +86,7 @@ top.
   `NoRowErr_cross` / `NoRowErr_filter` propagation,
   `Collection.Equiv` (perm + merge + drop_zero) with
   `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators,
-  `filter_cross_pushdown_left_unsound` counterexample.
+  `filter_cross_pushdown_left_inexact` counterexample.
 
 **Arity-cast scaffolding** (Mz.Schema + Mz.Collection):
 `Vector.cast_val`, `Vector.cast_eq_append_assoc`,

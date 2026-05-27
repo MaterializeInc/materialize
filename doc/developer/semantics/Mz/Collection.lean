@@ -439,18 +439,27 @@ theorem NoRowErr_filter_of_might_error_false {sch : Schema n}
   NoRowErr_filter p hNoErr
     (fun rec hrec => might_error_sound rec.row (hRows rec hrec) p hPred)
 
-/-! ## Filter / cross pushdown — counterexample
+/-! ## Filter / cross pushdown — counterexample (inexact at `=`)
 
-The canonical soundness gap for `filter (cross l r) = cross (filter
-l) r`. cross's err-diff is bilinear in data and err multiplicities:
-`(dL, eL) * (dR, eR) = (dL · dR, dL · eR + eL · dR + eL · eR)`.
+The canonical *imprecision* gap for `filter (cross l r) = cross
+(filter l) r`. cross's err-diff is bilinear in data and err
+multiplicities: `(dL, eL) * (dR, eR) = (dL · dR, dL · eR + eL · dR
++ eL · eR)`.
 
 A filter that zeroes `dL` before the cross drops the `dL · eR`
 term that the post-cross filter preserves. Witnessed concretely
 on `Schema.free 0` (empty schemas), where `Env` is the unique
-empty function, with a `.lit (.bool false)` predicate. -/
+empty function, with a `.lit (.bool false)` predicate.
 
-theorem filter_cross_pushdown_left_unsound :
+The rewrite is not unsound in the strict sense — it never
+produces a wrong row, it only drops an err that the LHS
+preserves. Under `=` the two sides differ; under `refines` (errors
+as bottom) the RHS refines the LHS. The recovery proofs under
+`NoRowErr` / `eraseRowErr` / `refines` close the gap in their
+respective windows. Name reflects "not equal at `=`"; the
+phrasing "inexact" is more precise than "unsound". -/
+
+theorem filter_cross_pushdown_left_inexact :
     ∃ (n m : Nat) (sch_l : Schema n) (sch_r : Schema m)
       (l : Collection sch_l) (r : Collection sch_r)
       (p_comb : Expr (Schema.append sch_l sch_r) .bool)
@@ -518,7 +527,7 @@ either marking the auto-generated `filterOne.match_1` reducible
 `filterOne` to dispatch via explicit `Datum.casesOn`. Left as
 follow-up.
 
-The counterexample (`filter_cross_pushdown_left_unsound`) remains
+The counterexample (`filter_cross_pushdown_left_inexact`) remains
 the load-bearing demonstration of the un-recovered direction. -/
 
 /-! ## Row refinement

@@ -78,7 +78,7 @@ against data multiplicities.
 
 | Transform | Statement | Status |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | **Counterexample mechanized** as `filter_cross_pushdown_left_unsound` in `Mz/Collection.lean` (concrete `Schema.free 0` witness with `.lit (.bool false)` predicate). Three recovery windows (strict via `NoRowErr r`, data-side via `eraseRowErr`, refinement via `SignOK`) are open in the indexed model — proofs require substitution-aware predicate evaluation across the cross's combined schema. |
+| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | **Inexact at `=`**; counterexample `filter_cross_pushdown_left_inexact` in `Mz/Collection.lean` (concrete `Schema.free 0` witness with `.lit (.bool false)` predicate). Rewrite never produces wrong rows — only drops err the LHS preserves; RHS refines LHS. Three recovery windows (strict via `NoRowErr r`, data-side via `eraseRowErr`, refinement via `SignOK`) are open in the indexed model — proofs require substitution-aware predicate evaluation across the cross's combined schema. |
 | `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |

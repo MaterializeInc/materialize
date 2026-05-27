@@ -614,7 +614,7 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
   argument that errors force a non-equality relation.
 * `filter_cross_pushdown_left` unsound when right collection has
   `err_diff > 0`. **Counterexample mechanized**:
-  `filter_cross_pushdown_left_unsound` in `Mz/Collection.lean`
+  `filter_cross_pushdown_left_inexact` in `Mz/Collection.lean`
   witnesses concrete `l`, `r`, predicate where LHS preserves an
   err the RHS drops. The three recovery windows (strict via
   `NoRowErr`, data-side via `eraseRowErr`, refinement via
@@ -754,7 +754,7 @@ Relations and analyses a planner can cite today.
 | `Datum k` (indexed)        | `Mz/Datum.lean`              | type discipline structural | overflow / decode / division-by-zero only |
 | `Expr sch k` (GADT)        | `Mz/Expr.lean` + `Mz/Eval.lean` | `=` on closed exprs (unbounded `Int`); WellTyped subsumed by GADT | bounded-int counter at `Mz/EquivBounded.lean` |
 | `Env sch`                  | `Mz/Eval.lean`               | typed lookup, no OOB case  | —                                         |
-| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `cross` / `negate` / `unionAll`); pushdown counterexample (`filter_cross_pushdown_left_unsound`); arity-cast scaffolding (`Update.cast`, `Collection.cast`, `crossOne_diff_eq` / `_err_diff_eq`) | `cross_assoc` row-component (Fin-index manipulation); pushdown recovery windows (strict / data / refines) |
+| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `cross` / `negate` / `unionAll`); pushdown counterexample (`filter_cross_pushdown_left_inexact`); arity-cast scaffolding (`Update.cast`, `Collection.cast`, `crossOne_diff_eq` / `_err_diff_eq`) | `cross_assoc` row-component (Fin-index manipulation); pushdown recovery windows (strict / data / refines) |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity (`evalAnd_err_err_eqErrSet_comm`) | bounded-int assoc, pushdown over cross |
 | `refines` (`Datum`)        | `Mz/Equiv.lean`              | compositionality (`refines_cong_binary`, per-op corollaries) | rewrites that add err |
 | `refines` (`Row` / `Update` / `Collection`) | `Mz/Collection.lean` | Smyth-style lift + refl / trans | pushdown lift open (depends on `cross`) |
