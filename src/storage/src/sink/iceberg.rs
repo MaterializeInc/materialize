@@ -655,7 +655,10 @@ fn merge_field_metadata_recursive(
             // Materialize (`key_value`/`key`/`value` vs `entries`/`keys`/`values`),
             // so name-based matching on the entries struct would drop the value
             // field's extension metadata. Merge the entries struct positionally.
-            let new_entries = merge_map_entries_metadata(iceberg_entries, mz_entries)?;
+            let new_entries = match mz_entries {
+                Some(mz_entries) => merge_map_entries_metadata(iceberg_entries, mz_entries)?,
+                None => iceberg_entries.as_ref().clone(),
+            };
             DataType::Map(Arc::new(new_entries), *sorted)
         }
         other => other.clone(),
@@ -692,13 +695,11 @@ fn merge_field_metadata_recursive(
 /// the current `entries`/`keys`/`values` names before flipping.
 fn merge_map_entries_metadata(
     iceberg_entries: &Field,
-    mz_entries: Option<&Field>,
+    mz_entries: &Field,
 ) -> anyhow::Result<Field> {
     let mut metadata = iceberg_entries.metadata().clone();
-    if let Some(mz_f) = mz_entries {
-        if let Some(extension_name) = mz_f.metadata().get(ARROW_EXTENSION_NAME_KEY) {
-            metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), extension_name.clone());
-        }
+    if let Some(extension_name) = mz_entries.metadata().get(ARROW_EXTENSION_NAME_KEY) {
+        metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), extension_name.clone());
     }
 
     let iceberg_fields = match iceberg_entries.data_type() {
@@ -709,22 +710,21 @@ fn merge_map_entries_metadata(
             other
         ),
     };
-    let mz_fields = match mz_entries.map(|f| f.data_type()) {
-        Some(DataType::Struct(fields)) => Some(fields),
-        Some(other) => anyhow::bail!(
+    let mz_fields = match mz_entries.data_type() {
+        DataType::Struct(fields) => fields,
+        other => anyhow::bail!(
             "Materialize map entries field '{}' is not a Struct: {:?}",
-            mz_entries.map(|f| f.name().as_str()).unwrap_or(""),
+            mz_entries.name(),
             other
         ),
-        None => None,
     };
 
     let new_fields: Vec<Field> = iceberg_fields
         .iter()
         .enumerate()
         .map(|(idx, iceberg_inner)| {
-            let mz_inner = mz_fields.and_then(|fields| fields.get(idx));
-            merge_field_metadata_recursive(iceberg_inner, mz_inner.map(|f| f.as_ref()))
+            let mz_inner = mz_fields.get(idx).map(|f| f.as_ref());
+            merge_field_metadata_recursive(iceberg_inner, mz_inner)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
