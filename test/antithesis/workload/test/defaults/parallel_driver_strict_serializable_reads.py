@@ -171,8 +171,18 @@ def _fresh_observation(step: int, prefix: str) -> Observation | None:
 
     Setting `transaction_isolation` explicitly costs one extra round
     trip but defends against future changes to the system default.
+
+    EXPLAIN TIMESTAMP rejects bind parameters at plan time — see
+    `plan_explain_timestamp` in `src/sql/src/plan/statement/dml.rs`,
+    which short-circuits with `PlanError::ParameterNotAllowed` when
+    the inner select's `contains_parameters` returns true.  We
+    therefore inline `prefix` into both SQL strings.  `prefix` is
+    constructed in `main` as `f"p{random_u64():016x}"` — a literal `p`
+    plus 16 lowercase hex chars — so f-string interpolation is safe
+    without further escaping.
     """
-    select_sql = f"SELECT row_count::bigint FROM {MV_NAME} WHERE prefix = %s"
+    quoted_prefix = f"'{prefix}'"
+    select_sql = f"SELECT row_count::bigint FROM {MV_NAME} WHERE prefix = {quoted_prefix}"
     explain_sql = f"EXPLAIN TIMESTAMP AS JSON FOR {select_sql}"
     try:
         with (
@@ -187,9 +197,9 @@ def _fresh_observation(step: int, prefix: str) -> Observation | None:
             conn.cursor() as cur,
         ):
             cur.execute("SET transaction_isolation TO 'strict serializable'")
-            cur.execute(explain_sql, (prefix,))
+            cur.execute(explain_sql)
             explain_row = cur.fetchone()
-            cur.execute(select_sql, (prefix,))
+            cur.execute(select_sql)
             select_row = cur.fetchone()
     except Exception:  # noqa: BLE001
         return None
