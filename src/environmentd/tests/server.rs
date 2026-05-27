@@ -6382,3 +6382,302 @@ fn test_inject_audit_events_malformed() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+/// End-to-end check of `/metrics/custom/{database}/{schema}/{name}`:
+///
+/// * a `CREATE API` followed by a `CREATE METRIC` produces a working
+///   Prometheus exposition on every HTTP listener whose config has
+///   `endpoint_api: true` (the test harness enables it on both listeners),
+/// * an unknown API name returns 404.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_metrics_custom_endpoint() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_prometheus_metrics_api"])
+        .await;
+
+    // The HTTP listener authenticates as `anonymous_http_user` by default.
+    // Grant it the privileges it needs to read the metric view.
+    {
+        let su = server.connect().internal().await.unwrap();
+        su.batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .await
+            .unwrap();
+        for stmt in [
+            format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ),
+            format!(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ),
+            format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ),
+            format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ),
+        ] {
+            su.batch_execute(&stmt).await.unwrap();
+        }
+    }
+
+    let client = server.connect().await.unwrap();
+
+    client
+        .batch_execute(
+            "CREATE VIEW v AS \
+             SELECT 7::int8 AS count, 'open'::text AS status UNION ALL \
+             SELECT 3::int8, 'closed'::text",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(&format!(
+            "GRANT SELECT ON materialize.public.v TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE API materialize.public.api1 \
+             FORMAT PROMETHEUS",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(&format!(
+            "GRANT USAGE ON API materialize.public.api1 TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE METRIC materialize.public.m \
+             IN API materialize.public.api1 AS ( \
+               TYPE 'gauge', \
+               HELP 'leads', \
+               VALUES FROM materialize.public.v, \
+               VALUE COLUMN 'count' \
+             )",
+        )
+        .await
+        .unwrap();
+
+    let external_url = format!(
+        "http://{}/metrics/custom/materialize/public/api1",
+        server.http_local_addr(),
+    );
+    let internal_url = format!(
+        "http://{}/metrics/custom/materialize/public/api1",
+        server.internal_http_local_addr(),
+    );
+
+    // Happy path: external listener serves Prometheus exposition.
+    let resp = reqwest::get(&external_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("# HELP m leads"), "body: {body}");
+    assert!(body.contains("# TYPE m gauge"), "body: {body}");
+    assert!(body.contains("m{status=\"open\"} 7"), "body: {body}");
+    assert!(body.contains("m{status=\"closed\"} 3"), "body: {body}");
+
+    // Both listeners have `endpoint_api: true` in the test harness, so the
+    // same URL on the internal listener serves the same exposition.
+    let resp = reqwest::get(&internal_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Unknown API name -> 404 on every listener.
+    let bogus_url = format!(
+        "http://{}/metrics/custom/materialize/public/no_such_api",
+        server.http_local_addr(),
+    );
+    let resp = reqwest::get(&bogus_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // After dropping the metric, the API should still serve but emit nothing
+    // beyond the empty exposition.
+    client
+        .batch_execute("DROP METRIC materialize.public.m")
+        .await
+        .unwrap();
+    let resp = reqwest::get(&external_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert!(!body.contains("m{"), "body should not list m: {body}");
+
+    // Revoke the HTTP user's privileges on the view, recreate the metric,
+    // and verify the scrape returns 403 instead of 200 with empty data or 500.
+    {
+        let su = server.connect().internal().await.unwrap();
+        su.batch_execute(&format!(
+            "REVOKE SELECT ON materialize.public.v FROM {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .await
+        .unwrap();
+    }
+    client
+        .batch_execute(
+            "CREATE METRIC materialize.public.m \
+             IN API materialize.public.api1 AS ( \
+               TYPE 'gauge', \
+               HELP 'leads', \
+               VALUES FROM materialize.public.v, \
+               VALUE COLUMN 'count' \
+             )",
+        )
+        .await
+        .unwrap();
+    let resp = reqwest::get(&external_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Revoke USAGE on the API itself. The role still has SELECT on the view
+    // and USAGE on the cluster, so without an explicit USAGE-on-API check
+    // the scrape would succeed; with the check it must 404 (the API is
+    // treated as not existing for this role).
+    {
+        let su = server.connect().internal().await.unwrap();
+        su.batch_execute(&format!(
+            "GRANT SELECT ON materialize.public.v TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .await
+        .unwrap();
+        su.batch_execute(&format!(
+            "REVOKE USAGE ON API materialize.public.api1 FROM {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .await
+        .unwrap();
+    }
+    let resp = reqwest::get(&external_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // After dropping the API (cascading the metric), the URL should 404.
+    client
+        .batch_execute("DROP API materialize.public.api1 CASCADE")
+        .await
+        .unwrap();
+    let resp = reqwest::get(&external_url).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Verifies that an `Api` and `Metric` survive an environmentd restart.
+///
+/// On restart the catalog re-parses each item's `create_sql` and re-runs the
+/// planner. If the persisted SQL or the deserialize_item path is wrong, the
+/// catalog hydration panics with `invalid persisted SQL`. This test catches
+/// that by stopping and restarting the server with a stable data dir.
+///
+/// It also confirms the dependency wiring (Metric -> {Api, View}) survives
+/// catalog rehydration: DROP VIEW without CASCADE must still error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_metrics_custom_endpoint_persistence() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    // First boot: enable the feature flag, create the API and metric.
+    {
+        let server = harness.clone().start_blocking();
+        let mut su = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        su.batch_execute("ALTER SYSTEM SET enable_prometheus_metrics_api = on")
+            .unwrap();
+
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute(
+                "CREATE VIEW v AS \
+                 SELECT 1::int8 AS count, 'a'::text AS label",
+            )
+            .unwrap();
+        client
+            .batch_execute(
+                "CREATE API materialize.public.api1 \
+                 FORMAT PROMETHEUS",
+            )
+            .unwrap();
+        client
+            .batch_execute(
+                "CREATE METRIC materialize.public.m \
+                 IN API materialize.public.api1 AS ( \
+                   TYPE 'gauge', \
+                   HELP 'h', \
+                   VALUES FROM materialize.public.v, \
+                   VALUE COLUMN 'count' \
+                 )",
+            )
+            .unwrap();
+    }
+
+    // Restart against the same data directory. If the catalog can't re-plan
+    // the persisted CREATE API / CREATE METRIC, this panics during boot.
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        // Re-creating without IF NOT EXISTS is the simplest way to confirm
+        // both items survived the restart: if hydration had silently lost
+        // them, these CREATEs would succeed instead of erroring.
+        let err = client
+            .batch_execute(
+                "CREATE API materialize.public.api1 \
+                 FORMAT PROMETHEUS",
+            )
+            .expect_err("api1 should still exist after restart");
+        let msg = err
+            .as_db_error()
+            .map(|e| e.message().to_string())
+            .unwrap_or_else(|| err.to_string());
+        assert!(msg.contains("already exists"), "unexpected error: {msg}");
+        let err = client
+            .batch_execute(
+                "CREATE METRIC materialize.public.m \
+                 IN API materialize.public.api1 AS ( \
+                   TYPE 'gauge', \
+                   HELP 'h', \
+                   VALUES FROM materialize.public.v, \
+                   VALUE COLUMN 'count' \
+                 )",
+            )
+            .expect_err("metric m should still exist after restart");
+        let msg = err
+            .as_db_error()
+            .map(|e| e.message().to_string())
+            .unwrap_or_else(|| err.to_string());
+        assert!(msg.contains("already exists"), "unexpected error: {msg}");
+
+        // The dependency graph was rebuilt: DROP VIEW without CASCADE
+        // still errors because the metric references it.
+        let err = client
+            .batch_execute("DROP VIEW materialize.public.v")
+            .expect_err("DROP VIEW should error while a metric depends on it");
+        let msg = err
+            .as_db_error()
+            .map(|e| e.message().to_string())
+            .unwrap_or_else(|| err.to_string());
+        assert!(
+            msg.contains("still depended upon by metric"),
+            "unexpected error: {msg}"
+        );
+
+        // ... but DROP VIEW ... CASCADE works and cleans up the metric.
+        client
+            .batch_execute("DROP VIEW materialize.public.v CASCADE")
+            .unwrap();
+        client
+            .batch_execute("DROP API materialize.public.api1")
+            .unwrap();
+    }
+}

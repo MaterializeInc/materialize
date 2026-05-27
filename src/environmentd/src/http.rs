@@ -499,6 +499,18 @@ impl HttpServer {
             router = router.merge(console_config_router);
         }
 
+        if routes_enabled.endpoint_api {
+            let endpoint_api_router = Router::new()
+                .route(
+                    "/metrics/custom/{database}/{schema}/{name}",
+                    routing::get(sql::handle_metrics_custom),
+                )
+                .layer(auth_middleware.clone())
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()));
+            router = router.merge(endpoint_api_router);
+        }
+
         // MCP (Model Context Protocol) endpoints
         // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
         if routes_enabled.mcp_agent || routes_enabled.mcp_developer {

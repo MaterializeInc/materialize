@@ -80,18 +80,36 @@ fn filter_requirements(
     session_meta: &dyn SessionMetadata,
     rbac_requirements: RbacRequirements,
 ) -> RbacRequirements {
-    // Skip RBAC non-mandatory checks if RBAC is disabled. However, we never skip RBAC checks for
-    // system roles. This allows us to limit access of system users even when RBAC is off.
-    let is_rbac_disabled = !is_rbac_enabled_for_session(catalog.system_vars(), session_meta)
-        && !session_meta.role_metadata().current_role.is_system()
-        && !session_meta.role_metadata().session_role.is_system();
-    // Skip RBAC checks on user items if the session is a superuser.
-    let is_superuser = session_meta.is_superuser();
-    if is_rbac_disabled || is_superuser {
+    // Skip RBAC non-mandatory checks when they aren't enforced for this session
+    // (RBAC disabled for a non-system role, or a superuser).
+    if !is_rbac_enforced_for_session(catalog.system_vars(), session_meta) {
         return rbac_requirements.filter_to_mandatory_requirements();
     }
 
     rbac_requirements
+}
+
+/// Returns whether RBAC privilege checks on user objects are enforced for
+/// `session`.
+///
+/// This is the inverse of the skip condition applied by plan validation in
+/// `filter_requirements`: checks are enforced unless RBAC is disabled (and
+/// the role is not a system role, which is always checked) or the session is a
+/// superuser. Callers that perform ad-hoc privilege checks outside the plan
+/// path (e.g. the custom metrics HTTP endpoint) use this so their gating
+/// matches plan validation exactly.
+pub fn is_rbac_enforced_for_session(
+    system_vars: &SystemVars,
+    session: &dyn SessionMetadata,
+) -> bool {
+    // RBAC is enabled for this session if the server/session flag is on, or if
+    // the role is a system role. We always check system roles so we can limit
+    // their access even when RBAC is off.
+    let is_rbac_enabled = is_rbac_enabled_for_session(system_vars, session)
+        || session.role_metadata().current_role.is_system()
+        || session.role_metadata().session_role.is_system();
+    // Even when enabled, superusers bypass checks on user objects.
+    is_rbac_enabled && !session.is_superuser()
 }
 
 // The default item types that most statements require USAGE privileges for.
