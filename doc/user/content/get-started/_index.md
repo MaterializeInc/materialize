@@ -88,5 +88,6 @@ depending on your consistency and performance requirements.
 
 ## Learn more
 
+- [Live data products](/concepts/live-data-products/) — what Materialize is for.
 - [Key concepts](/concepts/)
 - [Get started with Materialize](/get-started/quickstart)
