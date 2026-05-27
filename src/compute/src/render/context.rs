@@ -1006,19 +1006,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         // Track whether we already applied temporal bucketing in this call, to
         // avoid bucketing the same updates twice.
-        //
-        // Stacked bucketing across operators is prevented at the LIR level: in
-        // `strategy_from_future` (see `src/compute-types/src/plan/lowering.rs`),
-        // a bucketing consumer clears `LoweredExpr::has_future_updates`, so its
-        // parent is lowered with `ArrangementStrategy::Direct`.
-        //
-        // This flag is a belt-and-suspenders check for the case where a single
-        // `ensure_collections` call would otherwise fire bucketing twice on the
-        // same collection: once when forming the raw collection (via
-        // `as_collection_core` below) and again when building an arrangement in
-        // `collections.arranged`, or across two arrangements in that loop. The
-        // same `strategy` argument applies to all sites; the flag downgrades
-        // every application after the first to `Direct`.
         let mut bucketed = false;
 
         // True iff at least one new arrangement will actually be built below. Bucketing only
