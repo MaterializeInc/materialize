@@ -374,31 +374,22 @@ def main() -> int:
     producer_stop.set()
     t_producer.join(timeout=15.0)
 
-    # Authoritative committed_set: read the table directly via a
-    # fresh connection.  This is the ground truth — anything not in
-    # this set is not in the SUT regardless of whether the producer
-    # thinks it committed.  Handles the producer's ambiguous_set
-    # rows: if they actually landed despite no ack, they're here;
-    # if they didn't, they're not.
-    authoritative_set: set[int] = set()
-    try:
-        rows = query_retry(f"SELECT counter FROM {table}")
-        authoritative_set = {int(r[0]) for r in rows}
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning("subscribe-correctness: authoritative read failed: %s", exc)
-        # We can't run the safety assertion without this — bail with
-        # a `sometimes(False, ...)` and exit cleanly.
-        sometimes(
-            False,
-            "subscribe-correctness: at least one timeline could read authoritative set",
-            {"prefix": prefix, "exc": str(exc)[:200]},
-        )
-        consumer_stop.set()
-        t_consumer.join(timeout=5.0)
-        return 0
-
-    # Drive consumer catch-up.  Target ts = current mz_now() so we
-    # know the consumer has seen every event with ts <= that target.
+    # Pick the catch-up target timestamp BEFORE reading the
+    # authoritative set, and read the authoritative set AS OF that
+    # exact timestamp once the consumer has caught up to it.
+    #
+    # This closes a snapshot-skew race.  A plain
+    # `SELECT counter FROM {table}` picks its own read timestamp,
+    # which under strict serializability can sit *ahead* of a
+    # separately-sampled `mz_now()`.  The authoritative set would then
+    # include a row whose commit ts is later than `target_ts`, while
+    # the consumer — correctly caught up only to `target_ts` — has not
+    # yet streamed it, so the missed-events check fires a spurious
+    # `always(False)`.  The signature is an exact off-by-one
+    # (authoritative = received + 1) with `reconnects == 0`, i.e. no
+    # fault was even involved.  Reading both the authoritative set and
+    # the consumer-progress target at the same logical time makes the
+    # comparison snapshot-consistent.
     target_ts = 0
     try:
         row = query_one_retry("SELECT mz_now()::text::bigint")
@@ -428,6 +419,37 @@ def main() -> int:
 
     consumer_stop.set()
     t_consumer.join(timeout=10.0)
+
+    # Authoritative committed_set: read the table directly via a fresh
+    # connection.  This is the ground truth — anything not in this set
+    # is not in the SUT regardless of whether the producer thinks it
+    # committed.  Handles the producer's ambiguous_set rows: if they
+    # actually landed despite no ack, they're here; if they didn't,
+    # they're not.
+    #
+    # Pinned `AS OF target_ts` so the snapshot matches exactly the
+    # logical time the consumer caught up to (see the race note above).
+    # The read is non-blocking here because the consumer already
+    # observed progress past `target_ts`, so the table's upper is
+    # already beyond it.  Falls back to a plain read only when we
+    # couldn't sample a target_ts at all.
+    authoritative_set: set[int] = set()
+    try:
+        if target_ts > 0:
+            rows = query_retry(f"SELECT counter FROM {table} AS OF {target_ts}")
+        else:
+            rows = query_retry(f"SELECT counter FROM {table}")
+        authoritative_set = {int(r[0]) for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("subscribe-correctness: authoritative read failed: %s", exc)
+        # We can't run the safety assertion without this — bail with
+        # a `sometimes(False, ...)` and exit cleanly.
+        sometimes(
+            False,
+            "subscribe-correctness: at least one timeline could read authoritative set",
+            {"prefix": prefix, "exc": str(exc)[:200]},
+        )
+        return 0
 
     # Diffs for the assertion blobs.
     missed = sorted(authoritative_set - received_snapshot)[:20]
