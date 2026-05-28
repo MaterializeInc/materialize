@@ -748,6 +748,7 @@ remove the console's audience or other configured values.
    authorization server, this is typically `api://default`:
 
    ```mzsql
+   -- Make sure to add to the array if already set
    ALTER SYSTEM SET oidc_audience = '["api://default"]';
    ```
 
@@ -796,6 +797,7 @@ remove the console's audience or other configured values.
    the audience is the service client ID:
 
    ```mzsql
+   -- Make sure to add to the array if already set
    ALTER SYSTEM SET oidc_audience = '["YOUR_SERVICE_CLIENT_ID"]';
    ```
 
@@ -833,6 +835,7 @@ remove the console's audience or other configured values.
    to determine the correct value:
 
    ```mzsql
+   -- Make sure to add to the array if already set
    ALTER SYSTEM SET oidc_audience = '["YOUR_AUDIENCE_VALUE"]';
    ```
 
