@@ -17,14 +17,12 @@ class PersistCommitter(Check):
     survives envd restart and upgrade."""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(dedent(
-            """
+        return Testdrive(dedent("""
             > CREATE TABLE persist_committer_t (a int);
             > INSERT INTO persist_committer_t VALUES (1), (2), (3);
             > CREATE MATERIALIZED VIEW persist_committer_mv AS
                 SELECT count(*) FROM persist_committer_t;
-            """
-        ))
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         # This list MUST be of length 2.
@@ -37,11 +35,9 @@ class PersistCommitter(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(dedent(
-            """
+        return Testdrive(dedent("""
             $ set-sql-timeout duration=60s
 
             > SELECT * FROM persist_committer_mv;
             5
-            """
-        ))
+            """))

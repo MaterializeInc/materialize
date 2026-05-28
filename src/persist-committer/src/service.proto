@@ -17,8 +17,12 @@ message ProtoVersionedData {
   bytes data = 2;
 }
 
-message ProtoHeadRequest { string shard = 1; }
-message ProtoHeadResponse { optional ProtoVersionedData current = 1; }
+message ProtoHeadRequest {
+  string shard = 1;
+}
+message ProtoHeadResponse {
+  optional ProtoVersionedData current = 1;
+}
 
 // Note: the expected sequence number is implicit in `new.seqno - 1`, matching
 // the underlying Consensus trait. On mismatch, the caller must issue a
@@ -37,9 +41,14 @@ message ProtoScanRequest {
   uint64 from = 2;
   uint64 limit = 3;
 }
-message ProtoScanResponse { repeated ProtoVersionedData versions = 1; }
+message ProtoScanResponse {
+  repeated ProtoVersionedData versions = 1;
+}
 
-message ProtoTruncateRequest { string shard = 1; uint64 seqno = 2; }
+message ProtoTruncateRequest {
+  string shard = 1;
+  uint64 seqno = 2;
+}
 message ProtoTruncateResponse {
   // Absent if the underlying store could not report a count (matches
   // Consensus::truncate's Result<Option<usize>>).
@@ -47,9 +56,13 @@ message ProtoTruncateResponse {
 }
 
 message ProtoListKeysRequest {}
-message ProtoListKeysResponse { repeated string keys = 1; }
+message ProtoListKeysResponse {
+  repeated string keys = 1;
+}
 
-message ProtoSubscribeRequest { string shard = 1; }
+message ProtoSubscribeRequest {
+  string shard = 1;
+}
 message ProtoSubscribeMessage {
   oneof kind {
     ProtoVersionedData snapshot = 1;
