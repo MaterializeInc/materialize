@@ -771,14 +771,12 @@ impl<D: Data> ChainBuilder<D> {
     fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
         self.builder.push(update);
         self.drain();
-        self.chain.update_count += 1;
     }
 
     /// Push an owned-form update into the builder.
     fn push_owned(&mut self, update: &(D, Timestamp, Diff)) {
         self.builder.push(update);
         self.drain();
-        self.chain.update_count += 1;
     }
 
     /// Push the updates produced by a cursor into the builder.
@@ -1517,5 +1515,22 @@ impl<D: Data> Ord for MergeCursor<D> {
         let (d1, t1, _) = self.0.get();
         let (d2, t2, _) = other.0.get();
         (t1, d1).cmp(&(t2, d2)).reverse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Diff, Timestamp};
+
+    use super::ChainBuilder;
+
+    #[mz_ore::test]
+    fn chain_builder_update_count_matches_items() {
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..10_i64 {
+            builder.push_owned(&(i, Timestamp::new(i as u64), Diff::ONE));
+        }
+        let chain = builder.finish();
+        assert_eq!(chain.update_count, chain.iter().count());
     }
 }
