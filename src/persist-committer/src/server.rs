@@ -14,13 +14,15 @@
 //! `ListKeys` calls coming over gRPC funnel through here; the gRPC wiring
 //! itself is in a follow-up.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use futures::TryStreamExt;
 use mz_ore::task::spawn;
 use mz_persist::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::cache::ShardCache;
 use crate::metrics::CommitterMetrics;
@@ -37,6 +39,11 @@ pub struct PersistCommitter {
     cache: Arc<ShardCache>,
     registry: Arc<SubscriberRegistry>,
     metrics: CommitterMetrics,
+    /// Remote addresses of peers that have already produced at least one
+    /// successful RPC. Used to gate the "Received Persist Committer
+    /// connection from" log so that it fires once per peer, mirroring the
+    /// pubsub server's behavior.
+    seen_peers: Mutex<BTreeSet<SocketAddr>>,
 }
 
 impl PersistCommitter {
@@ -51,6 +58,17 @@ impl PersistCommitter {
             cache,
             registry,
             metrics,
+            seen_peers: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    /// Log the first time we see a given peer. No-ops on missing addr (e.g.
+    /// in-process callers via `InProcessConsensus`).
+    fn note_peer(&self, peer: Option<SocketAddr>) {
+        let Some(peer) = peer else { return };
+        let mut seen = self.seen_peers.lock().expect("seen_peers lock poisoned");
+        if seen.insert(peer) {
+            info!("Received Persist Committer connection from: {peer}");
         }
     }
 
@@ -329,6 +347,7 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoHeadRequest>,
     ) -> std::result::Result<Response<ProtoHeadResponse>, Status> {
         let mut guard = RpcGuard::new(&self.metrics, "head");
+        self.note_peer(request.remote_addr());
         let shard = request.into_inner().shard;
         let inner = self.head_inner(&shard).await;
         guard.set_outcome(outcome_label(&inner));
@@ -348,6 +367,7 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoScanRequest>,
     ) -> std::result::Result<Response<ProtoScanResponse>, Status> {
         let mut guard = RpcGuard::new(&self.metrics, "scan");
+        self.note_peer(request.remote_addr());
         let r = request.into_inner();
         let limit = usize::try_from(r.limit).unwrap_or(usize::MAX);
         let inner = self.scan_inner(&r.shard, SeqNo(r.from), limit).await;
@@ -368,6 +388,7 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoCompareAndSetRequest>,
     ) -> std::result::Result<Response<ProtoCompareAndSetResponse>, Status> {
         let mut guard = RpcGuard::new(&self.metrics, "cas");
+        self.note_peer(request.remote_addr());
         let r = request.into_inner();
         let new = from_proto(
             r.new
@@ -391,6 +412,7 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoTruncateRequest>,
     ) -> std::result::Result<Response<ProtoTruncateResponse>, Status> {
         let mut guard = RpcGuard::new(&self.metrics, "truncate");
+        self.note_peer(request.remote_addr());
         let r = request.into_inner();
         let inner = self.truncate_inner(&r.shard, SeqNo(r.seqno)).await;
         guard.set_outcome(outcome_label(&inner));
@@ -407,9 +429,10 @@ impl ProtoPersistConsensus for PersistCommitter {
 
     async fn list_keys(
         &self,
-        _request: Request<ProtoListKeysRequest>,
+        request: Request<ProtoListKeysRequest>,
     ) -> std::result::Result<Response<ProtoListKeysResponse>, Status> {
         let mut guard = RpcGuard::new(&self.metrics, "list_keys");
+        self.note_peer(request.remote_addr());
         let inner = self.list_keys_inner().await;
         guard.set_outcome(outcome_label(&inner));
         let result = match inner {
@@ -427,6 +450,7 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         request: Request<ProtoSubscribeRequest>,
     ) -> std::result::Result<Response<Self::SubscribeStream>, Status> {
+        self.note_peer(request.remote_addr());
         let shard = request.into_inner().shard;
         // Subscribe still maps subscribe_inner failures to tonic::Status because
         // the only failure mode is establishing the underlying read; once the

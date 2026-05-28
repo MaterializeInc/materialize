@@ -372,10 +372,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     ));
 
     if let Some(url) = args.persist_committer_url {
-        let endpoint = tonic::transport::Endpoint::from_shared(url)
+        tracing::info!("Connecting to Persist Committer: {url}");
+        let endpoint = tonic::transport::Endpoint::from_shared(url.clone())
             .context("invalid persist-committer-url")?;
         let channel = endpoint.connect_lazy();
-        persist_clients.set_committer_channel(channel);
+        persist_clients.set_committer_channel(channel, url);
     }
     let txns_ctx = TxnsContext::default();
 

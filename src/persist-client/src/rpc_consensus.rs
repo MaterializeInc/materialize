@@ -11,6 +11,9 @@
 //! gRPC service. Used by clusterds (and by `environmentd` itself over an
 //! in-process channel) when the `persist_consensus_use_committer` flag is on.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -26,25 +29,48 @@ use mz_persist_committer::proto::{
     proto_scan_response, proto_truncate_response,
 };
 use tonic::transport::Channel;
+use tracing::info;
 
 /// Client-side `Consensus` impl that forwards every operation to the persist
 /// committer over gRPC.
 #[derive(Debug, Clone)]
 pub struct RpcConsensus {
     client: ProtoPersistConsensusClient<Channel>,
+    /// URL the channel was configured with. Used purely for diagnostic
+    /// logging (Connecting / Connected lines analogous to pubsub).
+    url: Arc<str>,
+    /// Latches to `true` on the first successful RPC so the "Connected to
+    /// Persist Committer" line is emitted at most once per `RpcConsensus`.
+    connected_logged: Arc<AtomicBool>,
 }
 
 impl RpcConsensus {
     /// Construct a new `RpcConsensus` that uses `channel` to reach a persist
-    /// committer. Disables the default 4 MiB tonic message-size limits
-    /// because persist Scan responses can legitimately exceed it for hot
-    /// shards; matches the precedent set in `mz_persist_client::rpc` for
+    /// committer at `url`. Disables the default 4 MiB tonic message-size
+    /// limits because persist Scan responses can legitimately exceed it for
+    /// hot shards; matches the precedent set in `mz_persist_client::rpc` for
     /// pubsub.
-    pub fn new(channel: Channel) -> Self {
+    pub fn new(channel: Channel, url: String) -> Self {
         Self {
             client: ProtoPersistConsensusClient::new(channel)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
+            url: Arc::from(url),
+            connected_logged: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Emit the "Connected" log once across the lifetime of this client.
+    /// Called after every successful RPC; cheap thanks to the relaxed
+    /// AtomicBool fast path.
+    fn note_connected(&self) {
+        if !self.connected_logged.load(Ordering::Relaxed)
+            && self
+                .connected_logged
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            info!("Connected to Persist Committer: {}", self.url);
         }
     }
 }
@@ -120,6 +146,7 @@ impl Consensus for RpcConsensus {
             .await
             .map_err(transport_to_external)?
             .into_inner();
+        self.note_connected();
         match resp.result.ok_or_else(missing_result)? {
             proto_head_response::Result::Ok(ok) => Ok(ok.current.map(from_proto)),
             proto_head_response::Result::Err(e) => Err(from_proto_error(e)),
@@ -140,6 +167,7 @@ impl Consensus for RpcConsensus {
             .await
             .map_err(transport_to_external)?
             .into_inner();
+        self.note_connected();
         match resp.result.ok_or_else(missing_result)? {
             proto_compare_and_set_response::Result::Ok(ok) => {
                 if ok.committed {
@@ -168,6 +196,7 @@ impl Consensus for RpcConsensus {
             .await
             .map_err(transport_to_external)?
             .into_inner();
+        self.note_connected();
         match resp.result.ok_or_else(missing_result)? {
             proto_scan_response::Result::Ok(ok) => {
                 Ok(ok.versions.into_iter().map(from_proto).collect())
@@ -186,6 +215,7 @@ impl Consensus for RpcConsensus {
             .await
             .map_err(transport_to_external)?
             .into_inner();
+        self.note_connected();
         match resp.result.ok_or_else(missing_result)? {
             proto_truncate_response::Result::Ok(ok) => {
                 Ok(ok.deleted.map(|n| usize::try_from(n).unwrap_or(usize::MAX)))

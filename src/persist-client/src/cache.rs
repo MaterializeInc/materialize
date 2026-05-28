@@ -68,7 +68,7 @@ pub struct PersistClientCache {
     /// `persist_consensus_use_committer` is on and no in-process consensus is
     /// configured, `open_consensus` returns an `RpcConsensus` backed by this
     /// channel; otherwise it falls through to the direct CockroachDB path.
-    committer_channel: std::sync::Mutex<Option<tonic::transport::Channel>>,
+    committer_channel: std::sync::Mutex<Option<(tonic::transport::Channel, String)>>,
     /// Direct in-process `Consensus` adapter for `environmentd`'s own
     /// traffic. Takes precedence over `committer_channel` when set.
     committer_in_process: std::sync::Mutex<Option<Arc<dyn Consensus + Send + Sync>>>,
@@ -114,12 +114,13 @@ impl PersistClientCache {
 
     /// Configure the gRPC channel used to reach the in-envd persist committer.
     /// Has effect only when the `persist_consensus_use_committer` LD flag is on
-    /// and only for `Consensus` opens that happen *after* this call.
-    pub fn set_committer_channel(&self, channel: tonic::transport::Channel) {
+    /// and only for `Consensus` opens that happen *after* this call. `url` is
+    /// retained for diagnostic logging only.
+    pub fn set_committer_channel(&self, channel: tonic::transport::Channel, url: String) {
         *self
             .committer_channel
             .lock()
-            .expect("committer_channel lock poisoned") = Some(channel);
+            .expect("committer_channel lock poisoned") = Some((channel, url));
     }
 
     /// Configure an in-process `Consensus` that bypasses tonic for the
@@ -252,8 +253,8 @@ impl PersistClientCache {
                 let consensus: Arc<dyn Consensus> =
                     if use_committer && let Some(consensus) = committer_in_process {
                         consensus
-                    } else if use_committer && let Some(channel) = committer_channel {
-                        Arc::new(crate::rpc_consensus::RpcConsensus::new(channel))
+                    } else if use_committer && let Some((channel, url)) = committer_channel {
+                        Arc::new(crate::rpc_consensus::RpcConsensus::new(channel, url))
                     } else {
                         let consensus = ConsensusConfig::try_from(
                             x.key(),
