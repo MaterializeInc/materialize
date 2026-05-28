@@ -520,10 +520,6 @@ password.
 For dbt-specific setup, see [dbt connection profiles](/manage/dbt/get-started/).
 For Terraform, see [Terraform: get started](/manage/terraform/get-started/).
 
-Use the OAuth-based flows below ([Resource Owner Password](#resource-owner-password-flow),
-[Client Credentials](#client-credentials-flow)) when youneed
-the service account to authenticate against your IdP.
-
 ### Resource Owner Password flow
 
 Use this approach when you need a service account that authenticates with a
