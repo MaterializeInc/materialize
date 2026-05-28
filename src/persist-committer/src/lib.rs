@@ -17,11 +17,13 @@ pub mod proto {
 }
 
 pub mod cache;
+pub mod in_process;
 pub mod metrics;
 pub mod refresh;
 pub mod server;
 pub mod startup;
 pub mod subscribe;
 
+pub use in_process::InProcessConsensus;
 pub use server::PersistCommitter;
 pub use startup::{CommitterConfig, CommitterHandle, start_committer};

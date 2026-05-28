@@ -19,7 +19,7 @@ use std::sync::Arc;
 use futures::TryStreamExt;
 use mz_ore::task::spawn;
 use mz_persist::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::cache::ShardCache;
 use crate::metrics::CommitterMetrics;
@@ -54,12 +54,14 @@ impl PersistCommitter {
     }
 
     /// Read the latest `VersionedData` for `shard`, populating the cache on miss.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn head_inner(&self, shard: &str) -> Result<Option<VersionedData>, ExternalError> {
         if let Some(cached) = self.cache.get(shard) {
             self.metrics
                 .cache_hits_total
                 .with_label_values(&["head"])
                 .inc();
+            debug!(shard, seqno = ?cached.seqno, "head cache hit");
             return Ok(Some(cached));
         }
         self.metrics
@@ -68,6 +70,7 @@ impl PersistCommitter {
             .inc();
         let head = self.consensus.head(shard).await?;
         if let Some(v) = &head {
+            debug!(shard, seqno = ?v.seqno, "head cache miss, populating from underlying");
             self.cache.insert(shard, v.clone());
         }
         Ok(head)
@@ -90,6 +93,7 @@ impl PersistCommitter {
     /// `head()` to refresh the cache so the caller's follow-up
     /// `fetch_current_state` can be served from cache; the underlying trait
     /// does not return current state on mismatch.
+    #[tracing::instrument(level = "debug", skip(self, new), fields(seqno = ?new.seqno))]
     pub async fn cas_inner(
         &self,
         shard: &str,
@@ -98,10 +102,12 @@ impl PersistCommitter {
         let result = self.consensus.compare_and_set(shard, new.clone()).await?;
         match result {
             CaSResult::Committed => {
+                info!(shard, seqno = ?new.seqno, "committer CaS committed");
                 self.cache.insert(shard, new.clone());
                 self.registry.publish(shard, new);
             }
             CaSResult::ExpectationMismatch => {
+                info!(shard, seqno = ?new.seqno, "committer CaS mismatch, refreshing");
                 self.spawn_refresh(shard.to_string());
             }
         }
@@ -142,6 +148,11 @@ impl PersistCommitter {
         let token = self.cache.subscribe(shard);
         let rx = self.registry.register(shard);
         Ok((snapshot, rx, token))
+    }
+
+    /// Convenience accessor for tests and the in-process adapter.
+    pub fn cache(&self) -> &Arc<ShardCache> {
+        &self.cache
     }
 
     /// Spawn a background `head()` to refresh the cache for `shard`. Failures
@@ -310,9 +321,10 @@ impl ProtoPersistConsensus for PersistCommitter {
 }
 
 impl PersistCommitter {
-    /// Build a tonic service from this committer for `Server::builder().add_service(...)`.
-    pub fn into_service(self) -> ProtoPersistConsensusServer<PersistCommitter> {
-        ProtoPersistConsensusServer::new(self)
+    /// Build a tonic service that shares this committer instance with any
+    /// in-process consumers (e.g. `InProcessConsensus`).
+    pub fn into_service(self: Arc<Self>) -> ProtoPersistConsensusServer<PersistCommitter> {
+        ProtoPersistConsensusServer::from_arc(self)
     }
 }
 

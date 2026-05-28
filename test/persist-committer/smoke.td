@@ -9,8 +9,8 @@
 
 $ set-sql-timeout duration=30s
 
-> DROP TABLE IF EXISTS committer_t;
 > DROP MATERIALIZED VIEW IF EXISTS committer_mv;
+> DROP TABLE IF EXISTS committer_t;
 
 > CREATE TABLE committer_t (a int);
 > INSERT INTO committer_t VALUES (1), (2), (3);

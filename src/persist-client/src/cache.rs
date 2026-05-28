@@ -65,10 +65,13 @@ pub struct PersistClientCache {
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
     /// gRPC channel to the in-envd persist committer. When
-    /// `persist_consensus_use_committer` is on, `open_consensus` returns an
-    /// `RpcConsensus` backed by this channel; otherwise it falls through to
-    /// the direct CockroachDB path.
+    /// `persist_consensus_use_committer` is on and no in-process consensus is
+    /// configured, `open_consensus` returns an `RpcConsensus` backed by this
+    /// channel; otherwise it falls through to the direct CockroachDB path.
     committer_channel: std::sync::Mutex<Option<tonic::transport::Channel>>,
+    /// Direct in-process `Consensus` adapter for `environmentd`'s own
+    /// traffic. Takes precedence over `committer_channel` when set.
+    committer_in_process: std::sync::Mutex<Option<Arc<dyn Consensus + Send + Sync>>>,
 }
 
 #[derive(Debug)]
@@ -105,6 +108,7 @@ impl PersistClientCache {
             pubsub_sender: pubsub_client.sender,
             _pubsub_receiver_task,
             committer_channel: std::sync::Mutex::new(None),
+            committer_in_process: std::sync::Mutex::new(None),
         }
     }
 
@@ -116,6 +120,17 @@ impl PersistClientCache {
             .committer_channel
             .lock()
             .expect("committer_channel lock poisoned") = Some(channel);
+    }
+
+    /// Configure an in-process `Consensus` that bypasses tonic for the
+    /// committer call path. Used by `environmentd` to talk to its own
+    /// committer without serializing through gRPC, which would deadlock the
+    /// runtime under load. Takes precedence over any committer channel.
+    pub fn set_committer_in_process(&self, consensus: Arc<dyn Consensus + Send + Sync>) {
+        *self
+            .committer_in_process
+            .lock()
+            .expect("committer_in_process lock poisoned") = Some(consensus);
     }
 
     /// A test helper that returns a [PersistClientCache] disconnected from
@@ -159,6 +174,7 @@ impl PersistClientCache {
             pubsub_sender,
             _pubsub_receiver_task,
             committer_channel: std::sync::Mutex::new(None),
+            committer_in_process: std::sync::Mutex::new(None),
         }
     }
 
@@ -222,13 +238,21 @@ impl PersistClientCache {
                 // concurrency.
                 let use_committer =
                     crate::cfg::PERSIST_CONSENSUS_USE_COMMITTER.get(&self.cfg().configs);
+                let committer_in_process = self
+                    .committer_in_process
+                    .lock()
+                    .expect("committer_in_process lock poisoned")
+                    .as_ref()
+                    .map(Arc::clone);
                 let committer_channel = self
                     .committer_channel
                     .lock()
                     .expect("committer_channel lock poisoned")
                     .clone();
                 let consensus: Arc<dyn Consensus> =
-                    if use_committer && let Some(channel) = committer_channel {
+                    if use_committer && let Some(consensus) = committer_in_process {
+                        consensus
+                    } else if use_committer && let Some(channel) = committer_channel {
                         Arc::new(crate::rpc_consensus::RpcConsensus::new(channel))
                     } else {
                         let consensus = ConsensusConfig::try_from(

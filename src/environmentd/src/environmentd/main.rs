@@ -1064,7 +1064,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let _tokio_guard = runtime.enter();
         mz_persist_committer::start_committer(consensus, metrics, config)?
     };
-    persist_clients.set_committer_channel(committer_handle.loopback_channel.clone());
+    persist_clients.set_committer_in_process(Arc::clone(&committer_handle.in_process_consensus));
 
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),

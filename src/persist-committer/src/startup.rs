@@ -20,6 +20,7 @@ use mz_persist::location::Consensus;
 use tonic::transport::{Channel, Endpoint, Server};
 
 use crate::cache::ShardCache;
+use crate::in_process::InProcessConsensus;
 use crate::metrics::CommitterMetrics;
 use crate::refresh::spawn_refresh;
 use crate::server::PersistCommitter;
@@ -29,9 +30,13 @@ use crate::subscribe::SubscriberRegistry;
 /// and refresh task alive; dropping it aborts both.
 #[derive(Debug)]
 pub struct CommitterHandle {
+    /// An in-process `Consensus` adapter for `environmentd`'s own persist
+    /// traffic. Bypasses tonic to avoid runtime starvation when the same
+    /// runtime drives both the gRPC server and its client.
+    pub in_process_consensus: Arc<dyn Consensus + Send + Sync>,
     /// A lazy gRPC channel pointing at the committer's loopback listener.
-    /// Suitable to pass to `PersistClientCache::set_committer_channel` for
-    /// envd's own consensus traffic.
+    /// Kept for tests and tooling that want to exercise the wire path; do
+    /// not use it for envd's own persist traffic.
     pub loopback_channel: Channel,
     _server_task: mz_ore::task::AbortOnDropHandle<()>,
     _refresh_task: mz_ore::task::AbortOnDropHandle<()>,
@@ -60,12 +65,12 @@ pub fn start_committer(
 ) -> anyhow::Result<CommitterHandle> {
     let cache = Arc::new(ShardCache::new(config.max_cached_shards));
     let registry = Arc::new(SubscriberRegistry::new());
-    let committer = PersistCommitter::new(
+    let committer = Arc::new(PersistCommitter::new(
         Arc::clone(&consensus),
         Arc::clone(&cache),
         Arc::clone(&registry),
         metrics,
-    );
+    ));
 
     let refresh_task = spawn_refresh(
         Arc::clone(&consensus),
@@ -75,9 +80,19 @@ pub fn start_committer(
     );
 
     let listen_addr = config.listen_addr;
+    tracing::info!(
+        listen_addr = %listen_addr,
+        max_cached_shards = config.max_cached_shards,
+        cache_refresh_interval = ?config.cache_refresh_interval,
+        "persist committer starting",
+    );
+    let in_process_consensus: Arc<dyn Consensus + Send + Sync> =
+        Arc::new(InProcessConsensus::new(Arc::clone(&committer)));
+    let service = committer.into_service();
     let server_task = mz_ore::task::spawn(|| "persist_committer::grpc_server", async move {
+        tracing::info!(listen_addr = %listen_addr, "persist committer gRPC server listening");
         let res = Server::builder()
-            .add_service(committer.into_service())
+            .add_service(service)
             .serve(listen_addr)
             .await;
         if let Err(e) = res {
@@ -91,6 +106,7 @@ pub fn start_committer(
         .connect_lazy();
 
     Ok(CommitterHandle {
+        in_process_consensus,
         loopback_channel,
         _server_task: server_task.abort_on_drop(),
         _refresh_task: refresh_task.abort_on_drop(),
