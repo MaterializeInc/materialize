@@ -141,7 +141,7 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR",
-        default_value = "127.0.0.1:6878",
+        default_value = "127.0.0.1:6880",
         action = ArgAction::Set,
     )]
     internal_persist_committer_listen_addr: SocketAddr,
@@ -389,6 +389,15 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// The URL clusterds should use to reach the in-envd persist committer.
+    /// The default is suitable for the process orchestrator; in Kubernetes
+    /// the operator must set this to the envd service name.
+    #[clap(
+        long,
+        env = "PERSIST_COMMITTER_URL",
+        default_value = "http://localhost:6880"
+    )]
+    persist_committer_url: String,
     /// The number of worker threads created for the IsolatedRuntime used for
     /// storage related tasks. A negative value will subtract from the number
     /// of threads returned by [`num_cpus::get`].
@@ -1081,6 +1090,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
+        persist_committer_url: args.persist_committer_url,
         connection_context,
         // When serialized to args in the controller, only the relevant flags will be passed
         // through, so we just set all of them

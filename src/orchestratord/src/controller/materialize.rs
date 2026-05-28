@@ -115,6 +115,7 @@ pub struct Config {
     pub environmentd_internal_sql_port: u16,
     pub environmentd_internal_http_port: u16,
     pub environmentd_internal_persist_pubsub_port: u16,
+    pub environmentd_internal_persist_committer_port: u16,
 
     pub default_certificate_specs: DefaultCertificateSpecs,
 

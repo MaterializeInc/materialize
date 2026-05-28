@@ -340,6 +340,17 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: persist-committer
+    label: Persist Committer
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/persist-committer]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist-committer
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: "MySQL"
     key: mysql-tests
     steps:

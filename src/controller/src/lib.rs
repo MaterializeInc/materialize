@@ -99,6 +99,10 @@ pub struct ControllerConfig {
     pub metrics_registry: MetricsRegistry,
     /// The URL for Persist PubSub.
     pub persist_pubsub_url: String,
+    /// The URL clusterds should use to reach the in-envd persist committer.
+    /// Clusterds only use this URL when the `persist_consensus_use_committer`
+    /// LD flag is on.
+    pub persist_committer_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
     /// The connection context, to thread through to clusterd, with cli flags.
@@ -176,6 +180,9 @@ pub struct Controller {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
+
+    /// The URL for the in-envd persist committer; see [`ControllerConfig::persist_committer_url`].
+    persist_committer_url: String,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -260,6 +267,7 @@ impl Controller {
             metrics_rx: _,
             now: _,
             persist_pubsub_url: _,
+            persist_committer_url: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
@@ -711,6 +719,7 @@ impl Controller {
             metrics_rx,
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
+            persist_committer_url: config.persist_committer_url,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
