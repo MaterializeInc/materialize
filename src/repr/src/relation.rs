@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(any(test, feature = "proptest"))]
 use std::rc::Rc;
 use std::{fmt, vec};
 
@@ -29,13 +30,15 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "proptest"))]
+use crate::Row;
+#[cfg(any(test, feature = "proptest"))]
 use crate::arb_datum_for_column;
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{Datum, ReprScalarType, Row, SqlScalarType};
+use crate::{Datum, ReprScalarType, SqlScalarType};
 
 /// The type of a [`Datum`].
 ///

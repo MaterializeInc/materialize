@@ -492,6 +492,7 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+#[cfg(any(test, feature = "proptest"))]
 mod boxed_str {
 
     use columnation::Region;
