@@ -7813,6 +7813,7 @@ dependencies = [
 name = "mz-sql-anonymize"
 version = "0.0.0"
 dependencies = [
+ "mz-ore",
  "mz-sql-parser",
  "serde_json",
 ]

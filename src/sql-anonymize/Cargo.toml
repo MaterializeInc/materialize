@@ -16,3 +16,6 @@ path = "src/main.rs"
 [dependencies]
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 serde_json.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }

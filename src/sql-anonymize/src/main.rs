@@ -56,7 +56,7 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::redact;
 
-    #[test]
+    #[mz_ore::test]
     fn redacts_strings_and_numbers() {
         let redacted = redact("SELECT 'secret', 42 FROM t WHERE name = 'alice'").expect("parses");
         assert!(!redacted.contains("secret"), "{redacted}");
@@ -67,7 +67,7 @@ mod tests {
         assert!(redacted.contains("name"), "{redacted}");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn preserves_quoted_identifier_that_looks_like_a_literal() {
         // A column named with embedded spaces is double-quoted, not a literal,
         // and must survive redaction.
@@ -75,12 +75,12 @@ mod tests {
         assert!(redacted.contains(r#""my col""#), "{redacted}");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn returns_none_on_parse_error() {
         assert_eq!(redact("SELEC not valid sql"), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn redacts_each_statement_in_a_multi_statement_entry() {
         let redacted = redact("SELECT 'a'; SELECT 'b'").expect("parses");
         assert!(!redacted.contains("'a'"), "{redacted}");
