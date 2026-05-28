@@ -45,21 +45,6 @@ Materialize admin:
   audience for each service-account application
 {{</ note >}}
 
-Create an OIDC application in your identity provider and note the **issuer URL**
-and **client ID**. You will need these to configure Materialize.
-
-Set the following redirect URIs on the OIDC application:
-
-```
-https://<your-console-domain>/auth/callback
-http://localhost:9876/callback
-```
-
-Replace `<your-console-domain>` with the domain where your Materialize Console
-is accessible. The `http://localhost:9876/callback` URI is used by
-[`oauth2c`](#get-a-token-using-cli-tools) to fetch ID tokens from the command
-line; you can omit it if no one in your org will use the CLI flow.
-
 {{< tabs >}}
 {{< tab "Okta" >}}
 
