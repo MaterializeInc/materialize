@@ -453,16 +453,6 @@ Auto-provisioned roles:
 - Are not automatically removed when the user is removed from the IdP. See
   [De-provisioning users](#de-provisioning-users) for cleanup instructions.
 
-### Pre-provisioning roles
-
-An administrator can create roles before users login, rather than rely on
-auto-provisioning. To pre-provision a role, connect as a superuser and create
-the role with a name matching the expected JWT claim value:
-```mzsql
-CREATE ROLE "alice@your-org.com" WITH LOGIN;
-```
-To configure privileges for pre-provisioned roles, see [Manage database roles](/security/self-managed/access-control/manage-roles/).
-
 ### Auditing auto-provisioned roles
 
 To view which roles were auto-provisioned via OIDC, query `mz_audit_events`:
@@ -476,6 +466,18 @@ ORDER BY occurred_at DESC;
 
 Roles created through OIDC authentication will have `auto_provision_source` set to
 `oidc`.
+
+## Pre-provisioning roles
+
+An administrator can create roles before users login, rather than rely on
+auto-provisioning. To pre-provision a role, connect as a superuser and create
+the role with a name matching the expected JWT claim value:
+
+```mzsql
+CREATE ROLE "alice@your-org.com" WITH LOGIN;
+```
+
+To configure privileges for pre-provisioned roles, see [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
 ## Service accounts
 
