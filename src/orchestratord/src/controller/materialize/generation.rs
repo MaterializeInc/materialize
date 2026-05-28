@@ -143,7 +143,10 @@ pub struct Resources {
     pub public_service: Box<Service>,
     pub generation_service: Box<Service>,
     pub persist_pubsub_service: Box<Service>,
-    pub persist_committer_service: Box<Service>,
+    /// Only populated when committer wiring is enabled in the orchestratord
+    /// config; absent for older envd images that do not understand the
+    /// committer flags.
+    pub persist_committer_service: Option<Box<Service>>,
     pub environmentd_statefulset: Box<StatefulSet>,
     pub connection_info: Box<ConnectionInfo>,
 }
@@ -154,8 +157,9 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
-        let persist_committer_service =
-            Box::new(create_persist_committer_service(config, mz, generation));
+        let persist_committer_service = config
+            .environmentd_internal_persist_committer_port
+            .map(|port| Box::new(create_persist_committer_service(mz, generation, port)));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, mz, generation,
         ));
@@ -188,7 +192,10 @@ impl Resources {
 
         trace!("creating persist pubsub service");
         apply_resource(&service_api, &*self.persist_pubsub_service).await?;
-        apply_resource(&service_api, &*self.persist_committer_service).await?;
+        if let Some(svc) = self.persist_committer_service.as_deref() {
+            trace!("creating persist committer service");
+            apply_resource(&service_api, svc).await?;
+        }
 
         trace!("applying listeners configmap");
         apply_resource(&configmap_api, &self.connection_info.listeners_configmap).await?;
@@ -555,11 +562,7 @@ fn create_persist_pubsub_service(
     }
 }
 
-fn create_persist_committer_service(
-    config: &super::Config,
-    mz: &Materialize,
-    generation: u64,
-) -> Service {
+fn create_persist_committer_service(mz: &Materialize, generation: u64, port: u16) -> Service {
     Service {
         metadata: mz.managed_resource_meta(mz.persist_committer_service_name(generation)),
         spec: Some(ServiceSpec {
@@ -571,7 +574,7 @@ fn create_persist_committer_service(
             ports: Some(vec![ServicePort {
                 name: Some("grpc".to_string()),
                 protocol: Some("TCP".to_string()),
-                port: config.environmentd_internal_persist_committer_port.into(),
+                port: port.into(),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -959,16 +962,20 @@ fn create_environmentd_statefulset_object(
         config.environmentd_internal_persist_pubsub_port
     ));
 
-    // Add Persist Committer arguments
-    args.push(format!(
-        "--persist-committer-url=http://{}:{}",
-        mz.persist_committer_service_name(generation),
-        config.environmentd_internal_persist_committer_port,
-    ));
-    args.push(format!(
-        "--internal-persist-committer-listen-addr=0.0.0.0:{}",
-        config.environmentd_internal_persist_committer_port,
-    ));
+    // Persist committer arguments are emitted only when the operator has
+    // been configured with a committer port. Older envd images do not
+    // understand these flags and will exit with status 2 on startup.
+    if let Some(port) = config.environmentd_internal_persist_committer_port {
+        args.push(format!(
+            "--persist-committer-url=http://{}:{}",
+            mz.persist_committer_service_name(generation),
+            port,
+        ));
+        args.push(format!(
+            "--internal-persist-committer-listen-addr=0.0.0.0:{}",
+            port,
+        ));
+    }
 
     args.push(format!("--deploy-generation={}", generation));
 
