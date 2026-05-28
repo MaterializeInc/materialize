@@ -109,6 +109,12 @@ struct Args {
     )]
     persist_pubsub_url: String,
 
+    /// The URL for the in-envd persist committer gRPC service. When set and
+    /// `persist_consensus_use_committer` is on, consensus traffic is routed
+    /// here instead of opening a direct CockroachDB connection pool.
+    #[clap(long, env = "PERSIST_COMMITTER_URL", value_name = "http://HOST:PORT")]
+    persist_committer_url: Option<String>,
+
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -364,6 +370,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             GrpcPubSubClient::connect(cfg, metrics)
         },
     ));
+
+    if let Some(url) = args.persist_committer_url {
+        let endpoint = tonic::transport::Endpoint::from_shared(url)
+            .context("invalid persist-committer-url")?;
+        let channel = endpoint.connect_lazy();
+        persist_clients.set_committer_channel(channel);
+    }
     let txns_ctx = TxnsContext::default();
 
     let connection_context = ConnectionContext::from_cli_args(
