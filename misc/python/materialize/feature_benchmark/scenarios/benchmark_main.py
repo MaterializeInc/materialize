@@ -1076,7 +1076,6 @@ class DifferentialJoinHydrationFile(DifferentialJoinHydration):
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_column_paged_batcher = true;
-ALTER SYSTEM SET column_paged_batcher_backend = 'file';
 ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
 """)
 

@@ -42,10 +42,6 @@ use crate::column_pager::{self, ColumnPager, PagedColumn};
 use crate::columnar::Column;
 use crate::columnar::batcher::ColumnChunker;
 
-// ---------------------------------------------------------------------------
-// Batcher
-// ---------------------------------------------------------------------------
-
 /// Drives the merge-batcher over [`Column`] chunks routed through a
 /// [`ColumnPager`].
 ///
@@ -108,6 +104,14 @@ where
 
     /// Pop a chain from `self.chains`, emitting a negative `BatcherEvent`
     /// retracting its resident entries.
+    ///
+    /// Invariant for the retract to reconcile against the matching
+    /// `chain_push`: chain entries are never mutated in place between push
+    /// and pop. The only allowed mutation is a full pop / push pair (see
+    /// `insert_chain` and `merge_by`), so each entry's accounting category
+    /// — `Resident` vs `Paged` vs `Compressed` — is the same at both ends.
+    /// If a future change ever pages an entry out in place after push, this
+    /// path silently double-counts.
     fn chain_pop(&mut self) -> Option<VecDeque<PagedColumn<(D, T, R)>>> {
         let chain = self.chains.pop()?;
         self.emit_account(&chain, -1);
@@ -173,19 +177,12 @@ fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, u
 
 impl<D, T, R> Batcher for ColumnMergeBatcher<D, T, R>
 where
-    D: Columnar + 'static,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Timestamp + Clone + Ord + PartialOrder + 'static,
+    T: Columnar + Default + Timestamp + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
     type Input = Column<(D, T, R)>;
     type Output = Column<(D, T, R)>;
@@ -210,8 +207,7 @@ where
         let pager = self.pager();
         self.chunker.push_into(container);
         while let Some(chunk) = self.chunker.extract() {
-            let mut chunk = std::mem::take(chunk);
-            let paged = pager.page(&mut chunk);
+            let paged = pager.page(chunk);
             self.insert_chain(VecDeque::from([paged]));
         }
     }
@@ -223,8 +219,7 @@ where
         let pager = self.pager();
         // Finish chunker, fold any tail chunks in.
         while let Some(chunk) = self.chunker.finish() {
-            let mut chunk = std::mem::take(chunk);
-            let paged = pager.page(&mut chunk);
+            let paged = pager.page(chunk);
             self.insert_chain(VecDeque::from([paged]));
         }
 
@@ -276,18 +271,11 @@ where
 
 impl<D, T, R> ColumnMergeBatcher<D, T, R>
 where
-    D: Columnar + 'static,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Clone + PartialOrder + 'static,
+    T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     /// Insert `chain` and rebalance: while the youngest chain is at least
     /// half the size of its predecessor, merge them.
@@ -311,7 +299,7 @@ where
     /// per chunk produced, so the result chain holds `PagedColumn`s and the
     /// caller never sees a fully materialized merge result.
     fn merge_by(
-        &mut self,
+        &self,
         a: VecDeque<PagedColumn<(D, T, R)>>,
         b: VecDeque<PagedColumn<(D, T, R)>>,
     ) -> VecDeque<PagedColumn<(D, T, R)>> {
@@ -326,10 +314,6 @@ where
         output
     }
 }
-
-// ---------------------------------------------------------------------------
-// FetchIter
-// ---------------------------------------------------------------------------
 
 /// Streaming materializer over a chain of [`PagedColumn`] entries.
 ///
@@ -381,10 +365,6 @@ where
     }
 }
 
-// ---------------------------------------------------------------------------
-// Streaming drivers
-// ---------------------------------------------------------------------------
-
 /// Two-way merge driver. Reuses today's per-chunk gallop / ship-threshold
 /// logic from `Column::merge_from`, but pulls heads from [`FetchIter`] and
 /// emits finished output chunks through `sink` after routing them through
@@ -401,16 +381,9 @@ pub fn merge_chains<D, T, R, Sink>(
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Clone + PartialOrder,
+    T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     Sink: FnMut(PagedColumn<(D, T, R)>),
 {
     let pager = list1.pager();
@@ -449,8 +422,22 @@ pub fn merge_chains<D, T, R, Sink>(
     // Drain remaining: copy partial head through `merge_from`'s 1-input
     // dispatch, then hand the rest of the chain's `PagedColumn`s straight to
     // the sink without materializing.
-    drain_side(&mut heads[0], &mut positions[0], list1, &mut result, &mut sink, pager);
-    drain_side(&mut heads[1], &mut positions[1], list2, &mut result, &mut sink, pager);
+    drain_side(
+        &mut heads[0],
+        &mut positions[0],
+        list1,
+        &mut result,
+        &mut sink,
+        pager,
+    );
+    drain_side(
+        &mut heads[1],
+        &mut positions[1],
+        list2,
+        &mut result,
+        &mut sink,
+        pager,
+    );
 
     if !result.is_empty() {
         sink(pager.page(&mut result));
@@ -470,16 +457,9 @@ fn drain_side<D, T, R, Sink>(
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Clone + PartialOrder,
+    T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     Sink: FnMut(PagedColumn<(D, T, R)>),
 {
     if *pos < head.borrow().len() {
@@ -507,16 +487,9 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Clone + PartialOrder,
+    T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
-    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
-    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
-    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
-    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     SinkShip: FnMut(PagedColumn<(D, T, R)>),
     SinkKeep: FnMut(PagedColumn<(D, T, R)>),
 {
@@ -655,17 +628,15 @@ mod tests {
     }
 
     /// Wrap a Vec<Column> as a paged chain for `FetchIter`.
-    fn to_chain(cols: Vec<Column<KvUpdate>>, pager: &ColumnPager) -> VecDeque<PagedColumn<KvUpdate>> {
-        cols.into_iter()
-            .map(|mut c| pager.page(&mut c))
-            .collect()
+    fn to_chain(
+        cols: Vec<Column<KvUpdate>>,
+        pager: &ColumnPager,
+    ) -> VecDeque<PagedColumn<KvUpdate>> {
+        cols.into_iter().map(|mut c| pager.page(&mut c)).collect()
     }
 
     /// Drive `merge_chains` with a disabled pager and return owned tuples.
-    fn drive_merge(
-        chain1: Vec<Column<KvUpdate>>,
-        chain2: Vec<Column<KvUpdate>>,
-    ) -> Vec<KvUpdate> {
+    fn drive_merge(chain1: Vec<Column<KvUpdate>>, chain2: Vec<Column<KvUpdate>>) -> Vec<KvUpdate> {
         let pager = ColumnPager::disabled();
         let q1 = to_chain(chain1, &pager);
         let q2 = to_chain(chain2, &pager);
@@ -728,10 +699,7 @@ mod tests {
             vec![col(&[((0, 0), 0, 1), ((5, 0), 0, 1)])],
             vec![col(&[((5, 0), 0, 1), ((10, 0), 0, 1)])],
         );
-        assert_eq!(
-            out,
-            vec![((0, 0), 0, 1), ((5, 0), 0, 2), ((10, 0), 0, 1)]
-        );
+        assert_eq!(out, vec![((0, 0), 0, 1), ((5, 0), 0, 2), ((10, 0), 0, 1)]);
     }
 
     /// Same merge, force-paged: chains stay in `Paged` form throughout, and
@@ -740,14 +708,8 @@ mod tests {
     fn merge_chains_force_paged_round_trip() {
         let policy = ForcePagePolicy::new();
         let pager = ColumnPager::new(policy.clone());
-        let q1 = to_chain(
-            vec![col(&[((0, 0), 0, 1), ((2, 0), 0, 1)])],
-            &pager,
-        );
-        let q2 = to_chain(
-            vec![col(&[((1, 0), 0, 1), ((3, 0), 0, 1)])],
-            &pager,
-        );
+        let q1 = to_chain(vec![col(&[((0, 0), 0, 1), ((2, 0), 0, 1)])], &pager);
+        let q2 = to_chain(vec![col(&[((1, 0), 0, 1), ((3, 0), 0, 1)])], &pager);
 
         // Confirm the chains started paged-out (not Resident).
         assert!(matches!(q1.front().unwrap(), PagedColumn::Paged { .. }));
@@ -825,7 +787,10 @@ mod tests {
             Self
         }
         fn push(&mut self, _chunk: &mut Self::Input) {}
-        fn done(self, _description: differential_dataflow::trace::Description<u64>) -> Self::Output {
+        fn done(
+            self,
+            _description: differential_dataflow::trace::Description<u64>,
+        ) -> Self::Output {
             Vec::new()
         }
         fn seal(

@@ -237,9 +237,6 @@ impl PagingPolicy for AlwaysResidentPolicy {
     fn record(&self, _event: PageEvent) {}
 }
 
-// ---------------------------------------------------------------------------
-// Process-global pager
-// ---------------------------------------------------------------------------
 //
 // Following the pager design doc's spirit (`doc/developer/design/20260504_pager.md`):
 // "the cluster runs on swap or file, not both at once; a global atomic
@@ -261,13 +258,52 @@ static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
 /// Install `pager` as the process-wide active pager. Subsequent
 /// [`global_pager`] calls return a clone of this value across all threads.
 ///
-/// Worker init calls this on every config apply; each clusterd worker
-/// thread in the same process sees the same `worker_config`, so the
-/// repeated installs are idempotent (same `Arc`-equivalent state). Any
-/// [`PagedColumn`]s already in flight keep their own `Arc<dyn
-/// PagingPolicy>` clone, so a reinstall doesn't invalidate handles.
+/// Prefer [`apply_tiered_config`] for the production path so the
+/// `TieredPolicy` budget atomic stays stable across reconfigures. Direct
+/// `set_global_pager` use is appropriate for tests, the disabled pager, or
+/// callers that intentionally want a fresh policy.
 pub fn set_global_pager(pager: ColumnPager) {
     *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
+}
+
+/// Process-wide [`policy::TieredPolicy`] singleton. Lazily initialized on
+/// the first [`apply_tiered_config`] call.
+///
+/// Why a singleton: every `ResidentTicket` keeps an `Arc<dyn PagingPolicy>`
+/// pointing at the policy that decided to keep the column resident.
+/// Replacing the global `TieredPolicy` would orphan in-flight tickets onto
+/// the previous instance — they would credit a budget atomic that the new
+/// policy can no longer see, draining the new pool monotonically until it
+/// locks up on Page decisions. A persistent singleton with in-place
+/// [`policy::TieredPolicy::reconfigure`] sidesteps the issue: all tickets,
+/// past and present, share the same atomic.
+static TIERED_POLICY: std::sync::OnceLock<Arc<policy::TieredPolicy>> = std::sync::OnceLock::new();
+
+/// Apply a tiered-pager configuration. Reuses the singleton
+/// [`policy::TieredPolicy`] so in-flight `ResidentTicket`s remain coherent
+/// with the running budget after the operator tunes any of the inputs.
+///
+/// When `enabled` is true, installs a [`ColumnPager`] backed by the
+/// singleton policy. When false, installs [`ColumnPager::disabled`] —
+/// in-flight tickets still credit the singleton, which is harmless: the
+/// budget grows above the configured total until the next enable reconciles
+/// it via `reconfigure`.
+pub fn apply_tiered_config(
+    enabled: bool,
+    total_budget: usize,
+    backend: Backend,
+    codec: Option<Codec>,
+) {
+    let p = TIERED_POLICY
+        .get_or_init(|| Arc::new(policy::TieredPolicy::new(total_budget, backend, codec)));
+    p.reconfigure(total_budget, backend, codec);
+    if enabled {
+        #[allow(clippy::clone_on_ref_ptr)]
+        let dyn_policy: Arc<dyn PagingPolicy> = p.clone();
+        set_global_pager(ColumnPager::new(dyn_policy));
+    } else {
+        set_global_pager(ColumnPager::disabled());
+    }
 }
 
 /// Process-wide decision counters. Diagnostic only — log a summary every
@@ -305,14 +341,10 @@ fn record_decision(paged: bool, bytes: usize) {
 /// Returns the current global pager. Cheap: clones the inner `Arc<dyn
 /// PagingPolicy>`.
 pub fn global_pager() -> ColumnPager {
-    GLOBAL_PAGER
-        .read()
-        .expect("global pager poisoned")
-        .clone()
+    GLOBAL_PAGER.read().expect("global pager poisoned").clone()
 }
 
 impl ColumnPager {
-
     /// Drains `col` into a [`PagedColumn`]. After return `col` is left as a
     /// fresh `Column::default()` (typed, empty), ready to be refilled by the
     /// caller on the next loop iteration.

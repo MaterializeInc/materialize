@@ -60,8 +60,6 @@ pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 /// defaults to [`crate::column_pager::ColumnPager::disabled`]; inject a
 /// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
 pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
-/// Pageable counterpart to [`Col2KeyBatcher`].
-pub type Col2KeyPagedBatcher<K, T, R> = Col2ValPagedBatcher<K, (), T, R>;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
