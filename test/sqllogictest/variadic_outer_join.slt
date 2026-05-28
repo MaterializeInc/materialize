@@ -230,8 +230,7 @@ Explained Query:
           Filter: (#0{k}) IS NOT NULL
             →Read materialize.public.a
     cte l1 =
-      →Differential Join %1 » %0
-        Join stage 0 in %0 with lookup key #0{k}
+      →Differential Join %1:b[#2{k}] » %0:l0[#0{k}]
         →Arranged l0
         →Arrange (#2{k})
           →Read materialize.public.b
@@ -242,8 +241,7 @@ Explained Query:
           Map: null, null, null
             →Consolidating Union
               →Negate Diffs
-                →Differential Join %1 » %0
-                  Join stage 0 in %0 with lookup key #0{k}
+                →Differential Join %1[#0] » %0:l0[#0{k}]
                   →Arranged l0
                   →Distinct GroupAggregate
                     →Fused with Child Map/Filter/Project
@@ -259,8 +257,7 @@ Explained Query:
           Filter: (#0{k}) IS NOT NULL
             →Read l2
     cte l4 =
-      →Differential Join %0 » %1
-        Join stage 0 in %1 with lookup key #0{k}
+      →Differential Join %0:l3[#0{k}] » %1:c[#0{k}]
         →Arranged l3
         →Arrange (#0{k})
           →Read materialize.public.c
@@ -271,8 +268,7 @@ Explained Query:
         Map: null
           →Consolidating Union
             →Negate Diffs
-              →Differential Join %1 » %0
-                Join stage 0 in %0 with lookup key #0{k}
+              →Differential Join %1[#0] » %0:l3[#0{k}]
                 →Arranged l3
                 →Distinct GroupAggregate
                   →Fused with Child Map/Filter/Project
