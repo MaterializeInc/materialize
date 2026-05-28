@@ -354,8 +354,8 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 
 ## Step 4. Verify the configuration
 
-1. Navigate to your Materialize Console. You should see an option to sign in
-   via your identity provider via "Use single sign-on".
+1. Navigate to your Materialize Console. You should see an option to **Use
+   single sign-on**.
 
    ![Materialize Console login screen showing the SSO sign-in
    option](/images/console/console-self-managed-sso.png "Materialize Console login screen
