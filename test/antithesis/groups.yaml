@@ -75,6 +75,14 @@ default_anytime:
   # panics-adjacent optimizer/runtime invariant violations that don't
   # crash — into caught findings.
   - defaults/anytime_internal_error_scan
+  # Source/sink status convergence (port of test/source-sink-errors).
+  # Tracks per-user-object healthy/unhealthy transitions across the
+  # probe launch and asserts none stays in `stalled`/`failed`/`ceased`
+  # without a subsequent healthy observation past the MIN_RECOVERY
+  # budget.  Catches the bug class where mz_source_statuses /
+  # mz_sink_statuses don't converge to ground truth after the upstream
+  # disruption clears.
+  - defaults/anytime_source_status_convergence
 
 # Setup / driver scripts auto-added to every group.  The catalog,
 # persist, and reclock SUT-anchored properties don't need any
@@ -109,6 +117,13 @@ default_drivers:
   # divergence / non-deterministic execution.  Self-skips in
   # single-replica groups.
   - defaults/parallel_driver_cross_replica_consistency
+  # Append-only count monotonicity: long-running singleton inserts
+  # monotonically into a self-owned table and asserts count(*) never
+  # decreases across observations and never exceeds the in-process
+  # committed_count.  Catches the persist / storage data-loss bug
+  # class where a committed row silently disappears after a fault or
+  # compaction.
+  - defaults/singleton_driver_append_only_monotonic
 
 groups:
   kafka:
