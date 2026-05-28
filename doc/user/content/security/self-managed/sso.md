@@ -495,10 +495,10 @@ to authenticate against your IdP.
 
 ### SQL password authentication (recommended for non-OAuth clients)
 
-The simplest way to give a service or application access to Materialize on an
-OIDC listener is to create a role with a SQL password.
-
-Use this approach when your client doesn't speak OAuth natively.
+Even with OIDC enabled, Materialize still accepts SQL password authentication.
+This is required for clients that don't support OAuth flows. The simplest way to
+give such a service or application access is to create a role with a SQL
+password.
 
 1. As a user with the `CREATEROLE` privilege, create the role with a password:
 
