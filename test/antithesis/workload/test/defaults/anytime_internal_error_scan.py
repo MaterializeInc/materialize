@@ -91,8 +91,7 @@ _PROBE_QUERIES: tuple[str, ...] = (
     "SELECT now() - interval '1 day', date_trunc('hour', now()), "
     "       extract(epoch FROM now())::bigint % 1000",
     # jsonb round-trip + nesting.
-    "SELECT jsonb_build_object('k', g, 'sq', g*g) "
-    "FROM generate_series(1, 50) AS g",
+    "SELECT jsonb_build_object('k', g, 'sq', g*g) " "FROM generate_series(1, 50) AS g",
 )
 
 _STATUS_SCAN = (
@@ -141,10 +140,14 @@ def main() -> int:
                     except Exception as exc:  # noqa: BLE001
                         msg = str(exc)
                         if _is_internal_error(msg) and not looks_like_fault(msg):
-                            internal_errors.append({"query": q[:120], "error": msg[:300]})
+                            internal_errors.append(
+                                {"query": q[:120], "error": msg[:300]}
+                            )
                             LOG.error("internal error escaped on probe query: %s", msg)
                         elif not looks_like_fault(msg):
-                            LOG.warning("probe query non-fault, non-internal error: %s", msg)
+                            LOG.warning(
+                                "probe query non-fault, non-internal error: %s", msg
+                            )
 
                     # Status-table scan for stuck-in-internal-error objects.
                     try:

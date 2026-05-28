@@ -112,9 +112,7 @@ def main() -> int:
                 cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}".encode())
                 cur.execute(f"CREATE TABLE {table} (k int, v int)".encode())
                 cur.execute(f"INSERT INTO {table} VALUES {values_sql}".encode())
-                cur.execute(
-                    f"CREATE VIEW {view} AS {agg.format(rel=table)}".encode()
-                )
+                cur.execute(f"CREATE VIEW {view} AS {agg.format(rel=table)}".encode())
                 cur.execute(
                     f"CREATE MATERIALIZED VIEW {mv} AS {agg.format(rel=table)}".encode()
                 )

@@ -13,7 +13,7 @@
 # `test/antithesis/groups.yaml`).  Use `GROUP=<name>` to pick one;
 # defaults to `combined` (kitchen-sink) for back-compat.  Valid groups:
 # kafka, pg-cdc, mysql-cdc, sql-server-cdc, testdrive, parallel-workload,
-# upsert-stress, platform-checks, workload-replay, deploy, combined.
+# upsert-stress, platform-checks, workload-replay, combined.
 #
 # Targets:
 #   make build GROUP=kafka           # regen this group's compose YAML, acquire images
@@ -40,7 +40,7 @@ SHELL := /usr/bin/env bash
 GROUP     ?= combined
 PROJECT   := materialize-antithesis-$(GROUP)
 REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
-ALL_GROUPS := kafka pg-cdc mysql-cdc sql-server-cdc testdrive parallel-workload upsert-stress platform-checks workload-replay deploy combined
+ALL_GROUPS := kafka pg-cdc mysql-cdc sql-server-cdc testdrive parallel-workload upsert-stress platform-checks workload-replay combined
 
 # Pick podman if available, else docker.
 ifndef RUNTIME

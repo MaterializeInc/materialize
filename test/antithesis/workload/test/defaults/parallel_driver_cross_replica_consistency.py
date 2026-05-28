@@ -152,9 +152,7 @@ def main() -> int:
     baseline_name = replicas[0]
     baseline = per_replica[baseline_name]
     disagreeing = {
-        name: len(rowset)
-        for name, rowset in per_replica.items()
-        if rowset != baseline
+        name: len(rowset) for name, rowset in per_replica.items() if rowset != baseline
     }
     always(
         not disagreeing,

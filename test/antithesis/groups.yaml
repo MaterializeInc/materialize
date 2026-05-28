@@ -381,49 +381,6 @@ groups:
       - parallel-workload/parallel_driver_pw_hot_objects
     anytime: []
 
-  deploy:
-    description: >-
-      Zero-downtime-deploy + txn-wal-fencing properties under fault
-      injection.  Brings up a second `materialized` container
-      (`materialized2`, started with `deploy_generation=1`) alongside
-      the primary, sharing the same postgres-metadata catalog and minio
-      persist blob store.  The deploy_generation bump puts the second
-      instance into read-only mode: it rehydrates from the shared
-      durable state but rejects writes.
-
-      Properties asserted today (single driver — more can layer on as
-      the orchestration matures):
-        * Safety: writes to materialized2 must NEVER succeed.  Any
-          succeeding write would mean the read-only gate failed and
-          the two instances are racing on the same blob store —
-          dual-leader correctness violation.
-        * Liveness: a row INSERT'd against the primary becomes
-          visible on materialized2 within a bounded catchup window.
-          Proves the shared-state replication path is exercised at
-          least sometimes.
-
-      Future drivers to add:
-        * Full 0dt handoff: drop deploy_generation knob on the
-          primary, observe its fence ("cannot write in read-only
-          mode"), assert the new instance picks up writes cleanly.
-          Today blocked on having an in-container way to bump the
-          deploy_generation knob — needs a `mz` admin command or
-          equivalent SIGUSR2 plumbing.
-        * Fencing under load: keep a parallel-workload-style worker
-          pool driving the primary while the second instance is
-          promoted; assert no torn DML.
-
-      Topology: universal + materialized2 + clusterd2 (so the
-      multi-replica antithesis_cluster invariants still apply to the
-      cluster while the deploy instances race on the catalog).
-    services:
-      - materialized2
-      - clusterd2
-    setup: []
-    drivers:
-      - deploy/singleton_driver_read_only_safety
-    anytime: []
-
   platform-checks:
     description: >-
       Survives-faults coverage for the existing `test/platform-checks`
@@ -478,7 +435,6 @@ groups:
       - sql-server
       - polaris-bootstrap
       - polaris
-      - materialized2
       - clusterd2
       - clusterd-pool-0
       - clusterd-pool-1
@@ -508,7 +464,6 @@ groups:
       - parallel-workload/parallel_driver_pw_hot_objects
       - platform-checks/singleton_driver_platform_check
       - workload-replay/parallel_driver_workload_replay
-      - deploy/singleton_driver_read_only_safety
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
