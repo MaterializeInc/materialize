@@ -1052,7 +1052,24 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             persist_clients.metrics().postgres_consensus.clone(),
             Arc::clone(&persist_clients.cfg().configs),
         )?;
-        let consensus = runtime.block_on(consensus_cfg.open())?;
+        // Retry the initial consensus connection so envd boots through
+        // transient races where the metadata backend (CRDB / postgres)
+        // accepts TCP slightly after envd starts. Without this, a pre-PR
+        // envd image happened to absorb the race inside persist's own
+        // retry logic; the committer's eager open did not.
+        let consensus = runtime.block_on(async {
+            mz_ore::retry::Retry::default()
+                .clamp_backoff(Duration::from_secs(2))
+                .max_duration(Duration::from_secs(60))
+                .retry_async(|_| async {
+                    consensus_cfg
+                        .clone()
+                        .open()
+                        .await
+                        .inspect_err(|e| warn!("waiting for consensus backend: {e}"))
+                })
+                .await
+        })?;
         let config = mz_persist_committer::CommitterConfig {
             listen_addr: args.internal_persist_committer_listen_addr,
             max_cached_shards: mz_persist_client::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS
