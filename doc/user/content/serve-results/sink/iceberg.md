@@ -20,8 +20,7 @@ kept up to date. You can sink data from a materialized view, a source, or a
 table.
 
 This guide walks you through the steps required to set up Iceberg sinks in
-Materialize Cloud. The cloud-specific setup differs; the `CREATE SINK`
-statement is identical for both.
+Materialize Cloud.
 
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.
@@ -49,21 +48,18 @@ BigLake](https://cloud.google.com/biglake) provides a managed Apache Iceberg
 {{< /tab >}}
 {{< tab "GCP BigLake" >}}
 
+Google Cloud [documents the Lakehouse/BigLake setup process here](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog). The parts you'll need:
 - A Google Cloud project with the BigLake API enabled.
-- A [Google Cloud Storage
-  bucket](https://docs.cloud.google.com/storage/docs/creating-buckets) that will
-  hold your Iceberg data files.
-- A BigLake [runtime
-  catalog](https://docs.cloud.google.com/bigquery/docs/blms-rest-catalog). In the
-  Google Cloud Console, navigate to **BigLake** &rarr; **Lakehouse** &rarr;
-  **Runtime catalog** &rarr; **Create a catalog**, and point the catalog at
-  your GCS bucket.
+- A Google Cloud Storage bucket to serve as the Iceberg warehouse.
+- A Lakehouse runtime catalog backed by your warehouse bucket.
+  - _NOTE: Materialize uses a service account key, not catalog-vended credentials to write Iceberg data files._
+  So you may configure your catalog with either "End-user credentials" or "Credential vending mode".
 - A namespace in the BigLake catalog.
 
 {{< /tab >}}
 {{< /tabs >}}
 
-## Set up the Iceberg catalog and connections
+## Create the Iceberg catalog connection in Materialize
 
 {{< tabs >}}
 {{< tab "AWS S3 Tables" >}}
@@ -226,43 +222,19 @@ CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
 ### Step 1. Set up permissions in GCP
 
 Materialize authenticates to BigLake as a Google Cloud [service
-account](https://docs.cloud.google.com/iam/docs/service-account-overview) that you
-own. Create the service account, grant it the roles required to write to your
-BigLake catalog and GCS bucket, and generate a JSON key for Materialize.
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) you own.
 
-#### Step 1A. Create a service account
-
-In the Google Cloud Console, navigate to **IAM & Admin** &rarr; **Service
-Accounts** &rarr; **Create service account**. Give the account a name (for
-example, `materialize-iceberg`) and create it.
-
-#### Step 1B. Grant roles to the service account
-
-Grant the service account the following roles. The BigLake and Service Usage
-roles are granted at the project level; the Storage role is granted on the
-GCS bucket holding your Iceberg data.
-
-| Role | Granted on | Purpose |
-|------|------------|---------|
-| `roles/biglake.editor` (BigLake Editor) | Project | Create namespaces, register tables, and commit snapshots. |
-| `roles/serviceusage.serviceUsageConsumer` (Service Usage Consumer) | Project | Required to call any Google Cloud API. |
-| `roles/storage.objectUser` (Storage Object User) | GCS bucket | Read and write Iceberg data files in the warehouse bucket. |
-
-#### Step 1C. Create a service account key
-
-On the service account's **Keys** tab, choose **Add key** &rarr; **Create new
-key** &rarr; **JSON**. Download the JSON key file — you will load it into a
-Materialize secret in the next step.
-
-{{< warning >}}
-Treat the key file like a password. Do not commit it to source control or
-share it.
-{{< /warning >}}
+1. Create the service account.
+2. Grant the service account these roles on your **project**:
+    - `biglake.editor` (BigLake Editor)
+    - `serviceusage.serviceUsageConsumer` (Service Usage Consumer)
+3. Grant the service account this role on your **Iceberg warehouse bucket**:
+    - `storage.objectUser` (Storage Object User)
+4. [Create a service account key.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
 
 ### Step 2. Create a GCP connection in Materialize
 
-In Materialize, create a **GCP connection** that holds the service-account
-key.
+In Materialize, create a **GCP connection** that holds the service account key.
 
 1. Base64-encode the JSON key file. For example, in a shell:
 
@@ -273,14 +245,14 @@ key.
    The `decode(..., 'base64')` form below lets you paste the encoded value
    into SQL without worrying about embedded newlines or quotes in the JSON.
 
-1. Store the key in a Materialize [secret](/sql/create-secret/):
+2. Store the key in a Materialize [secret](/sql/create-secret/):
 
    ```mzsql
    CREATE SECRET gcp_service_account_key
      AS decode('<base64-encoded service account key JSON>', 'base64');
    ```
 
-1. Create the GCP connection. See [`CREATE
+3. Create the GCP connection. See [`CREATE
    CONNECTION`](/sql/create-connection/#gcp) for more on GCP connection
    options.
 
