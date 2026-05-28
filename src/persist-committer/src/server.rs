@@ -462,9 +462,14 @@ impl ProtoPersistConsensus for PersistCommitter {
 
 impl PersistCommitter {
     /// Build a tonic service that shares this committer instance with any
-    /// in-process consumers (e.g. `InProcessConsensus`).
+    /// in-process consumers (e.g. `InProcessConsensus`). Disables the default
+    /// 4 MiB tonic message-size limits because persist Scan responses can
+    /// legitimately reach tens of MiB for hot shards, matching the precedent
+    /// set by `mz_persist_client::rpc` for pubsub.
     pub fn into_service(self: Arc<Self>) -> ProtoPersistConsensusServer<PersistCommitter> {
         ProtoPersistConsensusServer::from_arc(self)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX)
     }
 }
 

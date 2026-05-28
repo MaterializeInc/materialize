@@ -36,10 +36,15 @@ pub struct RpcConsensus {
 
 impl RpcConsensus {
     /// Construct a new `RpcConsensus` that uses `channel` to reach a persist
-    /// committer.
+    /// committer. Disables the default 4 MiB tonic message-size limits
+    /// because persist Scan responses can legitimately exceed it for hot
+    /// shards; matches the precedent set in `mz_persist_client::rpc` for
+    /// pubsub.
     pub fn new(channel: Channel) -> Self {
         Self {
-            client: ProtoPersistConsensusClient::new(channel),
+            client: ProtoPersistConsensusClient::new(channel)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
         }
     }
 }
