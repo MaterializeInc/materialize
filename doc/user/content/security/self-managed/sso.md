@@ -3,10 +3,10 @@ title: "Single sign-on (SSO)"
 description: "Configure OIDC-based single sign-on (SSO) for Self-Managed Materialize."
 menu:
   main:
-    parent: "security-sm"
+    parent: "authentication-sm"
     name: "Single sign-on (SSO)"
     identifier: "sso-sm"
-    weight: 9
+    weight: 1
 ---
 
 {{< public-preview />}}

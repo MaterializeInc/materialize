@@ -3,10 +3,10 @@ title: "Migrate to SSO"
 description: "Migrate from password authentication to OIDC-based single sign-on (SSO) in Self-Managed Materialize."
 menu:
   main:
-    parent: "security-sm"
+    parent: "authentication-sm"
     name: "Migrate to SSO"
     identifier: "sso-migration-sm"
-    weight: 10
+    weight: 2
 ---
 
 If you have an existing Materialize deployment using Password/SASL-SCRAM authentication, you
