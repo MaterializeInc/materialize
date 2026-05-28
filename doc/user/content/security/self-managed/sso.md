@@ -334,6 +334,10 @@ spec:
   systemParameterConfigmapName: mz-system-params
 ```
 
+Apply the updated manifest to your Kubernetes cluster. For more on configuring
+system parameters via a ConfigMap, see [System parameters
+configuration](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
+
 ### Configure via SQL
 
 Alternatively, connect as `mz_system` and set the parameters using
