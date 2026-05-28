@@ -115,11 +115,11 @@ steps:
         sanitizer: skip
 
       - id: check-package-isolation
-        label: "Per-package isolated cargo check --all-targets"
+        label: Package-isolated cargo check
         command: bin/ci-builder run stable bin/check-package-isolation
         depends_on: []
         timeout_in_minutes: 45
-        parallelism: 8
+        parallelism: 5
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         sanitizer: skip

@@ -15,9 +15,18 @@
 
 //! String utilities.
 
+#[cfg(feature = "assert-no-tracing")]
 use crate::assert::soft_assertions_enabled;
 use std::fmt::{self, Debug, Formatter, Write};
 use std::ops::Deref;
+
+// Without the soft-assertion machinery available, treat soft assertions as
+// disabled so that `redact` always redacts. Callers that need the
+// debug-mode behavior opt into the `assert-no-tracing` feature.
+#[cfg(not(feature = "assert-no-tracing"))]
+fn soft_assertions_enabled() -> bool {
+    false
+}
 
 /// Extension methods for [`str`].
 pub trait StrExt {
