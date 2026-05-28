@@ -580,6 +580,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn eval_distinct_dedups() {
         let input = int64_rel(&[&[5], &[5], &[6]]);
         assert_eq!(
@@ -634,6 +635,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn eval_let_binds_local_get() {
         // let l = {1, 2} in (Get l) union (Get l) => each value with diff 2.
         let id = LocalId::new(0);
