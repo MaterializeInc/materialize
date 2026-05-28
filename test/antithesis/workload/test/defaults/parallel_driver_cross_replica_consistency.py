@@ -66,6 +66,21 @@ NUM_KEYS = 16
 STATEMENT_TIMEOUT_MS = 10000
 
 
+def _is_transient(msg: str) -> bool:
+    """Fault/race shapes beyond helper_fault_tolerance that this driver's
+    self-owned scratch objects can legitimately hit.
+
+    `was dropped` covers the scratch view/index/table being concurrently
+    torn down — during fault recovery the controller can drop in-flight
+    dataflow state, and our own DROP ... CASCADE can race a retry.  The
+    objects are prefix-scoped and owned solely by this invocation, so a
+    drop mid-read is never a correctness signal here (unlike in drivers
+    that read shared objects, which is why this stays local rather than
+    in the shared FAULT_PATTERNS).
+    """
+    return "was dropped" in msg.lower()
+
+
 def main() -> int:
     prefix = f"{helper_random.random_u64():016x}"
     rng = helper_random.AntithesisRandom()
@@ -133,7 +148,7 @@ def main() -> int:
                     LOG.debug("cleanup tolerated: %s", exc)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
-        if looks_like_fault(msg):
+        if looks_like_fault(msg) or _is_transient(msg):
             sometimes(
                 False,
                 "cross-replica: comparison completed without a fault",

@@ -76,6 +76,21 @@ NUM_KEYS = 16
 STATEMENT_TIMEOUT_MS = 10000
 
 
+def _is_transient(msg: str) -> bool:
+    """Fault/race shapes beyond helper_fault_tolerance that this driver's
+    self-owned scratch objects can legitimately hit.
+
+    `was dropped` / `collection ... was dropped` covers the scratch
+    table/view/MV being concurrently torn down — during fault recovery
+    the controller can drop in-flight dataflow state, and our own
+    DROP ... CASCADE can race a retry.  Prefix-scoped + owned solely by
+    this invocation, so a drop mid-read is never a correctness signal
+    here (kept local rather than in the shared FAULT_PATTERNS, which
+    other drivers reading shared objects rely on to stay strict).
+    """
+    return "was dropped" in msg.lower()
+
+
 def _rand_rows(rng: helper_random.AntithesisRandom) -> list[tuple[int, int]]:
     return [
         (rng.randrange(NUM_KEYS), rng.randrange(-1000, 1000)) for _ in range(NUM_ROWS)
@@ -142,8 +157,9 @@ def main() -> int:
                     LOG.debug("cleanup tolerated: %s", exc)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
-        if looks_like_fault(msg):
-            # Fault window during setup/read — not a correctness signal.
+        if looks_like_fault(msg) or _is_transient(msg):
+            # Fault window / concurrent-drop during setup/read — not a
+            # correctness signal.
             sometimes(
                 False,
                 "differential-query: comparison completed without a fault",

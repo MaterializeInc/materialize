@@ -142,6 +142,13 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # HikariCP-style (polaris's connection pool) exhaustion when the
     # JDBC upstream stays paused longer than the pool's wait budget.
     "Acquisition timeout while waiting for new connection",
+    # ---- Compute replica fault during a replica-targeted read --------
+    # When a query is pinned to a specific replica (SET cluster_replica)
+    # and Antithesis kills/pauses that replica's clusterd mid-read, the
+    # adapter surfaces this.  Hit by the cross-replica-consistency
+    # driver, which reads each replica in turn; the fault that kills
+    # the replica we're pinned to is expected, not a divergence.
+    "target replica failed or was dropped",
     # Polaris's IllegalStateException wording when its embedded
     # postgres-backed metadata DB is mid-restart after a fault and its
     # service-layer reads the schema version before bootstrap finishes.
