@@ -101,8 +101,9 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// The URL clusterds should use to reach the in-envd persist committer.
     /// Clusterds only use this URL when the `persist_consensus_use_committer`
-    /// LD flag is on.
-    pub persist_committer_url: String,
+    /// LD flag is on. `None` skips the `--persist-committer-url` argv entirely
+    /// so test harnesses without a running committer do not stall.
+    pub persist_committer_url: Option<String>,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
     /// The connection context, to thread through to clusterd, with cli flags.
@@ -182,7 +183,7 @@ pub struct Controller {
     persist_pubsub_url: String,
 
     /// The URL for the in-envd persist committer; see [`ControllerConfig::persist_committer_url`].
-    persist_committer_url: String,
+    persist_committer_url: Option<String>,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,

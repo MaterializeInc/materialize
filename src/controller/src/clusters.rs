@@ -711,7 +711,6 @@ impl Controller {
                         format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
-                        format!("--persist-committer-url={}", persist_committer_url),
                         format!("--environment-id={}", environment_id),
                         format!(
                             "--storage-timely-config={}",
@@ -748,6 +747,9 @@ impl Controller {
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
+                    }
+                    if let Some(url) = &persist_committer_url {
+                        args.push(format!("--persist-committer-url={}", url));
                     }
 
                     // If swap is enabled, make the replica limit its own heap usage based on the

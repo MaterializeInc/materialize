@@ -1090,7 +1090,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
-        persist_committer_url: args.persist_committer_url,
+        persist_committer_url: Some(args.persist_committer_url),
         connection_context,
         // When serialized to args in the controller, only the relevant flags will be passed
         // through, so we just set all of them
