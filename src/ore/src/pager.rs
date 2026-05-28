@@ -155,28 +155,54 @@ pub fn try_pageout(chunks: &mut [Vec<u64>]) -> std::io::Result<Handle> {
 }
 
 /// Reads multiple ranges. Output appended to `dst` in request order (concat).
-/// Panics if any range is out of bounds, or on I/O failure. Use
-/// [`try_read_at_many`] for fallible reads.
+///
+/// Ranges must be pairwise non-overlapping; ordering is otherwise unconstrained.
+/// Panics if any range is out of bounds, if two ranges overlap, or on I/O
+/// failure. Use [`try_read_at_many`] for fallible reads.
 pub fn read_at_many(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+    assert_ranges_disjoint(ranges);
     match &handle.inner {
         HandleInner::Swap(_) => swap::read_at_swap(handle, ranges, dst),
         HandleInner::File(_) => file::read_at_file(handle, ranges, dst),
     }
 }
 
-/// Fallible counterpart to [`read_at_many`]. Bounds violations still panic
-/// (caller bug); I/O failures return `Err`.
+/// Fallible counterpart to [`read_at_many`]. Caller-side preconditions
+/// (out-of-bounds, overlapping ranges) still panic; I/O failures return `Err`.
 pub fn try_read_at_many(
     handle: &Handle,
     ranges: &[(usize, usize)],
     dst: &mut Vec<u64>,
 ) -> std::io::Result<()> {
+    assert_ranges_disjoint(ranges);
     match &handle.inner {
         HandleInner::Swap(_) => {
             swap::read_at_swap(handle, ranges, dst);
             Ok(())
         }
         HandleInner::File(_) => file::try_read_at_file(handle, ranges, dst),
+    }
+}
+
+/// Asserts that no two ranges share any byte position. Both backends assume
+/// disjoint ranges: the file backend coalesces adjacent ranges into a single
+/// pread and writes into a contiguous slice of `dst`, and the swap backend
+/// likewise concatenates into `dst` per range. Overlapping ranges would
+/// duplicate bytes in `dst` silently, which is almost certainly not what the
+/// caller meant; reject upfront so misuse fails loud.
+fn assert_ranges_disjoint(ranges: &[(usize, usize)]) {
+    // Skip zero-length ranges; they cannot overlap anything by definition.
+    let mut sorted: Vec<(usize, usize)> = ranges.iter().copied().filter(|&(_, l)| l > 0).collect();
+    sorted.sort_by_key(|&(off, _)| off);
+    let mut prev_end: usize = 0;
+    for (off, len) in sorted {
+        assert!(
+            off >= prev_end,
+            "read_at_many: overlapping ranges (range starting at {off} overlaps a previous range ending at {prev_end})",
+        );
+        prev_end = off
+            .checked_add(len)
+            .expect("range offset+len overflow in assert_ranges_disjoint");
     }
 }
 
@@ -228,6 +254,36 @@ mod tests {
         assert_eq!(backend(), Backend::File);
         set_backend(Backend::Swap);
         assert_eq!(backend(), Backend::Swap);
+    }
+
+    #[mz_ore::test]
+    fn disjoint_check_accepts_sorted_adjacent_and_unsorted_disjoint() {
+        // Adjacent: not overlapping.
+        assert_ranges_disjoint(&[(0, 4), (4, 4)]);
+        // Sorted with gaps.
+        assert_ranges_disjoint(&[(0, 2), (10, 3), (100, 1)]);
+        // Unsorted but disjoint.
+        assert_ranges_disjoint(&[(10, 3), (0, 2), (100, 1)]);
+        // Zero-length ranges are always OK.
+        assert_ranges_disjoint(&[(5, 0), (5, 0), (5, 0)]);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "overlapping ranges")]
+    fn disjoint_check_rejects_overlap() {
+        assert_ranges_disjoint(&[(0, 4), (2, 4)]);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "overlapping ranges")]
+    fn disjoint_check_rejects_overlap_unsorted() {
+        assert_ranges_disjoint(&[(10, 5), (0, 2), (12, 1)]);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "overlapping ranges")]
+    fn disjoint_check_rejects_duplicate_range() {
+        assert_ranges_disjoint(&[(3, 2), (3, 2)]);
     }
 }
 
