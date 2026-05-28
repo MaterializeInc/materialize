@@ -19,7 +19,7 @@ use std::sync::Arc;
 use futures::TryStreamExt;
 use mz_ore::task::spawn;
 use mz_persist::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::cache::ShardCache;
 use crate::metrics::CommitterMetrics;
@@ -102,12 +102,12 @@ impl PersistCommitter {
         let result = self.consensus.compare_and_set(shard, new.clone()).await?;
         match result {
             CaSResult::Committed => {
-                info!(shard, seqno = ?new.seqno, "committer CaS committed");
+                debug!(shard, seqno = ?new.seqno, "committer CaS committed");
                 self.cache.insert(shard, new.clone());
                 self.registry.publish(shard, new);
             }
             CaSResult::ExpectationMismatch => {
-                info!(shard, seqno = ?new.seqno, "committer CaS mismatch, refreshing");
+                debug!(shard, seqno = ?new.seqno, "committer CaS mismatch, refreshing");
                 self.spawn_refresh(shard.to_string());
             }
         }
