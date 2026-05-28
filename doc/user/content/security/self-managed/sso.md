@@ -481,11 +481,17 @@ To configure privileges for pre-provisioned roles, see [Manage database roles](/
 
 ## Service accounts
 
-For machine-to-machine access, you have three options. Use **SQL password
-authentication** unless your service account specifically needs to
-authenticate against your IdP — in that case, use one of the OAuth flows
-([Resource Owner Password](#resource-owner-password-flow) or
-[Client Credentials](#client-credentials-flow)).
+For machine-to-machine access, you have three options:
+
+- [SQL password authentication](#sql-password-authentication-recommended-for-non-oauth-clients):
+  for clients that don't support OAuth flows.
+- [Resource Owner Password flow](#resource-owner-password-flow): for service
+  accounts that authenticate against your IdP with a username and password.
+- [Client Credentials flow](#client-credentials-flow): for service accounts
+  that authenticate against your IdP without a user context.
+
+Use SQL password authentication unless your service account specifically needs
+to authenticate against your IdP.
 
 ### SQL password authentication (recommended for non-OAuth clients)
 
