@@ -171,7 +171,7 @@ build apply=ProjectionPushdown
 (project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#1])
 ----
 Project (#1)
-  FlatMap generate_series(#0, #2, 1)
+  FlatMap repeat_row_non_negative(case when (integer_to_bigint(#2) >= integer_to_bigint(#0)) then (((integer_to_bigint(#2) - integer_to_bigint(#0)) / 1) + 1) else 0 end)
     Get x
 
 #Query using the columns newly created by FlatMap
@@ -183,6 +183,43 @@ Project (#2)
   FlatMap generate_series(#0, #1, 1)
     Project (#0, #2)
       Get x
+
+# Unused generate_series with a non-unit positive step collapses
+build apply=ProjectionPushdown
+(project (flat_map (get x) generate_series_int32 [#0 #2 3]) [#1])
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (integer_to_bigint(#2) >= integer_to_bigint(#0)) then (((integer_to_bigint(#2) - integer_to_bigint(#0)) / 3) + 1) else 0 end)
+    Get x
+
+# Unused generate_series with a negative step collapses (guard flips to <=)
+build apply=ProjectionPushdown
+(project (flat_map (get x) generate_series_int32 [#0 #2 -2]) [#1])
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (integer_to_bigint(#2) <= integer_to_bigint(#0)) then (((integer_to_bigint(#2) - integer_to_bigint(#0)) / -2) + 1) else 0 end)
+    Get x
+
+# Unused generate_series with a non-literal step is left alone
+build apply=ProjectionPushdown
+(project (flat_map (get x) generate_series_int32 [#0 #2 #1]) [#1])
+----
+Project (#1)
+  FlatMap generate_series(#0, #2, #1)
+    Get x
+
+cat
+(defsource z [int64 int64 int64])
+----
+ok
+
+# Unused int64 generate_series collapses without a cast
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [#0 #2 1]) [#1])
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((#2 - #0) / 1) + 1) else 0 end)
+    Get z
 
 # Project around a union
 
