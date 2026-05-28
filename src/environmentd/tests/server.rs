@@ -5535,6 +5535,52 @@ fn test_mcp_agent_with_data_product() {
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
     assert!(body["error"].is_null());
 
+    // Each row carries a `hydration` field (5th cell). For an MV that has
+    // had time to hydrate on a single-replica `quickstart` cluster, expect
+    // `hydrated: true` with 1/1 replicas.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty(), "details should return at least one row");
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(
+            row.len(),
+            5,
+            "each details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {:?}",
+            row,
+        );
+        let hydration = &row[4];
+        assert!(
+            hydration.is_object(),
+            "hydration cell should be a JSON object, got: {hydration}",
+        );
+        assert!(
+            hydration.get("hydrated").is_some_and(|v| v.is_boolean()),
+            "hydration.hydrated should be a bool, got: {hydration}",
+        );
+        let replica_count = hydration
+            .get("replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.replica_count should be an int, got: {hydration}")
+            });
+        let hydrated_replica_count = hydration
+            .get("hydrated_replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.hydrated_replica_count should be an int, got: {hydration}")
+            });
+        assert!(
+            replica_count >= 0 && hydrated_replica_count >= 0,
+            "replica counts must be non-negative, got: {hydration}",
+        );
+        assert!(
+            hydrated_replica_count <= replica_count,
+            "hydrated_replica_count ({hydrated_replica_count}) cannot exceed replica_count ({replica_count}): {hydration}",
+        );
+    }
+
     // get_data_product_details should also resolve the indexed view, proving
     // the filter change is applied consistently to mz_mcp_data_product_details.
     let indexed_view_name = find_product("test_indexed_view").as_array().unwrap()[0]
@@ -5559,6 +5605,16 @@ fn test_mcp_agent_with_data_product() {
         "indexed view should be resolvable via get_data_product_details, got: {body}"
     );
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    // Indexed view should also report a hydration object.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(row.len(), 5, "row should include hydration cell: {row:?}");
+        assert!(row[4].is_object(), "hydration cell should be an object");
+    }
 
     // read_data_product should return the row from the view.
     let (status, body) = mcp_post(
