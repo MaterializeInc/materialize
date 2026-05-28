@@ -270,3 +270,69 @@ SELECT id, r.lower, r.upper, r.lower_inclusive, r.upper_inclusive, r.empty FROM 
 2 6 15 true false false
 3 <null> <null> false false true
 4 <null> 100 false false false
+
+# Test smallint columns
+# Iceberg has no Int16, so smallint widens to Iceberg int (Int32) in the
+# arrow/parquet schema. The Datum::Int16 -> Int32Builder promotion is what
+# lets that conversion succeed end-to-end.
+> CREATE TABLE smallints(id smallint, val smallint);
+
+> INSERT INTO smallints VALUES (1, -32768), (2, 0), (3, 32767);
+
+> CREATE SINK smallint_demo
+    FROM smallints
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'smallint_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (id) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+$ duckdb-query name=iceberg
+SELECT id, val FROM iceberg_scan('s3://test-bucket/default_namespace/smallint_table') ORDER BY id
+1 -32768
+2 0
+3 32767
+
+# Test map columns
+# Materialize's arrow schema for maps uses field names entries/keys/values,
+# while iceberg-rust uses key_value/key/value. The metadata merge must align
+# them positionally so the value field's extension metadata survives.
+#
+# This is an indirect regression test: there is no testdrive primitive that
+# inspects parquet extension metadata, so we exercise the bug's observable
+# failure mode instead. If the positional merge regresses, ArrowBuilder
+# rejects the recordbatch with "Field 'value' missing extension metadata",
+# the sink stalls before writing, and the iceberg_scan below sees no data.
+> CREATE TABLE attrs(id int, props map[text => text]);
+
+> INSERT INTO attrs VALUES
+    (1, '{a=>foo,b=>bar}'),
+    (2, '{}'),
+    (3, '{key=>value}');
+
+> CREATE SINK map_demo
+    FROM attrs
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'map_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (id) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+# Verify the map round-trips: cardinality + sorted keys/values. Avoid
+# `props::VARCHAR` because the textual rendering of MAP differs across
+# DuckDB versions.
+$ duckdb-query name=iceberg
+SELECT id, cardinality(props), list_sort(map_keys(props))::VARCHAR, list_sort(map_values(props))::VARCHAR FROM iceberg_scan('s3://test-bucket/default_namespace/map_table') ORDER BY id
+1 2 [a, b] [bar, foo]
+2 0 [] []
+3 1 [key] [value]

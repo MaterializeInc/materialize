@@ -651,7 +651,14 @@ fn merge_field_metadata_recursive(
                 },
                 None => None,
             };
-            let new_entries = merge_field_metadata_recursive(iceberg_entries, mz_entries)?;
+            // The Iceberg arrow representation names map fields differently from
+            // Materialize (`key_value`/`key`/`value` vs `entries`/`keys`/`values`),
+            // so name-based matching on the entries struct would drop the value
+            // field's extension metadata. Merge the entries struct positionally.
+            let new_entries = match mz_entries {
+                Some(mz_entries) => merge_map_entries_metadata(iceberg_entries, mz_entries)?,
+                None => iceberg_entries.as_ref().clone(),
+            };
             DataType::Map(Arc::new(new_entries), *sorted)
         }
         other => other.clone(),
@@ -661,6 +668,70 @@ fn merge_field_metadata_recursive(
         iceberg_field.name(),
         new_data_type,
         iceberg_field.is_nullable(),
+    )
+    .with_metadata(metadata))
+}
+
+/// Merge metadata into a Map's entries struct, matching key/value positionally.
+///
+/// Iceberg's arrow representation names map fields `key_value`/`key`/`value`,
+/// while Materialize uses `entries`/`keys`/`values`. Name-based matching would
+/// drop the materialize extension metadata for the value field, which then
+/// causes `ArrowBuilder` to fail with "Field 'value' missing extension metadata".
+///
+/// Positional matching is safe because the Arrow spec defines Map structurally,
+/// not by field name: `List<entries: Struct<key: K, value: V>>` with exactly
+/// two struct children — key first, value second — and the names are only
+/// conventional. See `Map` in apache/arrow `format/Schema.fbs`:
+/// <https://github.com/apache/arrow/blob/main/format/Schema.fbs> — "The names
+/// of the child fields may be respectively 'entries', 'key', and 'value', but
+/// this is not enforced."
+///
+/// Future cleanup: we could instead align Materialize's arrow map field names
+/// with the Parquet/Iceberg convention (`key_value`/`key`/`value`) in
+/// `mz_arrow_util::builder::scalar_to_arrow_datatype_impl` and drop this
+/// positional helper. That would also affect `COPY TO S3 ... FORMAT = 'parquet'`
+/// output schemas, so we'd need to confirm no downstream consumers depend on
+/// the current `entries`/`keys`/`values` names before flipping.
+fn merge_map_entries_metadata(
+    iceberg_entries: &Field,
+    mz_entries: &Field,
+) -> anyhow::Result<Field> {
+    let mut metadata = iceberg_entries.metadata().clone();
+    if let Some(extension_name) = mz_entries.metadata().get(ARROW_EXTENSION_NAME_KEY) {
+        metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), extension_name.clone());
+    }
+
+    let iceberg_fields = match iceberg_entries.data_type() {
+        DataType::Struct(fields) => fields,
+        other => anyhow::bail!(
+            "Iceberg map entries field '{}' is not a Struct: {:?}",
+            iceberg_entries.name(),
+            other
+        ),
+    };
+    let mz_fields = match mz_entries.data_type() {
+        DataType::Struct(fields) => fields,
+        other => anyhow::bail!(
+            "Materialize map entries field '{}' is not a Struct: {:?}",
+            mz_entries.name(),
+            other
+        ),
+    };
+
+    let new_fields: Vec<Field> = iceberg_fields
+        .iter()
+        .enumerate()
+        .map(|(idx, iceberg_inner)| {
+            let mz_inner = mz_fields.get(idx).map(|f| f.as_ref());
+            merge_field_metadata_recursive(iceberg_inner, mz_inner)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    Ok(Field::new(
+        iceberg_entries.name(),
+        DataType::Struct(new_fields.into()),
+        iceberg_entries.is_nullable(),
     )
     .with_metadata(metadata))
 }
@@ -1996,6 +2067,71 @@ mod tests {
             .id;
         assert_eq!(equality_ids, vec![expected_id]);
         assert_ne!(expected_id, 2);
+    }
+
+    /// Regression test: iceberg-rust names map fields `key_value`/`key`/`value`
+    /// while Materialize uses `entries`/`keys`/`values`. The schema merge must
+    /// still copy the value field's extension metadata across so ArrowBuilder
+    /// can build the inner builder.
+    #[mz_ore::test]
+    #[allow(clippy::disallowed_types)]
+    fn merge_map_entries_preserves_value_extension_metadata() {
+        use std::collections::HashMap;
+
+        let mz_value_metadata = HashMap::from([(
+            ARROW_EXTENSION_NAME_KEY.to_string(),
+            "materialize.v1.string".to_string(),
+        )]);
+        let mz_entries = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("keys", DataType::Utf8, false),
+                    Field::new("values", DataType::Utf8, true).with_metadata(mz_value_metadata),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let mz_map = Field::new("m", DataType::Map(Arc::new(mz_entries), false), true)
+            .with_metadata(HashMap::from([(
+                ARROW_EXTENSION_NAME_KEY.to_string(),
+                "materialize.v1.map".to_string(),
+            )]));
+
+        let iceberg_entries = Field::new(
+            "key_value",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let iceberg_map = Field::new("m", DataType::Map(Arc::new(iceberg_entries), false), true);
+
+        let merged = merge_field_metadata_recursive(&iceberg_map, Some(&mz_map))
+            .expect("merge should succeed");
+
+        let entries = match merged.data_type() {
+            DataType::Map(entries, _) => entries.as_ref(),
+            other => panic!("expected Map, got {other:?}"),
+        };
+        let entry_fields = match entries.data_type() {
+            DataType::Struct(fields) => fields,
+            other => panic!("expected Struct, got {other:?}"),
+        };
+        // Iceberg naming must be preserved on the merged schema...
+        assert_eq!(entry_fields[0].name(), "key");
+        assert_eq!(entry_fields[1].name(), "value");
+        // ...and the materialize extension must have been copied positionally
+        // to the value field even though its name didn't match `values`.
+        assert_eq!(
+            entry_fields[1].metadata().get(ARROW_EXTENSION_NAME_KEY),
+            Some(&"materialize.v1.string".to_string()),
+        );
     }
 }
 
