@@ -150,6 +150,9 @@ available. To create additional users:
 password. ![Image of Materialize Console login screen with mz_system
 user](/images/mz_system_login.png "Materialize Console login screen with
 mz_system user")
+{{< note >}}
+This login screen appears only for authenticator kinds Password and SASL/SCRAM.
+{{< /note >}}
 
 1. Use [`CREATE ROLE ... WITH LOGIN PASSWORD ...`](/sql/create-role) to create
 new users:
