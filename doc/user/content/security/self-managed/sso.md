@@ -595,7 +595,7 @@ username and password to obtain an ID token.
      --data-urlencode "grant_type=password" \
      --data-urlencode "username=svc-materialize@your-org.com" \
      --data-urlencode "password=YOUR_SERVICE_ACCOUNT_PASSWORD" \
-     --data-urlencode "scope=openid" \
+     --data-urlencode "scope=openid email" \
      --data-urlencode "client_id=YOUR_CLIENT_ID"
    ```
 
@@ -623,7 +623,7 @@ username and password to obtain an ID token.
      --data-urlencode "grant_type=password" \
      --data-urlencode "username=svc-materialize@your-org.com" \
      --data-urlencode "password=YOUR_SERVICE_ACCOUNT_PASSWORD" \
-     --data-urlencode "scope=openid" \
+     --data-urlencode "scope=openid email" \
      --data-urlencode "client_id=YOUR_CLIENT_ID" \
      --data-urlencode "client_secret=YOUR_CLIENT_SECRET"
    ```
