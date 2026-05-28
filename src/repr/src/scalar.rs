@@ -13,16 +13,20 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
+#[cfg(any(test, feature = "proptest"))]
 use std::ops::Add;
 use std::sync::LazyLock;
 
 use anyhow::bail;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+#[cfg(any(test, feature = "proptest"))]
+use chrono::TimeZone;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
+#[cfg(any(test, feature = "proptest"))]
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -42,11 +46,13 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::pg_legacy_name::PgLegacyName;
-use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
+use crate::adt::range::Range;
+#[cfg(any(test, feature = "proptest"))]
+use crate::adt::range::{RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
-use crate::adt::timestamp::{
-    CheckedTimestamp, HIGH_DATE, LOW_DATE, TimestampError, TimestampPrecision,
-};
+use crate::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampPrecision};
+#[cfg(any(test, feature = "proptest"))]
+use crate::adt::timestamp::{HIGH_DATE, LOW_DATE};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::relation::ReprColumnType;
 pub use crate::relation_and_scalar::ProtoScalarType;
