@@ -643,12 +643,6 @@ username and password to obtain an ID token.
 Use this approach to treat an IdP client as a service account. This is useful
 for automated systems that do not have a user context.
 
-The `oidc_authentication_claim` setting determines which token claim maps to the
-Materialize role name. Note that Client Credentials tokens are **access tokens**
-(not ID tokens) and may not include the same claims as user tokens. In
-particular, the default `sub` claim contains the client ID, not a
-human-readable name.
-
 {{< tabs >}}
 {{< tab "Okta" >}}
 
