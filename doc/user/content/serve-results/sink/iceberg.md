@@ -219,7 +219,6 @@ CREATE SINK <sink_name>
     NAMESPACE = '<my_s3_table_bucket_namespace>',
     TABLE = '<my_iceberg_table>'
   )
-  USING AWS CONNECTION aws_connection
   KEY (<key>)
   MODE UPSERT
   WITH (COMMIT INTERVAL = '<commit_interval>');
@@ -238,7 +237,6 @@ CREATE SINK <sink_name>
     NAMESPACE = '<my_s3_table_bucket_namespace>',
     TABLE = '<my_iceberg_table>'
   )
-  USING AWS CONNECTION aws_connection
   MODE APPEND
   WITH (COMMIT INTERVAL = '<commit_interval>');
 ```

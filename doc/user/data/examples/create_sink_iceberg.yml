@@ -7,7 +7,6 @@
       NAMESPACE = '<namespace>',
       TABLE = '<table>'
     )
-    USING AWS CONNECTION <aws_connection>
     KEY ( <key_col> [, ...] ) [NOT ENFORCED]
     MODE UPSERT
     WITH (COMMIT INTERVAL = '<interval>')
@@ -37,9 +36,6 @@
         doesn't exist, Materialize creates it automatically. For details, see
         [Iceberg table
         creation](/sql/create-sink/iceberg/#iceberg-table-creation).
-    - name: "**USING AWS CONNECTION** `<aws_connection>`"
-      description: |
-        The [AWS connection](/sql/create-connection/#aws) for object storage access.
     - name: "**KEY** ( `<key_col>` [, ...] )"
       description: |
         The columns that uniquely identify rows. Materialize validates that the key is unique unless `NOT ENFORCED` is specified.
@@ -62,7 +58,6 @@
       NAMESPACE = '<namespace>',
       TABLE = '<table>'
     )
-    USING AWS CONNECTION <aws_connection>
     MODE APPEND
     WITH (COMMIT INTERVAL = '<interval>')
   syntax_elements:
@@ -91,9 +86,6 @@
         doesn't exist, Materialize creates it automatically. For details, see
         [Iceberg table
         creation](/sql/create-sink/iceberg/#iceberg-table-creation).
-    - name: "**USING AWS CONNECTION** `<aws_connection>`"
-      description: |
-        The [AWS connection](/sql/create-connection/#aws) for object storage access.
     - name: "**MODE APPEND**"
       description: |
         Writes all changes as data rows instead of using Iceberg delete files.
@@ -118,7 +110,6 @@
         NAMESPACE = 'events',
         TABLE = 'user_events'
       )
-      USING AWS CONNECTION aws_connection
       KEY (user_id, event_timestamp)
       MODE UPSERT
       WITH (COMMIT INTERVAL = '1m');
@@ -136,7 +127,6 @@
         NAMESPACE = 'events',
         TABLE = 'user_events_log'
       )
-      USING AWS CONNECTION aws_connection
       MODE APPEND
       WITH (COMMIT INTERVAL = '1m');
   testable: false
