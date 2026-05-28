@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-revision: 5a511a1f59
+revision: 5545dadf4d
 ---
 
 # mz-expr::scalar::func
@@ -19,3 +19,4 @@ Submodules define the function enum infrastructure and per-type implementations:
 
 `UnaryFunc`, `BinaryFunc`, `VariadicFunc`, and `UnmaterializableFunc` are re-exported and referenced by `MirScalarExpr`.
 Several timestamp/date/interval arithmetic functions have corrected `is_monotone` annotations: `add_timestamp_interval`, `add_timestamp_tz_interval`, `sub_timestamp_interval`, `sub_timestamp_tz_interval` are `(false, false)`; `add_date_interval` and `sub_date_interval` are `(true, false)` (monotone in the date argument but not in the interval argument); `date_bin_timestamp` and `date_bin_timestamp_tz` are `(false, true)` (not monotone in stride, but monotone in source). These corrections reflect that `Interval` lex order (months, days, micros) does not respect calendar-aware arithmetic with day-clamping.
+`age_timestamp` and `age_timestamp_tz` carry no `is_monotone` annotation (non-monotone in both arguments): as `a` increases past a month boundary, `months` increments while `days` drops, producing a lex-smaller `Interval`; holding `a` fixed and varying `b` produces a V-shape at `a == b`.
