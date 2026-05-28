@@ -1,0 +1,451 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE a (k int)
+
+statement ok
+CREATE TABLE b (x int, y int, k int)
+
+statement ok
+CREATE TABLE c (k int)
+
+statement ok
+INSERT INTO a VALUES (1)
+
+# Only (5, 5, 100) satisfies the b.x = b.y filter.
+statement ok
+INSERT INTO b VALUES (5, 5, 100), (3, 7, 200)
+
+statement ok
+INSERT INTO c VALUES (100)
+
+# Baseline: with the variadic LEFT JOIN lowering disabled, the generic
+# outer-join lowering classifies `b.x = b.y` as a right-local filter and
+# produces the correct single-row result.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON b.x = b.y) LEFT JOIN c ON b.k = c.k
+----
+Explained Query:
+  With
+    cte l0 =
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          ReadStorage materialize.public.a
+        ArrangeBy keys=[[]]
+          Filter (#0 = #1)
+            ReadStorage materialize.public.b
+    cte l1 =
+      Union
+        Get l0
+        Project (#0, #2..=#4)
+          Map (null, null, null)
+            Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                Union
+                  Negate
+                    Distinct project=[#0]
+                      Project (#0)
+                        Get l0
+                  Distinct project=[#0]
+                    ReadStorage materialize.public.a
+              ArrangeBy keys=[[#0]]
+                ReadStorage materialize.public.a
+    cte l2 =
+      ArrangeBy keys=[[#3{k}]]
+        Filter (#3{k}) IS NOT NULL
+          Get l1
+    cte l3 =
+      Project (#0..=#3)
+        Join on=(#3{k} = #4{k}) type=differential
+          Get l2
+          ArrangeBy keys=[[#0{k}]]
+            Filter (#0{k}) IS NOT NULL
+              ReadStorage materialize.public.c
+  Return
+    Union
+      Map (null)
+        Union
+          Negate
+            Project (#0..=#3)
+              Join on=(#3{k} = #4) type=differential
+                Get l2
+                ArrangeBy keys=[[#0]]
+                  Distinct project=[#0]
+                    Project (#3)
+                      Get l3
+          Get l1
+      Project (#0..=#3, #3)
+        Get l3
+
+Source materialize.public.a
+Source materialize.public.b
+  filter=((#0 = #1))
+Source materialize.public.c
+  filter=((#0{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON b.x = b.y) LEFT JOIN c ON b.k = c.k
+----
+1  5  5  100  100
+
+# Re-enable the variadic lowering (the system default) and re-run the
+# same query. The expected result is unchanged.
+# But we have observed a buggy extra NULL-enriched row (in comments below)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON b.x = b.y) LEFT JOIN c ON b.k = c.k
+----
+Explained Query:
+  With
+    cte l0 =
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          ReadStorage materialize.public.a
+        ArrangeBy keys=[[]]
+          Filter (#0 = #1)
+            ReadStorage materialize.public.b
+    cte l1 =
+      Union
+        Get l0
+        Project (#0, #2..=#4)
+          Map (null, null, null)
+            Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                Union
+                  Negate
+                    Distinct project=[#0]
+                      Project (#0)
+                        Get l0
+                  Distinct project=[#0]
+                    ReadStorage materialize.public.a
+              ArrangeBy keys=[[#0]]
+                ReadStorage materialize.public.a
+    cte l2 =
+      ArrangeBy keys=[[#3{k}]]
+        Filter (#3{k}) IS NOT NULL
+          Get l1
+    cte l3 =
+      Project (#0..=#3)
+        Join on=(#3{k} = #4{k}) type=differential
+          Get l2
+          ArrangeBy keys=[[#0{k}]]
+            Filter (#0{k}) IS NOT NULL
+              ReadStorage materialize.public.c
+  Return
+    Union
+      Map (null)
+        Union
+          Negate
+            Project (#0..=#3)
+              Join on=(#3{k} = #4) type=differential
+                Get l2
+                ArrangeBy keys=[[#0]]
+                  Distinct project=[#0]
+                    Project (#3)
+                      Get l3
+          Get l1
+      Project (#0..=#3, #3)
+        Get l3
+
+Source materialize.public.a
+Source materialize.public.b
+  filter=((#0 = #1))
+Source materialize.public.c
+  filter=((#0{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON b.x = b.y) LEFT JOIN c ON b.k = c.k
+----
+1  5  5  100  100
+
+# 1  NULL  NULL  NULL  NULL
+
+query IIII rowsort
+SELECT a.k, b.k, b.x, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL
+
+statement ok
+INSERT INTO b VALUES (5, 6, 1)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO false
+----
+COMPLETE 0
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL  NULL
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arrange (#0{k})
+        →Fused with Child Map/Filter/Project
+          Filter: (#0{k}) IS NOT NULL
+            →Read materialize.public.a
+    cte l1 =
+      →Differential Join %1 » %0
+        Join stage 0 in %0 with lookup key #0{k}
+        →Arranged l0
+        →Arrange (#2{k})
+          →Read materialize.public.b
+    cte l2 =
+      →Union
+        →Map/Filter/Project
+          Project: #0..=#3
+          Map: null, null, null
+            →Consolidating Union
+              →Negate Diffs
+                →Differential Join %1 » %0
+                  Join stage 0 in %0 with lookup key #0{k}
+                  →Arranged l0
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #0
+                        →Read l1
+              →Stream materialize.public.a
+        →Fused with Child Map/Filter/Project
+          Project: #0..=#2, #0
+            →Read l1
+    cte l3 =
+      →Arrange (#0{k})
+        →Fused with Child Map/Filter/Project
+          Filter: (#0{k}) IS NOT NULL
+            →Read l2
+    cte l4 =
+      →Differential Join %0 » %1
+        Join stage 0 in %1 with lookup key #0{k}
+        →Arranged l3
+        →Arrange (#0{k})
+          →Read materialize.public.c
+  →Return
+    →Union
+      →Map/Filter/Project
+        Project: #0..=#4
+        Map: null
+          →Consolidating Union
+            →Negate Diffs
+              →Differential Join %1 » %0
+                Join stage 0 in %0 with lookup key #0{k}
+                →Arranged l3
+                →Distinct GroupAggregate
+                  →Fused with Child Map/Filter/Project
+                    Project: #0
+                      →Read l4
+            →Stream l2
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#3, #0
+          →Read l4
+
+Source materialize.public.a
+Source materialize.public.b
+  filter=((#0 = #1) AND (#2{k}) IS NOT NULL)
+Source materialize.public.c
+  filter=((#0{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL  NULL
+
+# Additional cases covered by the non-crossing bail-out, plus a few
+# "good path" cases that VOJ should handle via augmentation. Each
+# query is run with the variadic lowering disabled (baseline) and
+# enabled (verify VOJ doesn't diverge from the SQL-correct result).
+
+# Auxiliary table for cases that need a two-column right.
+statement ok
+CREATE TABLE d (k1 int, k2 int)
+
+statement ok
+INSERT INTO d VALUES (1, 2), (5, 5)
+
+# --- baselines (VOJ disabled) ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO false
+----
+COMPLETE 0
+
+# B. LHS-LHS in the inner ON, referencing the inner left relation `b`.
+# Without bail-out: iter 1 augmentation ignores b.x = b.y, so the b rows
+# with b.x != b.y (i.e., (3,7,200) and (5,6,1)) get filtered away by
+# the post-filter and never appear with the expected NULL c.k.
+query IIIII rowsort
+SELECT b.x, b.y, b.k, a.k, c.k
+FROM (b LEFT JOIN a ON b.x = b.y AND b.k = a.k) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL
+5  5  100  NULL  100
+5  6  1  NULL  NULL
+
+# C. LHS-LHS in the outer ON, referencing body columns folded in from
+# the first right. Iter 1 matches a.k=1 against b.k=1 from (5,6,1), so
+# the body row is (1, 5, 6, 1). Iter 2's ON has b.k = c.k AND b.x = b.y;
+# without bail-out the b.x = b.y conjunct kills every product row,
+# including the augmented one that should yield (1, 5, 6, 1, NULL).
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k AND b.x = b.y
+----
+1  5  6  1  NULL
+
+# D. RHS-RHS in the outer ON. Without bail-out the augmented d row has
+# (d.k1 = val, d.k2 = NULL), so d.k1 = d.k2 evaluates to NULL and the
+# augmented row gets filtered out.
+query IIIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1, d.k2
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND d.k1 = d.k2
+----
+1  5  6  1  NULL  NULL
+
+# Positive cases: crossing-only equations that VOJ should actually
+# handle via augmentation.
+
+# E. Simple two-join chain, both joins bound to `a`.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON a.k = c.k
+----
+1  5  6  1  NULL
+
+# F. Iter 2 bound to the prior right (`b`) rather than to `a`. The
+# body row (1, 5, 6, 1) has b.k = 1, which is not in c.k, so the
+# augmentation should add an augmented (c.k = 1) row that matches it.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k
+----
+1  5  6  1  NULL
+
+# G. Multi-column crossing equation in iter 1, single-column in iter 2.
+# Exercises tuple-shaped left_vals / right_vals: only b row (5,5,100)
+# matches d row (5,5), the rest get augmented null d cols.
+query IIIIII rowsort
+SELECT b.x, b.y, b.k, d.k1, d.k2, c.k
+FROM (b LEFT JOIN d ON b.x = d.k1 AND b.y = d.k2) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL  NULL
+5  5  100  5  5  100
+5  6  1  NULL  NULL  NULL
+
+# H. Duplicate LHS column (`a.k = d.k1 AND a.k = d.k2`). Bound to `a`,
+# left_vals is a tuple of two copies of a.k, right_vals is (d.k1, d.k2).
+# For a.k = 1, the tuple (1, 1) is not in d's (d.k1, d.k2) = {(1,2),(5,5)},
+# so a.k = 1 should be unmatched and d cols should be NULL.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND a.k = d.k2
+----
+1  5  6  1  NULL
+
+# --- same queries with VOJ enabled; results must match the baselines ---
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_variadic_left_join_lowering TO true
+----
+COMPLETE 0
+
+# B.
+query IIIII rowsort
+SELECT b.x, b.y, b.k, a.k, c.k
+FROM (b LEFT JOIN a ON b.x = b.y AND b.k = a.k) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL
+5  5  100  NULL  100
+5  6  1  NULL  NULL
+
+# C.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k AND b.x = b.y
+----
+1  5  6  1  NULL
+
+# D.
+query IIIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1, d.k2
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND d.k1 = d.k2
+----
+1  5  6  1  NULL  NULL
+
+# E.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON a.k = c.k
+----
+1  5  6  1  NULL
+
+# F.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, c.k
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN c ON b.k = c.k
+----
+1  5  6  1  NULL
+
+# G.
+query IIIIII rowsort
+SELECT b.x, b.y, b.k, d.k1, d.k2, c.k
+FROM (b LEFT JOIN d ON b.x = d.k1 AND b.y = d.k2) LEFT JOIN c ON b.k = c.k
+----
+3  7  200  NULL  NULL  NULL
+5  5  100  5  5  100
+5  6  1  NULL  NULL  NULL
+
+# H.
+query IIIII rowsort
+SELECT a.k, b.x, b.y, b.k, d.k1
+FROM (a LEFT JOIN b ON a.k = b.k) LEFT JOIN d ON a.k = d.k1 AND a.k = d.k2
+----
+1  5  6  1  NULL
