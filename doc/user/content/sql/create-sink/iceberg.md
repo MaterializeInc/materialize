@@ -15,12 +15,9 @@ Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg s
 AWS S3 Tables. As data changes in Materialize, your Iceberg tables are
 automatically kept up to date.
 
-To create an Iceberg sink, you need:
-
-- An [AWS connection](/sql/create-connection/#aws) for authentication with
-  object storage.
-- An [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to
-  specify access parameters to your Iceberg catalog.
+To create an Iceberg sink, you need an [Iceberg catalog
+connection](/sql/create-connection/#iceberg-catalog) that specifies access
+parameters to your Iceberg catalog.
 
 ## Syntax
 
@@ -170,8 +167,7 @@ Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/mai
 
 ### Prerequisites: Create connections
 
-To create an Iceberg sink, you need an AWS connection and an Iceberg catalog
-connection.
+To create an Iceberg sink, you need an Iceberg catalog connection.
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-connection" %}}
@@ -198,7 +194,6 @@ CREATE SINK deduped_sink
     NAMESPACE = 'raw',
     TABLE = 'events'
   )
-  USING AWS CONNECTION aws_connection
   KEY (event_id) NOT ENFORCED
   MODE UPSERT
   WITH (COMMIT INTERVAL = '1m');
