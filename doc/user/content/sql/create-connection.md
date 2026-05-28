@@ -180,12 +180,11 @@ CREATE CONNECTION gcs_connection TO AWS (
 
 ### GCP
 
-A Google Cloud Platform (GCP) connection provides Materialize with access to a
-[service
-account](https://docs.cloud.google.com/iam/docs/service-account-overview) in your
-GCP project. You can use a GCP connection to authenticate with [Google Cloud
-BigLake](https://cloud.google.com/biglake) when creating an [Iceberg catalog
-connection](#iceberg-catalog).
+A Google Cloud Platform (GCP) connection gives Materialize
+a [service account](https://docs.cloud.google.com/iam/docs/service-account-overview)
+in your GCP project. You can use a GCP connection to authenticate with
+[Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog)
+when creating an [Iceberg catalog connection](#iceberg-catalog).
 
 #### Syntax {#gcp-syntax}
 
@@ -193,15 +192,10 @@ connection](#iceberg-catalog).
 
 #### Service account key {#gcp-service-account-key}
 
-Materialize authenticates as a [service
-account](https://docs.cloud.google.com/iam/docs/service-account-overview) that you
-own. Create a service-account key in JSON format using `gcloud iam
-service-accounts keys create` or the [Cloud
-Console](https://console.cloud.google.com/iam-admin/serviceaccounts), then
-load the key into a [secret](/sql/create-secret/) in Materialize.
+Materialize authenticates as a [service account](https://docs.cloud.google.com/iam/docs/service-account-overview) you own.
 
-The recommended pattern is to base64-encode the key file and use `decode()` to
-avoid pasting a multi-line JSON literal into SQL:
+[Create a service-account key in JSON format](https://docs.cloud.google.com/iam/docs/keys-create-delete#creating),
+then load the key into a [secret](/sql/create-secret/) in Materialize:
 
 ```bash
 base64 < key.json
@@ -211,6 +205,8 @@ base64 < key.json
 CREATE SECRET gcp_service_account_key
   AS decode('<base64-encoded service account key JSON>', 'base64');
 ```
+
+We recommend you base64-encode the key avoid pasting a multi-line JSON literal into SQL.
 
 #### Example {#gcp-example}
 
@@ -856,10 +852,9 @@ Materialize supports two catalog types:
 - `'s3tablesrest'` — [AWS S3
   Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
   Authenticates with an [AWS connection](#aws).
-- `'rest'` — Generic Iceberg REST catalog, including [Google Cloud
-  BigLake](https://cloud.google.com/biglake). Authenticates with a [GCP
-  connection](#gcp) or, for catalogs that speak OAuth2, a `CREDENTIAL`
-  secret.
+- `'rest'` — Generic Iceberg REST catalog, currently [Google Cloud
+  BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
+  Authenticates with a [GCP connection](#gcp).
 
 #### Syntax {#iceberg-catalog-syntax}
 
