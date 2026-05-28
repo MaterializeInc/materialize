@@ -11,6 +11,7 @@
 //!
 //! See `doc/developer/design/20260527_persist_committer.md`.
 
+#[allow(clippy::clone_on_ref_ptr, clippy::as_conversions)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/mz_persist_committer.rs"));
 }

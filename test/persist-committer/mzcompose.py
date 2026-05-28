@@ -31,9 +31,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """Run the smoke and restart workflows."""
-    c.workflow("smoke")
-    c.workflow("restart")
+    """Run every non-default workflow."""
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_smoke(c: Composition) -> None:

@@ -50,8 +50,8 @@ message ProtoTruncateRequest {
   uint64 seqno = 2;
 }
 message ProtoTruncateResponse {
-  // Absent if the underlying store could not report a count (matches
-  // Consensus::truncate's Result<Option<usize>>).
+  // Absent if the underlying store could not report a count, matching
+  // the inner Option in the underlying Consensus::truncate return type.
   optional uint64 deleted = 1;
 }
 

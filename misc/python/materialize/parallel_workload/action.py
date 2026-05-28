@@ -1522,6 +1522,23 @@ class FlipFlagsAction(Action):
             "row_with_validate",
             "arrow",
         ]
+        self.flags_with_values["persist_consensus_use_committer"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["persist_committer_cache_enabled"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["persist_committer_max_cached_shards"] = [
+            "100",
+            "1000",
+            "10000",
+            "100000",
+        ]
+        self.flags_with_values["persist_committer_cache_refresh_interval"] = [
+            "1s",
+            "5s",
+            "30s",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )

@@ -66,7 +66,7 @@ mod tests {
     use mz_persist::location::{SeqNo, VersionedData};
     use mz_persist::mem::MemConsensus;
 
-    #[tokio::test(start_paused = true)]
+    #[mz_ore::test(tokio::test(start_paused = true))]
     async fn refresh_picks_up_underlying_writes() {
         let underlying: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
         let cache = Arc::new(ShardCache::new(100));
@@ -94,7 +94,12 @@ mod tests {
             .await
             .unwrap();
 
-        let _handle = spawn_refresh(underlying, cache.clone(), registry, Duration::from_secs(1));
+        let _handle = spawn_refresh(
+            underlying,
+            Arc::clone(&cache),
+            registry,
+            Duration::from_secs(1),
+        );
 
         tokio::time::advance(Duration::from_millis(1500)).await;
         for _ in 0..50 {

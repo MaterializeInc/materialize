@@ -58,7 +58,7 @@ impl ShardCache {
 
     pub fn get(&self, shard: &str) -> Option<VersionedData> {
         let inner = self.inner.lock().expect("ShardCache lock poisoned");
-        let entry = inner.map.get(shard)?.clone();
+        let entry = Arc::clone(inner.map.get(shard)?);
         drop(inner);
         let guard = entry.lock().expect("ShardCache lock poisoned");
         guard.current.clone()
@@ -92,7 +92,7 @@ impl ShardCache {
     fn entry(&self, shard: &str) -> Arc<Mutex<CachedState>> {
         let mut inner = self.inner.lock().expect("ShardCache lock poisoned");
         if let Some(e) = inner.map.get(shard) {
-            return e.clone();
+            return Arc::clone(e);
         }
         if inner.map.len() >= self.max_shards {
             self.evict_one_locked(&mut inner);
@@ -103,7 +103,7 @@ impl ShardCache {
             subscribers: 0,
             last_access: tick,
         }));
-        inner.map.insert(shard.to_string(), entry.clone());
+        inner.map.insert(shard.to_string(), Arc::clone(&entry));
         entry
     }
 
@@ -153,7 +153,7 @@ mod tests {
     fn v(seqno: u64) -> VersionedData {
         VersionedData {
             seqno: SeqNo(seqno),
-            data: Bytes::from(vec![seqno as u8]),
+            data: Bytes::from(vec![u8::try_from(seqno & 0xff).unwrap()]),
         }
     }
 
@@ -180,7 +180,7 @@ mod tests {
         c.insert("b", v(1));
         c.insert("c", v(1));
         assert!(c.get("c").is_some());
-        let surviving = c.get("a").is_some() as u8 + c.get("b").is_some() as u8;
+        let surviving = usize::from(c.get("a").is_some()) + usize::from(c.get("b").is_some());
         assert_eq!(surviving, 1);
     }
 

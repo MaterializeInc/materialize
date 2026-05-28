@@ -69,11 +69,11 @@ mod tests {
     fn v(seqno: u64) -> VersionedData {
         VersionedData {
             seqno: SeqNo(seqno),
-            data: Bytes::from(vec![seqno as u8]),
+            data: Bytes::from(vec![u8::try_from(seqno & 0xff).unwrap()]),
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn broadcast_reaches_all_subscribers() {
         let registry = SubscriberRegistry::new();
         let mut a = registry.register("s1");
@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(b.recv().await.unwrap().seqno, SeqNo(1));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn other_shards_do_not_receive() {
         let registry = SubscriberRegistry::new();
         let mut a = registry.register("s1");
@@ -91,7 +91,7 @@ mod tests {
         assert!(a.try_recv().is_err());
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn slow_subscriber_drops_old_messages() {
         let registry = SubscriberRegistry::with_buffer(2);
         let mut a = registry.register("s1");

@@ -332,14 +332,16 @@ mod tests {
 
     fn fixture() -> (Arc<MemConsensus>, PersistCommitter) {
         let consensus = Arc::new(MemConsensus::default());
+        let consensus_dyn: Arc<dyn Consensus + Send + Sync> =
+            Arc::<MemConsensus>::clone(&consensus);
         let cache = Arc::new(ShardCache::new(100));
         let registry = Arc::new(SubscriberRegistry::new());
         let metrics = CommitterMetrics::for_tests();
-        let committer = PersistCommitter::new(consensus.clone(), cache, registry, metrics);
+        let committer = PersistCommitter::new(consensus_dyn, cache, registry, metrics);
         (consensus, committer)
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn head_reads_from_consensus_on_miss() {
         let (consensus, committer) = fixture();
         let _ = consensus.compare_and_set("s1", v(0, 0xAA)).await.unwrap();
@@ -347,7 +349,7 @@ mod tests {
         assert_eq!(got.unwrap().seqno, SeqNo(0));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn head_returns_cached_value_without_underlying() {
         // Underlying is empty; cache is pre-populated; head must return cache.
         let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
@@ -360,7 +362,7 @@ mod tests {
         assert_eq!(got.unwrap().seqno, SeqNo(5));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn cas_committed_updates_cache_and_publishes() {
         let (_, committer) = fixture();
         let mut sub = committer.registry.register("s1");
@@ -375,7 +377,7 @@ mod tests {
         assert_eq!(head.seqno, SeqNo(0));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn cas_mismatch_refreshes_cache_async() {
         let (consensus, committer) = fixture();
         // Underlying gets a value the committer's cache doesn't know about.
@@ -395,7 +397,7 @@ mod tests {
         assert_eq!(committer.cache.get("s1").unwrap().seqno, SeqNo(0));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn truncate_passthrough() {
         let (consensus, committer) = fixture();
         let _ = consensus.compare_and_set("s1", v(0, 0xAA)).await.unwrap();
@@ -405,7 +407,7 @@ mod tests {
         assert_eq!(deleted, Some(1));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn list_keys_returns_underlying_keys() {
         let (consensus, committer) = fixture();
         let _ = consensus.compare_and_set("s1", v(0, 0xAA)).await.unwrap();
