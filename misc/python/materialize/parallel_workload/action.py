@@ -1535,6 +1535,11 @@ class FlipFlagsAction(Action):
             "'5s'",
             "'30s'",
         ]
+        self.flags_with_values["persist_committer_stats_heartbeat_interval"] = [
+            "'0s'",
+            "'5s'",
+            "'30s'",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )

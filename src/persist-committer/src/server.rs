@@ -15,6 +15,7 @@
 //! itself is in a follow-up.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::TryStreamExt;
 use mz_ore::task::spawn;
@@ -53,6 +54,21 @@ impl PersistCommitter {
         }
     }
 
+    /// Time a single underlying-consensus call and record the elapsed time
+    /// under `op` in `backing_duration_seconds`.
+    async fn time_backing<F, T>(&self, op: &str, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        let start = Instant::now();
+        let out = fut.await;
+        self.metrics
+            .backing_duration_seconds
+            .with_label_values(&[op])
+            .observe(start.elapsed().as_secs_f64());
+        out
+    }
+
     /// Read the latest `VersionedData` for `shard`, populating the cache on miss.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn head_inner(&self, shard: &str) -> Result<Option<VersionedData>, ExternalError> {
@@ -68,7 +84,9 @@ impl PersistCommitter {
             .cache_misses_total
             .with_label_values(&["head"])
             .inc();
-        let head = self.consensus.head(shard).await?;
+        let head = self
+            .time_backing("head", self.consensus.head(shard))
+            .await?;
         if let Some(v) = &head {
             debug!(shard, seqno = ?v.seqno, "head cache miss, populating from underlying");
             self.cache.insert(shard, v.clone());
@@ -83,7 +101,8 @@ impl PersistCommitter {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        self.consensus.scan(shard, from, limit).await
+        self.time_backing("scan", self.consensus.scan(shard, from, limit))
+            .await
     }
 
     /// Forward a `compare_and_set` to the backing store.
@@ -99,7 +118,9 @@ impl PersistCommitter {
         shard: &str,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        let result = self.consensus.compare_and_set(shard, new.clone()).await?;
+        let result = self
+            .time_backing("cas", self.consensus.compare_and_set(shard, new.clone()))
+            .await?;
         match result {
             CaSResult::Committed => {
                 debug!(shard, seqno = ?new.seqno, "committer CaS committed");
@@ -108,7 +129,7 @@ impl PersistCommitter {
             }
             CaSResult::ExpectationMismatch => {
                 debug!(shard, seqno = ?new.seqno, "committer CaS mismatch, refreshing");
-                self.spawn_refresh(shard.to_string());
+                self.spawn_refresh(shard.to_string(), Instant::now());
             }
         }
         Ok(result)
@@ -121,14 +142,18 @@ impl PersistCommitter {
         shard: &str,
         seqno: SeqNo,
     ) -> Result<Option<usize>, ExternalError> {
-        self.consensus.truncate(shard, seqno).await
+        self.time_backing("truncate", self.consensus.truncate(shard, seqno))
+            .await
     }
 
     /// Collect the backing store's `list_keys` stream into a vector. This is
     /// an administrative operation; not on the hot path.
     pub async fn list_keys_inner(&self) -> Result<Vec<String>, ExternalError> {
-        let stream = self.consensus.list_keys();
-        stream.try_collect().await
+        self.time_backing("list_keys", async {
+            let stream = self.consensus.list_keys();
+            stream.try_collect().await
+        })
+        .await
     }
 
     /// Register a subscriber for `shard`, returning the broadcast receiver and
@@ -157,12 +182,19 @@ impl PersistCommitter {
 
     /// Spawn a background `head()` to refresh the cache for `shard`. Failures
     /// are logged and dropped; the TTL refresh task is the safety net.
-    fn spawn_refresh(&self, shard: String) {
+    /// `mismatch_at` is the moment the triggering CaS mismatch was observed,
+    /// used to record `cas_refresh_lag_seconds` on completion.
+    fn spawn_refresh(&self, shard: String, mismatch_at: Instant) {
         let consensus = Arc::clone(&self.consensus);
         let cache = Arc::clone(&self.cache);
         let registry = Arc::clone(&self.registry);
+        let metrics = self.metrics.clone();
         spawn(|| "persist_committer::cas_mismatch_refresh", async move {
-            match consensus.head(&shard).await {
+            let result = consensus.head(&shard).await;
+            metrics
+                .cas_refresh_lag_seconds
+                .observe(mismatch_at.elapsed().as_secs_f64());
+            match result {
                 Ok(Some(v)) => {
                     let prev = cache.get(&shard).map(|p| p.seqno);
                     let new_seqno = v.seqno;
@@ -228,14 +260,79 @@ fn to_proto_error(e: ExternalError) -> ProtoOperationError {
     }
 }
 
+fn outcome_label<T>(r: &Result<T, ExternalError>) -> &'static str {
+    match r {
+        Ok(_) => "ok",
+        Err(ExternalError::Determinate(_)) => "err_determinate",
+        Err(ExternalError::Indeterminate(_)) => "err_indeterminate",
+    }
+}
+
+fn cas_outcome_label(r: &Result<CaSResult, ExternalError>) -> &'static str {
+    match r {
+        Ok(CaSResult::Committed) => "committed",
+        Ok(CaSResult::ExpectationMismatch) => "mismatch",
+        Err(ExternalError::Determinate(_)) => "err_determinate",
+        Err(ExternalError::Indeterminate(_)) => "err_indeterminate",
+    }
+}
+
+/// RAII guard that records RPC-level metrics for a single handler invocation.
+/// Increments in-flight gauges on construction, decrements on drop, and
+/// observes the total handler duration plus a final outcome counter.
+struct RpcGuard<'a> {
+    metrics: &'a CommitterMetrics,
+    op: &'static str,
+    start: Instant,
+    outcome: &'static str,
+}
+
+impl<'a> RpcGuard<'a> {
+    fn new(metrics: &'a CommitterMetrics, op: &'static str) -> Self {
+        metrics.inflight_rpcs.inc();
+        metrics.inflight_rpcs_by_op.with_label_values(&[op]).inc();
+        Self {
+            metrics,
+            op,
+            start: Instant::now(),
+            outcome: "unknown",
+        }
+    }
+
+    fn set_outcome(&mut self, outcome: &'static str) {
+        self.outcome = outcome;
+    }
+}
+
+impl Drop for RpcGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .rpc_total
+            .with_label_values(&[self.op, self.outcome])
+            .inc();
+        self.metrics
+            .rpc_duration_seconds
+            .with_label_values(&[self.op])
+            .observe(self.start.elapsed().as_secs_f64());
+        self.metrics.inflight_rpcs.dec();
+        self.metrics
+            .inflight_rpcs_by_op
+            .with_label_values(&[self.op])
+            .dec();
+    }
+}
+
 #[async_trait]
 impl ProtoPersistConsensus for PersistCommitter {
     async fn head(
         &self,
         request: Request<ProtoHeadRequest>,
     ) -> std::result::Result<Response<ProtoHeadResponse>, Status> {
+        let mut guard = RpcGuard::new(&self.metrics, "head");
         let shard = request.into_inner().shard;
-        let result = match self.head_inner(&shard).await {
+        let inner = self.head_inner(&shard).await;
+        guard.set_outcome(outcome_label(&inner));
+        let result = match inner {
             Ok(current) => proto_head_response::Result::Ok(ProtoHeadOk {
                 current: current.map(to_proto),
             }),
@@ -250,9 +347,12 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         request: Request<ProtoScanRequest>,
     ) -> std::result::Result<Response<ProtoScanResponse>, Status> {
+        let mut guard = RpcGuard::new(&self.metrics, "scan");
         let r = request.into_inner();
         let limit = usize::try_from(r.limit).unwrap_or(usize::MAX);
-        let result = match self.scan_inner(&r.shard, SeqNo(r.from), limit).await {
+        let inner = self.scan_inner(&r.shard, SeqNo(r.from), limit).await;
+        guard.set_outcome(outcome_label(&inner));
+        let result = match inner {
             Ok(versions) => proto_scan_response::Result::Ok(ProtoScanOk {
                 versions: versions.into_iter().map(to_proto).collect(),
             }),
@@ -267,12 +367,15 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         request: Request<ProtoCompareAndSetRequest>,
     ) -> std::result::Result<Response<ProtoCompareAndSetResponse>, Status> {
+        let mut guard = RpcGuard::new(&self.metrics, "cas");
         let r = request.into_inner();
         let new = from_proto(
             r.new
                 .ok_or_else(|| Status::invalid_argument("missing new VersionedData"))?,
         );
-        let result = match self.cas_inner(&r.shard, new).await {
+        let inner = self.cas_inner(&r.shard, new).await;
+        guard.set_outcome(cas_outcome_label(&inner));
+        let result = match inner {
             Ok(cas_result) => proto_compare_and_set_response::Result::Ok(ProtoCompareAndSetOk {
                 committed: matches!(cas_result, CaSResult::Committed),
             }),
@@ -287,8 +390,11 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         request: Request<ProtoTruncateRequest>,
     ) -> std::result::Result<Response<ProtoTruncateResponse>, Status> {
+        let mut guard = RpcGuard::new(&self.metrics, "truncate");
         let r = request.into_inner();
-        let result = match self.truncate_inner(&r.shard, SeqNo(r.seqno)).await {
+        let inner = self.truncate_inner(&r.shard, SeqNo(r.seqno)).await;
+        guard.set_outcome(outcome_label(&inner));
+        let result = match inner {
             Ok(deleted) => proto_truncate_response::Result::Ok(ProtoTruncateOk {
                 deleted: deleted.map(|n| u64::try_from(n).unwrap_or(u64::MAX)),
             }),
@@ -303,7 +409,10 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         _request: Request<ProtoListKeysRequest>,
     ) -> std::result::Result<Response<ProtoListKeysResponse>, Status> {
-        let result = match self.list_keys_inner().await {
+        let mut guard = RpcGuard::new(&self.metrics, "list_keys");
+        let inner = self.list_keys_inner().await;
+        guard.set_outcome(outcome_label(&inner));
+        let result = match inner {
             Ok(keys) => proto_list_keys_response::Result::Ok(ProtoListKeysOk { keys }),
             Err(e) => proto_list_keys_response::Result::Err(to_proto_error(e)),
         };

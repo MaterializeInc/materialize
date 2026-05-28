@@ -307,6 +307,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::PERSIST_COMMITTER_CACHE_ENABLED)
         .add(&crate::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS)
         .add(&crate::cfg::PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL)
+        .add(&crate::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
         .add(&crate::cfg::CRDB_KEEPALIVES_IDLE)
@@ -426,6 +427,15 @@ pub const PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL: Config<Duration> = Config::n
     "persist_committer_cache_refresh_interval",
     Duration::from_secs(5),
     "TTL at which the persist committer refreshes subscribed shards.",
+);
+
+/// Interval between INFO-level stats heartbeat lines emitted by the
+/// committer. `0s` disables the heartbeat. Useful when metrics scraping is
+/// unavailable (CI logs, incident response).
+pub const PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
+    "persist_committer_stats_heartbeat_interval",
+    Duration::from_secs(30),
+    "Interval between persist committer stats heartbeat lines. 0 disables.",
 );
 
 /// Sets the maximum amount of time we'll wait to acquire a connection from

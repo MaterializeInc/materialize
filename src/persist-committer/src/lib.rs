@@ -17,6 +17,7 @@ pub mod proto {
 }
 
 pub mod cache;
+pub mod heartbeat;
 pub mod in_process;
 pub mod metrics;
 pub mod refresh;

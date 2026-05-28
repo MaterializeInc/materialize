@@ -547,6 +547,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_committer_cache_enabled",
     "persist_committer_max_cached_shards",
     "persist_committer_cache_refresh_interval",
+    "persist_committer_stats_heartbeat_interval",
     "crdb_connect_timeout",
     "crdb_tcp_user_timeout",
     "crdb_keepalives_idle",

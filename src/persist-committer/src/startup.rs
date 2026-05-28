@@ -20,6 +20,7 @@ use mz_persist::location::Consensus;
 use tonic::transport::{Channel, Endpoint, Server};
 
 use crate::cache::ShardCache;
+use crate::heartbeat::spawn_heartbeat;
 use crate::in_process::InProcessConsensus;
 use crate::metrics::CommitterMetrics;
 use crate::refresh::spawn_refresh;
@@ -40,6 +41,7 @@ pub struct CommitterHandle {
     pub loopback_channel: Channel,
     _server_task: mz_ore::task::AbortOnDropHandle<()>,
     _refresh_task: mz_ore::task::AbortOnDropHandle<()>,
+    _heartbeat_task: mz_ore::task::AbortOnDropHandle<()>,
 }
 
 /// Configuration for starting a committer.
@@ -48,6 +50,9 @@ pub struct CommitterConfig {
     pub listen_addr: SocketAddr,
     pub max_cached_shards: usize,
     pub cache_refresh_interval: Duration,
+    /// Periodic stats-log interval. `Duration::ZERO` disables the heartbeat
+    /// entirely; the task is still spawned but exits immediately.
+    pub heartbeat_interval: Duration,
 }
 
 /// Build a `PersistCommitter` from `consensus`, start its gRPC server on the
@@ -69,7 +74,7 @@ pub fn start_committer(
         Arc::clone(&consensus),
         Arc::clone(&cache),
         Arc::clone(&registry),
-        metrics,
+        metrics.clone(),
     ));
 
     let refresh_task = spawn_refresh(
@@ -78,6 +83,7 @@ pub fn start_committer(
         registry,
         config.cache_refresh_interval,
     );
+    let heartbeat_task = spawn_heartbeat(metrics, config.heartbeat_interval);
 
     let listen_addr = config.listen_addr;
     tracing::info!(
@@ -110,5 +116,6 @@ pub fn start_committer(
         loopback_channel,
         _server_task: server_task.abort_on_drop(),
         _refresh_task: refresh_task.abort_on_drop(),
+        _heartbeat_task: heartbeat_task.abort_on_drop(),
     })
 }
