@@ -215,6 +215,26 @@ The minimal viable prototype runs in `mzcompose` and consists of:
 
 Caching, TTL refresh, and metrics layer on after the prototype demonstrates the basic transport works.
 
+## Transport choice
+
+We chose gRPC (tonic + prost) for v1.
+Both endpoints (clusterd ↔ committer, envd ↔ committer) are single-revision in practice: every binary in an environment ships from the same release, and upgrades are atomic.
+gRPC's wire schema and per-RPC encode/decode therefore buy us no compatibility we cannot get with a simpler transport.
+
+Costs of gRPC at v1:
+* Two prost build steps (one in `mz-persist-committer`, the indirect dep in `mz-persist-client`).
+* Per-RPC protobuf encode/decode of `VersionedData.data` between `Bytes` and `Vec<u8>`.
+* HTTP/2 framing on every request.
+
+Cheaper alternatives, ordered by ceremony:
+* `tower::Service` over a custom length-prefixed bincode/postcard codec on raw framed TCP. Drops protobuf but keeps the async-server abstraction.
+* `capnp-rpc` (Cap'n Proto): zero-copy reads, fast, but more setup than bincode.
+* Hand-rolled binary protocol over `tokio::net::TcpStream`. Maximum perf, maximum maintenance.
+
+Decision (v1): keep gRPC.
+The work to swap transports is unblocked and orthogonal to everything else in this design, and gRPC matches the pubsub precedent.
+Benchmark the committer once it has miles; if the per-RPC overhead is a meaningful share of total persist latency, swap to a leaner transport.
+
 ## Alternatives
 
 **Dumb RPC proxy without caching.**
@@ -251,8 +271,9 @@ This defeats the connection-reduction goal at the worst possible moment (envd fa
 * How does the committer interact with the existing `StateCache` inside each `PersistClient`?
   Both are caches with similar semantics; we should confirm the marginal benefit of the committer-side cache empirically before committing to it long-term.
 * What is the right transport for the in-process committer client used by `environmentd` itself?
-  Decision (v1): a tonic in-memory channel.
-  This keeps `environmentd` on the same `RpcConsensus` code path as clusterds; the serialization overhead is acceptable for v1 and can be revisited if profiling shows it matters.
+  Decision (v1): a direct trait-dispatch adapter (`InProcessConsensus`) that calls `PersistCommitter::*_inner` directly, mirroring the pubsub `new_same_process_connection` pattern.
+  An earlier draft routed `environmentd`'s own traffic through a tonic in-memory channel, but pgwire and sqllogictest integration tests deadlocked because the same tokio runtime was driving both the gRPC server and its client.
+  This is a transient workaround that disappears once the committer moves into a separate `persistd` process (see "Future architecture" below).
 * Should we add per-shard authentication or rate limiting?
   Today persist clients are trusted in-cluster, so we propose no authn for v1, but the gRPC service is the natural place to add it later if needed.
 * What is the migration plan for environments where some clusterds still hold direct CRDB pools during the LD flag rollout?
@@ -264,3 +285,68 @@ This defeats the connection-reduction goal at the worst possible moment (envd fa
 * How does `environmentd` expose the committer gRPC service?
   Decision (v1): a dedicated new listener on a configurable port (default `6882`).
   Multiplexing onto the existing controller port was rejected to keep the committer's lifecycle independent of controller protocol churn.
+
+## Out of scope
+
+The timestamp oracle keeps its own direct connection to CockroachDB.
+The oracle does not use persist or the `Consensus` trait, so it falls outside the committer's reach.
+This is a wart — the oracle is a second per-environment persistent connection to the same database — but resolving it is out of scope for this work and tracked separately.
+
+## Future architecture: extract `persistd` as a separate service
+
+The committer's interaction with `environmentd` during this PR's bring-up surfaced a deeper issue.
+Hosting the committer's gRPC server on `environmentd`'s tokio runtime forced us to invent an `InProcessConsensus` adapter (above) to avoid a self-loopback deadlock; gRPC for the in-process path was unworkable on the same runtime.
+Compaction work also lives in `environmentd` today for similar historical reasons, and pubsub's `new_same_process_connection` is a similar accommodation for the same architectural mistake.
+
+The deeper signal is that `environmentd` should not be persist's host process.
+A dedicated `persistd` binary, deployed alongside `environmentd` in Kubernetes (and as a sibling process under the process orchestrator), should own:
+
+* The sole CockroachDB consensus connection pool for the environment.
+* The committer cache, refresh task, and gRPC service.
+* The persist pubsub server (eventually; see "Protocol consolidation" below).
+* Persist compaction workers, which currently squat in `environmentd`.
+
+`environmentd` becomes a client of `persistd` just like any `clusterd`.
+The `InProcessConsensus` adapter introduced in this PR disappears.
+There is exactly one tier holding consensus connections, and it does only persist work — making capacity planning, blast radius, and lifecycle reasoning all simpler.
+
+Resilience: `persistd` is a single-leader role.
+The current envd HA story (two envds during zero-downtime upgrade, leader-discovery via Kubernetes Service readiness) extends naturally to `persistd`.
+
+This work is out of scope for v1.
+The v1 committer ships hosted in `environmentd`; extraction is a follow-up project once both the committer and (separately) the pubsub server have soaked.
+
+## Future direction: protocol consolidation with pubsub
+
+`ProtoPersistPubSub` and the committer's `ProtoPersistConsensus` overlap substantially.
+Both are about per-shard state and diff propagation; pubsub today only broadcasts diffs, while the committer is the canonical writer that produces every diff.
+A future `PersistRouter` service can subsume both:
+
+* `compare_and_set`, `head`, `scan`, `truncate`, `list_keys` from the committer.
+* `subscribe(shard) -> stream<diff>` from pubsub.
+* `push_diff(shard, diff)` — meaningful only during the rollout window when some clients still write directly to CRDB; deprecated once the committer is the universal write path.
+
+Benefits: one TCP connection per clusterd, one schema, one ownership boundary.
+Cost: pubsub has significant production miles and a separate reconnect / backpressure story.
+This is a follow-up after both surfaces have stabilized in their own right; not bundled with v1.
+
+## Future direction: single-writer batched CaS
+
+In the steady state, only one `environmentd` writes a given shard partition.
+Two-writer overlap occurs only during zero-downtime upgrade handover, orchestration anomalies, or external tooling — rare and transient.
+The v1 committer treats every CaS independently: one RPC, one CRDB row write, one round trip.
+
+A future revision can exploit the single-writer invariant:
+
+* **Pipelined batch RPC.** Caller streams `[CaS(shard_A, vA1), CaS(shard_B, vB1), CaS(shard_A, vA2), ...]`.
+  The committer serializes per shard via the existing per-shard slot in `ShardCache`, then bundles across shards into a single CRDB multi-row `INSERT`.
+  Returns per-element results as a response stream.
+  Collapses N round trips into one CRDB transaction.
+* **Multi-writer fast-fail.** The committer remembers the last `seqno` it itself wrote per shard.
+  If a batch element's implicit `expected = new.seqno - 1` disagrees with that view (because another writer landed in between), the batch aborts at that point and the caller learns the position; the rare two-writer case stays correct and surfaces quickly rather than silently degrading every element.
+* **Apply-API (longer term).** Caller sends *intent* rather than state — e.g. "advance frontier", "register compaction" — and the committer holds the canonical state in memory, runs the intent against it, and CaSes the result.
+  Eliminates the entire `fetch_current_state` retry loop in persist clients and slims them dramatically.
+  This is a major architectural shift in `mz-persist-client` and depends on extracting `persistd` first; tracked here only as the long-term north star.
+
+The pipelined batch RPC is the most actionable next step.
+It does not require any client API change beyond an additional batch entry point.
