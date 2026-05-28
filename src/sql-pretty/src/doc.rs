@@ -10,7 +10,7 @@
 //! Functions that convert SQL AST nodes to pretty Docs.
 
 use itertools::Itertools;
-use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::display::{AstDisplay, escape_single_quote_string};
 use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};
 
@@ -768,7 +768,58 @@ impl Pretty {
             ));
         }
         docs.push(nest_title("AS", self.doc_query(&v.query)));
+        // `AS OF` is internal syntax that follows the query; the generic AstDisplay
+        // emits it, so we must too, otherwise it is silently dropped.
+        if let Some(time) = &v.as_of {
+            docs.push(RcDoc::text(format!("AS OF {time}")));
+        }
         intersperse_line_nest(docs)
+    }
+
+    pub(crate) fn doc_create_role<'a>(&'a self, v: &'a CreateRoleStatement) -> RcDoc<'a> {
+        let mut docs = vec![RcDoc::text(format!(
+            "CREATE ROLE {}",
+            v.name.to_ast_string_simple()
+        ))];
+        for option in &v.options {
+            docs.push(self.doc_role_attribute(option));
+        }
+        intersperse_line_nest(docs)
+    }
+
+    pub(crate) fn doc_alter_role<'a, T: AstInfo>(
+        &'a self,
+        v: &'a AlterRoleStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = vec![RcDoc::text(format!(
+            "ALTER ROLE {}",
+            v.name.to_ast_string_simple()
+        ))];
+        match &v.option {
+            AlterRoleOption::Attributes(attrs) => {
+                for attr in attrs {
+                    docs.push(self.doc_role_attribute(attr));
+                }
+            }
+            // `SET`/`RESET` variables carry no password-like data, so the generic
+            // AstDisplay is already lossless here.
+            AlterRoleOption::Variable(var) => docs.push(self.doc_display_pass(var)),
+        }
+        intersperse_line_nest(docs)
+    }
+
+    /// Like the generic AstDisplay for `RoleAttribute`, but preserves the `PASSWORD`
+    /// value instead of dropping it (the AstDisplay redaction is a global safety net
+    /// for logs/catalog; a pretty-printer that round-trips user SQL must keep it).
+    fn doc_role_attribute<'a>(&'a self, attr: &'a RoleAttribute) -> RcDoc<'a> {
+        match attr {
+            RoleAttribute::Password(Some(password)) => RcDoc::text(format!(
+                "PASSWORD '{}'",
+                escape_single_quote_string(password)
+            )),
+            RoleAttribute::Password(None) => RcDoc::text("PASSWORD NULL"),
+            other => self.doc_display_pass(other),
+        }
     }
 
     fn doc_view_definition<'a, T: AstInfo>(&'a self, v: &'a ViewDefinition<T>) -> RcDoc<'a> {
