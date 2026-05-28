@@ -295,7 +295,7 @@ If a user tries to log in and the role doesn't exist, the role will be auto-prov
 Create a ConfigMap with your OIDC parameters and reference it in the Materialize
 CR's `spec.systemParameterConfigmapName` field. At this point, your manifest should look like:
 
-```yaml
+```yaml {hl_lines="9-13 36"}
 apiVersion: v1
 kind: ConfigMap
 metadata:
