@@ -584,8 +584,7 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
         step.setdefault("retry", {}).setdefault("automatic", []).extend(
             [
                 {
-                    "exit_status": -1,  # Connection to agent lost
-                    "signal_reason": "none",
+                    "exit_status": -1,  # Agent lost or job timed out during checkout/setup
                     "limit": 2,
                 },
                 {
