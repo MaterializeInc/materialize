@@ -690,7 +690,6 @@
         WAREHOUSE = '<warehouse>',
         AWS CONNECTION = <aws_connection>,
         GCP CONNECTION = <gcp_connection>,
-        CREDENTIAL = SECRET <secret_name>,
         SCOPE = '<scope>'
     );
   syntax_elements:
@@ -705,12 +704,10 @@
 
         - `'s3tablesrest'` — [AWS S3
           Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
-          Requires `AWS CONNECTION` and `WAREHOUSE`.
-        - `'rest'` — Generic Iceberg REST catalog. The catalog server itself
-          (for example, [Google Cloud
-          BigLake](https://cloud.google.com/biglake)) handles authorization
-          and warehouse storage. Requires exactly one of `GCP CONNECTION` or
-          `CREDENTIAL` for authentication with the catalog server.
+          Requires `AWS CONNECTION`.
+        - `'rest'` - Generic Iceberg REST catalog, currently
+          [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
+          Requires `GCP CONNECTION`.
     - name: "`URL`"
       description: |
         *Value:* `text`. Required.
@@ -724,8 +721,7 @@
         *Value:* `text`.
 
         Identifies the catalog's warehouse — the object-storage location for
-        table data. Required for `'s3tablesrest'`; required by most `'rest'`
-        catalogs including BigLake.
+        table data. Required for `'s3tablesrest'`. Required for `'rest'` with GCP BigLake.
 
         - AWS S3 Tables: the S3 Tables bucket ARN
           (`arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`).
@@ -734,27 +730,12 @@
       description: |
         *Value:* object name.
 
-        The name of an [AWS connection](#aws) to use for authentication. Only
-        valid with `CATALOG TYPE = 's3tablesrest'`.
+        The name of an [AWS connection](#aws) to use for authentication.
     - name: "`GCP CONNECTION`"
       description: |
         *Value:* object name.
 
-        The name of a [GCP connection](#gcp) to use for authentication. Only
-        valid with `CATALOG TYPE = 'rest'`. Mutually exclusive with
-        `CREDENTIAL`.
-    - name: "`CREDENTIAL`"
-      description: |
-        *Value:* secret.
-
-        An OAuth2 bearer token (or client credentials) used to authenticate
-        with a `'rest'` catalog. Only valid with `CATALOG TYPE = 'rest'`.
-        Mutually exclusive with `GCP CONNECTION`.
-    - name: "`SCOPE`"
-      description: |
-        *Value:* `text`.
-
-        The OAuth2 scope to request when using `CREDENTIAL`. Optional.
+        The name of a [GCP connection](#gcp) to use for authentication.
 
 - name: "example-iceberg-catalog-connection"
   description: |
