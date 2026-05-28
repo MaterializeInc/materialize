@@ -678,6 +678,19 @@ impl<'a> CopyCsvFormatParams<'a> {
     }
 }
 
+/// One field decoded out of a CSV record by [`decode_copy_format_csv`]:
+/// `start..end` indexes into the per-record `output` buffer (csv-core
+/// unquotes/unescapes into that buffer), and `quoted` records whether the
+/// field's first input byte was the quote character. The quote flag is what
+/// distinguishes a literal `""` (quoted empty string) from an unquoted empty
+/// field (the default NULL marker), and a quoted `"\."` data row from the bare
+/// `\.` end-of-copy marker.
+struct DecodedField {
+    start: usize,
+    end: usize,
+    quoted: bool,
+}
+
 pub fn decode_copy_format_csv(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -713,7 +726,7 @@ pub fn decode_copy_format_csv(
     let mut input = data;
     let mut output = vec![0u8; data.len().max(1024)];
     let mut out_pos = 0;
-    let mut fields: Vec<(usize, usize, bool)> = Vec::new();
+    let mut fields: Vec<DecodedField> = Vec::new();
     let mut field_start = 0;
     let mut field_quoted: Option<bool> = None;
     let mut skip_header = header;
@@ -751,7 +764,11 @@ pub fn decode_copy_format_csv(
 
         match result {
             csv_core::ReadFieldResult::Field { record_end } => {
-                fields.push((field_start, out_pos, field_quoted.take().unwrap()));
+                fields.push(DecodedField {
+                    start: field_start,
+                    end: out_pos,
+                    quoted: field_quoted.take().unwrap(),
+                });
                 // The next field begins a new record only if this field ended
                 // one; otherwise it follows a delimiter mid-record.
                 at_record_start = record_end;
@@ -759,9 +776,14 @@ pub fn decode_copy_format_csv(
                 if record_end {
                     if skip_header {
                         skip_header = false;
-                    } else if fields.len() == 1
-                        && !fields[0].2
-                        && &output[fields[0].0..fields[0].1] == END_OF_COPY_MARKER
+                    } else if let [
+                        DecodedField {
+                            start,
+                            end,
+                            quoted: false,
+                        },
+                    ] = fields[..]
+                        && &output[start..end] == END_OF_COPY_MARKER
                     {
                         // Bare `\.` on its own line: end-of-copy marker. A
                         // quoted `"\."` also decodes to `\.` but is data, so
@@ -786,9 +808,9 @@ pub fn decode_copy_format_csv(
 
                         let mut row_builder = SharedRow::get();
                         let mut row_packer = row_builder.packer();
-                        for (typ, &(s, e, quoted)) in column_types.iter().zip_eq(fields.iter()) {
-                            let raw_value = &output[s..e];
-                            if !quoted && raw_value == null_as_bytes {
+                        for (typ, field) in column_types.iter().zip_eq(fields.iter()) {
+                            let raw_value = &output[field.start..field.end];
+                            if !field.quoted && raw_value == null_as_bytes {
                                 row_packer.push(Datum::Null);
                             } else {
                                 let s = match std::str::from_utf8(raw_value) {
@@ -820,8 +842,11 @@ pub fn decode_copy_format_csv(
                 output.resize(new_len, 0);
             }
             csv_core::ReadFieldResult::InputEmpty => {
-                // We've consumed all input; loop again with the now-empty
-                // slice so csv-core can flush any buffered trailing field.
+                // InputEmpty means csv-core consumed all our input mid-field
+                // and wants more. We have no more to give, so the next
+                // iteration calls it with the now-empty slice; per its
+                // documented termination protocol, that yields the partial
+                // field (if any) as a final `Field`, then `End`.
             }
             csv_core::ReadFieldResult::End => return Ok(rows),
         }

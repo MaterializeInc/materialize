@@ -512,3 +512,45 @@ DataRow {"fields":["b",""]}
 DataRow {"fields":["d","\\."]}
 CommandComplete {"tag":"SELECT 4"}
 ReadyForQuery {"status":"I"}
+
+# Obscure edge case: the NULL marker is itself set to `\.`, colliding with the
+# end-of-copy marker's byte sequence. The two are still distinguished:
+#   - An unquoted `\.` *field* matches the NULL marker => SQL NULL.
+#   - A quoted `"\."` field is the literal string `\.` (quoting suppresses
+#     both NULL-marker and end-marker interpretation).
+#   - A bare `\.` on its own line (a single-field record) is the end-of-copy
+#     marker regardless of the NULL setting, and subsequent rows are dropped.
+send
+Query {"query": "CREATE TABLE t9 (i INT8, t TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t9 FROM STDIN WITH (FORMAT CSV, NULL '\\.')"}
+CopyData "1,\\.\n"
+CopyData "2,\"\\.\"\n"
+CopyData "3,after\n"
+CopyData "\\.\n"
+CopyData "4,ignored\n"
+CopyDone
+Query {"query": "SELECT i, t FROM t9 ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","NULL"]}
+DataRow {"fields":["2","\\."]}
+DataRow {"fields":["3","after"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}

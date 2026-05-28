@@ -38,7 +38,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
@@ -3386,7 +3386,15 @@ impl CopyRowScanner {
             .end_marker_end
             .and_then(|end| end.checked_sub(split_pos));
         // Splits always occur at a completed-row boundary, so the in-progress
-        // record (if any) starts at the new beginning of the buffer.
+        // record (if any) starts at the new beginning of the buffer. Record
+        // this invariant explicitly so the `saturating_sub` below doesn't
+        // silently paper over a bug that bisected an in-progress record.
+        soft_assert_or_log!(
+            self.record_start >= split_pos,
+            "split bisected an in-progress CSV record: record_start={} < split_pos={}",
+            self.record_start,
+            split_pos,
+        );
         self.record_start = self.record_start.saturating_sub(split_pos);
     }
 
