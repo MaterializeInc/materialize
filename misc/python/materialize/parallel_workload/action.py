@@ -1531,9 +1531,9 @@ class FlipFlagsAction(Action):
             "100000",
         ]
         self.flags_with_values["persist_committer_cache_refresh_interval"] = [
-            "1s",
-            "5s",
-            "30s",
+            "'1s'",
+            "'5s'",
+            "'30s'",
         ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
