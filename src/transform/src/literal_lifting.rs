@@ -596,7 +596,7 @@ impl LiteralLifting {
                         let temp = mz_repr::RowArena::new();
                         let mut eval = aggr.expr.eval(&[], &temp);
                         if let Ok(param) = eval {
-                            eval = Ok(aggr.func.eval(Some(param), &temp));
+                            eval = Ok(aggr.func.eval(Some((param, mz_repr::Diff::ONE)), &temp));
                         }
                         MirScalarExpr::literal(
                             eval,

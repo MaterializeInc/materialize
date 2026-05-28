@@ -150,15 +150,22 @@ where
     }
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn count<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum<'a>>,
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
 {
+    // Count is accumulable: rather than expand each `(datum, diff)` into `diff`
+    // copies and count them, we sum the diffs directly. A net-negative count is
+    // possible (the surface does not define behavior in that case) and surfaces
+    // here as a negative result.
     // TODO(jkosh44) This should error when the count can't fit inside of an `i64` instead of returning a negative result.
-    let x: i64 = datums.into_iter().filter(|d| !d.is_null()).count() as i64;
-    Datum::from(x)
+    let mut count = Diff::ZERO;
+    for (datum, diff) in datums {
+        if !datum.is_null() {
+            count += diff;
+        }
+    }
+    Datum::from(count.into_inner())
 }
 
 fn any<'a, I>(datums: I) -> Datum<'a>
@@ -1354,7 +1361,8 @@ where
         //    (The current peer group will be the whole partition if there is no ORDER BY.)
         // We simply need to compute the aggregate once, on the entire partition, and each input
         // row will get this one aggregate value as result.
-        let result_value = wrapped_aggregate.eval(args, temp_storage);
+        let result_value =
+            wrapped_aggregate.eval(args.into_iter().map(|d| (d, Diff::ONE)), temp_storage);
         // Every row will get the above aggregate as result.
         for _ in 0..length {
             result.push(result_value);
@@ -1446,7 +1454,9 @@ where
                             //    the fixed size of the window, or that we are not retracting
                             //    arbitrary elements but doing queue operations. E.g., see
                             //    http://codercareer.blogspot.com/2012/02/no-33-maximums-in-sliding-windows.html
-                            let frame_values = args[frame_start..=frame_end].iter().cloned();
+                            let frame_values = args[frame_start..=frame_end]
+                                .iter()
+                                .map(|d| (*d, Diff::ONE));
                             let result_value = wrapped_aggregate.eval(frame_values, temp_storage);
                             result.push(result_value);
                         } else {
@@ -1775,11 +1785,13 @@ impl OneByOneAggr for NaiveOneByOneAggr {
     fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
         temp_storage.make_datum(|packer| {
             packer.push(if !self.reverse {
-                self.agg
-                    .eval(self.input.iter().map(|r| r.unpack_first()), temp_storage)
+                self.agg.eval(
+                    self.input.iter().map(|r| (r.unpack_first(), Diff::ONE)),
+                    temp_storage,
+                )
             } else {
                 self.agg.eval(
-                    self.input.iter().rev().map(|r| r.unpack_first()),
+                    self.input.iter().rev().map(|r| (r.unpack_first(), Diff::ONE)),
                     temp_storage,
                 )
             });
@@ -1949,8 +1961,94 @@ pub enum AggregateFunc {
     Dummy,
 }
 
+/// Expands an iterator of `(datum, diff)` into one `datum` per unit of `diff`.
+///
+/// A non-positive `diff` contributes no copies. This is used by aggregates that
+/// are sensitive to multiplicity (e.g. `sum`), to recover a flat datum stream
+/// from the count-aware surface.
+fn expand_counts<'a, I>(datums: I) -> impl Iterator<Item = Datum<'a>>
+where
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
+{
+    datums.into_iter().flat_map(|(datum, diff)| {
+        let copies = usize::try_from(diff.into_inner()).unwrap_or(0);
+        std::iter::repeat(datum).take(copies)
+    })
+}
+
 impl AggregateFunc {
+    /// Whether this aggregate's result is independent of the multiplicity of its
+    /// inputs (e.g. `min`/`max`/`any`/`all`).
+    ///
+    /// Such aggregates can ignore the `diff` of each input, evaluating over the
+    /// distinct datums rather than expanding by count. This keeps idempotent
+    /// reductions linear in the number of distinct inputs.
+    fn ignores_multiplicity(&self) -> bool {
+        use AggregateFunc::*;
+        matches!(
+            self,
+            MaxNumeric
+                | MaxInt16
+                | MaxInt32
+                | MaxInt64
+                | MaxUInt16
+                | MaxUInt32
+                | MaxUInt64
+                | MaxMzTimestamp
+                | MaxFloat32
+                | MaxFloat64
+                | MaxBool
+                | MaxString
+                | MaxDate
+                | MaxTimestamp
+                | MaxTimestampTz
+                | MaxInterval
+                | MaxTime
+                | MinNumeric
+                | MinInt16
+                | MinInt32
+                | MinInt64
+                | MinUInt16
+                | MinUInt32
+                | MinUInt64
+                | MinMzTimestamp
+                | MinFloat32
+                | MinFloat64
+                | MinBool
+                | MinString
+                | MinDate
+                | MinTimestamp
+                | MinTimestampTz
+                | MinInterval
+                | MinTime
+                | Any
+                | All
+        )
+    }
+
+    /// Evaluates the aggregate over an iterator of `(datum, diff)` pairs.
+    ///
+    /// Each aggregate consumes the multiplicity (`diff`) in whatever way is most
+    /// efficient: `count` sums the diffs, multiplicity-insensitive aggregates
+    /// (see [`AggregateFunc::ignores_multiplicity`]) ignore them, and everything
+    /// else expands each datum into `diff` copies (see [`expand_counts`]).
     pub fn eval<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+    where
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
+    {
+        // `count` is accumulable and handles diffs directly.
+        if let AggregateFunc::Count = self {
+            return count(datums);
+        }
+        if self.ignores_multiplicity() {
+            self.eval_datums(datums.into_iter().map(|(datum, _diff)| datum), temp_storage)
+        } else {
+            self.eval_datums(expand_counts(datums), temp_storage)
+        }
+    }
+
+    /// Evaluates the aggregate over a flat iterator of datums, ignoring multiplicity.
+    fn eval_datums<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
@@ -2010,7 +2108,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
             AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
-            AggregateFunc::Count => count(datums),
+            AggregateFunc::Count => unreachable!("Count is handled in `eval`"),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg { order_by } => jsonb_agg(datums, temp_storage, order_by),
@@ -2074,7 +2172,7 @@ impl AggregateFunc {
         temp_storage: &'a RowArena,
     ) -> Datum<'a>
     where
-        I: IntoIterator<Item = Datum<'a>>,
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
         W: OneByOneAggr,
     {
         match self {
@@ -2083,7 +2181,7 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => window_aggr::<_, W>(
-                datums,
+                expand_counts(datums),
                 temp_storage,
                 wrapped_aggregate,
                 order_by,
@@ -2094,7 +2192,7 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => fused_window_aggr::<_, W>(
-                datums,
+                expand_counts(datums),
                 temp_storage,
                 wrapped_aggregates,
                 order_by,
@@ -2110,11 +2208,13 @@ impl AggregateFunc {
         temp_storage: &'a RowArena,
     ) -> impl Iterator<Item = Datum<'a>>
     where
-        I: IntoIterator<Item = Datum<'a>>,
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
         W: OneByOneAggr,
     {
         // TODO: Use `enum_dispatch` to construct a unified iterator instead of `collect_vec`.
         assert!(self.can_fuse_with_unnest_list());
+        // Window functions are sensitive to multiplicity, so expand counts.
+        let datums = expand_counts(datums);
         match self {
             AggregateFunc::RowNumber { order_by } => {
                 row_number_no_list(datums, temp_storage, order_by).collect_vec()
