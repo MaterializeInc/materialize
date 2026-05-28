@@ -235,7 +235,9 @@ def test_verify_accepts_both_placeholder_styles() -> None:
 def test_verify_exempts_cluster_literals() -> None:
     # Cluster create_sql keeps its SIZE literal; verify must not flag it.
     new = {
-        "clusters": {"cluster_0": {"create_sql": "CREATE CLUSTER cluster_0 (SIZE = '100cc')"}},
+        "clusters": {
+            "cluster_0": {"create_sql": "CREATE CLUSTER cluster_0 (SIZE = '100cc')"}
+        },
         "databases": {},
         "queries": [],
     }
