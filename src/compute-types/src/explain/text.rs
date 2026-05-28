@@ -314,6 +314,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
@@ -323,23 +324,36 @@ impl Plan {
                     ctx.indent += 1;
                 }
 
+                let temporally_bucketed = matches!(
+                    temporal_bucketing_strategy,
+                    ArrangementStrategy::TemporalBucketing
+                );
+
                 use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
-                        writeln!(f, "{}→Distinct GroupAggregate{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Distinct GroupAggregate{annotations}")?;
                     }
                     ReducePlan::Accumulable(plan) => {
-                        writeln!(f, "{}→Accumulable GroupAggregate{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Accumulable GroupAggregate{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Hierarchical(
                         plan @ HierarchicalPlan::Bucketed(BucketedPlan { buckets, .. }),
                     ) => {
-                        write!(
-                            f,
-                            "{}→Bucketed Hierarchical GroupAggregate (buckets: ",
-                            ctx.indent
-                        )?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        write!(f, "Bucketed Hierarchical GroupAggregate (buckets:")?;
                         for bucket in buckets {
                             write!(f, " {bucket}")?;
                         }
@@ -352,6 +366,9 @@ impl Plan {
                         }),
                     ) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if *must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -373,11 +390,11 @@ impl Plan {
                                 ctx.indent += 1;
                             }
                         }
-                        writeln!(
-                            f,
-                            "{}→Non-incremental GroupAggregate{annotations}",
-                            ctx.indent
-                        )?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Non-incremental GroupAggregate{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                         ctx.indent.reset();
                     }
@@ -398,11 +415,22 @@ impl Plan {
 
                 ctx.indent.reset();
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
+                let temporally_bucketed = matches!(
+                    temporal_bucketing_strategy,
+                    ArrangementStrategy::TemporalBucketing
+                );
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if plan.must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -422,6 +450,9 @@ impl Plan {
                     }
                     TopKPlan::MonotonicTopK(plan) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if plan.must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -444,7 +475,11 @@ impl Plan {
                         })?;
                     }
                     TopKPlan::Basic(plan) => {
-                        writeln!(f, "{}→Non-monotonic TopK{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Non-monotonic TopK{annotations}")?;
 
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
@@ -493,8 +528,15 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
+                let any_temporally_bucketed = temporal_bucketing_strategies
+                    .iter()
+                    .any(|s| matches!(s, ArrangementStrategy::TemporalBucketing));
                 write!(f, "{}→", ctx.indent)?;
+                if any_temporally_bucketed {
+                    write!(f, "Temporally-Bucketed ")?;
+                }
                 if *consolidate_output {
                     write!(f, "Consolidating ")?;
                 }
@@ -763,6 +805,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -787,6 +830,13 @@ impl Plan {
                         let key = mode.seq(key, None);
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
                     }
                     if key_val_plan.key_plan.deref().is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;
@@ -814,7 +864,11 @@ impl Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -875,7 +929,16 @@ impl Plan {
                     }
                 }
                 writeln!(f, "{}", annotations)?;
-                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
+                ctx.indented(|ctx| {
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
+                    }
+                    input.fmt_text(f, ctx)
+                })?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
@@ -900,6 +963,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
                 if *consolidate_output {
                     writeln!(
@@ -911,6 +975,21 @@ impl Plan {
                     writeln!(f, "{}Union{}", ctx.indent, annotations)?;
                 }
                 ctx.indented(|ctx| {
+                    if temporal_bucketing_strategies
+                        .iter()
+                        .any(|s| !matches!(s, ArrangementStrategy::Direct))
+                    {
+                        let strategies = temporal_bucketing_strategies
+                            .iter()
+                            .map(|s| format!("{}", s))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategies=[{}]",
+                            ctx.indent, strategies
+                        )?;
+                    }
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
                     }

@@ -31,6 +31,9 @@ use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Pla
 
 /// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
 /// updates. Future updates are the only case where temporal bucketing pays off.
+///
+/// Any arrangement or consolidation that absorbs data that can have future updates should be
+/// guarded by a temporal bucketing operator.
 fn strategy_from_future(has_future_updates: bool) -> ArrangementStrategy {
     if has_future_updates {
         ArrangementStrategy::TemporalBucketing
@@ -294,6 +297,9 @@ impl Context {
                 // Even with a non-temporal MFP, we must propagate `has_future_updates`
                 // from the underlying binding — applying an MFP doesn't drop future-
                 // timestamped updates that already exist on the input.
+                //
+                // Note that global Gets from different dataflows can't have future updates, because
+                // both indexes and materialized views hold back future updates.
                 let has_future_updates = self.has_future_updates.contains(id)
                     || match &plan {
                         GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
@@ -875,21 +881,24 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         AvailableCollections::new_raw(),
                         &keys,
                         arity,
-                        input_future,
+                        // `new_raw` means no arrangement, so no bucketing is needed
+                        false,
                     )
                 } else {
                     input
                 };
                 // Return the plan, and no arrangements.
+                let temporal_bucketing_strategy = strategy_from_future(input_future);
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
                     plan: PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
+                        temporal_bucketing_strategy,
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),
-                    has_future_updates: input_future,
+                    has_future_updates: false,
                 }
             }
             MirRelationExpr::Negate { input } => {
@@ -908,7 +917,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         AvailableCollections::new_raw(),
                         &keys,
                         arity,
-                        input_future,
+                        // `new_raw` means no arrangement, so no bucketing is needed
+                        false,
                     )
                 } else {
                     input
@@ -932,6 +942,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } = self.lower_mir_expr(input)?;
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
+
                 let plan = if !keys
                     .arranged
                     .iter()
@@ -958,7 +969,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     keys: output_keys,
-                    has_future_updates: input_future,
+                    // Threshold builds its own output arrangement whose
+                    // MergeBatcher absorbs future-stamped updates, so no
+                    // future updates flow out.
+                    has_future_updates: false,
                 }
             }
             MirRelationExpr::Union { base, inputs } => {
@@ -968,14 +982,45 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 for input in inputs.iter() {
                     lowered_inputs.push(self.lower_mir_expr(input)?);
                 }
-                let any_future = lowered_inputs.iter().any(|l| l.has_future_updates);
+
+                // A Union with any `Negate` input should consolidate its
+                // output. The lowering is the only place where this decision
+                // can be coupled with the per-input bucketing strategy.
+                let consolidate_output = lowered_inputs
+                    .iter()
+                    .any(|l| matches!(l.plan.node, PlanNode::Negate { .. }));
+
+                // Per-input bucketing strategies: only meaningful when the
+                // Union consolidates its output, since bucketing only pays off
+                // ahead of a downstream consolidator.
+                let temporal_bucketing_strategies: Vec<ArrangementStrategy> = if consolidate_output
+                {
+                    lowered_inputs
+                        .iter()
+                        .map(|l| strategy_from_future(l.has_future_updates))
+                        .collect()
+                } else {
+                    lowered_inputs
+                        .iter()
+                        .map(|_| ArrangementStrategy::Direct)
+                        .collect()
+                };
+
+                let has_future_updates = if consolidate_output {
+                    // The MergeBatcher will hold back future updates (regardless of whether we are
+                    // bucketing here or not).
+                    false
+                } else {
+                    lowered_inputs.iter().any(|l| l.has_future_updates)
+                };
+
                 let plans = lowered_inputs
                     .into_iter()
                     .map(
                         |LoweredExpr {
                              plan,
                              keys,
-                             has_future_updates: future,
+                             has_future_updates: _,
                          }| {
                             // We don't have an MFP here -- install an operator to permute the
                             // input, if necessary.
@@ -985,7 +1030,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                                     AvailableCollections::new_raw(),
                                     &keys,
                                     arity,
-                                    future,
+                                    // `new_raw` means no arrangement, so no bucketing is needed
+                                    false,
                                 )
                             } else {
                                 plan
@@ -998,11 +1044,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 LoweredExpr {
                     plan: PlanNode::Union {
                         inputs: plans,
-                        consolidate_output: false,
+                        consolidate_output,
+                        temporal_bucketing_strategies,
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),
-                    has_future_updates: any_future,
+                    has_future_updates,
                 }
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
@@ -1010,7 +1057,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let LoweredExpr {
                     plan: input,
                     keys: mut input_keys,
-                    has_future_updates: future,
+                    has_future_updates: input_has_future_updates,
                 } = self.lower_mir_expr(input)?;
                 // Fill the `types` in `input_keys` if not already present.
                 let arity = input_mir.arity();
@@ -1025,7 +1072,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     LoweredExpr {
                         plan: input,
                         keys: input_keys,
-                        has_future_updates: future,
+                        has_future_updates: input_has_future_updates,
                     }
                 } else {
                     let mut new_keys = new_keys
@@ -1054,17 +1101,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                     // Return the plan and extended keys.
                     let lir_id = self.allocate_lir_id();
+                    let strategy = strategy_from_future(input_has_future_updates);
+                    assert!(!forms.arranged.is_empty()); // i.e., we do build an arrangement
+                    let has_future_updates = false;
                     LoweredExpr {
                         plan: PlanNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
                             input_mfp,
                             forms,
-                            strategy: strategy_from_future(future),
+                            strategy,
                         }
                         .as_plan(lir_id),
                         keys: input_keys,
-                        has_future_updates: future,
+                        has_future_updates,
                     }
                 }
             }
@@ -1226,9 +1276,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
         );
         let output_keys = reduce_plan.keys(group_key.len(), output_arity);
         let lir_id = self.allocate_lir_id();
-        // `extract_mfp_after` strips temporal predicates back into `*mfp_on_top` (the residual
-        // MFP installed above the reduce), so `mfp_after` is non-temporal and cannot introduce
-        // future updates. The output's future flag is just whatever the input had.
+        // `Reduce` builds its own input arrangement inside `render_reduce` (via `KeyValPlan`),
+        // bypassing `ensure_collections`. So we can't piggy-back on an upstream `ArrangeBy`'s
+        // strategy to request temporal bucketing on a temporal-MFP-fed input: there is no such
+        // `ArrangeBy`. Instead we record the strategy directly on the `Reduce` node, and
+        // `render_reduce` applies bucketing to the keyed `(key, val)` stream itself.
+        let temporal_bucketing_strategy = strategy_from_future(input_future);
+        // (This can't currently happen due to `extract_mfp_after` separating out any temporal part.)
+        let has_future_updates = mfp_after.has_temporal_predicates();
         Ok(LoweredExpr {
             plan: PlanNode::Reduce {
                 input_key,
@@ -1236,10 +1291,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 key_val_plan,
                 plan: reduce_plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             }
             .as_plan(lir_id),
             keys: output_keys,
-            has_future_updates: input_future,
+            has_future_updates,
         })
     }
 
