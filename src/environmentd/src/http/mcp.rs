@@ -68,11 +68,6 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
-// Details uses the full view, which also exposes a `hydration` JSON column
-// (`{hydrated, replica_count, hydrated_replica_count}`) so agents can tell
-// whether a read would block waiting for hydration, and whether the
-// cluster even has a replica to make progress. See DEX-30 and the comments
-// on `mz_mcp_data_product_details` in `src/catalog/src/builtin/mz_internal.rs`.
 const DETAILS_QUERY_PREFIX: &str =
     "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
 

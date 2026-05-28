@@ -5547,10 +5547,9 @@ fn test_mcp_agent_with_data_product() {
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
     assert!(body["error"].is_null());
 
-    // The response should expose a `hydration` field per row (5th cell) so
-    // agents can decide whether to back off or treat empty reads as final.
-    // See DEX-30. For an MV that's had time to hydrate on a single-replica
-    // `quickstart` cluster, expect `hydrated: true` with 1/1 replicas.
+    // Each row carries a `hydration` field (5th cell). For an MV that has
+    // had time to hydrate on a single-replica `quickstart` cluster, expect
+    // `hydrated: true` with 1/1 replicas.
     let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
     let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
     let rows = rows.as_array().expect("details should return rows");

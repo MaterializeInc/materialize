@@ -562,8 +562,9 @@ schema information.
 
 The `mz_mcp_data_product_details` view extends [`mz_mcp_data_products`](#mz_mcp_data_products)
 with a JSON Schema describing each data product's columns and types, and a
-readiness summary that lets agents tell "still warming up" apart from
-"genuinely empty."
+readiness summary so agents can avoid firing reads that would just block
+waiting for hydration, and can tell "still warming up" apart from "cluster
+has no replicas — needs operator action."
 
 <!-- RELATION_SPEC mz_internal.mz_mcp_data_product_details -->
 | Field         | Type     | Meaning                                                                                  |
@@ -572,7 +573,7 @@ readiness summary that lets agents tell "still warming up" apart from
 | `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
-| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. A read against a non-hydrated data product blocks until the dataflow catches up (it never returns partial data); when `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added. Check this before reading to avoid a blocking read. |
+| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. |
 
 ## `mz_object_dependencies`
 

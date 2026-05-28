@@ -482,17 +482,12 @@ def workflow_default(c: Composition) -> None:
 
     # -- hydration: end-to-end coverage for DEX-30 ----------------------------
     #
-    # Verifies that `mz_internal.mz_mcp_data_product_details` exposes a
-    # `hydration` JSON column that the agent endpoint surfaces through
-    # `get_data_product_details`, so agents can distinguish "still warming
-    # up" from "genuinely empty." Two scenarios:
-    #
+    # Two scenarios:
     #   1. MV on `quickstart` (1 replica) → hydrated=true, 1/1 replicas.
     #   2. MV on a cluster with zero replicas → hydrated=false, 0/0.
     #
-    # The HTTP user that the MCP server runs as on this no-auth listener is
-    # `anonymous_http_user`; it gets auto-provisioned on the first MCP
-    # request, so we provision it eagerly with an `initialize` call and then
+    # The HTTP user is `anonymous_http_user` (auto-provisioned on the first
+    # MCP request); we touch the endpoint eagerly with `initialize`, then
     # grant the necessary privileges as `mz_system`.
 
     # First touch the agent endpoint so `anonymous_http_user` exists as a role
