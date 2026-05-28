@@ -610,13 +610,42 @@
 
         The name of the user to connect as.
 
+- name: "syntax-gcp"
+  code: |
+    CREATE CONNECTION <connection_name> TO GCP (
+        SERVICE ACCOUNT KEY = SECRET <secret_name>
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`SERVICE ACCOUNT KEY`"
+      description: |
+        *Value:* secret. Required.
+
+        A secret containing a Google Cloud [service account
+        key](https://docs.cloud.google.com/iam/docs/keys-create-delete) in JSON
+        format. Materialize uses the key to authenticate to Google Cloud
+        services.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `false`. |
+
 - name: "syntax-iceberg-catalog"
   code: |
     CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
-        CATALOG TYPE = 's3tablesrest',
+        CATALOG TYPE = { 's3tablesrest' | 'rest' },
         URL = '<catalog_url>',
-        WAREHOUSE = '<warehouse_arn>',
-        AWS CONNECTION = <aws_connection>
+        WAREHOUSE = '<warehouse>',
+        AWS CONNECTION = <aws_connection>,
+        GCP CONNECTION = <gcp_connection>,
+        CREDENTIAL = SECRET <secret_name>,
+        SCOPE = '<scope>'
     );
   syntax_elements:
     - name: "`<connection_name>`"
@@ -626,28 +655,64 @@
       description: |
         *Value:* `text`. Required.
 
-        The type of Iceberg catalog. Currently only `'s3tablesrest'` (AWS S3 Tables) is supported.
+        The type of Iceberg catalog:
+
+        - `'s3tablesrest'` — [AWS S3
+          Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
+          Requires `AWS CONNECTION` and `WAREHOUSE`.
+        - `'rest'` — Generic Iceberg REST catalog. The catalog server itself
+          (for example, [Google Cloud
+          BigLake](https://cloud.google.com/biglake)) handles authorization
+          and warehouse storage. Requires exactly one of `GCP CONNECTION` or
+          `CREDENTIAL` for authentication with the catalog server.
     - name: "`URL`"
       description: |
         *Value:* `text`. Required.
 
-        The URL of the Iceberg catalog endpoint. For AWS S3 Tables, use
-        `https://s3tables.<region>.amazonaws.com/iceberg`.
+        The URL of the Iceberg catalog endpoint.
+
+        - AWS S3 Tables: `https://s3tables.<region>.amazonaws.com/iceberg`.
+        - GCP BigLake: `https://biglake.googleapis.com/iceberg/v1/restcatalog`.
     - name: "`WAREHOUSE`"
       description: |
-        *Value:* `text`. Required.
+        *Value:* `text`.
 
-        The ARN of the S3 Tables bucket:
-        `arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`.
+        Identifies the catalog's warehouse — the object-storage location for
+        table data. Required for `'s3tablesrest'`; required by most `'rest'`
+        catalogs including BigLake.
+
+        - AWS S3 Tables: the S3 Tables bucket ARN
+          (`arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`).
+        - GCP BigLake: the GCS bucket URI (`gs://<bucket>`).
     - name: "`AWS CONNECTION`"
       description: |
-        *Value:* object name. Required.
+        *Value:* object name.
 
-        The name of an [AWS connection](#aws) to use for authentication.
+        The name of an [AWS connection](#aws) to use for authentication. Only
+        valid with `CATALOG TYPE = 's3tablesrest'`.
+    - name: "`GCP CONNECTION`"
+      description: |
+        *Value:* object name.
+
+        The name of a [GCP connection](#gcp) to use for authentication. Only
+        valid with `CATALOG TYPE = 'rest'`. Mutually exclusive with
+        `CREDENTIAL`.
+    - name: "`CREDENTIAL`"
+      description: |
+        *Value:* secret.
+
+        An OAuth2 bearer token (or client credentials) used to authenticate
+        with a `'rest'` catalog. Only valid with `CATALOG TYPE = 'rest'`.
+        Mutually exclusive with `GCP CONNECTION`.
+    - name: "`SCOPE`"
+      description: |
+        *Value:* `text`.
+
+        The OAuth2 scope to request when using `CREDENTIAL`. Optional.
 
 - name: "example-iceberg-catalog-connection"
   description: |
-    The following example creates an AWS connection and an Iceberg catalog connection:
+    The following example creates an AWS connection and an Iceberg catalog connection for AWS S3 Tables:
   code: |
     -- First, create an AWS connection for authentication
     CREATE CONNECTION aws_connection
@@ -659,5 +724,27 @@
         URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
         WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
         AWS CONNECTION = aws_connection
+    );
+  testable: false
+
+- name: "example-iceberg-catalog-gcp-connection"
+  description: |
+    The following example creates a GCP connection and an Iceberg catalog connection for Google Cloud BigLake:
+  code: |
+    -- The service-account key JSON, base64-encoded (e.g., `base64 < key.json`).
+    CREATE SECRET gcp_service_account_key
+      AS decode('<base64-encoded service account key JSON>', 'base64');
+
+    -- Create a GCP connection that uses the service-account key.
+    CREATE CONNECTION gcp_connection TO GCP (
+        SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
+    );
+
+    -- Create the Iceberg catalog connection pointing to BigLake.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+        WAREHOUSE = 'gs://<bucket>',
+        GCP CONNECTION = gcp_connection
     );
   testable: false

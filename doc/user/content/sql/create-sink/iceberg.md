@@ -11,9 +11,10 @@ menu:
 
 {{< public-preview />}}
 
-Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg sinks write data from Materialize into an Iceberg table hosted on
-AWS S3 Tables. As data changes in Materialize, your Iceberg tables are
-automatically kept up to date.
+Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg
+sinks write data from Materialize into an Iceberg table hosted on AWS S3
+Tables or Google Cloud BigLake. As data changes in Materialize, your Iceberg
+tables are automatically kept up to date.
 
 To create an Iceberg sink, you need an [Iceberg catalog
 connection](/sql/create-connection/#iceberg-catalog) that specifies access
@@ -167,10 +168,24 @@ Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/mai
 
 ### Prerequisites: Create connections
 
-To create an Iceberg sink, you need an Iceberg catalog connection.
+To create an Iceberg sink, you need an Iceberg catalog connection. For
+end-to-end setup, see the [Iceberg sink
+guide](/serve-results/sink/iceberg/).
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-connection" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Creating an upsert sink
 

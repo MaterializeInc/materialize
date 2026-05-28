@@ -178,6 +178,50 @@ CREATE CONNECTION gcs_connection TO AWS (
 );
 ```
 
+### GCP
+
+A Google Cloud Platform (GCP) connection provides Materialize with access to a
+[service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) in your
+GCP project. You can use a GCP connection to authenticate with [Google Cloud
+BigLake](https://cloud.google.com/biglake) when creating an [Iceberg catalog
+connection](#iceberg-catalog).
+
+#### Syntax {#gcp-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-gcp" %}}
+
+#### Service account key {#gcp-service-account-key}
+
+Materialize authenticates as a [service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) that you
+own. Create a service-account key in JSON format using `gcloud iam
+service-accounts keys create` or the [Cloud
+Console](https://console.cloud.google.com/iam-admin/serviceaccounts), then
+load the key into a [secret](/sql/create-secret/) in Materialize.
+
+The recommended pattern is to base64-encode the key file and use `decode()` to
+avoid pasting a multi-line JSON literal into SQL:
+
+```bash
+base64 < key.json
+```
+
+```mzsql
+CREATE SECRET gcp_service_account_key
+  AS decode('<base64-encoded service account key JSON>', 'base64');
+```
+
+#### Example {#gcp-example}
+
+To create a GCP connection that authenticates with a service-account key:
+
+```mzsql
+CREATE CONNECTION gcp_connection TO GCP (
+    SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
+);
+```
+
 ### Kafka
 
 A Kafka connection establishes a link to a [Kafka] cluster. You can use Kafka
@@ -779,25 +823,36 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
 catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
 
+Materialize supports two catalog types:
+
+- `'s3tablesrest'` — [AWS S3
+  Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
+  Authenticates with an [AWS connection](#aws).
+- `'rest'` — Generic Iceberg REST catalog, including [Google Cloud
+  BigLake](https://cloud.google.com/biglake). Authenticates with a [GCP
+  connection](#gcp) or, for catalogs that speak OAuth2, a `CREDENTIAL`
+  secret.
+
 #### Syntax {#iceberg-catalog-syntax}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
 
-#### Example {#iceberg-catalog-example}
+#### Examples {#iceberg-catalog-examples}
 
-```mzsql
--- First, create an AWS connection for authentication
-CREATE CONNECTION aws_connection
-  TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::123456789012:role/MaterializeIceberg');
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
 
--- Create the Iceberg catalog connection
-CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
-    CATALOG TYPE = 's3tablesrest',
-    URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
-    WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
-    AWS CONNECTION = aws_connection
-);
-```
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-connection" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
 

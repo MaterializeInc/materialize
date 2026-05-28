@@ -10,15 +10,18 @@ menu:
 
 {{< public-preview />}}
 
-Iceberg sinks provide exactly once delivery of updates from Materialize into [Apache
-Iceberg](https://iceberg.apache.org/)[^1] tables hosted on [Amazon S3
-Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2].
-As data changes in Materialize, the corresponding Iceberg tables are
-automatically kept up to date. You can sink data from a materialized view, a
-source, or a table.
+Iceberg sinks provide exactly once delivery of updates from Materialize into
+[Apache Iceberg](https://iceberg.apache.org/)[^1] tables hosted on either
+[Amazon S3
+Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2]
+or [Google Cloud BigLake](https://cloud.google.com/biglake)[^3]. As data
+changes in Materialize, the corresponding Iceberg tables are automatically
+kept up to date. You can sink data from a materialized view, a source, or a
+table.
 
 This guide walks you through the steps required to set up Iceberg sinks in
-Materialize Cloud.
+Materialize Cloud. The cloud-specific setup differs; the `CREATE SINK`
+statement is identical for both.
 
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.
@@ -28,7 +31,14 @@ Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) is
     an AWS feature that provides fully managed Apache Iceberg tables as a native
     S3 storage type.
 
+[^3]: [Google Cloud
+BigLake](https://cloud.google.com/biglake) provides a managed Apache Iceberg
+    REST catalog over Google Cloud Storage.
+
 ## Prerequisites
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
 
 - An AWS account with permissions to create and manage IAM policies and roles.
 - An AWS S3 Table bucket in your AWS account. The S3 Table bucket must be in
@@ -36,7 +46,29 @@ Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) is
 - A namespace in the AWS S3 Table bucket. For details on creating namespaces,
   see [AWS S3 documentation: Creating a namespace](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-namespace-create.html).
 
-## Step 1. Set up permissions in AWS
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+- A Google Cloud project with the BigLake API enabled.
+- A [Google Cloud Storage
+  bucket](https://docs.cloud.google.com/storage/docs/creating-buckets) that will
+  hold your Iceberg data files.
+- A BigLake [runtime
+  catalog](https://docs.cloud.google.com/bigquery/docs/blms-rest-catalog). In the
+  Google Cloud Console, navigate to **BigLake** &rarr; **Lakehouse** &rarr;
+  **Runtime catalog** &rarr; **Create a catalog**, and point the catalog at
+  your GCS bucket.
+- A namespace in the BigLake catalog.
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Set up the Iceberg catalog and connections
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
+
+### Step 1. Set up permissions in AWS
 
 In AWS, set up permissions to allow Materialize to write data files to the
 object storage backing your Iceberg catalog. This tutorial uses an IAM policy
@@ -44,7 +76,7 @@ and IAM role to grant the required permissions. We **strongly** recommend using
 [role assumption-based authentication](/sql/create-connection/#aws-permissions)
 to manage access.
 
-### Step 1A. Create an IAM policy
+#### Step 1A. Create an IAM policy
 
 Create an [IAM
 policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
@@ -67,7 +99,7 @@ with the ARN of your S3 table bucket:
 }
 ```
 
-### Step 1B. Create an IAM role
+#### Step 1B. Create an IAM role
 
 Create an [IAM
 role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html) that
@@ -107,7 +139,7 @@ following:
 Once you have created the IAM role, copy the role ARN from the AWS console.
 You'll use the ARN in the next step.
 
-## Step 2. Create an AWS connection in Materialize
+### Step 2. Create an AWS connection in Materialize
 
 In Materialize, create an **AWS connection** to authenticate with the object
 storage:
@@ -142,7 +174,7 @@ storage:
 
    You will use the `external_id` to update the IAM role in the next step.
 
-## Step 3. Update the IAM role in AWS
+### Step 3. Update the IAM role in AWS
 
 Once you have the `external_id`, update the trust policy for the IAM role
 created in [step 1](#step-1b-create-an-iam-role). Replace `"PENDING"` with your
@@ -169,7 +201,7 @@ with your external ID value):
 }
 ```
 
-## Step 4. Create an Iceberg catalog connection in Materialize
+### Step 4. Create an Iceberg catalog connection in Materialize
 
 In Materialize, create an **Iceberg catalog connection** for the Iceberg sink to
 use. To create, use [`CREATE CONNECTION ... TO ICEBERG
@@ -188,7 +220,98 @@ CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
 );
 ```
 
-## Step 5. Create the Iceberg sink in Materialize
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+### Step 1. Set up permissions in GCP
+
+Materialize authenticates to BigLake as a Google Cloud [service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) that you
+own. Create the service account, grant it the roles required to write to your
+BigLake catalog and GCS bucket, and generate a JSON key for Materialize.
+
+#### Step 1A. Create a service account
+
+In the Google Cloud Console, navigate to **IAM & Admin** &rarr; **Service
+Accounts** &rarr; **Create service account**. Give the account a name (for
+example, `materialize-iceberg`) and create it.
+
+#### Step 1B. Grant roles to the service account
+
+Grant the service account the following roles. The BigLake and Service Usage
+roles are granted at the project level; the Storage role is granted on the
+GCS bucket holding your Iceberg data.
+
+| Role | Granted on | Purpose |
+|------|------------|---------|
+| `roles/biglake.editor` (BigLake Editor) | Project | Create namespaces, register tables, and commit snapshots. |
+| `roles/serviceusage.serviceUsageConsumer` (Service Usage Consumer) | Project | Required to call any Google Cloud API. |
+| `roles/storage.objectUser` (Storage Object User) | GCS bucket | Read and write Iceberg data files in the warehouse bucket. |
+
+#### Step 1C. Create a service account key
+
+On the service account's **Keys** tab, choose **Add key** &rarr; **Create new
+key** &rarr; **JSON**. Download the JSON key file — you will load it into a
+Materialize secret in the next step.
+
+{{< warning >}}
+Treat the key file like a password. Do not commit it to source control or
+share it.
+{{< /warning >}}
+
+### Step 2. Create a GCP connection in Materialize
+
+In Materialize, create a **GCP connection** that holds the service-account
+key.
+
+1. Base64-encode the JSON key file. For example, in a shell:
+
+   ```bash
+   base64 < key.json
+   ```
+
+   The `decode(..., 'base64')` form below lets you paste the encoded value
+   into SQL without worrying about embedded newlines or quotes in the JSON.
+
+1. Store the key in a Materialize [secret](/sql/create-secret/):
+
+   ```mzsql
+   CREATE SECRET gcp_service_account_key
+     AS decode('<base64-encoded service account key JSON>', 'base64');
+   ```
+
+1. Create the GCP connection. See [`CREATE
+   CONNECTION`](/sql/create-connection/#gcp) for more on GCP connection
+   options.
+
+   ```mzsql
+   CREATE CONNECTION gcp_connection TO GCP (
+       SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
+   );
+   ```
+
+### Step 3. Create an Iceberg catalog connection in Materialize
+
+In Materialize, create an **Iceberg catalog connection** for the Iceberg sink
+to use. Use [`CREATE CONNECTION ... TO ICEBERG
+CATALOG`](/sql/create-connection/#iceberg-catalog), replacing `<bucket>` with
+your GCS bucket name.
+
+The command uses the GCP connection you created earlier.
+
+```mzsql
+CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+    WAREHOUSE = 'gs://<bucket>',
+    GCP CONNECTION = gcp_connection
+);
+```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Create the Iceberg sink in Materialize
 
 In Materialize, you can sink from a materialized view, table, or source. Use
 [`CREATE SINK`](/sql/create-sink/iceberg) to create an Iceberg sink, replacing:
@@ -196,7 +319,7 @@ In Materialize, you can sink from a materialized view, table, or source. Use
 - `<sink_name>` with a name for your sink.
 - `<sink_cluster>` with the name of your sink cluster.
 - `<my_materialize_object>` with the name of your materialized view, table, or source.
-- `<my_s3_table_bucket_namespace>` with your S3 Table bucket namespace.
+- `<my_iceberg_namespace>` with your catalog namespace.
 - `<my_iceberg_table>` with the name of your Iceberg table. If the Iceberg table
   does not exist, Materialize creates the table. For details, see [`CREATE SINK`
   reference page](/sql/create-sink/iceberg/#iceberg-table-creation).
@@ -216,7 +339,7 @@ CREATE SINK <sink_name>
   IN CLUSTER <sink_cluster>
   FROM <my_materialize_object>
   INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
-    NAMESPACE = '<my_s3_table_bucket_namespace>',
+    NAMESPACE = '<my_iceberg_namespace>',
     TABLE = '<my_iceberg_table>'
   )
   KEY (<key>)
@@ -234,7 +357,7 @@ CREATE SINK <sink_name>
   IN CLUSTER <sink_cluster>
   FROM <my_materialize_object>
   INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
-    NAMESPACE = '<my_s3_table_bucket_namespace>',
+    NAMESPACE = '<my_iceberg_namespace>',
     TABLE = '<my_iceberg_table>'
   )
   MODE APPEND
