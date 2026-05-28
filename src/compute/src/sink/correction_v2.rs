@@ -1527,8 +1527,9 @@ mod tests {
     #[mz_ore::test]
     fn chain_builder_update_count_matches_items() {
         let mut builder = ChainBuilder::<i64>::default();
-        for i in 0..10_i64 {
-            builder.push_owned(&(i, Timestamp::new(i as u64), Diff::ONE));
+        for i in 0..10_u64 {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
         }
         let chain = builder.finish();
         assert_eq!(chain.update_count, chain.iter().count());
