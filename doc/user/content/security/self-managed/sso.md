@@ -134,10 +134,6 @@ additional applications in the [Service accounts](#service-accounts) section.
 
 1. Click **Register**.
 
-1. If you plan to use the [Resource Owner Password
-   flow](#resource-owner-password-flow) for service accounts, go to
-   **Authentication** and set **Allow public client flows** to **Yes**.
-
 1. On the application's **Overview** page, note the **Application (client) ID**
    and the **Directory (tenant) ID**.
 
@@ -577,15 +573,29 @@ username and password to obtain an ID token.
 {{< /tab >}}
 {{< tab "Microsoft Entra ID" >}}
 
-1. In Microsoft Entra ID, create a new user to serve as the service account.
+1. In the [Azure portal](https://portal.azure.com), go to **Microsoft Entra
+   ID** > **App registrations** and click **New registration**. Create a
+   dedicated registration for this flow rather than reusing the console
+   application from [Step 1](#step-1-configure-your-identity-provider).
 
-1. Assign the user to your Materialize application under **Enterprise
-   applications** > **Users and groups**.
+1. Configure the registration:
+   - **Name**: Enter a name (e.g., `Materialize ROPC`).
+   - **Supported account types**: Select the appropriate option for your
+     organization.
 
-1. Ensure **Allow public client flows** is set to **Yes** in your app
-   registration's **Authentication** settings. If you followed
-   [Step 1](#step-1-configure-your-identity-provider), this is already
-   configured.
+1. Click **Register**.
+
+1. Go to **Authentication** and set **Allow public client flows** to **Yes**.
+   This is required for the Resource Owner Password flow.
+
+1. On the application's **Overview** page, note the **Application (client) ID**
+   and the **Directory (tenant) ID**.
+
+1. Go to **Certificates & secrets** > **New client secret**. Add a description
+   and expiration, then click **Add**. Note the secret **Value**.
+
+1. Create a new user to serve as the service account, then assign it to this
+   application under **Enterprise applications** > **Users and groups**.
 
 1. Fetch an ID token:
 
@@ -596,7 +606,10 @@ username and password to obtain an ID token.
      --data-urlencode "username=svc-materialize@your-org.com" \
      --data-urlencode "password=YOUR_SERVICE_ACCOUNT_PASSWORD" \
      --data-urlencode "scope=openid email" \
-     --data-urlencode "client_id=YOUR_CLIENT_ID"
+      --data-urlencode "client_id=YOUR_CLIENT_ID"
+     --data-urlencode "scope=openid" \
+     --data-urlencode "client_id=YOUR_CLIENT_ID" \
+     --data-urlencode "client_secret=YOUR_CLIENT_SECRET"
    ```
 
 1. Extract the `id_token` from the JSON response and use it to connect:
