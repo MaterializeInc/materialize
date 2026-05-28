@@ -17,11 +17,35 @@ message ProtoVersionedData {
   bytes data = 2;
 }
 
+// Classification of an operation-level error, mirroring
+// `mz_persist::location::ExternalError`. Determinacy drives retry behavior on
+// the client side, so it must be preserved across the wire as data rather than
+// flattened into an RPC-level status code.
+enum ProtoDeterminacy {
+  PROTO_DETERMINACY_UNSPECIFIED = 0;
+  PROTO_DETERMINACY_DETERMINATE = 1;
+  PROTO_DETERMINACY_INDETERMINATE = 2;
+}
+
+// An error from the underlying Consensus implementation. RPC-level transport
+// failures stay as tonic::Status; this type only carries errors the operation
+// itself produced.
+message ProtoOperationError {
+  ProtoDeterminacy determinacy = 1;
+  string message = 2;
+}
+
 message ProtoHeadRequest {
   string shard = 1;
 }
-message ProtoHeadResponse {
+message ProtoHeadOk {
   optional ProtoVersionedData current = 1;
+}
+message ProtoHeadResponse {
+  oneof result {
+    ProtoHeadOk ok = 1;
+    ProtoOperationError err = 2;
+  }
 }
 
 // Note: the expected sequence number is implicit in `new.seqno - 1`, matching
@@ -31,9 +55,15 @@ message ProtoCompareAndSetRequest {
   string shard = 1;
   ProtoVersionedData new = 2;
 }
-message ProtoCompareAndSetResponse {
+message ProtoCompareAndSetOk {
   // True if the new value was committed; false on expectation mismatch.
   bool committed = 1;
+}
+message ProtoCompareAndSetResponse {
+  oneof result {
+    ProtoCompareAndSetOk ok = 1;
+    ProtoOperationError err = 2;
+  }
 }
 
 message ProtoScanRequest {
@@ -41,23 +71,41 @@ message ProtoScanRequest {
   uint64 from = 2;
   uint64 limit = 3;
 }
-message ProtoScanResponse {
+message ProtoScanOk {
   repeated ProtoVersionedData versions = 1;
+}
+message ProtoScanResponse {
+  oneof result {
+    ProtoScanOk ok = 1;
+    ProtoOperationError err = 2;
+  }
 }
 
 message ProtoTruncateRequest {
   string shard = 1;
   uint64 seqno = 2;
 }
-message ProtoTruncateResponse {
+message ProtoTruncateOk {
   // Absent if the underlying store could not report a count, matching
   // the inner Option in the underlying Consensus::truncate return type.
   optional uint64 deleted = 1;
 }
+message ProtoTruncateResponse {
+  oneof result {
+    ProtoTruncateOk ok = 1;
+    ProtoOperationError err = 2;
+  }
+}
 
 message ProtoListKeysRequest {}
-message ProtoListKeysResponse {
+message ProtoListKeysOk {
   repeated string keys = 1;
+}
+message ProtoListKeysResponse {
+  oneof result {
+    ProtoListKeysOk ok = 1;
+    ProtoOperationError err = 2;
+  }
 }
 
 message ProtoSubscribeRequest {

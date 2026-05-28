@@ -191,10 +191,13 @@ use crate::proto::proto_persist_consensus_server::{
     ProtoPersistConsensus, ProtoPersistConsensusServer,
 };
 use crate::proto::{
-    ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoHeadRequest, ProtoHeadResponse,
-    ProtoListKeysRequest, ProtoListKeysResponse, ProtoScanRequest, ProtoScanResponse,
-    ProtoSubscribeMessage, ProtoSubscribeRequest, ProtoTruncateRequest, ProtoTruncateResponse,
-    ProtoVersionedData, proto_subscribe_message,
+    ProtoCompareAndSetOk, ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoDeterminacy,
+    ProtoHeadOk, ProtoHeadRequest, ProtoHeadResponse, ProtoListKeysOk, ProtoListKeysRequest,
+    ProtoListKeysResponse, ProtoOperationError, ProtoScanOk, ProtoScanRequest, ProtoScanResponse,
+    ProtoSubscribeMessage, ProtoSubscribeRequest, ProtoTruncateOk, ProtoTruncateRequest,
+    ProtoTruncateResponse, ProtoVersionedData, proto_compare_and_set_response, proto_head_response,
+    proto_list_keys_response, proto_scan_response, proto_subscribe_message,
+    proto_truncate_response,
 };
 
 type SubscribeStream =
@@ -214,8 +217,15 @@ fn from_proto(p: ProtoVersionedData) -> VersionedData {
     }
 }
 
-fn external_to_status(e: ExternalError) -> Status {
-    Status::internal(e.to_string())
+fn to_proto_error(e: ExternalError) -> ProtoOperationError {
+    let determinacy = match &e {
+        ExternalError::Determinate(_) => ProtoDeterminacy::Determinate,
+        ExternalError::Indeterminate(_) => ProtoDeterminacy::Indeterminate,
+    };
+    ProtoOperationError {
+        determinacy: i32::from(determinacy),
+        message: e.to_string(),
+    }
 }
 
 #[async_trait]
@@ -225,9 +235,14 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoHeadRequest>,
     ) -> std::result::Result<Response<ProtoHeadResponse>, Status> {
         let shard = request.into_inner().shard;
-        let current = self.head_inner(&shard).await.map_err(external_to_status)?;
+        let result = match self.head_inner(&shard).await {
+            Ok(current) => proto_head_response::Result::Ok(ProtoHeadOk {
+                current: current.map(to_proto),
+            }),
+            Err(e) => proto_head_response::Result::Err(to_proto_error(e)),
+        };
         Ok(Response::new(ProtoHeadResponse {
-            current: current.map(to_proto),
+            result: Some(result),
         }))
     }
 
@@ -237,12 +252,14 @@ impl ProtoPersistConsensus for PersistCommitter {
     ) -> std::result::Result<Response<ProtoScanResponse>, Status> {
         let r = request.into_inner();
         let limit = usize::try_from(r.limit).unwrap_or(usize::MAX);
-        let versions = self
-            .scan_inner(&r.shard, SeqNo(r.from), limit)
-            .await
-            .map_err(external_to_status)?;
+        let result = match self.scan_inner(&r.shard, SeqNo(r.from), limit).await {
+            Ok(versions) => proto_scan_response::Result::Ok(ProtoScanOk {
+                versions: versions.into_iter().map(to_proto).collect(),
+            }),
+            Err(e) => proto_scan_response::Result::Err(to_proto_error(e)),
+        };
         Ok(Response::new(ProtoScanResponse {
-            versions: versions.into_iter().map(to_proto).collect(),
+            result: Some(result),
         }))
     }
 
@@ -255,12 +272,15 @@ impl ProtoPersistConsensus for PersistCommitter {
             r.new
                 .ok_or_else(|| Status::invalid_argument("missing new VersionedData"))?,
         );
-        let result = self
-            .cas_inner(&r.shard, new)
-            .await
-            .map_err(external_to_status)?;
-        let committed = matches!(result, CaSResult::Committed);
-        Ok(Response::new(ProtoCompareAndSetResponse { committed }))
+        let result = match self.cas_inner(&r.shard, new).await {
+            Ok(cas_result) => proto_compare_and_set_response::Result::Ok(ProtoCompareAndSetOk {
+                committed: matches!(cas_result, CaSResult::Committed),
+            }),
+            Err(e) => proto_compare_and_set_response::Result::Err(to_proto_error(e)),
+        };
+        Ok(Response::new(ProtoCompareAndSetResponse {
+            result: Some(result),
+        }))
     }
 
     async fn truncate(
@@ -268,12 +288,14 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoTruncateRequest>,
     ) -> std::result::Result<Response<ProtoTruncateResponse>, Status> {
         let r = request.into_inner();
-        let deleted = self
-            .truncate_inner(&r.shard, SeqNo(r.seqno))
-            .await
-            .map_err(external_to_status)?;
+        let result = match self.truncate_inner(&r.shard, SeqNo(r.seqno)).await {
+            Ok(deleted) => proto_truncate_response::Result::Ok(ProtoTruncateOk {
+                deleted: deleted.map(|n| u64::try_from(n).unwrap_or(u64::MAX)),
+            }),
+            Err(e) => proto_truncate_response::Result::Err(to_proto_error(e)),
+        };
         Ok(Response::new(ProtoTruncateResponse {
-            deleted: deleted.map(|n| u64::try_from(n).unwrap_or(u64::MAX)),
+            result: Some(result),
         }))
     }
 
@@ -281,8 +303,13 @@ impl ProtoPersistConsensus for PersistCommitter {
         &self,
         _request: Request<ProtoListKeysRequest>,
     ) -> std::result::Result<Response<ProtoListKeysResponse>, Status> {
-        let keys = self.list_keys_inner().await.map_err(external_to_status)?;
-        Ok(Response::new(ProtoListKeysResponse { keys }))
+        let result = match self.list_keys_inner().await {
+            Ok(keys) => proto_list_keys_response::Result::Ok(ProtoListKeysOk { keys }),
+            Err(e) => proto_list_keys_response::Result::Err(to_proto_error(e)),
+        };
+        Ok(Response::new(ProtoListKeysResponse {
+            result: Some(result),
+        }))
     }
 
     type SubscribeStream = SubscribeStream;
@@ -292,10 +319,14 @@ impl ProtoPersistConsensus for PersistCommitter {
         request: Request<ProtoSubscribeRequest>,
     ) -> std::result::Result<Response<Self::SubscribeStream>, Status> {
         let shard = request.into_inner().shard;
-        let (snapshot, rx, token) = self
-            .subscribe_inner(&shard)
-            .await
-            .map_err(external_to_status)?;
+        // Subscribe still maps subscribe_inner failures to tonic::Status because
+        // the only failure mode is establishing the underlying read; once the
+        // stream is open, operation errors become an end-of-stream condition.
+        let (snapshot, rx, token) = self.subscribe_inner(&shard).await.map_err(|e| {
+            // Preserve determinacy through the message body; clients that care
+            // about retry semantics on Subscribe must re-establish anyway.
+            Status::internal(e.to_string())
+        })?;
         let snapshot_proto = snapshot.map(to_proto).unwrap_or_default();
         let stream = async_stream::try_stream! {
             yield ProtoSubscribeMessage {
