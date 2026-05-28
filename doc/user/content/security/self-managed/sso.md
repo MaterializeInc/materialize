@@ -664,16 +664,6 @@ for automated systems that do not have a user context.
    See the authorization server setup in
    [Step 1](#step-1-configure-your-identity-provider).
 
-1. Ensure `oidc_audience` includes the expected audience value for tokens
-   from your authorization server. In Okta, the `aud` claim is set to the
-   authorization server's audience (configured in **Security** > **API** >
-   your auth server > **Settings**), not the client ID. For the default
-   authorization server, this is typically `api://default`:
-
-   ```mzsql
-   ALTER SYSTEM SET oidc_audience = '["api://default"]';
-   ```
-
 1. **Configure a custom claim for the service account identity.**
 
    The `oidc_authentication_claim` setting is global — it applies to both
@@ -731,6 +721,16 @@ for automated systems that do not have a user context.
      --data-urlencode "client_secret=YOUR_SERVICE_CLIENT_SECRET"
    ```
 
+1. Ensure `oidc_audience` includes the expected audience value for tokens
+   from your authorization server. In Okta, the `aud` claim is set to the
+   authorization server's audience (configured in **Security** > **API** >
+   your auth server > **Settings**), not the client ID. For the default
+   authorization server, this is typically `api://default`:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["api://default"]';
+   ```
+
 1. Extract the `access_token` from the JSON response and use it to connect:
 
    ```shell
@@ -759,15 +759,6 @@ for automated systems that do not have a user context.
 1. Go to **Certificates & secrets** > **New client secret**. Add a description
    and expiration, then click **Add**. Note the secret **Value**.
 
-1. Ensure `oidc_audience` includes the expected audience value for Client
-   Credentials tokens. In Entra, the `aud` claim is determined by the `scope`
-   parameter in the token request. When using `YOUR_SERVICE_CLIENT_ID/.default`,
-   the audience is the service client ID:
-
-   ```mzsql
-   ALTER SYSTEM SET oidc_audience = '["YOUR_SERVICE_CLIENT_ID"]';
-   ```
-
 1. Fetch an access token:
 
    ```shell
@@ -777,6 +768,15 @@ for automated systems that do not have a user context.
      --data-urlencode "scope=YOUR_SERVICE_CLIENT_ID/.default" \
      --data-urlencode "client_id=YOUR_SERVICE_CLIENT_ID" \
      --data-urlencode "client_secret=YOUR_SERVICE_CLIENT_SECRET"
+   ```
+
+1. Ensure `oidc_audience` includes the expected audience value for Client
+   Credentials tokens. In Entra, the `aud` claim is determined by the `scope`
+   parameter in the token request. When using `YOUR_SERVICE_CLIENT_ID/.default`,
+   the audience is the service client ID:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["YOUR_SERVICE_CLIENT_ID"]';
    ```
 
 1. Extract the `access_token` from the JSON response and use it to connect:
@@ -797,14 +797,6 @@ for automated systems that do not have a user context.
 
 1. Note the **Client ID** and **Client Secret**.
 
-1. Ensure `oidc_audience` includes the expected audience value for Client
-   Credentials tokens. Check the `aud` claim in the token issued by your IdP
-   to determine the correct value:
-
-   ```mzsql
-   ALTER SYSTEM SET oidc_audience = '["YOUR_AUDIENCE_VALUE"]';
-   ```
-
 1. Fetch an access token from your IdP's token endpoint:
 
    ```shell
@@ -814,6 +806,14 @@ for automated systems that do not have a user context.
      --data-urlencode "scope=openid" \
      --data-urlencode "client_id=YOUR_SERVICE_CLIENT_ID" \
      --data-urlencode "client_secret=YOUR_SERVICE_CLIENT_SECRET"
+   ```
+
+1. Ensure `oidc_audience` includes the expected audience value for Client
+   Credentials tokens. Check the `aud` claim in the token issued by your IdP
+   to determine the correct value:
+
+   ```mzsql
+   ALTER SYSTEM SET oidc_audience = '["YOUR_AUDIENCE_VALUE"]';
    ```
 
 1. Extract the `access_token` from the JSON response and use it to connect:
