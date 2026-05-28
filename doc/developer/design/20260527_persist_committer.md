@@ -262,5 +262,5 @@ This defeats the connection-reduction goal at the worst possible moment (envd fa
   This mirrors how other envd-provided endpoints reach clusterd today.
   On leader failover, the orchestrator restarts clusterd with a new URL; hot-reload via the controller channel is a follow-up.
 * How does `environmentd` expose the committer gRPC service?
-  Decision (v1): a dedicated new listener on a configurable port (default `6880`).
+  Decision (v1): a dedicated new listener on a configurable port (default `6882`).
   Multiplexing onto the existing controller port was rejected to keep the committer's lifecycle independent of controller protocol churn.

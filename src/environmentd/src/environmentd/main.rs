@@ -141,7 +141,7 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR",
-        default_value = "127.0.0.1:6880",
+        default_value = "127.0.0.1:6882",
         action = ArgAction::Set,
     )]
     internal_persist_committer_listen_addr: SocketAddr,
@@ -395,7 +395,7 @@ pub struct Args {
     #[clap(
         long,
         env = "PERSIST_COMMITTER_URL",
-        default_value = "http://localhost:6880"
+        default_value = "http://localhost:6882"
     )]
     persist_committer_url: String,
     /// The number of worker threads created for the IsolatedRuntime used for

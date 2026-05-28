@@ -198,7 +198,7 @@ pub struct Args {
     environmentd_internal_http_port: u16,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: u16,
-    #[clap(long, default_value = "6880")]
+    #[clap(long, default_value = "6882")]
     environmentd_internal_persist_committer_port: u16,
 
     #[clap(long, default_value = "6875")]
