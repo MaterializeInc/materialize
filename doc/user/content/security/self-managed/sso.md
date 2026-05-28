@@ -643,6 +643,13 @@ username and password to obtain an ID token.
 Use this approach to treat an IdP client as a service account. This is useful
 for automated systems that do not have a user context.
 
+{{< note >}}
+`oidc_audience` is an array of values. Before running the `ALTER SYSTEM SET
+oidc_audience` examples below, check the current value with `SHOW oidc_audience;`
+and **append** the new audience rather than overwriting it. Otherwise you may
+remove the console's audience or other configured values.
+{{</ note >}}
+
 {{< tabs >}}
 {{< tab "Okta" >}}
 
