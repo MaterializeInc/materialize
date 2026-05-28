@@ -34,10 +34,7 @@ Make sure you have:
 ## Step 1. Configure your identity provider
 
 {{< note >}}
-**Audience**: this step is typically performed by your IT or security team.
-The remaining steps (Step 2 onward) are performed by the Materialize
-infrastructure admin. When Step 1 is complete, hand off the following to the
-Materialize admin:
+The remaining steps (Step 2 onward) will need:
 
 - The OIDC **issuer URL**
 - The **client ID** for the console application
