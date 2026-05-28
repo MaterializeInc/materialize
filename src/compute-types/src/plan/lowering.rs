@@ -607,23 +607,36 @@ impl Context {
                     // in logical order, so no permutation is required.
                     let input_key = if keys.raw {
                         None
-                    } else if let Some((k, permutation, _)) = keys.arbitrary_arrangement() {
+                    } else if let Some((k, permutation, thinning)) = keys.arbitrary_arrangement() {
                         // Reading from this arrangement exposes input columns in arrangement
                         // order (key columns followed by thinned value columns). We must
                         // permute every reference to an input column accordingly: the
                         // `expr`s feeding the table function arguments, and the `mfp` running
                         // after the table function (which still references input columns at
-                        // positions `0..input_arity`). Table-function output columns at
-                        // positions `input_arity..` are appended after the table function in
-                        // a fixed order, so we leave those references alone.
+                        // positions `0..input_arity`).
+                        //
+                        // The renderer hands the `mfp` the *whole* arranged row and appends the
+                        // table-function output after it. The arranged row can be wider than the
+                        // logical input row when the key is not a set of distinct columns (an
+                        // expression, functional, or repeated-column key carries extra key
+                        // values). So the table-function output columns at positions
+                        // `input_arity..` must be shifted to land after the arranged row, and the
+                        // `mfp`'s new input arity must reflect the arranged width.
                         for expr in &mut exprs {
                             expr.permute(permutation);
                         }
                         let input_arity = permutation.len();
-                        let mfp_input_arity = mfp.input_arity;
+                        let arranged_arity = thinning.len() + k.len();
+                        let output_arity = mfp.input_arity - input_arity;
                         mfp.permute_fn(
-                            |c| if c < input_arity { permutation[c] } else { c },
-                            mfp_input_arity,
+                            |c| {
+                                if c < input_arity {
+                                    permutation[c]
+                                } else {
+                                    arranged_arity + (c - input_arity)
+                                }
+                            },
+                            arranged_arity + output_arity,
                         );
                         Some(k.clone())
                     } else {
