@@ -65,7 +65,9 @@ mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-orchestratord = { path = "../orchestratord", default-features = false }
 mz-ore = { path = "../ore", features = ["async", "panic", "process", "tracing", "id_gen"] }
+mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
+mz-persist-committer = { path = "../persist-committer" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
 mz-pgwire-common = { path = "../pgwire-common" }

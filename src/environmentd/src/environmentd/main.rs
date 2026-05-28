@@ -135,6 +135,16 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
+    /// The listen address for the in-envd persist committer gRPC service.
+    /// Clusterds connect here when `persist_consensus_use_committer` is on.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_PERSIST_COMMITTER_LISTEN_ADDR",
+        default_value = "127.0.0.1:6878",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -1021,6 +1031,32 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
+
+    // Start the in-envd persist committer. Always run it so clusterds with the
+    // LD flag on have something to connect to; envd itself only routes through
+    // it when persist_consensus_use_committer is also on.
+    let committer_handle = {
+        let metrics = mz_persist_committer::metrics::CommitterMetrics::register(&metrics_registry);
+        let consensus_cfg = mz_persist::cfg::ConsensusConfig::try_from(
+            &consensus_uri,
+            Box::new(persist_clients.cfg().clone()),
+            persist_clients.metrics().postgres_consensus.clone(),
+            Arc::clone(&persist_clients.cfg().configs),
+        )?;
+        let consensus = runtime.block_on(consensus_cfg.open())?;
+        let config = mz_persist_committer::CommitterConfig {
+            listen_addr: args.internal_persist_committer_listen_addr,
+            max_cached_shards: mz_persist_client::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS
+                .get(&persist_clients.cfg().configs),
+            cache_refresh_interval:
+                mz_persist_client::cfg::PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL
+                    .get(&persist_clients.cfg().configs),
+        };
+        let _tokio_guard = runtime.enter();
+        mz_persist_committer::start_committer(consensus, metrics, config)?
+    };
+    persist_clients.set_committer_channel(committer_handle.loopback_channel.clone());
+
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,

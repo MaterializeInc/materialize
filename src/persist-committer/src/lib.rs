@@ -19,6 +19,8 @@ pub mod cache;
 pub mod metrics;
 pub mod refresh;
 pub mod server;
+pub mod startup;
 pub mod subscribe;
 
 pub use server::PersistCommitter;
+pub use startup::{CommitterConfig, CommitterHandle, start_committer};
