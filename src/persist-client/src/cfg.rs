@@ -401,7 +401,7 @@ pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
 /// process. Requires a restart of the process to take effect.
 pub const PERSIST_CONSENSUS_USE_COMMITTER: Config<bool> = Config::new(
     "persist_consensus_use_committer",
-    false,
+    true,
     "If true, route consensus traffic through the in-envd persist committer.",
 );
 
