@@ -176,6 +176,13 @@ impl PersistCommitter {
 
     /// Register a subscriber for `shard`, returning the broadcast receiver and
     /// the snapshot (current cached state) the caller should emit first.
+    ///
+    /// Registration order matters: we register the broadcast receiver *before*
+    /// reading the snapshot so that any CaS that commits during the snapshot
+    /// read is delivered as a diff rather than being dropped. The caller is
+    /// already required to dedup by seqno (since the snapshot may itself
+    /// include diffs we then redeliver), so the worst case is a duplicate,
+    /// not a missed update.
     pub async fn subscribe_inner(
         &self,
         shard: &str,
@@ -187,9 +194,9 @@ impl PersistCommitter {
         ),
         ExternalError,
     > {
-        let snapshot = self.head_inner(shard).await?;
         let token = self.cache.subscribe(shard);
         let rx = self.registry.register(shard);
+        let snapshot = self.head_inner(shard).await?;
         Ok((snapshot, rx, token))
     }
 
