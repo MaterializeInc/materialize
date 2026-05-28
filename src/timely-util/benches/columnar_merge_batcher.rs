@@ -61,10 +61,6 @@ const SIZES: &[(&str, usize)] = &[
     ("128M", 128 * 1024 * 1024),
 ];
 
-// ---------------------------------------------------------------------------
-// Pager driver helpers
-// ---------------------------------------------------------------------------
-
 /// Always-page policy parameterized over backend + codec. Used to force the
 /// merger through the byte-shaped path even when chunks are tiny.
 struct ForcePage {
@@ -94,10 +90,6 @@ fn one_chain(mut c: Column<Tuple>, pager: &ColumnPager) -> VecDeque<PagedColumn<
     let paged = pager.page(&mut c);
     VecDeque::from([paged])
 }
-
-// ---------------------------------------------------------------------------
-// Data generation (mirrors `columnar_merger.rs`)
-// ---------------------------------------------------------------------------
 
 fn make(seed: u64, n: usize, key_range: u64, time_range: u64) -> Vec<Tuple> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -155,10 +147,6 @@ fn configs(n: usize) -> [(&'static str, Vec<Tuple>, Vec<Tuple>); 3] {
         ),
     ]
 }
-
-// ---------------------------------------------------------------------------
-// Benchmark
-// ---------------------------------------------------------------------------
 
 /// One row of the throughput summary — bytes-per-iter, plus the four variant
 /// labels we'll look up in `target/criterion/<group>/<variant>/<id>/...`.

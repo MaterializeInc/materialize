@@ -495,7 +495,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mz_join_core",
     "linear_join_yielding",
     "enable_column_paged_batcher",
-    "column_paged_batcher_backend",
     "column_paged_batcher_budget_fraction",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",

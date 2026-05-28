@@ -35,11 +35,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use differential_dataflow::trace::implementations::Vector;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_ore::pager::{self, Backend};
 use mz_timely_util::column_pager::policy::TieredPolicy;
 use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
