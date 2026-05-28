@@ -90,8 +90,6 @@ from helper_pg import (
     PGPORT,
     PGUSER,
     execute_retry,
-    query_one_retry,
-    query_retry,
 )
 
 LOG = helper_logging.setup_logging("driver.subscribe_correctness")
@@ -374,31 +372,60 @@ def main() -> int:
     producer_stop.set()
     t_producer.join(timeout=15.0)
 
-    # Pick the catch-up target timestamp BEFORE reading the
-    # authoritative set, and read the authoritative set AS OF that
-    # exact timestamp once the consumer has caught up to it.
+    # Read the authoritative set AND the catch-up target timestamp in a
+    # single read transaction, so they share one logical time.
     #
-    # This closes a snapshot-skew race.  A plain
-    # `SELECT counter FROM {table}` picks its own read timestamp,
-    # which under strict serializability can sit *ahead* of a
-    # separately-sampled `mz_now()`.  The authoritative set would then
-    # include a row whose commit ts is later than `target_ts`, while
-    # the consumer — correctly caught up only to `target_ts` — has not
-    # yet streamed it, so the missed-events check fires a spurious
-    # `always(False)`.  The signature is an exact off-by-one
-    # (authoritative = received + 1) with `reconnects == 0`, i.e. no
-    # fault was even involved.  Reading both the authoritative set and
-    # the consumer-progress target at the same logical time makes the
-    # comparison snapshot-consistent.
+    # This closes a snapshot-skew race that an earlier AS-OF-mz_now()
+    # attempt didn't fully fix.  `mz_now()` sampled on its own
+    # connection can lag the producer's last committed row's timestamp,
+    # so an authoritative read AS OF that (too-early) target missed a
+    # row the consumer had already streamed — producing an exact
+    # off-by-one (missed *or* spurious) with `reconnects == 0`, i.e. no
+    # fault involved.  Reading `SELECT counter FROM table` and
+    # `SELECT mz_now()` in the same transaction guarantees:
+    #   * the transaction's read timestamp T is >= every committed row
+    #     (strict-serializable read picks T at/after the latest write),
+    #     so `authoritative_set` is the complete committed set; and
+    #   * `target_ts == T`, so once the consumer's progress reaches T it
+    #     has streamed exactly the rows in `authoritative_set` — no more
+    #     (the producer has stopped, nothing commits after T), no fewer.
+    # missed and spurious are then both structurally empty unless the
+    # SUT genuinely lost or invented a row.
+    authoritative_set: set[int] = set()
     target_ts = 0
+    auth_ok = False
     try:
-        row = query_one_retry("SELECT mz_now()::text::bigint")
-        if row is not None:
-            target_ts = int(row[0])
-    except Exception:  # noqa: BLE001
-        # If we can't get mz_now(), fall back to "consumer caught up
-        # if max_progress_ts > 0" — strictly weaker but still useful.
-        target_ts = 0
+        with psycopg.connect(
+            host=PGHOST,
+            port=PGPORT,
+            user=PGUSER,
+            dbname=PGDATABASE,
+            connect_timeout=PROBE_CONNECT_TIMEOUT_S,
+        ) as conn:
+            with conn.cursor() as cur:
+                # autocommit defaults to off → these run in one txn.
+                cur.execute(f"SELECT counter FROM {table}".encode())
+                authoritative_set = {int(r[0]) for r in cur.fetchall()}
+                cur.execute(b"SELECT mz_now()::text::bigint")
+                row = cur.fetchone()
+                target_ts = int(row[0]) if row is not None else 0
+                conn.commit()
+        auth_ok = True
+    except Exception as exc:  # noqa: BLE001
+        if not looks_like_fault(str(exc)):
+            LOG.warning("subscribe-correctness: authoritative read failed: %s", exc)
+
+    if not auth_ok:
+        # Couldn't take the snapshot (fault window) — can't run the
+        # safety assertion; bail with a `sometimes(False, ...)`.
+        consumer_stop.set()
+        t_consumer.join(timeout=5.0)
+        sometimes(
+            False,
+            "subscribe-correctness: at least one timeline could read authoritative set",
+            {"prefix": prefix},
+        )
+        return 0
 
     catchup_deadline = time.time() + CATCHUP_TIMEOUT_S
     while time.time() < catchup_deadline:
@@ -419,37 +446,6 @@ def main() -> int:
 
     consumer_stop.set()
     t_consumer.join(timeout=10.0)
-
-    # Authoritative committed_set: read the table directly via a fresh
-    # connection.  This is the ground truth — anything not in this set
-    # is not in the SUT regardless of whether the producer thinks it
-    # committed.  Handles the producer's ambiguous_set rows: if they
-    # actually landed despite no ack, they're here; if they didn't,
-    # they're not.
-    #
-    # Pinned `AS OF target_ts` so the snapshot matches exactly the
-    # logical time the consumer caught up to (see the race note above).
-    # The read is non-blocking here because the consumer already
-    # observed progress past `target_ts`, so the table's upper is
-    # already beyond it.  Falls back to a plain read only when we
-    # couldn't sample a target_ts at all.
-    authoritative_set: set[int] = set()
-    try:
-        if target_ts > 0:
-            rows = query_retry(f"SELECT counter FROM {table} AS OF {target_ts}")
-        else:
-            rows = query_retry(f"SELECT counter FROM {table}")
-        authoritative_set = {int(r[0]) for r in rows}
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning("subscribe-correctness: authoritative read failed: %s", exc)
-        # We can't run the safety assertion without this — bail with
-        # a `sometimes(False, ...)` and exit cleanly.
-        sometimes(
-            False,
-            "subscribe-correctness: at least one timeline could read authoritative set",
-            {"prefix": prefix, "exc": str(exc)[:200]},
-        )
-        return 0
 
     # Diffs for the assertion blobs.
     missed = sorted(authoritative_set - received_snapshot)[:20]
