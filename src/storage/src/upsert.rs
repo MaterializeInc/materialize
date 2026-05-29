@@ -72,6 +72,10 @@ pub type UpsertValue = Result<Row, Box<UpsertError>>;
 )]
 pub struct UpsertKey([u8; 32]);
 
+impl columnation::Columnation for UpsertKey {
+    type InnerRegion = columnation::CopyRegion<UpsertKey>;
+}
+
 impl Debug for UpsertKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "0x")?;

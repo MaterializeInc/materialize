@@ -23,7 +23,7 @@ pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
     RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -70,6 +70,12 @@ mod spines {
     pub type RowBuilder<T, R> =
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, ColumnationStack<((Row, ()), T, R)>>>;
 
+    pub type ValRowSpine<K, T, R> = Spine<Rc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
+    pub type ValRowBuilder<K, T, R> = RcBuilder<
+        OrdValBuilder<ValRowLayout<((K, Row), T, R)>, ColumnationStack<((K, Row), T, R)>>,
+    >;
+
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
         phantom: std::marker::PhantomData<U>,
@@ -78,6 +84,11 @@ mod spines {
         phantom: std::marker::PhantomData<U>,
     }
     pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
+        phantom: std::marker::PhantomData<U>,
+    }
+    /// Mirror of [`RowValLayout`] with the roles swapped: arbitrary `Columnation`
+    /// keys with `Row` values stored as packed bytes in a [`DatumContainer`].
+    pub struct ValRowLayout<U: Update<Val = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
 
@@ -111,6 +122,18 @@ mod spines {
     {
         type KeyContainer = DatumContainer;
         type ValContainer = ColumnationStack<()>;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
+        type OffsetContainer = OffsetOptimized;
+    }
+    impl<U: Update<Val = Row>> Layout for ValRowLayout<U>
+    where
+        U::Key: Columnation,
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        type KeyContainer = ColumnationStack<U::Key>;
+        type ValContainer = DatumContainer;
         type TimeContainer = ColumnationStack<U::Time>;
         type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;

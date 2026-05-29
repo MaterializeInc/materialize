@@ -77,7 +77,7 @@ use differential_dataflow::trace::implementations::merge_batcher::{
 use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder, RowRowSpine};
+use mz_row_spine::{DatumSeq, ValRowBatcher, ValRowBuilder, ValRowSpine};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -162,19 +162,12 @@ impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
     }
 }
 
-// ── Row encoding for the packed-bytes persist-feedback spine ────────────────
-//
-// When `use_row_row_spine` is set, the persist-feedback arrangement uses a
-// `RowRowSpine`, whose key and value containers store packed `Row` bytes in an
-// lgalloc-backed region. Using that layout requires the operator to traffic in
-// `(Row, Row)` instead of `(UpsertKey, UpsertValue)`. The helpers below define
-// the encoding so that the round-trip is lossless and the encoded bytes sort
-// in the same order as the upstream `UpsertKey`.
-
-/// Encode an [`UpsertKey`] as a single-column `Row` of raw bytes.
-fn upsert_key_to_row(key: &UpsertKey) -> Row {
-    Row::pack_slice(&[Datum::Bytes(key.as_ref())])
-}
+// The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
+// land in a columnation arena (`UpsertKey` is `[u8; 32]` + `Copy`, so it uses
+// `CopyRegion`), and values are stored as packed `Row` bytes in a
+// `DatumContainer`. `UpsertValue` is `Result<Row, Box<UpsertError>>`, so we
+// still need to fold both arms into a single `Row` with a leading tag column
+// so they share the value container.
 
 /// Encode an [`UpsertValue`] as a `Row` with a leading tag column so both `Ok`
 /// and `Err` payloads round-trip through `Row` byte storage.
@@ -197,7 +190,7 @@ fn upsert_value_to_row(value: &UpsertValue) -> Row {
 }
 
 /// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
-/// `DatumSeq` view returned by a `RowRowSpine` cursor.
+/// `DatumSeq` view returned by a `ValRowSpine` cursor.
 fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
     let mut iter = seq;
     let tag = match iter.next() {
@@ -287,16 +280,17 @@ where
                 row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),
             );
         });
-    // Map (UpsertKey, UpsertValue) → (Row, Row) so the arrangement can use the
-    // packed-bytes `RowRowSpine` layout. Keys and values land in lgalloc-backed
-    // regions instead of scattered jemalloc allocations, which lets the OS
-    // evict cold pages cleanly under swap pressure.
-    let encoded = persist_keyed.map(|(k, v)| (upsert_key_to_row(&k), upsert_value_to_row(&v)));
+    // Map (UpsertKey, UpsertValue) → (UpsertKey, Row) so the arrangement can
+    // use the `ValRowSpine` layout. Keys are densely packed in a columnation
+    // arena (UpsertKey is fixed-size [u8; 32]) and values land in a packed-bytes
+    // `DatumContainer`, which lets the OS evict cold value pages cleanly under
+    // swap pressure.
+    let encoded = persist_keyed.map(|(k, v)| (k, upsert_value_to_row(&v)));
     let persist_arranged = arrange_core::<
         _,
-        RowRowBatcher<T, Diff>,
-        RowRowBuilder<T, Diff>,
-        RowRowSpine<T, Diff>,
+        ValRowBatcher<UpsertKey, T, Diff>,
+        ValRowBuilder<UpsertKey, T, Diff>,
+        ValRowSpine<UpsertKey, T, Diff>,
     >(encoded.inner, Pipeline, "Persist feedback");
     let mut persist_trace = persist_arranged.trace.clone();
 
@@ -609,7 +603,7 @@ fn drain_sealed_input<T, FromTime>(
     ineligible: &mut Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
     output: &mut Vec<(UpsertValue, T, Diff)>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<RowRowSpine<T, Diff>>,
+    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
     worker_id: &usize,
     source_id: &GlobalId,
 ) -> DrainStats
@@ -662,13 +656,11 @@ where
 
     for (key, ts, upsert_diff) in eligible {
         // Look up the current value for this key in the persist trace. The
-        // spine stores keys as packed `Row` bytes, so we encode the
-        // `UpsertKey` to a `Row` and borrow it as a `DatumSeq` for the seek.
-        let key_row = upsert_key_to_row(&key);
-        let key_seq = DatumSeq::from_row(&key_row);
-        cursor.seek_key(&storage, key_seq);
+        // spine stores keys directly in a columnation arena, so we seek by
+        // borrowed `UpsertKey`.
+        cursor.seek_key(&storage, &key);
         let old_value = match cursor.get_key(&storage) {
-            Some(found) if found == key_seq => {
+            Some(found) if found == &key => {
                 let mut result = None;
                 while let Some(val) = cursor.get_val(&storage) {
                     let mut count = Diff::ZERO;
