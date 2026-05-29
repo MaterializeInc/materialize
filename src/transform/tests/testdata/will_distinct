@@ -98,6 +98,27 @@ Distinct project=[#0, #1]
       Map (#0, #1)
         Get x
 
+# FlatMap: retains input columns, so distinct input rows never merge; the
+# table-function count is non-negative, so the inner Distinct is removed.
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (flat_map (reduce (get x) [#0 #1] []) generate_series_int64 [#0 #1 1]) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  FlatMap generate_series(#0, #1, 1)
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# NEGATIVE: TopK whose limit is a non-literal expression (a column reference) is
+# not recognized as a magnitude mask, so the inner Distinct is preserved.
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (top_k (reduce (get x) [#0 #1] []) [] [#0] #0 0) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  TopK order_by=[#0 asc nulls_first] limit=#0
+    Distinct project=[#0, #1]
+      Get x
+
 # ---------------------------------------------------------------------------
 # Project requires a non-negative input. Over a plain (non-negative) Distinct
 # the inner Distinct is removed; under a Negate (negative) it is preserved
