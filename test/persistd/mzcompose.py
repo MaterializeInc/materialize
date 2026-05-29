@@ -16,12 +16,20 @@ keeps running.
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import (
+    METADATA_STORE,
+    metadata_store_services,
+)
 from materialize.mzcompose.services.persistd import Persistd
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
+    *metadata_store_services(),
     Persistd(
-        depends_on=["postgres-metadata"],
+        depends_on=[METADATA_STORE],
+        consensus_url=(
+            f"postgres://root@{METADATA_STORE}:26257?options=--search_path=consensus"
+        ),
     ),
     Materialized(
         additional_system_parameter_defaults={
