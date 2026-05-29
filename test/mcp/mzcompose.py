@@ -451,6 +451,143 @@ def workflow_default(c: Composition) -> None:
             f"(dex27_other), but activity log shows cluster_name = {observed_cluster!r}"
         )
 
+    # -- read_data_product fails loud when role lacks USAGE on home cluster ---
+    #
+    # `mz_mcp_data_products` filters by SELECT on the object but not by
+    # cluster privileges, so a role may see a data product hosted on a
+    # cluster it can't use. Auto-routing without a USAGE check would
+    # emit `SET CLUSTER = <home>; SELECT ...` and the SELECT would fail
+    # with `permission denied for CLUSTER`. Silently falling back to the
+    # session default would hide the missing privilege as "slow reads
+    # forever," so we instead surface a clear `ClusterPrivilegeMissing`
+    # error and let the caller decide: grant USAGE, or pass an explicit
+    # `cluster` override to read from a cluster they can use.
+
+    with c.test_case("agent_read_data_product_fails_when_lacking_cluster_usage"):
+        # Provision a "compute" cluster that hosts the MV's dataflow, and
+        # a "serving" cluster the HTTP user has USAGE on. Grant SELECT on
+        # the MV but withhold USAGE on the compute cluster.
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.restricted_mv;
+            DROP CLUSTER IF EXISTS restricted_compute CASCADE;
+            DROP CLUSTER IF EXISTS restricted_serving CASCADE;
+            CREATE CLUSTER restricted_compute REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+            CREATE CLUSTER restricted_serving REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+            CREATE MATERIALIZED VIEW public.restricted_mv IN CLUSTER restricted_compute
+                AS SELECT 9::int AS id, 'override'::text AS name;
+            GRANT SELECT ON public.restricted_mv TO anonymous_http_user;
+            GRANT USAGE ON CLUSTER restricted_serving TO anonymous_http_user;
+            REVOKE USAGE ON CLUSTER restricted_compute FROM anonymous_http_user;
+            ALTER ROLE anonymous_http_user SET cluster = 'restricted_serving';
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        # Touch the agent endpoint so `anonymous_http_user` exists.
+        post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "initialize",
+                {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "restricted", "version": "0.1.0"},
+                },
+                req_id=2800,
+            ),
+        )
+
+        # No-override read: must fail with ClusterPrivilegeMissing and an
+        # actionable message naming the missing cluster.
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "read_data_product",
+                    "arguments": {
+                        "name": '"materialize"."public"."restricted_mv"',
+                        "limit": 5,
+                    },
+                },
+                req_id=2801,
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        err = body.get("error")
+        assert err is not None, (
+            "no-override read should fail loud when the role lacks USAGE on "
+            f"the home cluster, but got: {body}"
+        )
+        assert (
+            err["data"]["error_type"] == "ClusterPrivilegeMissing"
+        ), f"unexpected error_type: {err}"
+        assert (
+            "restricted_compute" in err["message"]
+        ), f"error message should name the missing cluster: {err['message']!r}"
+
+        # With an explicit `cluster` override to a usable cluster, the
+        # read succeeds. Confirms the documented recovery path.
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "read_data_product",
+                    "arguments": {
+                        "name": '"materialize"."public"."restricted_mv"',
+                        "cluster": "restricted_serving",
+                        "limit": 5,
+                    },
+                },
+                req_id=2802,
+            ),
+        )
+        body = r.json()
+        assert (
+            "error" not in body
+        ), f"override to a usable cluster should succeed, got: {body}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["9", "override"]], f"unexpected rows: {rows}"
+
+        # Sanity: explicit override to the un-usable home cluster still
+        # fails (now at SQL execution time, not in the auto-route check).
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "read_data_product",
+                    "arguments": {
+                        "name": '"materialize"."public"."restricted_mv"',
+                        "cluster": "restricted_compute",
+                        "limit": 5,
+                    },
+                },
+                req_id=2803,
+            ),
+        )
+        body = r.json()
+        assert (
+            "error" in body
+        ), "explicit override to a cluster without USAGE should still fail loudly"
+
+        # Tidy up the role default so it does not leak into later cases.
+        c.sql(
+            "ALTER ROLE anonymous_http_user RESET cluster",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
     # -- agent: disable/enable via flag ----------------------------------------
 
     with c.test_case("agent_disable_via_flag"):
