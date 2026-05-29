@@ -263,6 +263,16 @@ def main() -> int:
         help="After anonymizing, scan the output for surviving original identifiers and "
         "non-anonymized string literals, and refuse to write if any are found.",
     )
+    parser.add_argument(
+        "--require-parser",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require the mz-sql-anonymize parser for query literal redaction "
+        "(the default). With --no-require-parser, fall back to a weaker regex "
+        "that only redacts single-quoted strings (missing numbers, dollar-quoted "
+        "strings, and comments) when the parser binary is unavailable or a "
+        "statement does not parse.",
+    )
 
     parser.add_argument(
         "file",
@@ -271,6 +281,20 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Resolve the output target up front so an invalid invocation fails before
+    # any work (and before the parser-availability check below).
+    if args.output:
+        output = args.output
+    elif args.in_place:
+        output = args.file
+    else:
+        print(
+            "error: specify an output with -o/--output (use '-' for stdout) "
+            "or pass --in-place to overwrite the input file",
+            file=sys.stderr,
+        )
+        return 1
 
     with open(args.file) as f:
         workload = yaml.load(f, Loader=yaml.CSafeLoader)
@@ -555,22 +579,47 @@ def main() -> int:
     # Redact literals in query SQL with Materialize's own parser, in one batch.
     # The parser handles every literal form the dialect supports (numbers, hex
     # strings, intervals, dollar-quoted and escape strings) where the regex only
-    # caught single-quoted strings. Fall back to the regex per-statement when
-    # the helper binary is unavailable or cannot parse a given statement.
+    # caught single-quoted strings.
+    #
+    # By default (--require-parser) the regex is NOT an acceptable substitute:
+    # if the parser binary is unavailable, or any individual statement does not
+    # parse, the tool errors rather than silently emitting weaker redaction.
+    # --no-require-parser opts into the regex fallback for those cases.
     if query_literal_targets:
         sqls = [q["sql"] for q in query_literal_targets]
         redacted = redact_literals_via_parser(sqls)
         if redacted is None:
+            if args.require_parser:
+                print(
+                    "error: mz-sql-anonymize helper not found, so query literals "
+                    "cannot be redacted with the parser. Build it with:\n"
+                    "    cargo build --release -p mz-sql-anonymize\n"
+                    "or pass --no-require-parser to fall back to a weaker regex "
+                    "that only redacts single-quoted strings (missing numbers, "
+                    "dollar-quoted strings, and comments).",
+                    file=sys.stderr,
+                )
+                return 1
             print(
                 "warning: mz-sql-anonymize helper not found; using regex literal "
                 "redaction for queries, which misses numbers, dollar-quoted "
-                "strings, and comments. Build it for exact redaction:\n"
-                "    cargo build --release -p mz-sql-anonymize",
+                "strings, and comments (--no-require-parser).",
                 file=sys.stderr,
             )
             for q in query_literal_targets:
                 q["sql"] = anonymize_literals_in_sql(q["sql"])
         else:
+            unparsed = [i for i, red in enumerate(redacted) if red is None]
+            if unparsed and args.require_parser:
+                print(
+                    f"error: mz-sql-anonymize could not parse {len(unparsed)} of "
+                    f"{len(redacted)} captured queries, so their literals cannot "
+                    "be redacted with the parser. Pass --no-require-parser to "
+                    "redact these with the weaker regex instead (it only handles "
+                    "single-quoted strings).",
+                    file=sys.stderr,
+                )
+                return 1
             for q, red in zip(query_literal_targets, redacted):
                 q["sql"] = (
                     red if red is not None else anonymize_literals_in_sql(q["sql"])
@@ -587,18 +636,6 @@ def main() -> int:
             for problem in problems:
                 print(f"  {problem}", file=sys.stderr)
             return 1
-
-    if args.output:
-        output = args.output
-    elif args.in_place:
-        output = args.file
-    else:
-        print(
-            "error: specify an output with -o/--output (use '-' for stdout) "
-            "or pass --in-place to overwrite the input file",
-            file=sys.stderr,
-        )
-        return 1
 
     if output == "-":
         yaml.dump(new, sys.stdout, Dumper=yaml.CSafeDumper)

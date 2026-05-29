@@ -93,8 +93,14 @@ def run_tool(
     workload: dict[str, Any],
     *extra_args: str,
     in_place: bool = False,
+    require_parser: bool = False,
 ) -> tuple[int, dict[str, Any] | None, str]:
-    """Run main() against a workload, returning (exit_code, output, dumped_text)."""
+    """Run main() against a workload, returning (exit_code, output, dumped_text).
+
+    Defaults to --no-require-parser so tests are deterministic whether or not
+    the mz-sql-anonymize binary is built; tests that exercise the parser
+    requirement pass require_parser=True.
+    """
     inp = tmp_path / "workload.yml"
     inp.write_text(yaml.safe_dump(workload))
     argv = ["mz-workload-anonymize", str(inp)]
@@ -104,6 +110,8 @@ def run_tool(
     else:
         out = tmp_path / "out.yml"
         argv += ["-o", str(out)]
+    if not require_parser:
+        argv.append("--no-require-parser")
     argv += list(extra_args)
 
     with mock.patch.object(sys, "argv", argv):
@@ -258,6 +266,19 @@ def test_regex_fallback_warns(
     rc, _out, _text = run_tool(tmp_path, base_workload())
     assert rc == 0
     assert "mz-sql-anonymize helper not found" in capsys.readouterr().err
+
+
+def test_require_parser_errors_without_binary(
+    tmp_path: Any, force_regex: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # By default the parser is required: with no binary the tool must refuse to
+    # run rather than silently fall back to the weaker regex.
+    rc, out, _text = run_tool(tmp_path, base_workload(), require_parser=True)
+    assert rc == 1
+    assert out is None
+    err = capsys.readouterr().err
+    assert "mz-sql-anonymize" in err
+    assert "--no-require-parser" in err
 
 
 @pytest.mark.skipif(

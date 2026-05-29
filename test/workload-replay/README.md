@@ -80,14 +80,17 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 *Literals (`--literals`, enabled by default):*
 - Query SQL is redacted with Materialize's own parser (`mz-sql-anonymize`),
   replacing all literals — strings, numbers, hex strings, intervals — with
-  `'<REDACTED>'`. If the helper binary is not built, the tool falls back to a
-  regex that only catches single-quoted strings (and prints a warning).
+  `'<REDACTED>'`. **This is required by default**: if the helper binary is not
+  built, or a captured statement does not parse, the tool errors instead of
+  silently producing weaker output. Pass `--no-require-parser` to fall back to
+  a regex that only catches single-quoted strings (missing numbers,
+  dollar-quoted strings, and comments).
 - `create_sql` strings (including connection hosts/users, sink topics, source
   options, and column defaults) → `'literal_1'`, `'literal_2'`, ... via regex.
   The parser is not used here because `to_ast_string_redacted()` intentionally
   does not redact DDL option strings.
 
-For exact, parser-based query redaction, build the helper once:
+Build the helper once (required for the default `--require-parser` mode):
 ```bash
 cargo build --release -p mz-sql-anonymize
 ```
@@ -105,6 +108,7 @@ bin/mz-workload-anonymize <file> [OPTIONS]
 | `--identifiers` / `--no-identifiers` | Anonymize object names | enabled |
 | `--literals` / `--no-literals` | Anonymize literals | enabled |
 | `--verify` / `--no-verify` | Re-scan output for leaks and refuse to write if any are found | enabled |
+| `--require-parser` / `--no-require-parser` | Require the parser for query literals; error rather than fall back to the weaker regex | enabled |
 
 **Examples:**
 ```bash
