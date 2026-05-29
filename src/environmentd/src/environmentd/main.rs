@@ -1068,7 +1068,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         );
         let endpoint = tonic::transport::Endpoint::from_shared(args.persist_committer_url.clone())
             .context("invalid --persist-committer-url")?;
-        let channel = endpoint.connect_lazy();
+        // `connect_lazy` constructs the hyper client, which immediately calls
+        // `tokio::spawn` to drive its internal connection pool. That requires
+        // an active Tokio runtime; outside of `block_on` it panics with
+        // "there is no reactor running". Enter the runtime context so the
+        // spawn lands on `runtime` rather than thread-local nothing.
+        let channel = runtime.block_on(async { endpoint.connect_lazy() });
         persist_clients.set_committer_channel(channel, args.persist_committer_url.clone());
         None
     } else {
