@@ -40,8 +40,8 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
