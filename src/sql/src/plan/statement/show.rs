@@ -20,10 +20,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
-    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
-    ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
-    UnresolvedItemName, WithOptionValue,
+    CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -1254,7 +1251,17 @@ fn humanize_sql_for_show_create(
                 }
             });
         }
-
+        Statement::CreateSink(stmt) => {
+            stmt.with_options.retain_mut(|o| {
+                match o.name {
+                    CreateSinkOptionName::CommitInterval => true,
+                    CreateSinkOptionName::PartitionStrategy => true,
+                    CreateSinkOptionName::Snapshot => true,
+                    // Drop version, which does not roundtrip.
+                    CreateSinkOptionName::Version => false,
+                }
+            });
+        }
         _ => (),
     }
 
