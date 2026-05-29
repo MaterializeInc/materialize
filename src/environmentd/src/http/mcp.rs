@@ -994,9 +994,10 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
 /// same read on a named cluster instead — useful for running the read on a
 /// differently-sized or differently-replicated cluster.
 ///
-/// If both the override and the catalog cluster are absent (the catalog
-/// cluster column is unexpectedly null), the query falls back to the
-/// session's default cluster.
+/// Without an override, the role must have `USAGE` on the catalog cluster
+/// — otherwise the call fails with [`McpRequestError::ClusterPrivilegeMissing`]
+/// rather than silently degrading to a slower path that would mask the
+/// missing privilege.
 ///
 /// The name is expected to come from `get_data_products()` /
 /// `get_data_product_details()`. The query runs inside a READ ONLY
