@@ -26,7 +26,7 @@ in the Console, performance improvements, and bug fixes.
 
 {{< public-preview />}}
 
-Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (Okta, Microsoft Entra ID, Auth0, Keycloak). Users authenticate via their IdP and receive a JWT token that Materialize validates; new users are auto-provisioned as database roles on first login, and existing users with matching emails map automatically to their current accounts. Enabling SSO is backward compatible: password-based auth continues to work for applications and service accounts. 
+Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (Okta, Microsoft Entra ID, Auth0, Keycloak). Users authenticate via their IdP and receive a JWT token that Materialize validates; new users are auto-provisioned as database roles on first login, and existing users with matching emails map automatically to their current accounts. Enabling SSO is backward compatible: password-based auth continues to work for applications and service accounts.
 
 For more information, refer to:
 - [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
