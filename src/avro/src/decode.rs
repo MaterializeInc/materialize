@@ -497,6 +497,14 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
+            // See `SimpleArrayAccess::decode_next` — same `MAX_BLOCK_LEN`
+            // bound applies; a wire-claimed block length above the cap
+            // would let the decode loop OOM / overflow allocation.
+            if len > MAX_BLOCK_LEN {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro map block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                ))));
+            }
             self.remaining = len;
         }
         assert!(self.remaining > 0);
@@ -560,6 +568,12 @@ impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
     }
 }
 
+/// Sanity cap on the per-block element count an Avro array/map can claim
+/// from the wire. Without it, a malicious or corrupt file can claim up
+/// to `i64::MAX` items and the generic array/map decode loop will run
+/// until it eventually OOMs or hits `Vec` capacity-overflow.
+const MAX_BLOCK_LEN: usize = 1 << 24;
+
 impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
     fn decode_next<D: AvroDecode>(&mut self, d: D) -> Result<Option<D::Out>, AvroError> {
         if self.done {
@@ -576,6 +590,11 @@ impl<'a, R: AvroRead> AvroArrayAccess for SimpleArrayAccess<'a, R> {
                 }
                 _ => unreachable!(),
             };
+            if len > MAX_BLOCK_LEN {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro array block length {len} exceeds limit {MAX_BLOCK_LEN}"
+                ))));
+            }
             self.remaining = len;
         }
         assert!(self.remaining > 0);
