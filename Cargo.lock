@@ -6086,6 +6086,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
+ "num-traits",
  "prometheus",
  "proptest",
  "prost",

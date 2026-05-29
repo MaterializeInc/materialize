@@ -41,6 +41,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::CollectionExt;
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -1575,23 +1576,12 @@ static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1_i32 << FLOAT_SC
 fn float_to_fixed_point(n: f64) -> i128 {
     debug_assert!(n.is_finite());
 
-    let bits = n.to_bits();
-    let raw_exponent = (bits >> 52) & 0x7ff;
-    let raw_mantissa = bits & 0x000f_ffff_ffff_ffff;
-
-    // Zero and subnormals. Subnormals have magnitude below `2^-1022`, so even
-    // after scaling by `2^FLOAT_SCALE_EXP` they truncate to zero.
-    if raw_exponent == 0 {
-        return 0;
-    }
-
-    // Reconstruct the 53-bit significand (restoring the implicit leading bit)
-    // and the base-2 exponent `exp` such that `|n| * FLOAT_SCALE == significand
-    // * 2^exp`. The bias is 1023 and the significand carries 52 fractional bits,
-    // and we fold in the `* 2^FLOAT_SCALE_EXP` scaling by shifting the exponent.
-    let significand = u128::from(raw_mantissa | 0x0010_0000_0000_0000);
-    let raw_exponent = i64::try_from(raw_exponent).expect("11-bit value fits in i64");
-    let exp = raw_exponent - 1023 - 52 + i64::from(FLOAT_SCALE_EXP);
+    // Decompose `n` into integer parts such that `n == sign * mantissa *
+    // 2^exponent`. Folding in the `* 2^FLOAT_SCALE_EXP` scaling then amounts to
+    // shifting `mantissa` left by `exponent + FLOAT_SCALE_EXP` bits.
+    let (mantissa, exponent, sign) = Float::integer_decode(n);
+    let significand = u128::from(mantissa);
+    let exp = i64::from(exponent) + i64::from(FLOAT_SCALE_EXP);
 
     let magnitude: u128 = if exp >= 0 {
         // Left shifts of 128 or more bits leave nothing within the 128-bit
@@ -1601,7 +1591,8 @@ fn float_to_fixed_point(n: f64) -> i128 {
             _ => 0,
         }
     } else {
-        // Right shift truncates the fractional part towards zero.
+        // Right shift truncates the fractional part towards zero. Subnormals
+        // (and zero) shift entirely out of the window and become zero.
         match u32::try_from(-exp) {
             Ok(shift) if shift < 128 => significand >> shift,
             _ => 0,
@@ -1610,11 +1601,11 @@ fn float_to_fixed_point(n: f64) -> i128 {
 
     // Reinterpret the magnitude as a signed `i128` (wrapping into the signed
     // domain) and apply the sign of `n`.
-    let signed = magnitude.cast_signed();
-    if bits >> 63 == 1 {
-        signed.wrapping_neg()
+    let magnitude = magnitude.cast_signed();
+    if sign < 0 {
+        magnitude.wrapping_neg()
     } else {
-        signed
+        magnitude
     }
 }
 
