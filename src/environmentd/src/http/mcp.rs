@@ -232,6 +232,16 @@ struct QueryParams {
 #[derive(Debug, Deserialize)]
 struct QuerySystemCatalogParams {
     sql_query: String,
+    /// Optional cluster to target. Required for reading `mz_introspection.*`
+    /// per-replica relations and for `EXPLAIN ANALYZE`, which read introspection
+    /// data from a specific cluster.
+    #[serde(default)]
+    cluster: Option<String>,
+    /// Optional replica to target within `cluster`. Required for
+    /// `mz_introspection.*` reads on a multi-replica cluster (single-replica
+    /// clusters auto-select). Has no meaning without `cluster`.
+    #[serde(default)]
+    cluster_replica: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -724,14 +734,23 @@ async fn handle_tools_list(
                 description: concat!(
                     "Query Materialize system catalog tables for troubleshooting and observability. ",
                     "Only mz_*, pg_catalog, and information_schema tables are accessible. ",
-                    "Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries.",
+                    "Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. ",
+                    "To read mz_introspection.* per-replica relations or run EXPLAIN ANALYZE, set the cluster (and cluster_replica on multi-replica clusters) to target the replica the data is read from.",
                 ).to_owned() + &format!(" {size_hint}"),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "sql_query": {
                             "type": "string",
-                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
+                            "description": "PostgreSQL-compatible SELECT, SHOW, EXPLAIN, or EXPLAIN ANALYZE query referencing mz_* system catalog tables"
+                        },
+                        "cluster": {
+                            "type": "string",
+                            "description": "Optional cluster to target. Required for reading mz_introspection.* per-replica relations and for EXPLAIN ANALYZE, which read introspection data from a specific cluster."
+                        },
+                        "cluster_replica": {
+                            "type": "string",
+                            "description": "Optional replica to target within the cluster. Required for mz_introspection.* reads on a multi-replica cluster (single-replica clusters auto-select). Requires cluster to also be set."
                         }
                     },
                     "required": ["sql_query"]
@@ -777,7 +796,14 @@ async fn handle_tools_call(
             execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
-            query_system_catalog(client, &p.sql_query, max_response_size).await
+            query_system_catalog(
+                client,
+                &p.sql_query,
+                p.cluster.as_deref(),
+                p.cluster_replica.as_deref(),
+                max_response_size,
+            )
+            .await
         }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -961,7 +987,7 @@ async fn read_data_product(
     format_rows_response(rows, max_response_size)
 }
 
-/// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
+/// Validates query is a single SELECT, SHOW, EXPLAIN, or EXPLAIN ANALYZE statement.
 fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
     let sql = sql.trim();
     if sql.is_empty() {
@@ -983,17 +1009,23 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
         )));
     }
 
-    // Allowlist: Only SELECT, SHOW, and EXPLAIN statements permitted
+    // Allowlist: Only SELECT, SHOW, EXPLAIN, and EXPLAIN ANALYZE statements
+    // permitted. EXPLAIN ANALYZE is planned as a SELECT against mz_introspection,
+    // so it is read-only and benefits from cluster/replica targeting.
     let stmt = &stmts[0];
     use mz_sql_parser::ast::Statement;
 
     match &stmt.ast {
-        Statement::Select(_) | Statement::Show(_) | Statement::ExplainPlan(_) => {
+        Statement::Select(_)
+        | Statement::Show(_)
+        | Statement::ExplainPlan(_)
+        | Statement::ExplainAnalyzeObject(_)
+        | Statement::ExplainAnalyzeCluster(_) => {
             // Allowed - read-only operations
             Ok(())
         }
         _ => Err(McpRequestError::QueryValidationFailed(
-            "Only SELECT, SHOW, and EXPLAIN statements are allowed".to_string(),
+            "Only SELECT, SHOW, EXPLAIN, and EXPLAIN ANALYZE statements are allowed".to_string(),
         )),
     }
 }
@@ -1024,9 +1056,20 @@ async fn execute_query(
 async fn query_system_catalog(
     client: &mut AuthedClient,
     sql_query: &str,
+    cluster: Option<&str>,
+    cluster_replica: Option<&str>,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!("Executing query_system_catalog");
+    debug!(?cluster, ?cluster_replica, "Executing query_system_catalog");
+
+    // `cluster_replica` targets a replica of the *current* cluster, so without
+    // an explicit cluster the target is ambiguous. Reject rather than silently
+    // applying it to the session default.
+    if cluster_replica.is_some() && cluster.is_none() {
+        return Err(McpRequestError::QueryValidationFailed(
+            "cluster_replica requires cluster to be set".to_string(),
+        ));
+    }
 
     // First validate it's a read-only query
     validate_readonly_query(sql_query)?;
@@ -1034,14 +1077,38 @@ async fn query_system_catalog(
     // Then validate that query only references mz_* tables by parsing the SQL
     validate_system_catalog_query(sql_query)?;
 
+    // Optionally target a cluster and replica. `SET CLUSTER` runs the query on
+    // the named cluster; `SET CLUSTER_REPLICA` selects the replica that answers
+    // `mz_introspection.*` reads and `EXPLAIN ANALYZE`, which read per-replica
+    // introspection data.
+    let mut targeting = String::new();
+    if let Some(cluster) = cluster {
+        targeting.push_str(&format!(
+            "SET CLUSTER = {}; ",
+            escaped_string_literal(cluster)
+        ));
+    }
+    if let Some(replica) = cluster_replica {
+        targeting.push_str(&format!(
+            "SET CLUSTER_REPLICA = {}; ",
+            escaped_string_literal(replica),
+        ));
+    }
+
     // Wrap the query in a READ ONLY transaction with a tight search_path
     // restricted to system schemas. This prevents unqualified `mz_*` references
     // from resolving to user-created objects (e.g. a view `public.mz_leak`) via
     // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
-    // used by the agent `query` tool).
+    // used by the agent `query` tool). `mz_introspection` is included so
+    // unqualified introspection relation names resolve.
+    //
+    // Note: EXPLAIN ANALYZE targets a user object (e.g. a materialized view),
+    // which this system-only search_path cannot resolve by an unqualified name —
+    // callers must fully qualify the object (e.g. `database.schema.name`).
     let combined_query = format!(
-        "BEGIN READ ONLY; SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema; {}; COMMIT;",
-        sql_query
+        "BEGIN READ ONLY; \
+         SET search_path = mz_catalog, mz_internal, mz_introspection, pg_catalog, information_schema; \
+         {targeting}{sql_query}; COMMIT;",
     );
 
     let rows = execute_sql(client, &combined_query).await?;
@@ -1234,6 +1301,16 @@ mod tests {
     #[mz_ore::test]
     fn test_validate_readonly_query_explain() {
         assert!(validate_readonly_query("EXPLAIN SELECT 1").is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_readonly_query_explain_analyze() {
+        assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR INDEX i").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE CLUSTER MEMORY").is_ok());
+        assert!(
+            validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv AS SQL")
+                .is_ok()
+        );
     }
 
     #[mz_ore::test]
@@ -1553,6 +1630,27 @@ mod tests {
         assert!(
             validate_system_catalog_query("SHOW TABLES").is_ok(),
             "SHOW TABLES should be allowed"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_allows_explain_analyze() {
+        // EXPLAIN ANALYZE reads per-replica introspection data internally. Its
+        // `FOR INDEX`/`FOR MATERIALIZED VIEW` target is an explainee, not a
+        // table reference, so it neither trips the non-system-table check nor
+        // the "must reference a system table" SELECT guard.
+        assert!(
+            validate_system_catalog_query("EXPLAIN ANALYZE MEMORY FOR INDEX i").is_ok(),
+            "EXPLAIN ANALYZE for an index should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv")
+                .is_ok(),
+            "EXPLAIN ANALYZE for a materialized view should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("EXPLAIN ANALYZE CLUSTER MEMORY").is_ok(),
+            "EXPLAIN ANALYZE CLUSTER should be allowed"
         );
     }
 
