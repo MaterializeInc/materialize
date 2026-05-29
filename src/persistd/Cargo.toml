@@ -9,10 +9,6 @@ publish = false
 [lints]
 workspace = true
 
-[[bin]]
-name = "persistd"
-path = "src/bin/persistd.rs"
-
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["env"] }
