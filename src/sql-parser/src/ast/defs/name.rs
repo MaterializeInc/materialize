@@ -296,7 +296,7 @@ impl Ident {
             && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
             && !self
                 .as_keyword()
-                .map(|kw| kw.is_sometimes_reserved() || kw.is_context_sensitive_keyword())
+                .map(Keyword::is_sometimes_reserved)
                 .unwrap_or(false)
     }
 
