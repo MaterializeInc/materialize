@@ -214,7 +214,7 @@ where
     }
 }
 
-struct Codec {
+pub struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
     /// When true, skip the aggregate buffer size check in `decode()`.
