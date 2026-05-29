@@ -270,3 +270,119 @@ def test_parser_path_redacts_numeric_literal(tmp_path: Any) -> None:
     assert rc == 0
     assert "987654321" not in text
     assert "<REDACTED>" in text
+
+
+def cdc_workload() -> dict[str, Any]:
+    """A workload with a CDC source whose subsources (children) are keyed by
+    their fully-qualified `database.schema.name`."""
+    return {
+        "clusters": {},
+        "databases": {
+            "upstream_db": {
+                "ingest_schema": {
+                    "tables": {},
+                    "views": {},
+                    "materialized_views": {},
+                    "indexes": {},
+                    "types": {},
+                    "connections": {},
+                    "sources": {
+                        "pg_src": {
+                            "create_sql": "CREATE SOURCE pg_src FROM POSTGRES CONNECTION c",
+                            "type": "postgres",
+                            "children": {
+                                "upstream_db.ingest_schema.people": {
+                                    "name": "people",
+                                    "database": "upstream_db",
+                                    "schema": "ingest_schema",
+                                    "create_sql": "CREATE SUBSOURCE people (id int)",
+                                    "columns": [{"name": "id", "type": "int4"}],
+                                },
+                            },
+                        },
+                    },
+                    "sinks": {},
+                },
+            },
+        },
+        "queries": [],
+    }
+
+
+def test_subsource_child_key_is_anonymized(tmp_path: Any, force_regex: None) -> None:
+    # Regression: the child's fully-qualified dict key must not leak the
+    # original database/schema/name.
+    rc, _out, text = run_tool(tmp_path, cdc_workload())
+    assert rc == 0
+    for original in ("upstream_db", "ingest_schema", "people"):
+        assert original not in text, f"{original!r} leaked via a child key"
+
+
+def test_verify_catches_leaked_child_key() -> None:
+    # A surviving original identifier in a structural dict key must be flagged.
+    new = {
+        "clusters": {},
+        "databases": {
+            "db_0": {
+                "schema_1": {
+                    "sources": {
+                        "source_1": {
+                            "children": {
+                                # Leaky: original schema name survived in the key.
+                                "db_0.ingest_schema.child_1": {"name": "child_1"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "queries": [],
+    }
+    mapping = {"ingest_schema": "schema_1"}
+    args = mock.Mock(identifiers=True, literals=True)
+    problems = mz_workload_anonymize.verify_anonymized(new, mapping, args)
+    assert any("ingest_schema" in p for p in problems)
+
+
+def test_verify_ignores_reserved_format_key_collision() -> None:
+    # A user column named like a reserved format key (e.g. transaction_id) must
+    # not make verify flag the query record's own field name.
+    new = {
+        "clusters": {},
+        "databases": {},
+        "queries": [{"sql": "SELECT column_1 FROM table_1", "transaction_id": 7}],
+    }
+    mapping = {"transaction_id": "column_1"}
+    args = mock.Mock(identifiers=True, literals=True)
+    assert mz_workload_anonymize.verify_anonymized(new, mapping, args) == []
+
+
+def test_verify_ignores_identifier_word_in_scalar_value() -> None:
+    # A scalar value (here a column default) may contain a word matching a
+    # renamed column; that is data, not an identifier leak, so the identifier
+    # check must not scan scalar values. (SQL text is scanned separately.)
+    new = {
+        "clusters": {},
+        "databases": {
+            "db_0": {
+                "public": {
+                    "tables": {
+                        "table_1": {
+                            "create_sql": "CREATE TABLE table_1 (column_1 text)",
+                            "columns": [
+                                {
+                                    "name": "column_1",
+                                    "type": "text",
+                                    "default": "'secret note'",
+                                }
+                            ],
+                        }
+                    },
+                }
+            }
+        },
+        "queries": [],
+    }
+    mapping = {"note": "column_1"}
+    args = mock.Mock(identifiers=True, literals=False)
+    assert mz_workload_anonymize.verify_anonymized(new, mapping, args) == []

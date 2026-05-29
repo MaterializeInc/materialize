@@ -80,6 +80,61 @@ def keywords() -> set[str]:
     return result
 
 
+# Keys that are part of the workload file format itself, not user identifiers.
+# The verify pass must not treat these as leaks when a user object happens to
+# share a name with one of them (e.g. a column named `transaction_id`). Their
+# *values* are still checked; only the structural key name is exempt.
+RESERVED_FORMAT_KEYS = frozenset(
+    {
+        # top level
+        "databases",
+        "clusters",
+        "queries",
+        "mz_workload_version",
+        # schema-level containers
+        "tables",
+        "views",
+        "materialized_views",
+        "indexes",
+        "types",
+        "connections",
+        "sources",
+        "sinks",
+        # object / column fields
+        "create_sql",
+        "name",
+        "type",
+        "schema",
+        "database",
+        "columns",
+        "managed",
+        "children",
+        "nullable",
+        "default",
+        "rows",
+        "avg_size",
+        # source statistics fields
+        "bytes_total",
+        "messages_total",
+        "bytes_second",
+        "messages_second",
+        # query record fields
+        "sql",
+        "cluster",
+        "search_path",
+        "statement_type",
+        "finished_status",
+        "params",
+        "transaction_isolation",
+        "session_id",
+        "transaction_id",
+        "began_at",
+        "duration",
+        "result_size",
+    }
+)
+
+
 def _iter_sql(obj: Any, path: str = "") -> Any:
     """Yield (location, sql) for every create_sql/sql string in the workload."""
     if isinstance(obj, dict):
@@ -94,17 +149,38 @@ def _iter_sql(obj: Any, path: str = "") -> Any:
             yield from _iter_sql(value, f"{path}[{i}]")
 
 
+def _iter_strings(obj: Any, path: str = "") -> Any:
+    """Yield (location, string) for every string in the workload, keys included.
+
+    Identifiers leak through structural positions too — notably dict keys such
+    as a source child's fully-qualified name — so the identifier check must look
+    beyond create_sql/sql values.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            child_path = f"{path}.{key}"
+            if isinstance(key, str):
+                yield f"{child_path}.<KEY>", key
+            yield from _iter_strings(value, child_path)
+    elif isinstance(obj, list):
+        for i, value in enumerate(obj):
+            yield from _iter_strings(value, f"{path}[{i}]")
+    elif isinstance(obj, str):
+        yield path, obj
+
+
 def verify_anonymized(
     new: dict[str, Any], mapping: dict[str, str], args: argparse.Namespace
 ) -> list[str]:
     """Best-effort scan of anonymized output for data that should have been scrubbed.
 
     This is a backstop for the heuristic text substitution, not a proof: it
-    catches whole-word survivals of original identifiers and any single-quoted
-    literal that was not reduced to a placeholder ('<REDACTED>' from the
-    parser-based path, or 'literal_N' from the regex fallback). It cannot detect
-    sensitive data hidden in dollar-quoted strings, comments, or numeric
-    literals when the regex fallback is in use.
+    catches whole-word survivals of original identifiers (in any string,
+    including structural dict keys) and any single-quoted literal in SQL that
+    was not reduced to a placeholder ('<REDACTED>' from the parser-based path,
+    or 'literal_N' from the regex fallback). It cannot detect sensitive data
+    hidden in dollar-quoted strings, comments, or numeric literals when the
+    regex fallback is in use.
 
     Cluster create_sql is exempt from the literal check: its literals (SIZE,
     replication factor, availability zones) are non-sensitive configuration that
@@ -127,12 +203,24 @@ def verify_anonymized(
     string_literal = re.compile(r"'(?:[^']|'')*'")
     placeholder = re.compile(r"^'(?:literal_\d+|<REDACTED>)'$")
 
-    for location, sql in _iter_sql(new):
+    # The identifier check runs over identifier positions only: SQL text and
+    # structural dict keys (e.g. a source child's fully-qualified key). It must
+    # NOT scan arbitrary scalar values — a kept literal like 'secret note' can
+    # contain a word that matches a renamed column without being a leak.
+    def check_identifiers(location: str, text: str) -> None:
         for original, pattern in identifier_checks:
-            if pattern.search(sql):
+            if pattern.search(text):
                 problems.append(
                     f"{location}: original identifier {original!r} survived"
                 )
+
+    for location, text in _iter_strings(new):
+        if location.endswith(".<KEY>") and text not in RESERVED_FORMAT_KEYS:
+            check_identifiers(location, text)
+
+    for location, sql in _iter_sql(new):
+        check_identifiers(location, sql)
+        # Literal check runs only over SQL, and exempts cluster create_sql.
         if args.literals and not location.startswith(".clusters"):
             for match in string_literal.finditer(sql):
                 if not placeholder.fullmatch(match.group(0)):
@@ -322,8 +410,17 @@ def main() -> int:
                             if args.literals:
                                 anonymize_column_default(column)
                             child["columns"].append(column)
+                        # Build the child's fully-qualified key from the mapped
+                        # database/schema names. child["name"] is already
+                        # anonymized above, but database/schema are remapped
+                        # later (pass 2); without mapping them here the key
+                        # leaks the original database and schema names. When
+                        # --identifiers is off the mapping is empty and these
+                        # resolve back to the originals, as intended.
                         source["children"][
-                            f"{child['database']}.{child['schema']}.{child['name']}"
+                            f"{mapping.get(child['database'], child['database'])}."
+                            f"{mapping.get(child['schema'], child['schema'])}."
+                            f"{child['name']}"
                         ] = child
                 new_schema["sources"][new_source_name] = source
 
