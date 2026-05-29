@@ -19,11 +19,10 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-05-28* <br>
 *Released to Materialize Self-Managed: 2026-05-29* <br>
 
-This release includes a new Maintained Objects page in the Console,
-performance improvements, and bug fixes.
+This release includes Single Sign-On (SSO), a new Maintained Objects page in the Console, performance improvements, and bug fixes.
 
 ### Features {#v26.26-features}
-
+- **SSO / OIDC logins for Self-Managed (Public Preview)**: Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (e.g. Okta, Entra ID). Users are auto-provisioned as database roles on first login. Note: SCIM and IdP-based role mapping are not included in this release.
 - **Maintained Objects**: The Console now includes a Maintained Objects page
   that provides a unified view of all sources, materialized views, indexes,
   and tables with real-time freshness metrics, hydration status, and cluster
