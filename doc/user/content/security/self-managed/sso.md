@@ -34,11 +34,12 @@ Make sure you have:
 ## Step 1. Configure your identity provider
 
 {{< note >}}
-The remaining steps (Step 2 onward) will need:
+You will use the following values from your IdP configuration to [configure
+OIDC system parameters for Materialize](#step-3-configure-oidc-system-parameters):
 
 - The OIDC **issuer URL**
 - The **client ID** for the console application
-- (If using service accounts) the client ID, client secret, and expected
+- If using service accounts, the client ID, client secret, and expected
   audience for each service-account application
 {{</ note >}}
 
@@ -180,12 +181,12 @@ additional applications in the [Service accounts](#service-accounts) section.
 {{< /tabs >}}
 
 {{< note >}}
-**Handoff checklist**: before continuing to Step 2, the Materialize admin
-needs the following from whoever configured the IdP:
+Once you have configured your IdP, you will need the following values to [configure
+OIDC system parameters for Materialize](#step-3-configure-oidc-system-parameters):
 
 - The OIDC **issuer URL**
 - The **client ID** for the console application
-- (If using service accounts) the client ID, client secret, and expected
+- If using service accounts, the client ID, client secret, and expected
   audience for each service-account application
 {{</ note >}}
 
@@ -251,7 +252,7 @@ or SQL commands, but it is strongly recommended to use a ConfigMap. See [Configu
 |-----------|-------------|----------|---------|
 | `oidc_issuer` | The OIDC issuer URL (e.g., `https://your-org.okta.com/oauth2/default`). Materialize uses this to discover the JWKS endpoint for token validation. | Yes | None |
 | `oidc_audience` | A JSON array of expected audience values for token validation (e.g., `["your-client-id"]`). Use the **client ID from [Step 1](#step-1-configure-your-identity-provider)**. Materialize checks that the JWT's `aud` claim contains at least one of these values. **By default, this is empty, and audience validation is skipped.**| No | `[]` |
-| `oidc_authentication_claim` | The JWT claim to use as the Materialize username. See [Mapping IdP users to Materialize roles](#mapping-idp-users-to-materialize-roles) for details. | No | `sub` |
+| `oidc_authentication_claim` | The JWT claim to use as the Materialize username. For ID tokens (human users), a common claim is `email`. For access tokens from the [Client Credentials flow](#client-credentials-flow), ensure this claim exists in the token. See [Mapping IdP users to Materialize roles](#mapping-idp-users-to-materialize-roles) for details. | No | `sub` |
 | `console_oidc_client_id` | The OIDC client ID used by the web console for the authorization code flow. | For console login | Empty |
 | `console_oidc_scopes` | Space-separated OIDC scopes requested by the web console when obtaining a token. Scopes control which claims are included in the token. The `openid` scope is required to obtain an ID token. Add `email` to include the `email` claim, or `profile` to include name claims. If `oidc_authentication_claim` references a claim like `email`, you must request the corresponding scope here. | For console login | Empty |
 
@@ -261,27 +262,6 @@ When `oidc_audience` is empty, audience validation is skipped. This means
 Materialize, including tokens issued for other applications. **Always set
 `oidc_audience` in production environments.**
 {{</ warning >}}
-
-### Mapping IdP users to Materialize roles
-
-When a user authenticates into Materialize, their role name is the value of the JWT claim keyed by `oidc_authentication_claim`.
-
-For example, if `oidc_authentication_claim` is set to `email` and a user authenticates with the following JWT:
-
-```json
-{
-  "sub": "auth0|abc123",
-  "email": "alice@your-org.com",
-  "name": "Alice",
-  "iat": 1516239022
-}
-```
-
-Their role name will be `alice@your-org.com`.
-
-For ID tokens (human users), a common claim is `email`. For access tokens from the [Client Credentials flow](#client-credentials-flow), ensure this claim exists in the token.
-
-If a user tries to log in and the role doesn't exist, the role will be auto-provisioned. See [Auto-provisioned roles](#auto-provisioned-roles) for more details.
 
 ### Configure via ConfigMap
 
@@ -326,6 +306,13 @@ spec:
   requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
   systemParameterConfigmapName: mz-system-params
 ```
+
+{{< note >}}
+This example sets `oidc_authentication_claim` to `email` rather than the default
+`sub`, so each user's role name comes from their `email` claim. Because the
+authentication claim references `email`, `console_oidc_scopes` includes the
+`email` scope to ensure that claim is present in the token.
+{{</ note >}}
 
 Apply the updated manifest to your Kubernetes cluster. For more on configuring
 system parameters via a ConfigMap, see [System parameters
@@ -433,11 +420,33 @@ is established, it persists until disconnected, regardless of token expiry.
 {{</ note >}}
 
 
-## Auto-provisioned roles
+## Provisioning roles
 
-Each user who authenticates via OIDC is associated with a single database role
-in Materialize through `oidc_authentication_claim`. When a user signs in and no matching role exists, Materialize
-**automatically creates** a role for them.
+### Mapping IdP users to Materialize roles
+
+Each user or service account that authenticates via OIDC maps to a single
+Materialize database role. When a user authenticates into Materialize, their role name is the value of the JWT claim keyed by `oidc_authentication_claim`.
+
+For example, if `oidc_authentication_claim` is set to `email` and a user authenticates with the following JWT:
+
+```json
+{
+  "sub": "auth0|abc123",
+  "email": "alice@your-org.com",
+  "name": "Alice",
+  "iat": 1516239022
+}
+```
+
+Their role name will be `alice@your-org.com`.
+
+If a user logs in and no matching role exists, Materialize auto-provisions one,
+as described in the next section.
+
+### Auto-provisioning roles
+
+When a user signs in and no role matching their `oidc_authentication_claim`
+value exists, Materialize **automatically creates** a role for them.
 
 Auto-provisioned roles:
 - Have default privileges only.
@@ -446,7 +455,7 @@ Auto-provisioned roles:
 - Are not automatically removed when the user is removed from the IdP. See
   [De-provisioning users](#de-provisioning-users) for cleanup instructions.
 
-### Auditing auto-provisioned roles
+#### Auditing auto-provisioned roles
 
 To view which roles were auto-provisioned via OIDC, query `mz_audit_events`:
 
@@ -460,7 +469,7 @@ ORDER BY occurred_at DESC;
 Roles created through OIDC authentication will have `auto_provision_source` set to
 `oidc`.
 
-## Pre-provisioning roles
+### Pre-provisioning roles
 
 An administrator can create roles before users login, rather than rely on
 auto-provisioning. To pre-provision a role, connect as a superuser and create
@@ -470,7 +479,9 @@ the role with a name matching the expected JWT claim value:
 CREATE ROLE "alice@your-org.com" WITH LOGIN;
 ```
 
-To configure privileges for pre-provisioned roles, see [Manage database roles](/security/self-managed/access-control/manage-roles/).
+Like auto-provisioned roles, pre-provisioned roles start with default privileges
+only and must be granted additional privileges through
+[RBAC](/security/self-managed/access-control/manage-roles/).
 
 ## Service accounts
 
@@ -482,9 +493,6 @@ For machine-to-machine access, you have three options:
   accounts that authenticate against your IdP with a username and password.
 - [Client Credentials flow](#client-credentials-flow): for service accounts
   that authenticate against your IdP without a user context.
-
-Use SQL password authentication unless your service account specifically needs
-to authenticate against your IdP.
 
 ### SQL password authentication (recommended for non-OAuth clients)
 
