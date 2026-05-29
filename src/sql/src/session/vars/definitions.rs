@@ -2232,6 +2232,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2256,6 +2262,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
         }
     }
 }
@@ -2297,6 +2304,7 @@ mod tests {
             enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2326,6 +2334,7 @@ mod tests {
         set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

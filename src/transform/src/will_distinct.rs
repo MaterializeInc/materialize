@@ -53,7 +53,7 @@ impl crate::Transform for WillDistinct {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
-        self.apply(relation, derived);
+        self.apply(relation, derived, ctx.features.enable_will_distinct_propagation);
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -61,7 +61,7 @@ impl crate::Transform for WillDistinct {
 }
 
 impl WillDistinct {
-    fn apply(&self, expr: &mut MirRelationExpr, derived: DerivedView) {
+    fn apply(&self, expr: &mut MirRelationExpr, derived: DerivedView, generalize: bool) {
         // Maintain a todo list of triples of 1. expression, 2. child analysis results, and 3. a "will distinct" bit.
         // The "will distinct" bit says that a subsequent operator will make the specific multiplicities of each record
         // irrelevant, and the expression only needs to present the correct *multiset* of records, with any positive
@@ -126,32 +126,34 @@ impl WillDistinct {
                         }
                     }
                     MirRelationExpr::TopK { input, limit, .. } => {
-                        if limit.as_ref().and_then(|e| e.as_literal_int64()) == Some(1) {
+                        if generalize
+                            && limit.as_ref().and_then(|e| e.as_literal_int64()) == Some(1)
+                        {
                             todo.push((input, derived.last_child(), true));
                         } else {
                             todo.push((input, derived.last_child(), false));
                         }
                     }
                     MirRelationExpr::Map { input, .. } => {
-                        todo.push((input, derived.last_child(), distinct_by));
+                        todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
                     MirRelationExpr::Filter { input, .. } => {
-                        todo.push((input, derived.last_child(), distinct_by));
+                        todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
                     MirRelationExpr::FlatMap { input, .. } => {
-                        todo.push((input, derived.last_child(), distinct_by));
+                        todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
                     MirRelationExpr::Threshold { input, .. } => {
-                        todo.push((input, derived.last_child(), distinct_by));
+                        todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
                     MirRelationExpr::Negate { input, .. } => {
-                        todo.push((input, derived.last_child(), distinct_by));
+                        todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
                     MirRelationExpr::Project { input, .. } => {
                         // Project needs a non-negative input to ensure output polarity does not change.
                         // Two inputs that collapse to be one output, if their input polarities are different,
                         // could end with either output polarity (or zero).
-                        if *derived.last_child().value::<NonNegative>().unwrap() {
+                        if generalize && *derived.last_child().value::<NonNegative>().unwrap() {
                             todo.push((input, derived.last_child(), distinct_by));
                         } else {
                             todo.push((input, derived.last_child(), false));
