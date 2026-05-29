@@ -1347,8 +1347,40 @@ pub struct GeneralDeserializer<'a> {
     pub schema: SchemaNode<'a>,
 }
 
+/// Cap on recursive `GeneralDeserializer::deserialize` calls. Avro records
+/// may reference themselves (`{"name":"X","type":"record","fields":[
+/// {"name":"x","type":"X"}]}`), so a malicious file plus matching wire
+/// bytes can recurse forever and overflow the stack.
+const MAX_DECODE_DEPTH: usize = 128;
+
+thread_local! {
+    static DECODE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct DecodeDepthGuard;
+impl DecodeDepthGuard {
+    fn enter() -> Result<Self, AvroError> {
+        DECODE_DEPTH.with(|d| {
+            let new = d.get() + 1;
+            if new > MAX_DECODE_DEPTH {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Avro decode depth exceeds limit {MAX_DECODE_DEPTH}"
+                ))));
+            }
+            d.set(new);
+            Ok(DecodeDepthGuard)
+        })
+    }
+}
+impl Drop for DecodeDepthGuard {
+    fn drop(&mut self) {
+        DECODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
     fn deserialize<R: AvroRead, D: AvroDecode>(self, r: &mut R, d: D) -> Result<D::Out, AvroError> {
+        let _guard = DecodeDepthGuard::enter()?;
         use ValueOrReader::Reader;
         match self.schema.inner {
             SchemaPiece::Null => d.scalar(Scalar::Null),
