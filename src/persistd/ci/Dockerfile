@@ -7,15 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM distroless-prod-base
-
-# Workspace-wide cargo feature unification compiles `mz-persist` with the
-# `foundationdb` feature (enabled by `materialized`), so the `persistd` binary
-# carries a `DT_NEEDED libfdb_c.so` entry even though it does not itself enable
-# the feature. Bundle the client library so the binary loads, mirroring
-# `ubuntu-base` which does the same for `materialized`.
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
+# Use `prod-base` (Ubuntu) rather than `distroless-prod-base`. Workspace-wide
+# cargo feature unification compiles `mz-persist` with the same heavy
+# dependency set as `environmentd` (FoundationDB, plus xz/lzma via the
+# arrow/parquet stack), so the `persistd` binary needs the same runtime shared
+# libraries (`libfdb_c.so`, `liblzma.so.5`, ...). `prod-base` provides them via
+# `ubuntu-base`; the distroless image does not, and bundling each library by
+# hand is whack-a-mole. This matches `environmentd` and `clusterd`.
+MZFROM prod-base
 
 COPY persistd /usr/local/bin/persistd
 
-ENTRYPOINT ["persistd"]
+USER materialize
+
+ENTRYPOINT ["tini", "--", "persistd"]
