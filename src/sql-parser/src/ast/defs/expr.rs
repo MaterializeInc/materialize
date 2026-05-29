@@ -891,7 +891,36 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             }
         }
 
-        f.write_node(&self.name);
+        // If the function name clashes with a keyword that has its own
+        // special parser form (any `(Token::Keyword(KW), Some(Token::LParen))`
+        // dispatch in `parse_expr`), an unquoted name on reparse would
+        // trigger the special-grammar parser instead of a regular function
+        // call. Emit the always-quoted stable form for the name in that
+        // case so the regular function-call path is preserved. The list
+        // tracks the parser's dispatch table; add a new entry here whenever
+        // a new keyword grows special-grammar parens.
+        let name_stable = self.name.to_ast_string_stable();
+        let needs_quote_to_disambiguate = matches!(
+            name_stable.as_str(),
+            r#""array""#
+                | r#""coalesce""#
+                | r#""exists""#
+                | r#""extract""#
+                | r#""greatest""#
+                | r#""least""#
+                | r#""map""#
+                | r#""normalize""#
+                | r#""nullif""#
+                | r#""position""#
+                | r#""row""#
+                | r#""substring""#
+                | r#""trim""#
+        );
+        if needs_quote_to_disambiguate {
+            f.write_str(&name_stable);
+        } else {
+            f.write_node(&self.name);
+        }
         f.write_str("(");
         if self.distinct {
             f.write_str("DISTINCT ")
