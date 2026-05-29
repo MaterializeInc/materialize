@@ -50,9 +50,15 @@
 //! ```
 //!
 //! The "chain invariant" states that each chain has at least `chain_proportionality` times as
-//! many chunks as the next one. This means that chain sizes will often be powers of
+//! many updates as the next one. This means that chain sizes will often be powers of
 //! `chain_proportionality`, but they don't have to be. For example, for a proportionality of 2,
 //! the chain sizes `[11, 5, 2, 1]` would satisfy the chain invariant.
+//!
+//! Note that the invariant is maintained on update counts, not chunk counts. Chunks are
+//! byte-bounded (see [`ChunkBuilder`]), so chunk count is not proportional to update count and
+//! would be a poor proxy: any chain below the chunk byte boundary is a single chunk regardless
+//! of how many updates it holds, which would let the geometric invariant collapse and break the
+//! O(log N) amortization of inserts.
 //!
 //! Choosing the `chain_proportionality` value allows tuning the trade-off between memory and CPU
 //! resources required to maintain corrections. A higher proportionality forces more frequent chain
@@ -320,8 +326,8 @@ impl<D: Data> CorrectionV2<D> {
             let prop = self.chain_proportionality;
             let merge_needed = |chains: &[Chain<_>]| match chains {
                 [.., prev, last] => {
-                    let last_len = f64::cast_lossy(last.len());
-                    let prev_len = f64::cast_lossy(prev.len());
+                    let last_len = f64::cast_lossy(last.update_count);
+                    let prev_len = f64::cast_lossy(prev.update_count);
                     last_len * prop > prev_len
                 }
                 _ => false,
@@ -414,8 +420,8 @@ impl<D: Data> CorrectionV2<D> {
         while i > 0 {
             let needs_merge = self.chains.get(i).is_some_and(|a| {
                 let b = &self.chains[i - 1];
-                let a_len = f64::cast_lossy(a.len());
-                let b_len = f64::cast_lossy(b.len());
+                let a_len = f64::cast_lossy(a.update_count);
+                let b_len = f64::cast_lossy(b.update_count);
                 a_len * self.chain_proportionality > b_len
             });
             if needs_merge {
@@ -684,11 +690,6 @@ impl<D: Data> Chain<D> {
     /// Return whether the chain is empty.
     fn is_empty(&self) -> bool {
         self.chunks.is_empty()
-    }
-
-    /// Return the length of the chain, in chunks.
-    fn len(&self) -> usize {
-        self.chunks.len()
     }
 
     /// Push a chunk onto the chain.
@@ -1522,7 +1523,7 @@ impl<D: Data> Ord for MergeCursor<D> {
 mod tests {
     use mz_repr::{Diff, Timestamp};
 
-    use super::ChainBuilder;
+    use super::{ChainBuilder, ChunkData};
 
     #[mz_ore::test]
     fn chain_builder_update_count_matches_items() {
@@ -1533,5 +1534,48 @@ mod tests {
         }
         let chain = builder.finish();
         assert_eq!(chain.update_count, chain.iter().count());
+    }
+
+    /// Push enough updates to cross at least one `mint()` boundary, forcing the
+    /// `Align` encode -> `from_bytes` decode roundtrip (the spilling path this data
+    /// structure exists to support), and assert `iter()` roundtrips values, order,
+    /// and diffs across the spill boundary.
+    #[mz_ore::test]
+    fn chain_builder_roundtrips_across_mint_boundary() {
+        // A single `mint()` fires near the ~2 MiB (`SHIP_WORDS`) serialized boundary. With
+        // three 8-byte columns per update that's tens of thousands of updates; pushing 200k
+        // comfortably forces multiple mints.
+        let count = 200_000_u64;
+
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..count {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+
+        // At least one chunk must have been minted into `Align` form, otherwise the spill
+        // path wouldn't be exercised.
+        let align_chunks = chain
+            .chunks
+            .iter()
+            .filter(|c| matches!(c.data, ChunkData::Align(_)))
+            .count();
+        assert!(
+            align_chunks > 0,
+            "expected at least one spilled (Align) chunk, got chunks: {:?}",
+            chain.chunks,
+        );
+
+        // `iter()` must roundtrip every update, in order, with correct diffs.
+        assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+        let mut expected = 0_u64;
+        for (d, t, r) in chain.iter() {
+            assert_eq!(d, i64::try_from(expected).expect("fits"));
+            assert_eq!(t, Timestamp::new(expected));
+            assert_eq!(r, Diff::ONE);
+            expected += 1;
+        }
+        assert_eq!(expected, count);
     }
 }
