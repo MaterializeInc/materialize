@@ -86,8 +86,8 @@ def workflow_default(c: Composition) -> None:
             "get_data_product_details" in tool_names
         ), f"missing get_data_product_details: {tool_names}"
         assert (
-            "query" not in tool_names
-        ), f"query should be hidden by default: {tool_names}"
+            "query" in tool_names
+        ), f"query should be present by default: {tool_names}"
 
     with c.test_case("agent_get_data_products"):
         r = post_mcp(
@@ -587,6 +587,43 @@ def workflow_default(c: Composition) -> None:
             port=6877,
             print_statement=False,
         )
+
+    # -- agent: query tool disable/enable via flag --------------------------------
+
+    with c.test_case("agent_query_tool_disable_via_flag"):
+        # Query tool is enabled by default; confirm it appears in tools/list.
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
+        assert r.status_code == 200
+        tool_names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert "query" in tool_names, f"query should be enabled by default: {tool_names}"
+
+        # Disable via system parameter.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent_query_tool = false",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
+        assert r.status_code == 200
+        tool_names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert (
+            "query" not in tool_names
+        ), f"query should be hidden after disabling: {tool_names}"
+
+        # Re-enable.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent_query_tool = true",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
+        assert r.status_code == 200
+        tool_names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert "query" in tool_names, f"query should be re-enabled: {tool_names}"
 
     # -- agent: disable/enable via flag ----------------------------------------
 
