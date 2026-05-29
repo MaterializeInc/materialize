@@ -2172,7 +2172,7 @@ impl RowPacker<'_> {
                                     .map(|d| |row: &mut RowPacker| row.try_push_proto(&*d)),
                             },
                         )
-                        .expect("decoding ProtoRow must succeed");
+                        .map_err(|err| err.to_string())?;
                     }
                 }
             }
