@@ -209,12 +209,12 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(".*");
             }
             Expr::FieldAccess { expr, field } => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".");
                 f.write_node(field);
             }
             Expr::WildcardAccess(expr) => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
@@ -476,6 +476,56 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
     }
 }
 impl_display_t!(Expr);
+
+/// Write `expr` as the receiver of a `.` operator (used by `FieldAccess` and
+/// `WildcardAccess`), parenthesizing when the receiver could re-bind the
+/// trailing dot on reparse. The `.` token has very high precedence and both
+/// the lexer and parser greedily extend adjacent tokens: `1.x` tokenizes the
+/// number `1.` and leaves `x` as an alias, and `'a'::T.x` consumes `T.x` as a
+/// qualified type name. The whitelist below covers receivers that print as
+/// self-terminating syntax (identifiers, parenthesized exprs, function calls,
+/// bracketed collections, etc.); anything else gets explicit parens.
+fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let safe = matches!(
+        expr,
+        Expr::Identifier(_)
+            | Expr::QualifiedWildcard(_)
+            | Expr::FieldAccess { .. }
+            | Expr::WildcardAccess(_)
+            | Expr::Parameter(_)
+            | Expr::Nested(_)
+            | Expr::Row { .. }
+            | Expr::Function(_)
+            | Expr::Case { .. }
+            | Expr::Exists(_)
+            | Expr::Subquery(_)
+            | Expr::AnySubquery { .. }
+            | Expr::AllSubquery { .. }
+            | Expr::Array(_)
+            | Expr::ArraySubquery(_)
+            | Expr::List(_)
+            | Expr::ListSubquery(_)
+            | Expr::Map(_)
+            | Expr::MapSubquery(_)
+            | Expr::Subscript { .. }
+            | Expr::HomogenizingFunction { .. }
+            | Expr::NullIf { .. }
+            | Expr::Value(
+                Value::String(_)
+                    | Value::Boolean(_)
+                    | Value::Null
+                    | Value::HexString(_)
+                    | Value::Interval(_)
+            )
+    );
+    if safe {
+        f.write_node(expr);
+    } else {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    }
+}
 
 impl<T: AstInfo> Expr<T> {
     pub fn null() -> Expr<T> {
