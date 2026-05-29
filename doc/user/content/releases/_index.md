@@ -19,20 +19,32 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-05-28* <br>
 *Released to Materialize Self-Managed: 2026-05-29* <br>
 
-This release includes Single sign-On (SSO), a new Maintained Objects page in the Console, performance improvements, and bug fixes.
+This release includes Single Sign-On (SSO) for Self-Managed, a new Objects page
+in the Console, performance improvements, and bug fixes.
 
-### Features {#v26.26-features}
-- **SSO / OIDC logins for Self-Managed (Public Preview)**: Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (e.g. Okta, Entra ID). Users are auto-provisioned as database roles on first login. Note: SCIM and IdP-based role mapping are not included in this release. For more information, refer to the docs:
-  - [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
-- **Maintained Objects**: The Console now includes a Maintained Objects page
-  that provides a unified view of all sources, materialized views, indexes,
-  and tables with real-time freshness metrics, hydration status, and cluster
-  assignments. An object details panel shows SQL definitions and column
-  metadata, and a freshness diagnosis tool visualizes the critical dependency
-  path when investigating lag.
+### Single Sign-On (SSO) for Self-Managed
+
+{{< public-preview />}}
+
+Self-Managed deployments can now configure single sign-on via any
+OIDC-compliant identity provider (e.g. Okta, Entra ID). 
+
+For more information, refer to:
+- [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
+
+### Objects page
+
+The Console includes a new Objects page, which provides a unified view of all
+sources, materialized views, indexes and sinks. You can track real-time freshness
+metrics, hydration status, and cluster assignments. If an object is stale, you can diagnose why. 
+If lag is inherited from upstream, you can visualize the critical path. And if an object itself
+is the cause of lag, you can diagnose the root cause.
 
 ### Improvements {#v26.26-improvements}
 
+- **More performant temporal filters**: We've significantly improved the performance of
+  temporal filters. While specific results will vary by workload, in our tests we saw CPU utilization drop from 75% to
+  4% on workloads dominated by temporal filter evaluation.
 - **Faster DDL at scale**: DDL operations (`CREATE TABLE`, `DROP TABLE`,
   etc.) are now up to 65% faster in environments with many objects by
   eliminating a per-table loop that previously ran on every group commit.
