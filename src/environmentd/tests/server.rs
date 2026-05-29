@@ -5081,26 +5081,25 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
     });
 }
 
-/// Tests the MCP agent endpoint with default feature flags
-/// (enable_mcp_agent=true, enable_mcp_agent_query_tool=false).
+/// Tests the MCP agent endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
 fn test_mcp_agent() {
-    let harness = test_util::TestHarness::default()
-        .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
-}
-
-/// Tests the MCP agent endpoint with the query tool enabled.
-#[mz_ore::test]
-fn test_mcp_agent_query_tool() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_agent_query_tool".to_string(),
-            "true".to_string(),
+            "false".to_string(),
         );
+    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
+}
+
+/// Tests the MCP agent endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_agent_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
 }
 
@@ -6048,7 +6047,7 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "agent should work again after re-enabling"
     );
 
-    // Test query tool toggling: initially disabled.
+    // Test query tool toggling: enabled by default.
     let query_call = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -6061,21 +6060,8 @@ fn test_mcp_agent_runtime_flag_toggle() {
     let (status, body) = mcp_post(&agents_url, query_call.clone());
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("query tool is not available"),
-        "query tool should be disabled by default"
-    );
-
-    // Enable query tool at runtime.
-    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
-
-    let (status, body) = mcp_post(&agents_url, query_call.clone());
-    assert_eq!(status, StatusCode::OK);
-    assert!(
         body["error"].is_null(),
-        "query tool should work after enabling"
+        "query tool should be enabled by default"
     );
     let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
@@ -6083,15 +6069,31 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "query should return result with 1"
     );
 
-    // Disable query tool again.
+    // Disable query tool at runtime.
     server.disable_feature_flags(&["enable_mcp_agent_query_tool"]);
-    let (_, body) = mcp_post(&agents_url, query_call.clone());
+
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("query tool is not available"),
-        "query tool should be disabled again"
+        "query tool should be disabled after disabling"
+    );
+
+    // Re-enable query tool.
+    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should work after re-enabling"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1 after re-enabling"
     );
 }
 
