@@ -343,6 +343,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
     let mut avro_format_options = vec![];
     for_each_format(format, |doc_on_schema, fmt| match fmt {
         Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Avro(AvroSchema::Glue { .. })
         | Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
@@ -624,6 +625,7 @@ async fn purify_create_sink(
     let mut csr_connection_ids = BTreeSet::new();
     for_each_format(format, |_, fmt| match fmt {
         Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Avro(AvroSchema::Glue { .. })
         | Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
@@ -2296,6 +2298,15 @@ async fn purify_source_format_single(
                 .await?
             }
             AvroSchema::InlineSchema { .. } => {}
+            AvroSchema::Glue { .. } => {
+                // Glue purification lands in Stage 4c.2b. Until then the
+                // planner rejects this variant earlier with a clearer
+                // error; this arm exists for exhaustiveness only.
+                sql_bail!(
+                    "FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY is not yet \
+                     implemented (lands in a follow-up PR)"
+                );
+            }
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {

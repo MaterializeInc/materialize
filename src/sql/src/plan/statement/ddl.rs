@@ -2371,6 +2371,15 @@ fn get_encoding_inner(
                         sql_bail!("Avro CSR seed resolution has not been performed")
                     }
                 }
+                AvroSchema::Glue { .. } => {
+                    // Planner support lands in Stage 4c.2b (next PR);
+                    // 4c.2a only adds the parser surface so users get a
+                    // clear, scoped error rather than a parser failure.
+                    sql_bail!(
+                        "FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY is not yet \
+                         implemented (lands in a follow-up PR)"
+                    )
+                }
             };
 
             // Map the legacy (csr_connection, confluent_wire_format) pair to
