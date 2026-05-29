@@ -129,9 +129,13 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain {
         // In a single-time context, we propagate the monotonicity status of the
-        // input, unless the MFP contains temporal predicates. Temporal predicates
-        // (i.e., `mz_now()`) can result in the future removal of records, thus
-        // breaking physical monotonicity. This matches the judgment made for
+        // input, conservatively treating an MFP with temporal predicates as
+        // breaking physical monotonicity. Note that an MFP cannot itself produce
+        // negative diffs (map/filter/project never negate), so this is stricter
+        // than strictly necessary for a single-time dataflow: temporal predicates
+        // (`mz_now()`) only introduce retractions *across* timestamps, and a
+        // one-shot dataflow runs at a single time. We keep the check anyway as
+        // defense-in-depth and to mirror the judgment made for
         // `MirRelationExpr::Filter` in the MIR monotonicity analysis.
         PhysicallyMonotonic(input.0 && !mfp.has_temporal_predicates())
     }
