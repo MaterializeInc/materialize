@@ -7100,6 +7100,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "stacker",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-native-tls",
