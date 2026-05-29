@@ -29,11 +29,12 @@ SERVICES = [
         },
         depends_on=["persistd"],
         environment_extra=[
-            # Both envd's in-process committer and clusterd subprocesses pick
-            # up MZ_PERSIST_COMMITTER_URL. Pointing at persistd makes them
-            # route through the standalone service instead of envd's own
-            # in-process adapter.
+            # Point both envd and clusterd subprocesses at the standalone
+            # persistd container. MZ_EXTERNAL_PERSIST_COMMITTER tells envd
+            # to skip its own in-process committer and dial this URL as a
+            # client, so all consensus traffic funnels through persistd.
             "MZ_PERSIST_COMMITTER_URL=http://persistd:6882",
+            "MZ_EXTERNAL_PERSIST_COMMITTER=true",
         ],
     ),
     Testdrive(no_reset=True),

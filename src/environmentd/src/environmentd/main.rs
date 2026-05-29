@@ -398,6 +398,12 @@ pub struct Args {
         default_value = "http://localhost:6882"
     )]
     persist_committer_url: String,
+    /// When true, environmentd does not start its own in-process persist
+    /// committer; instead it dials `--persist-committer-url` as a client.
+    /// Useful when running a standalone `persistd` process so all consensus
+    /// traffic (envd + clusterds) funnels through the same committer.
+    #[clap(long, env = "EXTERNAL_PERSIST_COMMITTER", default_value = "false")]
+    external_persist_committer: bool,
     /// The number of worker threads created for the IsolatedRuntime used for
     /// storage related tasks. A negative value will subtract from the number
     /// of threads returned by [`num_cpus::get`].
@@ -1041,10 +1047,31 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let persist_clients = Arc::new(persist_clients);
 
-    // Start the in-envd persist committer. Always run it so clusterds with the
-    // LD flag on have something to connect to; envd itself only routes through
-    // it when persist_consensus_use_committer is also on.
-    let committer_handle = {
+    // Wire up the persist committer. Two mutually exclusive modes:
+    //
+    // * In-process: environmentd hosts the committer itself, exposes it on
+    //   `--internal-persist-committer-listen-addr` for clusterds, and routes
+    //   its own persist traffic through the `InProcessConsensus` adapter to
+    //   avoid loopback gRPC stalling its own runtime.
+    //
+    // * External: a separate `persistd` process owns the committer.
+    //   environmentd dials `--persist-committer-url` as a client over gRPC,
+    //   the same path clusterds use, and does NOT start its own committer.
+    //
+    // The `--external-persist-committer` flag selects between them. The
+    // `persist_consensus_use_committer` LD flag still gates whether any
+    // particular consensus open routes through the committer at all.
+    let _committer_handle = if args.external_persist_committer {
+        tracing::info!(
+            url = %args.persist_committer_url,
+            "Connecting to Persist Committer",
+        );
+        let endpoint = tonic::transport::Endpoint::from_shared(args.persist_committer_url.clone())
+            .context("invalid --persist-committer-url")?;
+        let channel = endpoint.connect_lazy();
+        persist_clients.set_committer_channel(channel, args.persist_committer_url.clone());
+        None
+    } else {
         let metrics = mz_persist_committer::metrics::CommitterMetrics::register(&metrics_registry);
         let consensus_cfg = mz_persist::cfg::ConsensusConfig::try_from(
             &consensus_uri,
@@ -1081,9 +1108,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 .get(&persist_clients.cfg().configs),
         };
         let _tokio_guard = runtime.enter();
-        mz_persist_committer::start_committer(consensus, metrics, config)?
+        let handle = mz_persist_committer::start_committer(consensus, metrics, config)?;
+        persist_clients.set_committer_in_process(Arc::clone(&handle.in_process_consensus));
+        Some(handle)
     };
-    persist_clients.set_committer_in_process(Arc::clone(&committer_handle.in_process_consensus));
 
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
