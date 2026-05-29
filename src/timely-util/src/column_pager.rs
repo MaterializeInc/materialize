@@ -32,6 +32,7 @@
 
 #![deny(missing_docs)]
 
+pub mod metrics;
 pub mod policy;
 
 use std::io::{self, Read};
@@ -186,6 +187,7 @@ pub struct ResidentTicket {
 
 impl Drop for ResidentTicket {
     fn drop(&mut self) {
+        metrics::observe_resident_released(self.bytes);
         self.policy
             .record(PageEvent::ResidentReleased { bytes: self.bytes });
     }
@@ -266,8 +268,7 @@ pub fn set_global_pager(pager: ColumnPager) {
     *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
 }
 
-/// Process-wide [`policy::TieredPolicy`] singleton. Lazily initialized on
-/// the first [`apply_tiered_config`] call.
+/// Process-wide [`policy::TieredPolicy`] singleton.
 ///
 /// Why a singleton: every `ResidentTicket` keeps an `Arc<dyn PagingPolicy>`
 /// pointing at the policy that decided to keep the column resident.
@@ -277,7 +278,18 @@ pub fn set_global_pager(pager: ColumnPager) {
 /// locks up on Page decisions. A persistent singleton with in-place
 /// [`policy::TieredPolicy::reconfigure`] sidesteps the issue: all tickets,
 /// past and present, share the same atomic.
-static TIERED_POLICY: std::sync::OnceLock<Arc<policy::TieredPolicy>> = std::sync::OnceLock::new();
+///
+/// Initialized eagerly with zero budget so [`metrics::register`] can read
+/// it during compute startup, before any [`apply_tiered_config`] call. The
+/// first config apply resizes the pool via `reconfigure`, which is the same
+/// path operator-driven tunes take.
+static TIERED_POLICY: LazyLock<Arc<policy::TieredPolicy>> =
+    LazyLock::new(|| Arc::new(policy::TieredPolicy::new(0, Backend::Swap, None)));
+
+/// Returns a reference to the process-wide [`policy::TieredPolicy`] singleton.
+pub fn tiered_policy() -> &'static policy::TieredPolicy {
+    &TIERED_POLICY
+}
 
 /// Apply a tiered-pager configuration. Reuses the singleton
 /// [`policy::TieredPolicy`] so in-flight `ResidentTicket`s remain coherent
@@ -294,8 +306,7 @@ pub fn apply_tiered_config(
     backend: Backend,
     codec: Option<Codec>,
 ) {
-    let p = TIERED_POLICY
-        .get_or_init(|| Arc::new(policy::TieredPolicy::new(total_budget, backend, codec)));
+    let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
     p.reconfigure(total_budget, backend, codec);
     if enabled {
         #[allow(clippy::clone_on_ref_ptr)]
@@ -303,38 +314,6 @@ pub fn apply_tiered_config(
         set_global_pager(ColumnPager::new(dyn_policy));
     } else {
         set_global_pager(ColumnPager::disabled());
-    }
-}
-
-/// Process-wide decision counters. Diagnostic only — log a summary every
-/// `DECISION_LOG_INTERVAL` Page decisions so we can tell whether the
-/// pager is actually engaging without per-call log spam.
-static SKIP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static PAGE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static SKIP_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static PAGE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-const DECISION_LOG_INTERVAL: usize = 1024;
-
-fn record_decision(paged: bool, bytes: usize) {
-    use std::sync::atomic::Ordering;
-    if paged {
-        let n = PAGE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        PAGE_BYTES.fetch_add(bytes, Ordering::Relaxed);
-        if n.is_multiple_of(DECISION_LOG_INTERVAL) {
-            let s = SKIP_COUNT.load(Ordering::Relaxed);
-            let sb = SKIP_BYTES.load(Ordering::Relaxed);
-            let pb = PAGE_BYTES.load(Ordering::Relaxed);
-            tracing::info!(
-                skip_calls = s,
-                skip_bytes = sb,
-                page_calls = n,
-                page_bytes = pb,
-                "column-pager: decision rate"
-            );
-        }
-    } else {
-        SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
-        SKIP_BYTES.fetch_add(bytes, Ordering::Relaxed);
     }
 }
 
@@ -366,17 +345,14 @@ impl ColumnPager {
 
         let (backend, codec) = match self.policy.decide(hint) {
             PageDecision::Skip => {
-                record_decision(false, len_bytes);
+                metrics::observe_skip(len_bytes);
                 let ticket = ResidentTicket {
                     bytes: len_bytes,
                     policy: Arc::clone(&self.policy),
                 };
                 return PagedColumn::Resident(std::mem::take(col), ticket);
             }
-            PageDecision::Page { backend, codec } => {
-                record_decision(true, len_bytes);
-                (backend, codec)
-            }
+            PageDecision::Page { backend, codec } => (backend, codec),
         };
         let meta = Meta { len_bytes };
 
@@ -404,9 +380,11 @@ impl ColumnPager {
                     }
                 };
                 let handle = pager::pageout_with(backend, &mut [body]);
+                let bytes_out = handle.len_bytes();
+                metrics::observe_pageout(len_bytes, bytes_out);
                 self.policy.record(PageEvent::PagedOut {
                     bytes_in: len_bytes,
-                    bytes_out: handle.len_bytes(),
+                    bytes_out,
                     backend,
                     codec: None,
                 });
@@ -426,6 +404,7 @@ impl ColumnPager {
                 // `Typed` allocation so the caller can refill it, rather than
                 // dropping a buffer it may want to reuse.
                 col.clear();
+                metrics::observe_pageout(len_bytes, out.len());
                 self.policy.record(PageEvent::PagedOut {
                     bytes_in: len_bytes,
                     bytes_out: out.len(),
@@ -461,6 +440,7 @@ impl ColumnPager {
                 let mut body: Vec<u64> = Vec::with_capacity(handle.len());
                 pager::take(handle, &mut body);
                 debug_assert_eq!(body.len() * 8, meta.len_bytes);
+                metrics::observe_pagein(meta.len_bytes);
                 self.policy.record(PageEvent::PagedIn {
                     bytes: meta.len_bytes,
                 });
@@ -484,6 +464,7 @@ impl ColumnPager {
                     }
                 }
                 debug_assert_eq!(decoded.len(), meta.len_bytes);
+                metrics::observe_pagein(decoded.len());
                 self.policy.record(PageEvent::PagedIn {
                     bytes: decoded.len(),
                 });
