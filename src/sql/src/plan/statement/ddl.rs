@@ -2379,6 +2379,12 @@ fn get_encoding_inner(
                         sql_bail!("Avro CSR seed resolution has not been performed")
                     }
                 }
+                AvroSchema::Glue { .. } => {
+                    sql_bail!(
+                        "FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY is not yet \
+                         implemented"
+                    )
+                }
             };
 
             // Map the legacy (csr_connection, confluent_wire_format) pair to

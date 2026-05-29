@@ -3655,3 +3655,35 @@ DROP NETWORK POLICY if exists q
 DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
+
+# AWS Glue Schema Registry — Avro source format. Parser-only; the planner
+# rejects this variant with a "not yet implemented" error until the
+# follow-up PR.
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema')
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema')
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }] }))), envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [] }))), envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY
+----
+error: Expected CONNECTION, found EOF
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY
+                                                                                           ^
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') ENVELOPE NONE
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') ENVELOPE NONE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }] }))), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
