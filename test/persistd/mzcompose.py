@@ -1,0 +1,64 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""
+Smoke test that routes envd's persist consensus traffic through a separate
+persistd container. Confirms the standalone committer accepts gRPC traffic
+end-to-end and that persisted state survives an envd restart while persistd
+keeps running.
+"""
+
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.persistd import Persistd
+from materialize.mzcompose.services.testdrive import Testdrive
+
+SERVICES = [
+    Persistd(
+        depends_on=["postgres-metadata"],
+    ),
+    Materialized(
+        additional_system_parameter_defaults={
+            "persist_consensus_use_committer": "true",
+        },
+        depends_on=["persistd"],
+        environment_extra=[
+            # Both envd's in-process committer and clusterd subprocesses pick
+            # up MZ_PERSIST_COMMITTER_URL. Pointing at persistd makes them
+            # route through the standalone service instead of envd's own
+            # in-process adapter.
+            "MZ_PERSIST_COMMITTER_URL=http://persistd:6882",
+        ],
+    ),
+    Testdrive(no_reset=True),
+]
+
+
+def workflow_default(c: Composition) -> None:
+    """Run every non-default workflow."""
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_smoke(c: Composition) -> None:
+    """Exercise basic SQL with persistd in the read+write path."""
+    c.up("persistd", "materialized")
+    c.run_testdrive_files("smoke.td")
+
+
+def workflow_restart(c: Composition) -> None:
+    """Confirm shard state survives an envd restart while persistd stays up."""
+    c.up("persistd", "materialized")
+    c.run_testdrive_files("smoke.td")
+    c.kill("materialized")
+    c.up("materialized")
+    c.run_testdrive_files("after_restart.td")

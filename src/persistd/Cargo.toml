@@ -1,0 +1,39 @@
+[package]
+name = "mz-persistd"
+description = "Standalone Materialize persist committer service."
+version = "26.27.0-dev.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "persistd"
+path = "src/bin/persistd.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+futures.workspace = true
+humantime.workspace = true
+mz-alloc = { path = "../alloc" }
+mz-alloc-default = { path = "../alloc-default", optional = true }
+mz-build-info = { path = "../build-info" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "id_gen", "metrics", "tracing"] }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-committer = { path = "../persist-committer" }
+num_cpus.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[features]
+default = ["mz-alloc-default"]
+jemalloc = ["mz-alloc/jemalloc"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["mz-alloc-default"]

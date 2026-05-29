@@ -7275,6 +7275,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-persistd"
+version = "26.27.0-dev.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures",
+ "humantime",
+ "mz-alloc",
+ "mz-alloc-default",
+ "mz-build-info",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-committer",
+ "num_cpus",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "mz-pgcopy"
 version = "0.0.0"
 dependencies = [
