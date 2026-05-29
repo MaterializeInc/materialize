@@ -3105,6 +3105,54 @@ mod test {
     }
 
     #[mz_ore::test]
+    fn array_lower_upper_respect_lower_bound() {
+        use mz_repr::adt::array::ArrayDimension;
+        use mz_repr::{Datum, RowArena};
+
+        let arena = RowArena::new();
+
+        // Builds a one-dimensional array with the given lower bound and length,
+        // then returns (array_lower(_, 1), array_upper(_, 1)).
+        let bounds = |lower_bound: isize, length: usize| {
+            let dims = [ArrayDimension {
+                lower_bound,
+                length,
+            }];
+            let elems = vec![Datum::Int32(0); length];
+            let datum =
+                arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+            let arr = match datum {
+                Datum::Array(arr) => arr,
+                other => panic!("expected array, got {other:?}"),
+            };
+            (array_lower(arr, 1).unwrap(), array_upper(arr, 1).unwrap())
+        };
+
+        // Default lower bound of 1: array_fill(0, ARRAY[3]).
+        assert_eq!(bounds(1, 3), (Some(1), Some(3)));
+        // Lower bound of 5: array_fill(0, ARRAY[3], ARRAY[5]) => [5:7].
+        assert_eq!(bounds(5, 3), (Some(5), Some(7)));
+        // Negative lower bound: array_fill(0, ARRAY[3], ARRAY[-3]) => [-3:-1].
+        assert_eq!(bounds(-3, 3), (Some(-3), Some(-1)));
+
+        // Out-of-range dimensions return None rather than the bound.
+        let dims = [ArrayDimension {
+            lower_bound: 5,
+            length: 3,
+        }];
+        let elems = vec![Datum::Int32(0); 3];
+        let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+        let arr = match datum {
+            Datum::Array(arr) => arr,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(array_lower(arr, 0).unwrap(), None);
+        assert_eq!(array_upper(arr, 0).unwrap(), None);
+        assert_eq!(array_lower(arr, 2).unwrap(), None);
+        assert_eq!(array_upper(arr, 2).unwrap(), None);
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_is_monotone() {
         use proptest::prelude::*;
