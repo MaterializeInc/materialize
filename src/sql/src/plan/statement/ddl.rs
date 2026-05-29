@@ -2415,6 +2415,12 @@ fn get_encoding_inner(
                         sql_bail!("Avro Glue seed resolution has not been performed");
                     };
 
+                    // A Glue seed carries a single `value_schema` (unlike a
+                    // CSR seed, which can hold both key and value), so a bare
+                    // `FORMAT AVRO USING AWS GLUE` is always value-only. A
+                    // key is still expressible via the separate `KEY FORMAT
+                    // ... VALUE FORMAT ...` clause, where `get_encoding`
+                    // promotes this value encoding into the key slot.
                     Schema {
                         key_schema: None,
                         value_schema: seed.value_schema.clone(),

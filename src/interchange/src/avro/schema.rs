@@ -549,8 +549,24 @@ impl fmt::Debug for AvroSchemaResolver {
 ///
 /// Differences from the CSR cache:
 /// * Keys are UUIDs (Glue schema-version IDs), not `i32`s.
-/// * Glue schemas are single definitions — no `references` field on
-///   `GetSchemaVersion`, so the cache does not chase a dependency graph.
+/// * **No cross-schema references.** AWS Glue Schema Registry does not have
+///   a CSR-style "schema references" concept: `GetSchemaVersion` returns a
+///   single self-contained `SchemaDefinition` JSON blob with no `references`
+///   field, so the cache does not chase a dependency graph (compare
+///   [`SchemaCache::get`], which fetches transitive references). Avro's
+///   *intra-document* named-type references still work — they are resolved
+///   by the Avro parser from the single JSON document.
+/// * **Registry name enforcement.** Glue schema-version UUIDs are globally
+///   unique within an AWS account, and `GetSchemaVersion(uuid)` is not
+///   scoped to a registry. The AWS API forces a choice between
+///   `SchemaVersionId` (UUID) and `SchemaId(RegistryName, SchemaName) +
+///   SchemaVersionNumber`; combining them is not allowed (see
+///   <https://docs.aws.amazon.com/glue/latest/webapi/API_GetSchemaVersion.html>).
+///   At runtime we only have the UUID, so the cache validates each
+///   fetched version's `SchemaArn` against `expected_registry` and
+///   treats a mismatch as a permanent decode error — otherwise a record
+///   framed against the wrong registry would silently succeed as long as
+///   the credentials could see it.
 /// * No outer retry layer. `aws-sdk-glue` ships a "standard" retry policy
 ///   by default that handles transient errors; layering our own
 ///   `Retry::default()` on top would amplify backoff without adding

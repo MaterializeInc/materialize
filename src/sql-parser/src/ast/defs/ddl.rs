@@ -174,6 +174,15 @@ pub enum AvroSchema<T: AstInfo> {
     ///
     /// Parallel to the `Csr` variant. See
     /// `doc/developer/design/20260512_aws_glue_schema_registry.md`.
+    ///
+    /// **Cross-schema references are intentionally unsupported.** Unlike the
+    /// `Csr` variant — whose `key_reference_schemas` / `value_reference_schemas`
+    /// fields are resolved transitively against the Confluent registry — AWS
+    /// Glue Schema Registry has no analogue: `RegisterSchemaVersion` takes a
+    /// single self-contained `SchemaDefinition` JSON blob with no
+    /// cross-schema-reference field. Avro's *intra-document* named-type
+    /// references still work because they are resolved by the Avro parser
+    /// from a single JSON document.
     Glue {
         connection: T::ItemName,
         with_options: Vec<GlueAvroOption<T>>,
