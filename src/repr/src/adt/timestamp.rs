@@ -901,9 +901,11 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<NaiveDateTime> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: NaiveDateTime::from_proto(proto)?,
-        })
+        // Go through `from_timestamplike` so out-of-range values are
+        // rejected here — pushing them into a `Row` succeeds but
+        // `read_datum` would panic when reconstructing the timestamp.
+        CheckedTimestamp::from_timestamplike(NaiveDateTime::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
@@ -913,9 +915,8 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<DateTime<Utc>> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: DateTime::<Utc>::from_proto(proto)?,
-        })
+        CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
