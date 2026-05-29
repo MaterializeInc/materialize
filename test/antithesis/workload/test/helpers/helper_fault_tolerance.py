@@ -173,6 +173,37 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # fault window's downtime exceeds the durable since-pin lifetime
     # the reconnect query is rejected with this exact wording.
     "could not find a valid timestamp for the query",
+    # ---- statement_timeout under fault load -------------------------
+    # Materialize/Postgres wording when a query exceeds its session's
+    # `statement_timeout`.  Drivers that pin a per-query timeout (e.g.
+    # `parallel_driver_cross_replica_consistency` and
+    # `parallel_driver_differential_query` use 10s; `testdrive`'s
+    # default pgwire timeout for `INSERT … generate_series` etc.) hit
+    # this whenever Antithesis's fault windows slow the SUT enough
+    # that the per-query budget elapses.  That's expected under
+    # fault injection, not a property violation — without this entry
+    # the cross-replica/differential drivers misfire `always(False)`
+    # at heavier fault densities (observed once 4h runs were long
+    # enough to land enough faults on a single read).  Same wording
+    # surfaces from a testdrive subprocess in its stdout when the
+    # underlying query gets canceled and helper_testdrive subsequently
+    # kills the process at its 600s wall budget.
+    "canceling statement due to statement timeout",
+    # `helper_testdrive.run()` kills the testdrive subprocess at its
+    # wall-clock budget (default 600s; platform-checks' `initialize`
+    # phase uses 300s) and appends this marker to stderr so the caller
+    # can distinguish a wall-budget kill from a clean non-zero exit.
+    # Under Antithesis fault windows the per-phase budget is routinely
+    # exceeded simply because the SUT is being killed/paused for
+    # 20-40s at a stretch; treating that as a property violation
+    # produces noise.  Without this, platform-check's "runs to
+    # completion" assertion and the testdrive driver's "non-transient
+    # error" assertion both misfire `always(False)` when a check's
+    # `initialize` phase or the random .td script gets cut off at the
+    # wall budget without the underlying query error reaching stdout
+    # (e.g. the SUT was paused with the testdrive client blocked
+    # mid-`>` directive, no error returned yet).
+    "[helper_testdrive] timed out after",
 )
 
 
