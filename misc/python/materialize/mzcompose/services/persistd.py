@@ -46,8 +46,13 @@ class Persistd(Service):
                 f"--stats-heartbeat-interval={stats_heartbeat_interval}",
             ]
 
+        # Use `service_healthy` so that persistd does not race a slow
+        # metadata-store boot. `service_started` only waits for the
+        # backend's PID to exist; CRDB and Postgres both accept connections
+        # tens of seconds after that, which would otherwise drive persistd
+        # into a long retry loop on startup.
         depends_graph: dict[str, ServiceDependency] = {
-            s: {"condition": "service_started"} for s in depends_on
+            s: {"condition": "service_healthy"} for s in depends_on
         }
         environment = [
             "MZ_NO_TELEMETRY=1",

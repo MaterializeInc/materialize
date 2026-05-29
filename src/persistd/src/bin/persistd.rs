@@ -111,7 +111,15 @@ fn main() {
 }
 
 async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow::Error> {
-    info!(listen_addr = %args.listen_addr, "persistd starting");
+    // `SensitiveUrl::Display` masks any password component, so this is safe
+    // to log verbatim. Operators commonly hit "wrong URL" misconfigurations
+    // (search_path missing, host typo); recording the resolved value at
+    // INFO removes the guesswork.
+    info!(
+        listen_addr = %args.listen_addr,
+        consensus_url = %args.consensus_url,
+        "persistd starting",
+    );
 
     // Build the same PersistConfig surface the in-envd committer uses so
     // dyncfg knobs (timeouts, retry parameters) keep their defaults.
@@ -119,9 +127,14 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
     let persist_metrics = Arc::new(Metrics::new(&persist_cfg, &metrics_registry));
     let configs = Arc::clone(&persist_cfg.configs);
 
+    // Retry indefinitely. The metadata store (CRDB / Postgres) only signals
+    // `service_started` to compose dependents, not `service_healthy`, so
+    // persistd can outrun the backend's listener-ready point by tens of
+    // seconds. A bounded retry would kill the container while the operator
+    // is still waiting for the backend, racing rather than waiting; loop
+    // forever and let compose's own healthcheck timeout govern.
     let consensus = mz_ore::retry::Retry::default()
         .clamp_backoff(Duration::from_secs(2))
-        .max_duration(Duration::from_secs(60))
         .retry_async(|_| async {
             let consensus_cfg = ConsensusConfig::try_from(
                 &args.consensus_url,
@@ -136,6 +149,7 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
         })
         .await
         .context("opening consensus backend")?;
+    info!("consensus backend ready");
 
     let committer_metrics = CommitterMetrics::register(&metrics_registry);
     let committer_config = CommitterConfig {
