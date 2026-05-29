@@ -27,7 +27,7 @@ in the Console, performance improvements, and bug fixes.
 {{< public-preview />}}
 
 Self-Managed deployments can now configure single sign-on via any
-OIDC-compliant identity provider (e.g. Okta, Entra ID). 
+OIDC-compliant identity provider (e.g. Okta, Entra ID).
 
 For more information, refer to:
 - [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
@@ -36,7 +36,7 @@ For more information, refer to:
 
 The Console includes a new Objects page, which provides a unified view of all
 sources, materialized views, indexes and sinks. You can track real-time freshness
-metrics, hydration status, and cluster assignments. If an object is stale, you can diagnose why. 
+metrics, hydration status, and cluster assignments. If an object is stale, you can diagnose why.
 If lag is inherited from upstream, you can visualize the critical path. And if an object itself
 is the cause of lag, you can diagnose the root cause.
 
