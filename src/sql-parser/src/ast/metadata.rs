@@ -245,7 +245,19 @@ impl AstDisplay for RawDataType {
                 f.write_str("]");
             }
             RawDataType::Other { name, typ_mod } => {
-                f.write_node(name);
+                // If the type name is a single unqualified identifier whose
+                // unquoted form clashes with a keyword that has its own
+                // special parser dispatch (e.g. `map` → `parse_map_type`,
+                // which then expects `[`), an unquoted emit would reparse
+                // through that dispatch and fail. Emit the always-quoted
+                // stable form in that case to keep the normal type-name path.
+                let name_stable = name.to_ast_string_stable();
+                let needs_quote_to_disambiguate = matches!(name_stable.as_str(), r#""map""#);
+                if needs_quote_to_disambiguate {
+                    f.write_str(&name_stable);
+                } else {
+                    f.write_node(name);
+                }
                 if typ_mod.len() > 0 {
                     f.write_str("(");
                     f.write_node(&display::comma_separated(typ_mod));
