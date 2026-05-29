@@ -610,6 +610,26 @@ mod tests {
 
         assert_eq!(consensus.head(&key).await, Ok(None));
 
+        // A missing consensus relation must surface as `is_undefined_table()`,
+        // which `persistd` keys on to terminate-and-restart so its schema is
+        // recreated. Drop the table out from under a live handle and confirm
+        // the next op reports it, then reopen to restore the shared schema.
+        {
+            let conn = consensus.get_connection().await?;
+            conn.batch_execute("DROP TABLE consensus").await?;
+            drop(conn);
+            let err = consensus
+                .head(&key)
+                .await
+                .expect_err("head against a dropped table must error");
+            assert!(
+                err.is_undefined_table(),
+                "expected undefined_table, got: {err:?}",
+            );
+            // `open` runs `CREATE TABLE IF NOT EXISTS`, restoring the schema.
+            PostgresConsensus::open(config.clone()).await?;
+        }
+
         // This should be a separate postgres_consensus_blocking test, but nextest makes it
         // difficult since we can't specify that both tests touch the consensus table and thus
         // interfere with each other.

@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use futures::TryStreamExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::task::spawn;
 use mz_persist::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use tracing::{debug, info, warn};
@@ -69,9 +70,14 @@ impl PersistCommitter {
 
     /// Time a single underlying-consensus call and record the elapsed time
     /// under `op` in `backing_duration_seconds`.
-    async fn time_backing<F, T>(&self, op: &str, fut: F) -> T
+    ///
+    /// A failed op is logged at `warn` with its full cause chain. Without this
+    /// the backend's real error (e.g. a Postgres SQLSTATE) is invisible: the
+    /// per-op `debug` traces are off by default and the error returned to
+    /// clients is flattened to its top-level `Display` further up the stack.
+    async fn time_backing<F, T>(&self, op: &str, fut: F) -> Result<T, ExternalError>
     where
-        F: std::future::Future<Output = T>,
+        F: std::future::Future<Output = Result<T, ExternalError>>,
     {
         let start = Instant::now();
         let out = fut.await;
@@ -79,6 +85,13 @@ impl PersistCommitter {
             .backing_duration_seconds
             .with_label_values(&[op])
             .observe(start.elapsed().as_secs_f64());
+        if let Err(err) = &out {
+            warn!(
+                op,
+                error = %err.display_with_causes(),
+                "persist committer backing consensus operation failed",
+            );
+        }
         out
     }
 
@@ -236,7 +249,11 @@ fn to_proto_error(e: ExternalError) -> ProtoOperationError {
     };
     ProtoOperationError {
         determinacy: i32::from(determinacy),
-        message: e.to_string(),
+        // Carry the full cause chain, not just the top-level `Display`. For a
+        // Postgres-backed error the top level is the opaque "db error"; the
+        // actual SQLSTATE and message live in the source chain, which clients
+        // (and operators reading their logs) otherwise never see.
+        message: e.display_with_causes().to_string(),
     }
 }
 
@@ -511,5 +528,29 @@ mod tests {
         let mut keys = committer.list_keys_inner().await.unwrap();
         keys.sort();
         assert_eq!(keys, vec!["s1".to_string(), "s2".to_string()]);
+    }
+
+    #[mz_ore::test]
+    fn to_proto_error_preserves_cause_chain() {
+        use mz_persist::location::Indeterminate;
+
+        // Mimic the Postgres path, where the top-level `Display` is opaque
+        // ("db error") and the real detail lives in the source chain.
+        let err = ExternalError::Indeterminate(Indeterminate::new(
+            anyhow::anyhow!("relation \"consensus\" does not exist").context("db error"),
+        ));
+        let proto = to_proto_error(err);
+        assert_eq!(
+            proto.determinacy,
+            i32::from(ProtoDeterminacy::Indeterminate)
+        );
+        assert!(
+            proto.message.contains("db error")
+                && proto
+                    .message
+                    .contains("relation \"consensus\" does not exist"),
+            "message dropped the cause chain: {}",
+            proto.message,
+        );
     }
 }

@@ -217,6 +217,33 @@ impl ExternalError {
         // Gross...
         self.to_string().contains("timeout")
     }
+
+    /// Returns whether this error was caused by the backing store reporting
+    /// that a relation does not exist (Postgres/CRDB SQLSTATE 42P01,
+    /// `undefined_table`).
+    ///
+    /// The standalone `persistd` process keys on this. Its consensus schema is
+    /// created once, at startup, by [`crate::postgres::PostgresConsensus::open`].
+    /// If the backing store is reset out from under a running `persistd` the
+    /// relation vanishes and every consensus op then fails indefinitely with
+    /// this code, which no in-process retry can clear. `persistd` treats it as
+    /// fatal and exits so its supervisor restarts it and recreates the schema.
+    /// The in-process committer embedded in `environmentd` deliberately does
+    /// not act on this.
+    pub fn is_undefined_table(&self) -> bool {
+        use std::error::Error;
+        let mut next: Option<&(dyn Error + 'static)> = Some(self);
+        while let Some(err) = next {
+            if let Some(db) =
+                err.downcast_ref::<deadpool_postgres::tokio_postgres::error::DbError>()
+            {
+                return db.code()
+                    == &deadpool_postgres::tokio_postgres::error::SqlState::UNDEFINED_TABLE;
+            }
+            next = err.source();
+        }
+        false
+    }
 }
 
 impl std::fmt::Display for ExternalError {

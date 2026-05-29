@@ -7278,6 +7278,7 @@ name = "mz-persistd"
 version = "26.27.0-dev.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "futures",
  "humantime",

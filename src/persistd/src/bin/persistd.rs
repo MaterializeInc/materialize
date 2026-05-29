@@ -22,7 +22,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
+use async_trait::async_trait;
+use futures::StreamExt;
 use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -31,11 +33,15 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::ConsensusConfig;
+use mz_persist::location::{
+    CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
+};
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_committer::metrics::CommitterMetrics;
 use mz_persist_committer::{CommitterConfig, start_committer};
-use tracing::{info, warn};
+use tokio::sync::Notify;
+use tracing::{error, info, warn};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -151,6 +157,14 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
         .context("opening consensus backend")?;
     info!("consensus backend ready");
 
+    // Watch for the consensus relation disappearing (e.g. the backing store
+    // was reset). See `TerminateOnMissingSchema`.
+    let schema_lost = Arc::new(Notify::new());
+    let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(TerminateOnMissingSchema {
+        inner: consensus,
+        schema_lost: Arc::clone(&schema_lost),
+    });
+
     let committer_metrics = CommitterMetrics::register(&metrics_registry);
     let committer_config = CommitterConfig {
         listen_addr: args.listen_addr,
@@ -160,11 +174,105 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
     let _handle = start_committer(consensus, committer_metrics, committer_config)
         .context("starting committer")?;
 
-    // Block until the process is signaled to exit. Dropping `_handle` aborts
-    // the gRPC server and refresh tasks.
-    tokio::signal::ctrl_c()
-        .await
-        .context("waiting for shutdown signal")?;
-    info!("persistd shutting down");
-    Ok(())
+    // Block until the process is signaled to exit or the consensus schema
+    // vanishes. Dropping `_handle` aborts the gRPC server and refresh tasks.
+    tokio::select! {
+        res = tokio::signal::ctrl_c() => {
+            res.context("waiting for shutdown signal")?;
+            info!("persistd shutting down");
+            Ok(())
+        }
+        // The wrapper already logged the underlying cause at error level.
+        // Return an error so the process exits non-zero and its supervisor
+        // restarts it, re-running schema creation in `open`.
+        _ = schema_lost.notified() => Err(anyhow!(
+            "consensus relation vanished from the backing store; exiting so the supervisor \
+             restarts persistd and recreates the schema"
+        )),
+    }
+}
+
+/// Fire `schema_lost` and log if `err` reports the consensus relation is gone.
+fn flag_missing_schema(err: &ExternalError, schema_lost: &Notify) {
+    if err.is_undefined_table() {
+        error!(
+            error = %err.display_with_causes(),
+            "consensus relation does not exist; the backing store appears to have been reset. \
+             Terminating so the supervisor restarts persistd and recreates the schema",
+        );
+        schema_lost.notify_one();
+    }
+}
+
+/// A [`Consensus`] wrapper that detects the backing store losing the consensus
+/// relation and signals `persistd` to terminate.
+///
+/// `persistd` creates its schema exactly once, in `PostgresConsensus::open`,
+/// during startup. If the backing store is reset under a running `persistd`
+/// the relation disappears and every op then fails forever with SQLSTATE
+/// 42P01 (`undefined_table`); no in-process retry can clear it. Rather than
+/// spin silently, the standalone process treats this as fatal: this wrapper
+/// fires `schema_lost`, `run` exits non-zero, and the supervisor restarts
+/// `persistd`, which recreates the schema.
+///
+/// This policy is intentionally local to the standalone binary. The in-process
+/// committer in `environmentd` shares the same committer code but must never
+/// self-terminate, so it does not install this wrapper.
+#[derive(Debug)]
+struct TerminateOnMissingSchema {
+    inner: Arc<dyn Consensus + Send + Sync>,
+    schema_lost: Arc<Notify>,
+}
+
+#[async_trait]
+impl Consensus for TerminateOnMissingSchema {
+    fn list_keys(&self) -> ResultStream<'_, String> {
+        let schema_lost = Arc::clone(&self.schema_lost);
+        Box::pin(self.inner.list_keys().inspect(move |item| {
+            if let Err(err) = item {
+                flag_missing_schema(err, &schema_lost);
+            }
+        }))
+    }
+
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let res = self.inner.head(key).await;
+        if let Err(err) = &res {
+            flag_missing_schema(err, &self.schema_lost);
+        }
+        res
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        new: VersionedData,
+    ) -> Result<CaSResult, ExternalError> {
+        let res = self.inner.compare_and_set(key, new).await;
+        if let Err(err) = &res {
+            flag_missing_schema(err, &self.schema_lost);
+        }
+        res
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let res = self.inner.scan(key, from, limit).await;
+        if let Err(err) = &res {
+            flag_missing_schema(err, &self.schema_lost);
+        }
+        res
+    }
+
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        let res = self.inner.truncate(key, seqno).await;
+        if let Err(err) = &res {
+            flag_missing_schema(err, &self.schema_lost);
+        }
+        res
+    }
 }
