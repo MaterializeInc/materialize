@@ -5475,6 +5475,7 @@ async fn test_auth_oidc_non_login_role() {
 }
 
 /// Fetches the role names a user is a member of, sorted alphabetically.
+#[allow(clippy::disallowed_methods)]
 async fn fetch_user_role_memberships(
     client: &tokio_postgres::Client,
     user_name: &str,
@@ -5495,6 +5496,7 @@ async fn fetch_user_role_memberships(
 
 /// Sets up a test harness with OIDC auth, creates roles, and enables group sync.
 /// Returns the server, admin client, OIDC mock server, and a TLS factory closure.
+#[allow(clippy::disallowed_methods)]
 async fn setup_group_sync_test() -> (
     test_util::TestServer,
     tokio_postgres::Client,
@@ -5588,6 +5590,7 @@ fn jwt_with_groups(oidc_server: &OidcMockServer, groups: serde_json::Value) -> S
 /// First login grants roles from JWT groups, with correct grantor and audit log entries.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_first_login() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
 
@@ -5630,6 +5633,7 @@ async fn test_oidc_group_sync_first_login() {
 /// The self-referential group should be silently skipped; other valid groups apply.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_self_named_group() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
     admin_client
@@ -5757,6 +5761,7 @@ async fn test_oidc_group_sync_ws() {
 /// Setup: grant alice's own role to r_cycle, so r_cycle is a member of alice.
 /// Then a JWT with group "r_cycle" makes sync try to grant r_cycle to alice,
 /// which would create a cycle (alice → r_cycle → alice).
+#[allow(clippy::disallowed_methods)]
 async fn setup_circular_group(
     admin_client: &tokio_postgres::Client,
     oidc_server: &OidcMockServer,
@@ -5782,6 +5787,7 @@ async fn setup_circular_group(
 /// In strict mode, a sync error rejects the login entirely.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_strict_rejects_on_error() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
     setup_circular_group(&admin_client, &oidc_server, &server).await;
@@ -5847,6 +5853,7 @@ async fn test_oidc_group_sync_fail_open_sends_notice() {
 /// not grant the privileges of the distinct "admin" role (SQL-276).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_case_sensitive() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
 

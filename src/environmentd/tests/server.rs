@@ -2713,6 +2713,7 @@ fn test_internal_console_proxy() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_metrics_public_endpoint() {
     let server = test_util::TestHarness::default()
         .with_system_parameter_default(
