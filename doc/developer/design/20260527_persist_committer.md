@@ -27,8 +27,9 @@ Existing persist test suites pass against the new transport with no semantic cha
   Caller-provided new-state depends on caller-observed old-state, so payload merging is not semantically sound.
 * Cross-environment consensus sharing.
   Each environment retains its own consensus DB.
-* A standalone `persistd` binary.
-  The committer ships inside `environmentd` for v1.
+* A server-streaming `Subscribe` RPC that pushes per-shard diffs.
+  An earlier draft included one; no client consumed it, so v1 ships without subscriptions and the cache is refreshed only on `CompareAndSet` mismatch.
+  Diff propagation continues to flow through the existing persist pubsub channel, unchanged by this work.
 
 ## Solution proposal
 
@@ -61,15 +62,15 @@ The committer lives in a new `mz-persist-committer` crate.
 It composes the existing `PostgresConsensus`, a per-shard cache, and a tonic gRPC server.
 
 **`PersistCommitter`** owns the only `Arc<dyn Consensus>` backed by CRDB in the environment.
-It accepts RPC requests, consults the cache, dispatches to the underlying `Consensus`, and broadcasts updates to subscribers.
+It accepts RPC requests, consults the cache, and dispatches to the underlying `Consensus`.
 
-**`ShardCache`** is a `BTreeMap<ShardId, Arc<Mutex<CachedState>>>` where `CachedState` holds the latest observed `VersionedData` and the set of active subscribers.
+**`ShardCache`** is a `BTreeMap<ShardId, Arc<Mutex<CachedState>>>` where `CachedState` holds the latest observed `VersionedData` and an LRU access tick.
 Inserts compare sequence numbers and only move forward, never backward.
-The map is bounded by `persist_committer_max_cached_shards`; entries with zero subscribers are LRU-evicted when the cap is reached.
+The map is bounded by `persist_committer_max_cached_shards`; the least-recently-accessed entry is evicted when the cap is reached.
 
 **`ProtoPersistConsensus`** is the new gRPC service.
-It exposes four unary RPCs mirroring the `Consensus` trait — `Head`, `Scan`, `CompareAndSet`, `Truncate` — plus a server-streaming `Subscribe(ShardId)` that pushes `VersionedData` diffs.
-The diff wire format matches the existing `ProtoPubSubMessage::PushDiff` so the cluster-side persist subscriber can reuse decoders.
+It exposes five unary RPCs mirroring the `Consensus` trait — `Head`, `Scan`, `CompareAndSet`, `Truncate`, `ListKeys`.
+Each unary response is a `oneof { ok, err }` envelope so that operation-level errors (including their `Determinate`/`Indeterminate` classification) travel as message data rather than as `tonic::Status`; the latter is reserved for transport failures.
 
 **`RpcConsensus`** is a new `Consensus` implementation in `mz-persist-client` that wraps a tonic channel.
 It is the only persist-client-side change; once a `PersistClientCache` decides to use it, every existing persist consumer is unaffected.
@@ -84,10 +85,11 @@ It is the only persist-client-side change; once a `PersistClientCache` decides t
 2. `RpcConsensus` sends `CompareAndSet { shard, new }` to the committer.
 3. The committer forwards the call to its `PostgresConsensus` unconditionally.
    CRDB arbitrates.
-4. On `Committed`, the committer updates the cache for `shard` (monotonic merge), then publishes the new `VersionedData` to every subscriber of that shard.
+4. On `Committed`, the committer updates the cache for `shard` (monotonic merge).
 5. On `ExpectationMismatch`, the underlying trait does not return the current state.
    The committer replies to the caller with the mismatch and concurrently spawns a fire-and-forget `head()` against CRDB to refresh the cache so the caller's follow-up `fetch_current_state` can be served from cache.
-   A per-shard mutex around this refresh prevents concurrent mismatches from stampeding the underlying store.
+   This refresh is the only mechanism that pulls forward state written by another committer or by tooling.
+   Concurrent mismatches against a hot shard can produce concurrent refresh fetches; deduplicating them via a per-shard "refresh in flight" flag is tracked as a follow-up.
 
 We do not fast-reject CaS against the cache.
 With two `environmentd` instances briefly coexisting during failover, the cache may lag CRDB, and a cache-based reject could incorrectly fail a legitimate CaS.
@@ -99,7 +101,6 @@ Forwarding every write keeps CRDB authoritative.
 2. `RpcConsensus` sends `Head { shard }` to the committer.
 3. If the cache has an entry, the committer returns the cached `VersionedData`.
    Otherwise it reads CRDB, populates the cache, and returns the value.
-4. On cache miss, the committer marks the shard warm and begins delivering diffs to any subsequent subscriber.
 
 Stale cache reads are safe because the cache moves forward monotonically.
 A caller that reads sequence number N from cache when CRDB holds N+1 simply learns about N+1 on its next CaS failure, then retries.
@@ -123,12 +124,6 @@ It is not on the hot path and is rarely called.
 The underlying trait returns `Result<Option<usize>, _>` — the count is `None` when the backing store cannot report one — so the gRPC response uses an `optional uint64` field.
 The cache is unaffected because truncation only removes historical sequence numbers, not the current head.
 
-**Subscribe path:**
-
-When a clusterd's `PersistClient` opens a shard, it opens a `Subscribe(shard)` server-stream to the committer.
-The committer registers the subscriber, sends the current cached `VersionedData` as the first message, then streams every subsequent `VersionedData` update produced by its own CaS commits.
-The subscription tears down when the clusterd closes the shard or the gRPC stream.
-
 ### Cache freshness with multiple writers
 
 The cache is necessarily best-effort because the committer is not always the only writer to CRDB:
@@ -137,10 +132,14 @@ The cache is necessarily best-effort because the committer is not always the onl
 * During rollout, some clusterds may still hold direct CRDB connections (`persist_consensus_use_committer = off`).
 * External tooling (backups, admin scripts) may read or write directly.
 
-To bound staleness, the committer refreshes cached shards on a TTL (default 5s, `persist_committer_cache_refresh_interval`) whenever the shard has active subscribers.
-The TTL refresh issues a `head` to CRDB, monotonic-merges the result, and broadcasts any diff.
-A second refresh trigger fires on every `ExpectationMismatch` from CaS, since that strongly signals the cache is behind whoever just wrote.
-Combined with monotonic insert and the no-fast-reject CaS rule, the cache cannot serve a stale value that causes incorrect behavior; it can only delay observation of newer state by at most the TTL.
+The cache learns about state written elsewhere along two paths:
+
+* Any `head` cache miss reads CRDB and populates the cache, so a shard the local committer has never touched is fetched fresh on its first read.
+* Any `compare_and_set` that returns `ExpectationMismatch` spawns a background `head` to CRDB and monotonic-merges the result.
+  The mismatch itself is the signal that the cache is behind whoever just wrote.
+
+Combined with monotonic insert and the no-fast-reject CaS rule (below), the cache cannot serve a stale value that causes incorrect behavior; the worst case is that a follow-up CaS by this committer mismatches, refreshes, and the caller retries.
+There is no periodic refresh task — an earlier draft included one keyed off active subscribers, but with no subscriber consumer the freshness loop never ran in practice; we removed it rather than ship an inert loop.
 
 ### Connectivity and failover
 
@@ -158,10 +157,9 @@ The persist client retries with existing exponential backoff.
 The replica makes no progress until reconnect, which matches today's behavior when CRDB is down; controllers are also unreachable in that scenario, so the cluster is effectively idle anyway.
 
 When the committer cannot reach CRDB, the underlying `PostgresConsensus` error propagates verbatim to in-flight RPCs.
-Subscribe streams stay open and continue to serve cached reads under the monotonic guarantee.
+Read-side calls can still be served from the cache under the monotonic guarantee for any shard already warm.
 
-Overload is bounded by a per-shard outstanding-request queue (default 1024).
-Beyond the limit the server returns `RESOURCE_EXHAUSTED`, which the client treats as a retryable backoff signal.
+Overload protection — a per-shard outstanding-request queue that rejects with `RESOURCE_EXHAUSTED` past a threshold — is described under follow-ups; v1 ships in-flight gauges but no enforced bound.
 
 ### Configuration
 
@@ -173,36 +171,47 @@ All flags are LaunchDarkly-backed and evaluated dynamically:
   disables the in-memory cache while keeping the RPC path.
   Acts as a safety valve if the cache turns out to be a regression source.
 * `persist_committer_max_cached_shards` (usize, default `10000`):
-  hard cap on cache size; LRU evicts shards with no subscribers.
-* `persist_committer_cache_refresh_interval` (duration, default `5s`):
-  TTL for periodic re-`head` of subscribed shards.
+  hard cap on cache size; the least-recently-accessed entry is evicted when the cap is reached.
+* `persist_committer_stats_heartbeat_interval` (duration, default `30s`):
+  interval at which the committer emits an INFO-level stats line.
+  `0s` disables it.
 
 ### Metrics
 
-New metrics, exposed by `environmentd`:
+New metrics, exposed by `environmentd` (and by `persistd` when run standalone):
 
 * `mz_persist_committer_rpc_total{op, result}` and `mz_persist_committer_rpc_duration_seconds{op}`:
   per-RPC counters and histograms.
+  `result` is one of `ok` / `committed` / `mismatch` / `err_determinate` / `err_indeterminate`.
+* `mz_persist_committer_backing_duration_seconds{op}`:
+  latency of the underlying `Consensus` call only.
+  Diff against `rpc_duration_seconds` to isolate committer-internal cost vs. backing-store cost.
 * `mz_persist_committer_cache_hits_total{op}` / `_misses_total{op}`:
   measures how often the cache short-circuits reads.
-* `mz_persist_committer_cached_shards` (gauge) and `mz_persist_committer_subscribers{shard}` (gauge):
+* `mz_persist_committer_cached_shards` (gauge):
   cache footprint.
-* `mz_persist_committer_inflight_rpcs` (gauge) and `mz_persist_committer_queue_depth{shard}` (gauge):
-  overload visibility.
-* `mz_persist_consensus_pool_connections{state}` (gauge):
-  open/idle/wait, missing today, useful regardless of this work.
+* `mz_persist_committer_inflight_rpcs` (gauge) and `mz_persist_committer_inflight_rpcs_by_op{op}` (gauge):
+  in-flight visibility, broken down by op so a slow handler is visible without scraping latency.
+* `mz_persist_committer_cas_refresh_lag_seconds` (histogram):
+  time from CaS mismatch to the background `head()` refresh task completing.
+  If consistently slower than the client's retry interval, retries may see stale cache and loop until the refresh lands.
+
+A future overload-protection metric (`queue_depth{shard}`) is mentioned under follow-ups; it is not present in v1.
 
 The headline metric for rollout is the count of active CRDB connections per environment, which should drop from `O(replicas)` to `O(envds)` after enable.
 
 ### Testing strategy
 
-The `Consensus` trait abstraction lets us reuse every existing persist correctness test against `RpcConsensus` simply by parameterizing the test harness on the trait implementation.
-On top of that:
+The `Consensus` trait abstraction lets us reuse the same `RpcConsensus` against `mz-persist-committer`'s in-process and over-the-wire paths; v1 ships:
 
-* Unit tests in `mz-persist-committer` verify monotonic-insert (random-order property test), per-shard mutex serialization, and cache eviction semantics.
-* An mzcompose composition under `test/persist-committer/` runs `environmentd` plus several `clusterd` replicas, exercises CaS contention, kills the committer mid-flight, and verifies retry semantics.
-* A platform check (`mz-platform-checks`) verifies that shard state survives `environmentd` restart with the committer enabled.
-* Parallel-workload runs with the committer enabled surface panics or deadlocks under concurrent DDL/DML.
+* Unit tests in `mz-persist-committer` covering monotonic-insert (random-order property test), cache LRU eviction, and the determinacy-preserving error envelope on the wire.
+* Unit tests in `mz-persist-client::rpc_consensus` covering the client-side roundtrip and the `tonic::Status` → `Indeterminate` mapping for transport failures.
+* A `test/persist-committer/` mzcompose composition that runs `environmentd` plus a clusterd against an external `persistd`, exercising the standalone deployment end-to-end.
+* A `test/persistd/` mzcompose composition that smoke-tests the binary directly and exercises envd restart while `persistd` keeps running.
+* A platform check (`mz-platform-checks`) that verifies shard state survives `environmentd` restart with the committer enabled.
+* Parallel-workload runs with the committer enabled to surface panics or deadlocks under concurrent DDL/DML.
+
+Parameterizing the entire existing persist correctness suite against `RpcConsensus` is appealing but is not part of this work; it is filed as a follow-up.
 
 ## Minimal viable prototype
 
@@ -273,7 +282,7 @@ This defeats the connection-reduction goal at the worst possible moment (envd fa
 * What is the right transport for the in-process committer client used by `environmentd` itself?
   Decision (v1): a direct trait-dispatch adapter (`InProcessConsensus`) that calls `PersistCommitter::*_inner` directly, mirroring the pubsub `new_same_process_connection` pattern.
   An earlier draft routed `environmentd`'s own traffic through a tonic in-memory channel, but pgwire and sqllogictest integration tests deadlocked because the same tokio runtime was driving both the gRPC server and its client.
-  This is a transient workaround that disappears once the committer moves into a separate `persistd` process (see "Future architecture" below).
+  Once `environmentd` is configured with `--external-persist-committer` to dial a standalone `persistd` (see "Standalone `persistd`" below), there is no in-process loop and the adapter is bypassed entirely; the adapter remains for the embedded path.
 * Should we add per-shard authentication or rate limiting?
   Today persist clients are trusted in-cluster, so we propose no authn for v1, but the gRPC service is the natural place to add it later if needed.
 * What is the migration plan for environments where some clusterds still hold direct CRDB pools during the LD flag rollout?
@@ -292,43 +301,43 @@ The timestamp oracle keeps its own direct connection to CockroachDB.
 The oracle does not use persist or the `Consensus` trait, so it falls outside the committer's reach.
 This is a wart — the oracle is a second per-environment persistent connection to the same database — but resolving it is out of scope for this work and tracked separately.
 
-## Future architecture: extract `persistd` as a separate service
+## Standalone `persistd`
 
 The committer's interaction with `environmentd` during this PR's bring-up surfaced a deeper issue.
 Hosting the committer's gRPC server on `environmentd`'s tokio runtime forced us to invent an `InProcessConsensus` adapter (above) to avoid a self-loopback deadlock; gRPC for the in-process path was unworkable on the same runtime.
 Compaction work also lives in `environmentd` today for similar historical reasons, and pubsub's `new_same_process_connection` is a similar accommodation for the same architectural mistake.
 
 The deeper signal is that `environmentd` should not be persist's host process.
-A dedicated `persistd` binary, deployed alongside `environmentd` in Kubernetes (and as a sibling process under the process orchestrator), should own:
+This PR ships a `mz-persistd` binary (image, mzbuild, CI step) that runs the committer in its own process.
+`environmentd` learns an `--external-persist-committer` flag: when set, it dials an external `persistd` over gRPC instead of starting an in-process committer, and clusterds in the same deployment dial the same `persistd` endpoint.
+Mzcompose's `Materialized` helper auto-attaches a paired `persistd` companion service when an external Postgres-flavored metadata store is configured, so most CI compositions exercise the standalone path by default.
 
-* The sole CockroachDB consensus connection pool for the environment.
-* The committer cache, refresh task, and gRPC service.
-* The persist pubsub server (eventually; see "Protocol consolidation" below).
-* Persist compaction workers, which currently squat in `environmentd`.
+What is *not* yet in this PR but is the obvious next step:
 
-`environmentd` becomes a client of `persistd` just like any `clusterd`.
-The `InProcessConsensus` adapter introduced in this PR disappears.
-There is exactly one tier holding consensus connections, and it does only persist work — making capacity planning, blast radius, and lifecycle reasoning all simpler.
+* Orchestratord support for a standalone `persistd` Deployment in Kubernetes.
+  Today orchestratord already builds a `persist_committer_service` k8s `Service`, but its selector points back at the `environmentd` pod (which runs the in-process committer).
+  Re-pointing that Service at a dedicated `persistd` Deployment is largely orchestratord wiring.
+* Helm chart wiring for the `persistd` Deployment, NetworkPolicies, and the `Materialize` CR schema for a `persistd` block.
+* Removing the in-`environmentd` committer once the standalone path is the only path.
 
 Resilience: `persistd` is a single-leader role.
 The current envd HA story (two envds during zero-downtime upgrade, leader-discovery via Kubernetes Service readiness) extends naturally to `persistd`.
 
-This work is out of scope for v1.
-The v1 committer ships hosted in `environmentd`; extraction is a follow-up project once both the committer and (separately) the pubsub server have soaked.
+Compaction workers and the pubsub server still live in `environmentd`; moving them into `persistd` is a separate effort beyond the scope of this work.
 
 ## Future direction: protocol consolidation with pubsub
 
-`ProtoPersistPubSub` and the committer's `ProtoPersistConsensus` overlap substantially.
-Both are about per-shard state and diff propagation; pubsub today only broadcasts diffs, while the committer is the canonical writer that produces every diff.
-A future `PersistRouter` service can subsume both:
+`ProtoPersistPubSub` and the committer's `ProtoPersistConsensus` are complementary:
+the committer is the canonical writer that produces every diff, and pubsub is the existing fan-out path that delivers those diffs to subscribers.
+A future `PersistRouter` service could subsume both behind one schema and one TCP connection per clusterd:
 
 * `compare_and_set`, `head`, `scan`, `truncate`, `list_keys` from the committer.
-* `subscribe(shard) -> stream<diff>` from pubsub.
-* `push_diff(shard, diff)` — meaningful only during the rollout window when some clients still write directly to CRDB; deprecated once the committer is the universal write path.
+* `subscribe(shard) -> stream<diff>` and `push_diff(shard, diff)` from pubsub.
 
 Benefits: one TCP connection per clusterd, one schema, one ownership boundary.
 Cost: pubsub has significant production miles and a separate reconnect / backpressure story.
 This is a follow-up after both surfaces have stabilized in their own right; not bundled with v1.
+The fact that v1 deliberately omits a server-streaming `Subscribe` from `ProtoPersistConsensus` (see "Out of scope") leaves pubsub as the sole diff-fan-out protocol, which makes the eventual consolidation cleaner — there is only ever one subscribe surface to migrate.
 
 ## Future direction: single-writer batched CaS
 
