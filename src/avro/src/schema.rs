@@ -864,12 +864,19 @@ impl PartialEq for UnionSchema {
 struct SchemaParser {
     named: Vec<Option<NamedSchemaPiece>>,
     indices: BTreeMap<FullName, usize>,
+    depth: usize,
 }
+
+/// Cap on nested-type depth while parsing an Avro schema JSON. The parser
+/// recurses through `parse_inner` for every nested `record`/`array`/`map`/
+/// `union` so an untrusted schema like `{"type":{"type":{"type":...}}}`
+/// can otherwise overflow the stack.
+const MAX_SCHEMA_DEPTH: usize = 128;
 
 impl SchemaParser {
     fn parse(mut self, value: &Value) -> Result<Schema, AvroError> {
         let top = self.parse_inner("", value)?;
-        let SchemaParser { named, indices } = self;
+        let SchemaParser { named, indices, .. } = self;
         Ok(Schema {
             named: named.into_iter().map(|o| o.unwrap()).collect(),
             indices,
@@ -878,6 +885,24 @@ impl SchemaParser {
     }
 
     fn parse_inner(
+        &mut self,
+        default_namespace: &str,
+        value: &Value,
+    ) -> Result<SchemaPieceOrNamed, AvroError> {
+        self.depth += 1;
+        if self.depth > MAX_SCHEMA_DEPTH {
+            self.depth -= 1;
+            return Err(ParseSchemaError::new(format!(
+                "schema nesting depth exceeds limit {MAX_SCHEMA_DEPTH}"
+            ))
+            .into());
+        }
+        let result = self.parse_inner_impl(default_namespace, value);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_inner_impl(
         &mut self,
         default_namespace: &str,
         value: &Value,
@@ -1399,6 +1424,7 @@ impl Schema {
         let p = SchemaParser {
             named: named.into_iter().map(Some).collect(),
             indices,
+            depth: 0,
         };
         p.parse(primary)
     }
