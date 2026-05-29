@@ -97,8 +97,12 @@ impl AstDisplay for Value {
                 f.write_str("'");
             }
             Value::HexString(v) => {
+                // The lexer accepts arbitrary bytes inside `X'...'` and treats
+                // `''` as an escaped single quote. We must escape `'` on the
+                // way out so a value containing `'` round-trips through the
+                // lexer instead of closing the literal prematurely.
                 f.write_str("X'");
-                f.write_str(v);
+                f.write_node(&display::escape_single_quote_string(v));
                 f.write_str("'");
             }
             Value::Boolean(v) => f.write_str(v),
