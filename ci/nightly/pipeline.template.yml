@@ -294,18 +294,6 @@ steps:
   - group: Kafka
     key: kafka
     steps:
-      - id: kafka-matrix
-        label: Previous Kafka versions
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-matrix
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9510"
-
       - id: kafka-multi-broker
         label: Kafka multi-broker
         depends_on: build-aarch64

@@ -292,7 +292,6 @@ case "$cmd" in
                 --env QA_CLUSTER_SPEC_SHEET_MYSQL_HOSTNAME
                 --env QA_CLUSTER_SPEC_SHEET_MYSQL_PASSWORD
                 # For Miri with nightly Rust
-                --env ZOOKEEPER_ADDR
                 --env KAFKA_ADDRS
                 --env SCHEMA_REGISTRY_URL
                 --env STEP_START_TIMESTAMP_WITH_TZ

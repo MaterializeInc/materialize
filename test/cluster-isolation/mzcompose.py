@@ -25,12 +25,10 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 from materialize.util import selected_by_name
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
@@ -112,7 +110,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("kafka", "schema-registry")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 

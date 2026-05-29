@@ -56,6 +56,12 @@ class RedpandaDeployment(K8sDeployment):
                 # Only require 4KB per topic partition rather than 4MiB.
                 "--set",
                 "redpanda.topic_memory_per_partition=4096",
+                # `testdrive/kafka-time-offset.td` ingests records with
+                # timestamps in 2099; Redpanda v23+ otherwise rejects them
+                # under the 1-hour `log_message_timestamp_after_max_ms`
+                # default. Same relaxation as `mzcompose.services.redpanda`.
+                "--set",
+                "redpanda.log_message_timestamp_after_max_ms=9223372036854",
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],

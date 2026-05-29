@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM foundationdb/foundationdb:7.3.71
+FROM foundationdb/foundationdb:7.3.77
 
 # Use the upstream entrypoint which handles FDB_CLUSTER_FILE_CONTENTS
 # Database initialization is handled separately by FoundationDBCluster service

@@ -24,10 +24,8 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
@@ -50,7 +48,7 @@ def parse_args(parser: WorkflowArgumentParser) -> argparse.Namespace:
 
 
 def get_kafka_services(redpanda: bool) -> list[str]:
-    return ["redpanda"] if redpanda else ["zookeeper", "kafka", "schema-registry"]
+    return ["redpanda"] if redpanda else ["kafka", "schema-registry"]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

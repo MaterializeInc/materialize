@@ -38,7 +38,6 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread, all_subclasses
 
 SERVICES = [
@@ -47,14 +46,16 @@ SERVICES = [
     SqlServer(),
     PolarisBootstrap(),
     Polaris(),
-    Zookeeper(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://127.0.0.1:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
@@ -75,7 +76,6 @@ SERVICE_NAMES = [
     "postgres",
     "mysql",
     "sql-server",
-    "zookeeper",
     "kafka",
     "schema-registry",
     # Still required for backups/s3 testing even when we use Azurite as blob store

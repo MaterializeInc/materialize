@@ -33,7 +33,6 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.workload_replay.config import cluster_replica_sizes
 from materialize.workload_replay.executor import benchmark, test
 from materialize.workload_replay.util import (
@@ -44,14 +43,16 @@ from materialize.workload_replay.util import (
 
 SERVICES = [
     SshBastionHost(allow_any_key=True),
-    Zookeeper(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://127.0.0.1:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
