@@ -158,6 +158,29 @@ FROM (
 query error timestamp out of range
 select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)
 
+# Regression test for database-issues#CLU-92: a leap-second timestamptz combined
+# with a fixed offset that shifts the seconds off `:59` previously panicked
+# during row encoding because chrono cannot represent a leap-second nanosecond
+# value at a `NaiveTime` whose seconds-of-minute is not 59.
+query T
+SELECT timezone('+00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-06-30 23:59:59
+
+query T
+SELECT timezone('-00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-07-01 00:00:01
+
+# Complementary case: a zero offset keeps the result on `:59`, exercising the
+# `else` branch of `checked_add_with_leapsecond` that restores the leap-second
+# nanos via `with_nanosecond(nanos)`. The resulting leap-second `NaiveDateTime`
+# is then rendered as the following regular second.
+query T
+SELECT timezone('+00:00', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-07-01 00:00:00
+
 ### to_char
 
 statement ok
