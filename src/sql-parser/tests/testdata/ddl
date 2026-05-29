@@ -3629,14 +3629,14 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHE
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema')
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }] }))), envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }], seed: None }))), envelope: None })
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [] }))), envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [], seed: None }))), envelope: None })
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY
@@ -3644,3 +3644,12 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHE
 error: Expected CONNECTION, found EOF
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY
                                                                                            ^
+
+# SEED is emitted by purification; users do not write it directly but the
+# parser must accept it on roundtrip (catalog regenerates create_sql).
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') SEED VALUE SCHEMA '{"type":"record","name":"row","fields":[]}'
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') SEED VALUE SCHEMA '{"type":"record","name":"row","fields":[]}'
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"type\":\"record\",\"name\":\"row\",\"fields\":[]}" }) }))), envelope: None })

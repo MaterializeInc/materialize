@@ -356,9 +356,6 @@ async fn get_decoder(
             reference_schemas,
             wire_format,
         }) => {
-            // The Glue arm is decode-ready, but the planner does not yet
-            // construct `WireFormat::Glue`, so only `None`/`Confluent` are
-            // reachable from SQL today.
             let writer_schemas = match wire_format {
                 WireFormat::None => WriterSchemas::None,
                 WireFormat::Confluent { registry } => {

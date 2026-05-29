@@ -24,9 +24,8 @@
 //!   ingest Confluent-framed bytes without an attached CSR connection
 //!   (the schema id is read but the schema is not fetched).
 //! * [`WireFormat::Glue`] — AWS Glue Schema Registry framing
-//!   (magic byte + UUID schema-version id). Not yet wired to the planner, so
-//!   currently unconstructable from SQL — defined here so the in-memory shape
-//!   is stable while the rest of the support lands.
+//!   (magic byte + UUID schema-version id). Constructable from SQL on the
+//!   source side; sinks do not yet support Glue and remain Confluent-only.
 
 use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};

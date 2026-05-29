@@ -177,6 +177,9 @@ pub enum AvroSchema<T: AstInfo> {
     Glue {
         connection: T::ItemName,
         with_options: Vec<GlueAvroOption<T>>,
+        /// Populated during purification by fetching the named schema's
+        /// latest version from AWS Glue. Users cannot write this clause.
+        seed: Option<GlueAvroSeed>,
     },
 }
 
@@ -201,6 +204,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
             Self::Glue {
                 connection,
                 with_options,
+                seed,
             } => {
                 f.write_str("USING AWS GLUE SCHEMA REGISTRY CONNECTION ");
                 f.write_node(connection);
@@ -208,6 +212,10 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
+                }
+                if let Some(seed) = seed {
+                    f.write_str(" ");
+                    f.write_node(seed);
                 }
             }
         }
@@ -459,6 +467,26 @@ impl AstDisplay for CsrSeedAvro {
     }
 }
 impl_display!(CsrSeedAvro);
+
+/// Resolved reader schema for an `AvroSchema::Glue` source.
+///
+/// Glue schemas have no references (each schema-version is a single
+/// self-contained definition), so unlike [`CsrSeedAvro`] there is no
+/// references vector. Key-side schemas are deferred until we have a
+/// concrete use case — Kafka source keys still go through CSR today.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GlueAvroSeed {
+    pub value_schema: String,
+}
+
+impl AstDisplay for GlueAvroSeed {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED VALUE SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
+    }
+}
+impl_display!(GlueAvroSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedProtobuf {

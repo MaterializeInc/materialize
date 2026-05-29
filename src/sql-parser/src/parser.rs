@@ -2121,9 +2121,19 @@ impl<'a> Parser<'a> {
             } else {
                 vec![]
             };
+            // SEED VALUE SCHEMA '<json>' is emitted by purification; users do
+            // not write it directly. Accept it on roundtrip parses.
+            let seed = if self.parse_keyword(SEED) {
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(GlueAvroSeed { value_schema })
+            } else {
+                None
+            };
             AvroSchema::Glue {
                 connection,
                 with_options,
+                seed,
             }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();

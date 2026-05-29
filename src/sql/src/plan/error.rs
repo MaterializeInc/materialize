@@ -42,8 +42,8 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
 use crate::pure::error::{
-    CsrPurificationError, IcebergSinkPurificationError, KafkaSinkPurificationError,
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
+    CsrPurificationError, GluePurificationError, IcebergSinkPurificationError,
+    KafkaSinkPurificationError, KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
     MySqlSourcePurificationError, PgSourcePurificationError, SqlServerSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -276,6 +276,7 @@ pub enum PlanError {
     IcebergSinkPurification(IcebergSinkPurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
+    GluePurification(GluePurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
     SqlServerSourcePurificationError(SqlServerSourcePurificationError),
     UseTablesForSources(String),
@@ -371,6 +372,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
+            Self::GluePurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
             Self::SubsourceNameConflict {
@@ -475,6 +477,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::CsrPurification(e) => e.hint(),
+            Self::GluePurification(e) => e.hint(),
             Self::KafkaSinkPurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
                 let suffix = "Make sure to surround case sensitive names in double quotes.";
@@ -803,6 +806,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::IcebergSinkPurification(e) => write!(f, "ICEBERG sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
+            Self::GluePurification(e) => write!(f, "AWS GLUE SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
             Self::SqlServerSourcePurificationError(e) => write!(f, "SQL SERVER source validation: {}", e),
             Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
@@ -1010,6 +1014,12 @@ impl From<KafkaSinkPurificationError> for PlanError {
 impl From<IcebergSinkPurificationError> for PlanError {
     fn from(e: IcebergSinkPurificationError) -> Self {
         PlanError::IcebergSinkPurification(e)
+    }
+}
+
+impl From<GluePurificationError> for PlanError {
+    fn from(e: GluePurificationError) -> Self {
+        PlanError::GluePurification(e)
     }
 }
 
