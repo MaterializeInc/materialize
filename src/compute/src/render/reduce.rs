@@ -12,7 +12,6 @@
 //! Consult [ReducePlan] documentation for details.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
 use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
@@ -1555,7 +1554,9 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
 /// scale is `FLOAT_SCALE == 2^FLOAT_SCALE_EXP`.
 const FLOAT_SCALE_EXP: u32 = 24;
 
-static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1_i32 << FLOAT_SCALE_EXP));
+/// The fixed-point scale applied to float sums, i.e. `2^FLOAT_SCALE_EXP`.
+#[allow(clippy::as_conversions)] // Integer-to-float cast, exact and const-evaluable.
+const FLOAT_SCALE: f64 = (1_u64 << FLOAT_SCALE_EXP) as f64;
 
 /// Maps a finite `f64` onto the fixed-point `i128` domain used to accumulate
 /// float sums, i.e. computes `trunc(n * FLOAT_SCALE)` reduced modulo `2^128`.
@@ -1839,7 +1840,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 } else if neg_infs.is_positive() {
                     Datum::from(f32::NEG_INFINITY)
                 } else {
-                    let sum = f64::cast_lossy(accum.into_inner()) / *FLOAT_SCALE;
+                    let sum = f64::cast_lossy(accum.into_inner()) / FLOAT_SCALE;
                     Datum::from(f32::cast_lossy(sum))
                 }
             }
@@ -1862,7 +1863,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 } else if neg_infs.is_positive() {
                     Datum::from(f64::NEG_INFINITY)
                 } else {
-                    Datum::from(f64::cast_lossy(accum.into_inner()) / *FLOAT_SCALE)
+                    Datum::from(f64::cast_lossy(accum.into_inner()) / FLOAT_SCALE)
                 }
             }
             (
@@ -2552,7 +2553,7 @@ mod tests {
     /// where the old conversion was already correct.
     #[allow(clippy::as_conversions)]
     fn saturating_convert(n: f64) -> i128 {
-        (n * *FLOAT_SCALE) as i128
+        (n * FLOAT_SCALE) as i128
     }
 
     #[mz_ore::test]
