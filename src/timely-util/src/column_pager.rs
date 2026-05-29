@@ -45,10 +45,6 @@ use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnar::Column;
 
-// ---------------------------------------------------------------------------
-// Codec
-// ---------------------------------------------------------------------------
-
 /// Compression codec applied to a paged-out column.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Codec {
@@ -56,10 +52,6 @@ pub enum Codec {
     /// `io::Read`/`io::Write`, no random access.
     Lz4,
 }
-
-// ---------------------------------------------------------------------------
-// Policy
-// ---------------------------------------------------------------------------
 
 /// Inputs to a pageout decision.
 #[derive(Copy, Clone, Debug)]
@@ -133,10 +125,6 @@ pub trait PagingPolicy: Send + Sync {
     /// Records a pageout/pagein/failure event for metrics or adaptive decisions.
     fn record(&self, event: PageEvent);
 }
-
-// ---------------------------------------------------------------------------
-// Meta + PagedColumn
-// ---------------------------------------------------------------------------
 
 /// Sizing metadata captured at pageout time. Stored alongside the payload so
 /// `take` can size buffers.
@@ -212,10 +200,6 @@ pub enum CompressedInner {
     Paged(Handle),
 }
 
-// ---------------------------------------------------------------------------
-// ColumnPager
-// ---------------------------------------------------------------------------
-
 /// Pages typed [`Column`]s out and back in, driven by a [`PagingPolicy`].
 ///
 /// Cheap to clone (it's an `Arc`). Hold one per operator if you want per-site
@@ -269,11 +253,19 @@ impl ColumnPager {
                 // serialized and copied.
                 debug_assert_eq!(len_bytes % 8, 0);
                 let body: Vec<u64> = match std::mem::take(col) {
+                    // Move the aligned buffer straight into the pager: the
+                    // allocation transfers with no copy. `take` already left
+                    // `col` as a refill-ready `Typed` default.
                     Column::Align(v) => v,
-                    other => {
+                    mut other => {
                         let mut buf = Vec::with_capacity(len_bytes);
                         other.into_bytes(&mut buf);
                         debug_assert_eq!(buf.len() % 8, 0);
+                        // `into_bytes` only borrowed `other`; clear it in place
+                        // and hand it back so the caller keeps the `Typed`
+                        // allocation instead of us dropping a reusable buffer.
+                        other.clear();
+                        *col = other;
                         bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf)
                     }
                 };
@@ -295,7 +287,11 @@ impl ColumnPager {
                     col.into_bytes(&mut enc);
                     enc.finish().expect("lz4 finish into Vec is infallible");
                 }
-                *col = Column::default();
+                // `into_bytes` borrows `col`, so empty it explicitly now that
+                // its bytes live (compressed) in `out`. `clear` retains the
+                // `Typed` allocation so the caller can refill it, rather than
+                // dropping a buffer it may want to reuse.
+                col.clear();
                 self.policy.record(PageEvent::PagedOut {
                     bytes_in: len_bytes,
                     bytes_out: out.len(),
@@ -305,6 +301,11 @@ impl ColumnPager {
                 let inner = match backend {
                     Backend::Swap => CompressedInner::Memory(out),
                     Backend::File => {
+                        // The pager deals in `Vec<u64>`, so the framed bytes
+                        // must be widened. `out` is already compressed (~4x
+                        // smaller than the source), so this copy is over the
+                        // small form; avoiding it would mean a byte-oriented
+                        // pager entry point, not worth widening that surface.
                         let padded = pad_u8_to_u64(out);
                         let handle = pager::pageout_with(Backend::File, &mut [padded]);
                         CompressedInner::Paged(handle)
@@ -360,10 +361,6 @@ impl ColumnPager {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Reinterprets `bytes` as a `Vec<u64>` by trailing-zero padding to a multiple
 /// of 8 and copying. The lz4 frame trailer self-delimits so the trailing pad is
 /// invisible to [`FrameDecoder`].
@@ -382,10 +379,6 @@ fn pad_u8_to_u64(mut bytes: Vec<u8>) -> Vec<u64> {
     dst.copy_from_slice(&bytes);
     out
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[allow(clippy::clone_on_ref_ptr)]
