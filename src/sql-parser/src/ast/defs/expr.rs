@@ -394,7 +394,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnySubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -402,7 +402,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnyExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -410,7 +410,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllSubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -418,7 +418,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -524,6 +524,38 @@ fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: 
         f.write_str("(");
         f.write_node(expr);
         f.write_str(")");
+    }
+}
+
+/// Write `left` as the LHS of `<left> <op> ANY/ALL (...)`. The operator on
+/// the right is a binary infix op whose precedence will reach inside an
+/// already-low-precedence lhs (`Like`, `In*`, `Between`, `Is*`, `And`,
+/// `Or`, `Not`, nested `AnyExpr`/`AllExpr`) and reparse it as part of the
+/// quantified expression's left rather than as a wrapper around it.
+/// Parenthesize those; let normal infix `Op` use its existing precedence
+/// to print without parens.
+fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let needs_parens = matches!(
+        expr,
+        Expr::Like { .. }
+            | Expr::Between { .. }
+            | Expr::IsExpr { .. }
+            | Expr::InList { .. }
+            | Expr::InSubquery { .. }
+            | Expr::And { .. }
+            | Expr::Or { .. }
+            | Expr::Not { .. }
+            | Expr::AnyExpr { .. }
+            | Expr::AllExpr { .. }
+            | Expr::AnySubquery { .. }
+            | Expr::AllSubquery { .. }
+    );
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
     }
 }
 
