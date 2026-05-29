@@ -466,7 +466,7 @@ Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, filter
 parse-statement
 SHOW ALL
 ----
-SHOW "all"
+SHOW all
 =>
 Show(ShowVariable(ShowVariableStatement { variable: Ident("all") }))
 
