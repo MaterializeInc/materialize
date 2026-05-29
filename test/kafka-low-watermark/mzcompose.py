@@ -95,6 +95,14 @@ def workflow_low_watermark(c: Composition) -> None:
 > COMMIT
 {select_cmd} SELECT count(*) FROM lwm_{suffix}_tbl
 {expected}
+$ skip-if
+SELECT {"true" if not start_offset_clause else "false"}
+# Sleep for 20s to make sure that the source has not restarted (would happen after 5s)
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+{select_cmd} SELECT count(*) FROM lwm_{suffix}_tbl
+{expected}
+> SELECT count(*) FROM mz_internal.mz_source_status_history hx JOIN mz_catalog.mz_sources s ON hx.source_id = s.id WHERE s.name = 'lwm_{suffix}' AND hx.status = 'starting'
+1
 """)
         print(f"PASSED: {suffix} START OFFSET with low watermark > 0")
 
