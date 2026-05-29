@@ -75,12 +75,35 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 - Table names → `table_1`, `table_2`, ...
 - Column names → `column_1`, `column_2`, ...
 - View, materialized view, source, sink, connection names
-- All identifiers in `create_sql` definitions and queries
+- All identifier references in `create_sql` definitions and queries
+
+Identifier renaming is done on the parsed AST by `mz-sql-anonymize`, which
+renames whole identifier tokens. A text regex (the previous approach) corrupted
+SQL by matching identifiers as substrings or inside string literals; the AST
+does not.
 
 *Literals (`--literals`, enabled by default):*
-- String literals in SQL → `'literal_1'`, `'literal_2'`, ...
-- String default values in table/source/child columns
-- String literals in queries
+- Query SQL is redacted on the AST, replacing every literal — strings, numbers,
+  hex strings, intervals — with `'<REDACTED>'`.
+- `create_sql` strings (connection hosts/users, sink topics, source options,
+  column defaults) → `'literal_1'`, `'literal_2'`, ... via a blanket regex. The
+  AST is not used for these because option values like broker addresses are
+  typed fields the parser does not treat as redactable literals (the engine's
+  own redacted Display leaves them intact too).
+- Cluster sizing/replication and session/system config (`SET`/`RESET`/`ALTER
+  SYSTEM`, e.g. timeouts) are **preserved** — replay needs them and they are not
+  sensitive.
+
+**The parser binary is required by default**: if it is not built, the tool
+errors rather than fall back to the corruption-prone regex for everything. Pass
+`--no-require-parser` to allow that fallback. Individual statements that do not
+parse fall back to the regex with a warning regardless, and the verify pass
+still scans them.
+
+Build the helper once (required for the default `--require-parser` mode):
+```bash
+cargo build --release -p mz-sql-anonymize
+```
 
 **Usage:**
 ```bash
@@ -90,9 +113,12 @@ bin/mz-workload-anonymize <file> [OPTIONS]
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-o, --output` | Path to write output | overwrites input file |
+| `-o, --output` | Path to write output (`-` for stdout); required unless `--in-place` | — |
+| `--in-place` | Overwrite the input file (destroys the original capture) | off |
 | `--identifiers` / `--no-identifiers` | Anonymize object names | enabled |
-| `--literals` / `--no-literals` | Anonymize string literals | enabled |
+| `--literals` / `--no-literals` | Anonymize literals | enabled |
+| `--verify` / `--no-verify` | Re-scan output for leaks and refuse to write if any are found | enabled |
+| `--require-parser` / `--no-require-parser` | Require the parser for query literals; error rather than fall back to the weaker regex | enabled |
 
 **Examples:**
 ```bash
