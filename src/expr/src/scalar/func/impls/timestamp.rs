@@ -727,7 +727,8 @@ pub fn timezone_timestamp(
             }
         },
     };
-    DateTime::from_naive_utc_and_offset(dt - offset, Utc)
+    let dt = checked_sub_with_leapsecond(&dt, &offset).ok_or(EvalError::TimestampOutOfRange)?;
+    DateTime::from_naive_utc_and_offset(dt, Utc)
         .try_into()
         .err_into()
 }
@@ -753,6 +754,22 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
         None => return None,
     })
     .map(|dt| dt.with_nanosecond(nanos).unwrap())
+}
+
+/// Checked subtraction that is missing from chrono. Adapt its methods here but add a check.
+fn checked_sub_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
+    // extract and temporarily remove the fractional part and later recover it
+    let nanos = lhs.nanosecond();
+    let lhs = lhs.with_nanosecond(0).unwrap();
+    let rhs = rhs.local_minus_utc();
+    let dt = lhs.checked_sub_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
+    // See `checked_add_with_leapsecond` for why we have to special-case
+    // leap-second nanos that no longer land on `:59` after applying the offset.
+    if nanos >= 1_000_000_000 && dt.second() != 59 {
+        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
+    } else {
+        Some(dt.with_nanosecond(nanos).unwrap())
+    }
 }
 
 #[derive(
