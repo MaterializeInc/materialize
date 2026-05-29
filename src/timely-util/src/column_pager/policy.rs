@@ -21,11 +21,45 @@
 //! [`AtomicUsize`] and credited back from whichever thread happens to drop
 //! the column.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use mz_ore::pager::Backend;
 
 use crate::column_pager::{Codec, PageDecision, PageEvent, PageHint, PagingPolicy};
+
+const BACKEND_SWAP: u8 = 0;
+const BACKEND_FILE: u8 = 1;
+
+const CODEC_NONE: u8 = 0;
+const CODEC_LZ4: u8 = 1;
+
+fn encode_backend(b: Backend) -> u8 {
+    match b {
+        Backend::Swap => BACKEND_SWAP,
+        Backend::File => BACKEND_FILE,
+    }
+}
+
+fn decode_backend(v: u8) -> Backend {
+    match v {
+        BACKEND_FILE => Backend::File,
+        _ => Backend::Swap,
+    }
+}
+
+fn encode_codec(c: Option<Codec>) -> u8 {
+    match c {
+        None => CODEC_NONE,
+        Some(Codec::Lz4) => CODEC_LZ4,
+    }
+}
+
+fn decode_codec(v: u8) -> Option<Codec> {
+    match v {
+        CODEC_LZ4 => Some(Codec::Lz4),
+        _ => None,
+    }
+}
 
 /// A single-pool byte budget for resident columns.
 ///
@@ -58,10 +92,15 @@ use crate::column_pager::{Codec, PageDecision, PageEvent, PageHint, PagingPolicy
 /// granularity; if profiles show contention we can switch to chunk-sized
 /// reservations.
 pub struct TieredPolicy {
-    /// Remaining budget, in bytes, available for resident columns.
+    /// Remaining budget, in bytes, available for resident columns. Drains
+    /// on `decide` (Skip), refills on `record(ResidentReleased)`.
     budget: AtomicUsize,
-    backend: Backend,
-    codec: Option<Codec>,
+    /// Last-configured total. `reconfigure` adjusts `budget` by the delta
+    /// against this value so existing `ResidentTicket`s stay coherent with
+    /// the running budget after an operator-driven tune.
+    configured: AtomicUsize,
+    backend: AtomicU8,
+    codec: AtomicU8,
 }
 
 impl TieredPolicy {
@@ -71,15 +110,47 @@ impl TieredPolicy {
     pub fn new(total_budget: usize, backend: Backend, codec: Option<Codec>) -> Self {
         Self {
             budget: AtomicUsize::new(total_budget),
-            backend,
-            codec,
+            configured: AtomicUsize::new(total_budget),
+            backend: AtomicU8::new(encode_backend(backend)),
+            codec: AtomicU8::new(encode_codec(codec)),
         }
+    }
+
+    /// Adjust this policy in place. Budget moves by `new_total - prev_total`
+    /// so in-flight `ResidentTicket`s — which still credit this same atomic
+    /// when they drop — stay coherent with the resized pool. Backend and
+    /// codec selection take effect on the next [`PagingPolicy::decide`]
+    /// call.
+    ///
+    /// Shrinking the configured total below the in-flight resident set
+    /// saturates the available budget at zero; subsequent `decide` calls
+    /// page out until releases bring the pool back above zero.
+    pub fn reconfigure(&self, new_total: usize, backend: Backend, codec: Option<Codec>) {
+        let prev = self.configured.swap(new_total, Ordering::Relaxed);
+        if new_total > prev {
+            self.budget.fetch_add(new_total - prev, Ordering::Relaxed);
+        } else if prev > new_total {
+            let shrink = prev - new_total;
+            let _ = self
+                .budget
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                    Some(cur.saturating_sub(shrink))
+                });
+        }
+        self.backend
+            .store(encode_backend(backend), Ordering::Relaxed);
+        self.codec.store(encode_codec(codec), Ordering::Relaxed);
     }
 
     /// Returns the current remaining budget in bytes. Useful for metrics or
     /// tests.
     pub fn budget_remaining(&self) -> usize {
         self.budget.load(Ordering::Relaxed)
+    }
+
+    /// Returns the most-recently-configured total. Useful for tests.
+    pub fn configured_total(&self) -> usize {
+        self.configured.load(Ordering::Relaxed)
     }
 }
 
@@ -89,8 +160,8 @@ impl PagingPolicy for TieredPolicy {
             PageDecision::Skip
         } else {
             PageDecision::Page {
-                backend: self.backend,
-                codec: self.codec,
+                backend: decode_backend(self.backend.load(Ordering::Relaxed)),
+                codec: decode_codec(self.codec.load(Ordering::Relaxed)),
             }
         }
     }
@@ -216,6 +287,69 @@ mod tests {
             before,
             "cross-thread drop must credit the same global pool",
         );
+    }
+
+    /// Reconfigure preserves the in-flight resident set: tickets minted
+    /// against the old configured total still credit the same atomic when
+    /// they drop. Growing the configured total adds the delta; shrinking
+    /// subtracts saturating at zero.
+    #[mz_ore::test]
+    fn reconfigure_preserves_in_flight() {
+        let policy = Arc::new(TieredPolicy::new(4 * 1024, Backend::Swap, None));
+        let cp = ColumnPager::new(as_dyn(&policy));
+
+        // Hold one resident, consuming some budget.
+        let mut col = sample(256);
+        let p = cp.page(&mut col);
+        assert!(matches!(p, PagedColumn::Resident(_, _)));
+        let consumed = 4 * 1024 - policy.budget_remaining();
+        assert!(consumed > 0);
+
+        // Grow the pool by 8 KiB. Available budget should rise by the delta;
+        // configured total reflects the new size.
+        let before = policy.budget_remaining();
+        policy.reconfigure(4 * 1024 + 8 * 1024, Backend::Swap, None);
+        assert_eq!(policy.budget_remaining(), before + 8 * 1024);
+        assert_eq!(policy.configured_total(), 4 * 1024 + 8 * 1024);
+
+        // Drop the resident; the ticket credits the same atomic, even
+        // though the pool was resized in between.
+        drop(p);
+        assert_eq!(policy.budget_remaining(), 4 * 1024 + 8 * 1024);
+    }
+
+    /// Shrinking the configured total below available budget saturates at
+    /// zero rather than wrapping.
+    #[mz_ore::test]
+    fn reconfigure_shrink_saturates() {
+        let policy = Arc::new(TieredPolicy::new(1024, Backend::Swap, None));
+        // Shrink by more than the current available budget.
+        policy.reconfigure(0, Backend::Swap, None);
+        assert_eq!(policy.budget_remaining(), 0);
+        assert_eq!(policy.configured_total(), 0);
+    }
+
+    /// Backend / codec selection takes effect on the next decide.
+    #[mz_ore::test]
+    fn reconfigure_swaps_backend_and_codec() {
+        let policy = Arc::new(TieredPolicy::new(0, Backend::Swap, None));
+        let initial = policy.decide(PageHint { len_bytes: 1 });
+        assert!(matches!(
+            initial,
+            PageDecision::Page {
+                backend: Backend::Swap,
+                codec: None
+            }
+        ));
+        policy.reconfigure(0, Backend::File, Some(Codec::Lz4));
+        let updated = policy.decide(PageHint { len_bytes: 1 });
+        assert!(matches!(
+            updated,
+            PageDecision::Page {
+                backend: Backend::File,
+                codec: Some(Codec::Lz4),
+            }
+        ));
     }
 
     #[mz_ore::test]

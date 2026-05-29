@@ -32,10 +32,11 @@
 
 #![deny(missing_docs)]
 
+pub mod metrics;
 pub mod policy;
 
 use std::io::{self, Read};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use columnar::Columnar;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
@@ -186,6 +187,7 @@ pub struct ResidentTicket {
 
 impl Drop for ResidentTicket {
     fn drop(&mut self) {
+        metrics::observe_resident_released(self.bytes);
         self.policy
             .record(PageEvent::ResidentReleased { bytes: self.bytes });
     }
@@ -215,6 +217,113 @@ impl ColumnPager {
         Self { policy }
     }
 
+    /// Constructs a pager that never pages out: every [`page`] returns a
+    /// [`PagedColumn::Resident`] whose ticket discards release events. Useful
+    /// as a default when callers want a placeholder pager before injecting a
+    /// real policy.
+    ///
+    /// [`page`]: ColumnPager::page
+    pub fn disabled() -> Self {
+        Self::new(Arc::new(AlwaysResidentPolicy))
+    }
+}
+
+/// Policy that keeps every column resident and discards events. Backs
+/// [`ColumnPager::disabled`].
+struct AlwaysResidentPolicy;
+
+impl PagingPolicy for AlwaysResidentPolicy {
+    fn decide(&self, _hint: PageHint) -> PageDecision {
+        PageDecision::Skip
+    }
+    fn record(&self, _event: PageEvent) {}
+}
+
+//
+// Following the pager design doc's spirit (`doc/developer/design/20260504_pager.md`):
+// "the cluster runs on swap or file, not both at once; a global atomic
+// encodes that operational reality directly. A per-pager design would
+// either duplicate the global flag at the struct level or invite confusion
+// about which configuration wins."
+//
+// The lower-level `mz_ore::pager` already uses a global atomic for backend
+// selection. This module's policy/budget layer mirrors that shape: one
+// `ColumnPager` per process, swapped atomically when the controller changes
+// the configuration. Merge batchers clone the `Arc` inside on use; live
+// reinstalls take effect on the next call without per-thread coordination.
+
+/// Process-global active pager. Defaults to [`ColumnPager::disabled`]
+/// until worker init calls [`set_global_pager`].
+static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
+    LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+
+/// Install `pager` as the process-wide active pager. Subsequent
+/// [`global_pager`] calls return a clone of this value across all threads.
+///
+/// Prefer [`apply_tiered_config`] for the production path so the
+/// `TieredPolicy` budget atomic stays stable across reconfigures. Direct
+/// `set_global_pager` use is appropriate for tests, the disabled pager, or
+/// callers that intentionally want a fresh policy.
+pub fn set_global_pager(pager: ColumnPager) {
+    *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
+}
+
+/// Process-wide [`policy::TieredPolicy`] singleton.
+///
+/// Why a singleton: every `ResidentTicket` keeps an `Arc<dyn PagingPolicy>`
+/// pointing at the policy that decided to keep the column resident.
+/// Replacing the global `TieredPolicy` would orphan in-flight tickets onto
+/// the previous instance — they would credit a budget atomic that the new
+/// policy can no longer see, draining the new pool monotonically until it
+/// locks up on Page decisions. A persistent singleton with in-place
+/// [`policy::TieredPolicy::reconfigure`] sidesteps the issue: all tickets,
+/// past and present, share the same atomic.
+///
+/// Initialized eagerly with zero budget so [`metrics::register`] can read
+/// it during compute startup, before any [`apply_tiered_config`] call. The
+/// first config apply resizes the pool via `reconfigure`, which is the same
+/// path operator-driven tunes take.
+static TIERED_POLICY: LazyLock<Arc<policy::TieredPolicy>> =
+    LazyLock::new(|| Arc::new(policy::TieredPolicy::new(0, Backend::Swap, None)));
+
+/// Returns a reference to the process-wide [`policy::TieredPolicy`] singleton.
+pub fn tiered_policy() -> &'static policy::TieredPolicy {
+    &TIERED_POLICY
+}
+
+/// Apply a tiered-pager configuration. Reuses the singleton
+/// [`policy::TieredPolicy`] so in-flight `ResidentTicket`s remain coherent
+/// with the running budget after the operator tunes any of the inputs.
+///
+/// When `enabled` is true, installs a [`ColumnPager`] backed by the
+/// singleton policy. When false, installs [`ColumnPager::disabled`] —
+/// in-flight tickets still credit the singleton, which is harmless: the
+/// budget grows above the configured total until the next enable reconciles
+/// it via `reconfigure`.
+pub fn apply_tiered_config(
+    enabled: bool,
+    total_budget: usize,
+    backend: Backend,
+    codec: Option<Codec>,
+) {
+    let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
+    p.reconfigure(total_budget, backend, codec);
+    if enabled {
+        #[allow(clippy::clone_on_ref_ptr)]
+        let dyn_policy: Arc<dyn PagingPolicy> = p.clone();
+        set_global_pager(ColumnPager::new(dyn_policy));
+    } else {
+        set_global_pager(ColumnPager::disabled());
+    }
+}
+
+/// Returns the current global pager. Cheap: clones the inner `Arc<dyn
+/// PagingPolicy>`.
+pub fn global_pager() -> ColumnPager {
+    GLOBAL_PAGER.read().expect("global pager poisoned").clone()
+}
+
+impl ColumnPager {
     /// Drains `col` into a [`PagedColumn`]. After return `col` is left as a
     /// fresh `Column::default()` (typed, empty), ready to be refilled by the
     /// caller on the next loop iteration.
@@ -236,6 +345,7 @@ impl ColumnPager {
 
         let (backend, codec) = match self.policy.decide(hint) {
             PageDecision::Skip => {
+                metrics::observe_skip(len_bytes);
                 let ticket = ResidentTicket {
                     bytes: len_bytes,
                     policy: Arc::clone(&self.policy),
@@ -270,9 +380,11 @@ impl ColumnPager {
                     }
                 };
                 let handle = pager::pageout_with(backend, &mut [body]);
+                let bytes_out = handle.len_bytes();
+                metrics::observe_pageout(len_bytes, bytes_out);
                 self.policy.record(PageEvent::PagedOut {
                     bytes_in: len_bytes,
-                    bytes_out: handle.len_bytes(),
+                    bytes_out,
                     backend,
                     codec: None,
                 });
@@ -292,6 +404,7 @@ impl ColumnPager {
                 // `Typed` allocation so the caller can refill it, rather than
                 // dropping a buffer it may want to reuse.
                 col.clear();
+                metrics::observe_pageout(len_bytes, out.len());
                 self.policy.record(PageEvent::PagedOut {
                     bytes_in: len_bytes,
                     bytes_out: out.len(),
@@ -327,6 +440,7 @@ impl ColumnPager {
                 let mut body: Vec<u64> = Vec::with_capacity(handle.len());
                 pager::take(handle, &mut body);
                 debug_assert_eq!(body.len() * 8, meta.len_bytes);
+                metrics::observe_pagein(meta.len_bytes);
                 self.policy.record(PageEvent::PagedIn {
                     bytes: meta.len_bytes,
                 });
@@ -350,6 +464,7 @@ impl ColumnPager {
                     }
                 }
                 debug_assert_eq!(decoded.len(), meta.len_bytes);
+                metrics::observe_pagein(decoded.len());
                 self.policy.record(PageEvent::PagedIn {
                     bytes: decoded.len(),
                 });
