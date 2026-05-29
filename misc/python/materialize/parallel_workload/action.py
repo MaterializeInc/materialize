@@ -1530,11 +1530,6 @@ class FlipFlagsAction(Action):
             "10000",
             "100000",
         ]
-        self.flags_with_values["persist_committer_cache_refresh_interval"] = [
-            "'1s'",
-            "'5s'",
-            "'30s'",
-        ]
         self.flags_with_values["persist_committer_stats_heartbeat_interval"] = [
             "'0s'",
             "'5s'",

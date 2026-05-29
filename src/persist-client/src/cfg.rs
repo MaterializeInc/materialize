@@ -306,7 +306,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::PERSIST_CONSENSUS_USE_COMMITTER)
         .add(&crate::cfg::PERSIST_COMMITTER_CACHE_ENABLED)
         .add(&crate::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS)
-        .add(&crate::cfg::PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL)
         .add(&crate::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
@@ -419,14 +418,6 @@ pub const PERSIST_COMMITTER_MAX_CACHED_SHARDS: Config<usize> = Config::new(
     "persist_committer_max_cached_shards",
     10_000,
     "Maximum number of shards held in the persist committer's cache.",
-);
-
-/// Interval at which the committer re-reads subscribed shards from CRDB
-/// to bound staleness.
-pub const PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL: Config<Duration> = Config::new(
-    "persist_committer_cache_refresh_interval",
-    Duration::from_secs(5),
-    "TTL at which the persist committer refreshes subscribed shards.",
 );
 
 /// Interval between INFO-level stats heartbeat lines emitted by the

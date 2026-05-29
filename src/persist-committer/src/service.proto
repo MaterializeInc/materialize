@@ -108,21 +108,10 @@ message ProtoListKeysResponse {
   }
 }
 
-message ProtoSubscribeRequest {
-  string shard = 1;
-}
-message ProtoSubscribeMessage {
-  oneof kind {
-    ProtoVersionedData snapshot = 1;
-    ProtoVersionedData diff = 2;
-  }
-}
-
 service ProtoPersistConsensus {
   rpc Head(ProtoHeadRequest) returns (ProtoHeadResponse);
   rpc Scan(ProtoScanRequest) returns (ProtoScanResponse);
   rpc CompareAndSet(ProtoCompareAndSetRequest) returns (ProtoCompareAndSetResponse);
   rpc Truncate(ProtoTruncateRequest) returns (ProtoTruncateResponse);
   rpc ListKeys(ProtoListKeysRequest) returns (ProtoListKeysResponse);
-  rpc Subscribe(ProtoSubscribeRequest) returns (stream ProtoSubscribeMessage);
 }

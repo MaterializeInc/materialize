@@ -26,18 +26,15 @@ use tracing::{debug, info, warn};
 
 use crate::cache::ShardCache;
 use crate::metrics::CommitterMetrics;
-use crate::subscribe::SubscriberRegistry;
 
 /// In-envd persist consensus committer.
 ///
 /// Acts as a proxy over a backing `Consensus` implementation (typically
-/// `PostgresConsensus`) while maintaining a monotonic per-shard read cache
-/// and a per-shard subscriber broadcast.
+/// `PostgresConsensus`) while maintaining a monotonic per-shard read cache.
 #[derive(Debug)]
 pub struct PersistCommitter {
     consensus: Arc<dyn Consensus + Send + Sync>,
     cache: Arc<ShardCache>,
-    registry: Arc<SubscriberRegistry>,
     metrics: CommitterMetrics,
     /// Remote addresses of peers that have already produced at least one
     /// successful RPC. Used to gate the "Received Persist Committer
@@ -50,13 +47,11 @@ impl PersistCommitter {
     pub fn new(
         consensus: Arc<dyn Consensus + Send + Sync>,
         cache: Arc<ShardCache>,
-        registry: Arc<SubscriberRegistry>,
         metrics: CommitterMetrics,
     ) -> Self {
         Self {
             consensus,
             cache,
-            registry,
             metrics,
             seen_peers: Mutex::new(BTreeSet::new()),
         }
@@ -125,11 +120,11 @@ impl PersistCommitter {
 
     /// Forward a `compare_and_set` to the backing store.
     ///
-    /// On `Committed`, monotonic-merge the new value into the cache and publish
-    /// it to subscribers. On `ExpectationMismatch`, spawn a fire-and-forget
-    /// `head()` to refresh the cache so the caller's follow-up
-    /// `fetch_current_state` can be served from cache; the underlying trait
-    /// does not return current state on mismatch.
+    /// On `Committed`, monotonic-merge the new value into the cache. On
+    /// `ExpectationMismatch`, spawn a fire-and-forget `head()` to refresh the
+    /// cache so the caller's follow-up `fetch_current_state` can be served
+    /// from cache; the underlying trait does not return current state on
+    /// mismatch.
     #[tracing::instrument(level = "debug", skip(self, new), fields(seqno = ?new.seqno))]
     pub async fn cas_inner(
         &self,
@@ -142,8 +137,7 @@ impl PersistCommitter {
         match result {
             CaSResult::Committed => {
                 debug!(shard, seqno = ?new.seqno, "committer CaS committed");
-                self.cache.insert(shard, new.clone());
-                self.registry.publish(shard, new);
+                self.cache.insert(shard, new);
             }
             CaSResult::ExpectationMismatch => {
                 debug!(shard, seqno = ?new.seqno, "committer CaS mismatch, refreshing");
@@ -174,45 +168,19 @@ impl PersistCommitter {
         .await
     }
 
-    /// Register a subscriber for `shard`, returning the broadcast receiver and
-    /// the snapshot (current cached state) the caller should emit first.
-    ///
-    /// Registration order matters: we register the broadcast receiver *before*
-    /// reading the snapshot so that any CaS that commits during the snapshot
-    /// read is delivered as a diff rather than being dropped. The caller is
-    /// already required to dedup by seqno (since the snapshot may itself
-    /// include diffs we then redeliver), so the worst case is a duplicate,
-    /// not a missed update.
-    pub async fn subscribe_inner(
-        &self,
-        shard: &str,
-    ) -> Result<
-        (
-            Option<VersionedData>,
-            tokio::sync::broadcast::Receiver<VersionedData>,
-            crate::cache::SubscriberToken,
-        ),
-        ExternalError,
-    > {
-        let token = self.cache.subscribe(shard);
-        let rx = self.registry.register(shard);
-        let snapshot = self.head_inner(shard).await?;
-        Ok((snapshot, rx, token))
-    }
-
     /// Convenience accessor for tests and the in-process adapter.
     pub fn cache(&self) -> &Arc<ShardCache> {
         &self.cache
     }
 
-    /// Spawn a background `head()` to refresh the cache for `shard`. Failures
-    /// are logged and dropped; the TTL refresh task is the safety net.
-    /// `mismatch_at` is the moment the triggering CaS mismatch was observed,
-    /// used to record `cas_refresh_lag_seconds` on completion.
+    /// Spawn a background `head()` to refresh the cache for `shard` after a
+    /// CaS mismatch. Failures are logged and dropped; the next direct read
+    /// or successful CaS repopulates the cache. `mismatch_at` is the moment
+    /// the triggering CaS mismatch was observed, used to record
+    /// `cas_refresh_lag_seconds` on completion.
     fn spawn_refresh(&self, shard: String, mismatch_at: Instant) {
         let consensus = Arc::clone(&self.consensus);
         let cache = Arc::clone(&self.cache);
-        let registry = Arc::clone(&self.registry);
         let metrics = self.metrics.clone();
         spawn(|| "persist_committer::cas_mismatch_refresh", async move {
             let result = consensus.head(&shard).await;
@@ -221,12 +189,7 @@ impl PersistCommitter {
                 .observe(mismatch_at.elapsed().as_secs_f64());
             match result {
                 Ok(Some(v)) => {
-                    let prev = cache.get(&shard).map(|p| p.seqno);
-                    let new_seqno = v.seqno;
-                    cache.insert(&shard, v.clone());
-                    if Some(new_seqno) != prev {
-                        registry.publish(&shard, v);
-                    }
+                    cache.insert(&shard, v);
                 }
                 Ok(None) => {}
                 Err(e) => warn!(shard, error = %e, "cas_mismatch_refresh head failed"),
@@ -237,11 +200,7 @@ impl PersistCommitter {
 
 // gRPC service wiring.
 
-use std::pin::Pin;
-
 use bytes::Bytes;
-use futures::Stream;
-use tokio_stream::wrappers::BroadcastStream;
 use tonic::{Request, Response, Status, async_trait};
 
 use crate::proto::proto_persist_consensus_server::{
@@ -251,14 +210,10 @@ use crate::proto::{
     ProtoCompareAndSetOk, ProtoCompareAndSetRequest, ProtoCompareAndSetResponse, ProtoDeterminacy,
     ProtoHeadOk, ProtoHeadRequest, ProtoHeadResponse, ProtoListKeysOk, ProtoListKeysRequest,
     ProtoListKeysResponse, ProtoOperationError, ProtoScanOk, ProtoScanRequest, ProtoScanResponse,
-    ProtoSubscribeMessage, ProtoSubscribeRequest, ProtoTruncateOk, ProtoTruncateRequest,
-    ProtoTruncateResponse, ProtoVersionedData, proto_compare_and_set_response, proto_head_response,
-    proto_list_keys_response, proto_scan_response, proto_subscribe_message,
-    proto_truncate_response,
+    ProtoTruncateOk, ProtoTruncateRequest, ProtoTruncateResponse, ProtoVersionedData,
+    proto_compare_and_set_response, proto_head_response, proto_list_keys_response,
+    proto_scan_response, proto_truncate_response,
 };
-
-type SubscribeStream =
-    Pin<Box<dyn Stream<Item = std::result::Result<ProtoSubscribeMessage, Status>> + Send>>;
 
 fn to_proto(v: VersionedData) -> ProtoVersionedData {
     ProtoVersionedData {
@@ -450,45 +405,6 @@ impl ProtoPersistConsensus for PersistCommitter {
             result: Some(result),
         }))
     }
-
-    type SubscribeStream = SubscribeStream;
-
-    async fn subscribe(
-        &self,
-        request: Request<ProtoSubscribeRequest>,
-    ) -> std::result::Result<Response<Self::SubscribeStream>, Status> {
-        self.note_peer(request.remote_addr());
-        let shard = request.into_inner().shard;
-        // Subscribe still maps subscribe_inner failures to tonic::Status because
-        // the only failure mode is establishing the underlying read; once the
-        // stream is open, operation errors become an end-of-stream condition.
-        let (snapshot, rx, token) = self.subscribe_inner(&shard).await.map_err(|e| {
-            // Preserve determinacy through the message body; clients that care
-            // about retry semantics on Subscribe must re-establish anyway.
-            Status::internal(e.to_string())
-        })?;
-        let snapshot_proto = snapshot.map(to_proto).unwrap_or_default();
-        let stream = async_stream::try_stream! {
-            yield ProtoSubscribeMessage {
-                kind: Some(proto_subscribe_message::Kind::Snapshot(snapshot_proto)),
-            };
-            let mut rx = BroadcastStream::new(rx);
-            while let Some(item) = futures::StreamExt::next(&mut rx).await {
-                match item {
-                    Ok(v) => yield ProtoSubscribeMessage {
-                        kind: Some(proto_subscribe_message::Kind::Diff(to_proto(v))),
-                    },
-                    Err(_lagged) => {
-                        // Lagged: subscriber must resync via Head. Drop and continue.
-                        continue;
-                    }
-                }
-            }
-            // Token is moved into the stream and dropped when the stream ends.
-            drop(token);
-        };
-        Ok(Response::new(Box::pin(stream)))
-    }
 }
 
 impl PersistCommitter {
@@ -523,9 +439,8 @@ mod tests {
         let consensus_dyn: Arc<dyn Consensus + Send + Sync> =
             Arc::<MemConsensus>::clone(&consensus);
         let cache = Arc::new(ShardCache::new(100));
-        let registry = Arc::new(SubscriberRegistry::new());
         let metrics = CommitterMetrics::for_tests();
-        let committer = PersistCommitter::new(consensus_dyn, cache, registry, metrics);
+        let committer = PersistCommitter::new(consensus_dyn, cache, metrics);
         (consensus, committer)
     }
 
@@ -543,23 +458,16 @@ mod tests {
         let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
         let cache = Arc::new(ShardCache::new(100));
         cache.insert("s1", v(5, 0xCC));
-        let registry = Arc::new(SubscriberRegistry::new());
-        let committer =
-            PersistCommitter::new(consensus, cache, registry, CommitterMetrics::for_tests());
+        let committer = PersistCommitter::new(consensus, cache, CommitterMetrics::for_tests());
         let got = committer.head_inner("s1").await.unwrap();
         assert_eq!(got.unwrap().seqno, SeqNo(5));
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn cas_committed_updates_cache_and_publishes() {
+    async fn cas_committed_updates_cache() {
         let (_, committer) = fixture();
-        let mut sub = committer.registry.register("s1");
-
         let result = committer.cas_inner("s1", v(0, 0xAA)).await.unwrap();
         assert_eq!(result, CaSResult::Committed);
-
-        let pushed = sub.recv().await.unwrap();
-        assert_eq!(pushed.seqno, SeqNo(0));
 
         let head = committer.head_inner("s1").await.unwrap().unwrap();
         assert_eq!(head.seqno, SeqNo(0));

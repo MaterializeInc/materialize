@@ -9,7 +9,7 @@
 
 //! Wiring helper that bundles the moving parts of the committer into a single
 //! call site so that `environmentd` does not need to know the internal
-//! relationships between the cache, registry, refresh task, and tonic server.
+//! relationships between the cache and the tonic server.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,12 +23,10 @@ use crate::cache::ShardCache;
 use crate::heartbeat::spawn_heartbeat;
 use crate::in_process::InProcessConsensus;
 use crate::metrics::CommitterMetrics;
-use crate::refresh::spawn_refresh;
 use crate::server::PersistCommitter;
-use crate::subscribe::SubscriberRegistry;
 
 /// Handle returned by [`start_committer`]. Holding it keeps the gRPC server
-/// and refresh task alive; dropping it aborts both.
+/// and the heartbeat task alive; dropping it aborts both.
 #[derive(Debug)]
 pub struct CommitterHandle {
     /// An in-process `Consensus` adapter for `environmentd`'s own persist
@@ -40,7 +38,6 @@ pub struct CommitterHandle {
     /// not use it for envd's own persist traffic.
     pub loopback_channel: Channel,
     _server_task: mz_ore::task::AbortOnDropHandle<()>,
-    _refresh_task: mz_ore::task::AbortOnDropHandle<()>,
     _heartbeat_task: mz_ore::task::AbortOnDropHandle<()>,
 }
 
@@ -49,15 +46,14 @@ pub struct CommitterHandle {
 pub struct CommitterConfig {
     pub listen_addr: SocketAddr,
     pub max_cached_shards: usize,
-    pub cache_refresh_interval: Duration,
     /// Periodic stats-log interval. `Duration::ZERO` disables the heartbeat
     /// entirely; the task is still spawned but exits immediately.
     pub heartbeat_interval: Duration,
 }
 
 /// Build a `PersistCommitter` from `consensus`, start its gRPC server on the
-/// configured listen address, spawn the cache refresh task, and return a
-/// loopback channel for use by `environmentd` itself.
+/// configured listen address, and return a loopback channel for use by
+/// `environmentd` itself.
 ///
 /// `listen_addr` is the TCP address the committer's gRPC server binds. The
 /// returned loopback channel points at `http://127.0.0.1:<port>` (lazy
@@ -69,27 +65,18 @@ pub fn start_committer(
     config: CommitterConfig,
 ) -> anyhow::Result<CommitterHandle> {
     let cache = Arc::new(ShardCache::new(config.max_cached_shards));
-    let registry = Arc::new(SubscriberRegistry::new());
     let committer = Arc::new(PersistCommitter::new(
         Arc::clone(&consensus),
         Arc::clone(&cache),
-        Arc::clone(&registry),
         metrics.clone(),
     ));
 
-    let refresh_task = spawn_refresh(
-        Arc::clone(&consensus),
-        Arc::clone(&cache),
-        registry,
-        config.cache_refresh_interval,
-    );
     let heartbeat_task = spawn_heartbeat(metrics, config.heartbeat_interval);
 
     let listen_addr = config.listen_addr;
     tracing::info!(
         listen_addr = %listen_addr,
         max_cached_shards = config.max_cached_shards,
-        cache_refresh_interval = ?config.cache_refresh_interval,
         "persist committer starting",
     );
     let in_process_consensus: Arc<dyn Consensus + Send + Sync> =
@@ -115,7 +102,6 @@ pub fn start_committer(
         in_process_consensus,
         loopback_channel,
         _server_task: server_task.abort_on_drop(),
-        _refresh_task: refresh_task.abort_on_drop(),
         _heartbeat_task: heartbeat_task.abort_on_drop(),
     })
 }

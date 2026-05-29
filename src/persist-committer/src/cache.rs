@@ -14,11 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use mz_persist::location::VersionedData;
 
-/// Per-shard cached state plus a refcount of active subscribers.
+/// Per-shard cached state. The cache self-corrects only via the
+/// CaS-mismatch refresh path; there is no subscriber-driven freshness loop,
+/// so entries carry only a monotonic value and an LRU access tick.
 #[derive(Debug)]
 pub struct CachedState {
     pub current: Option<VersionedData>,
-    pub subscribers: usize,
     /// Monotonically increasing access tick used by LRU eviction.
     pub last_access: u64,
 }
@@ -64,31 +65,6 @@ impl ShardCache {
         guard.current.clone()
     }
 
-    pub fn subscribe(&self, shard: &str) -> SubscriberToken {
-        let entry = self.entry(shard);
-        {
-            let mut guard = entry.lock().expect("ShardCache lock poisoned");
-            guard.subscribers += 1;
-        }
-        SubscriberToken { entry }
-    }
-
-    pub fn shards_with_subscribers(&self) -> Vec<String> {
-        let inner = self.inner.lock().expect("ShardCache lock poisoned");
-        inner
-            .map
-            .iter()
-            .filter_map(|(k, v)| {
-                let g = v.lock().expect("ShardCache lock poisoned");
-                if g.subscribers > 0 {
-                    Some(k.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
     fn entry(&self, shard: &str) -> Arc<Mutex<CachedState>> {
         let mut inner = self.inner.lock().expect("ShardCache lock poisoned");
         if let Some(e) = inner.map.get(shard) {
@@ -100,7 +76,6 @@ impl ShardCache {
         let tick = inner.tick;
         let entry = Arc::new(Mutex::new(CachedState {
             current: None,
-            subscribers: 0,
             last_access: tick,
         }));
         inner.map.insert(shard.to_string(), Arc::clone(&entry));
@@ -111,13 +86,9 @@ impl ShardCache {
         let victim = inner
             .map
             .iter()
-            .filter_map(|(k, v)| {
+            .map(|(k, v)| {
                 let g = v.lock().expect("ShardCache lock poisoned");
-                if g.subscribers == 0 {
-                    Some((k.clone(), g.last_access))
-                } else {
-                    None
-                }
+                (k.clone(), g.last_access)
             })
             .min_by_key(|(_, tick)| *tick)
             .map(|(k, _)| k);
@@ -130,17 +101,6 @@ impl ShardCache {
         let mut inner = self.inner.lock().expect("ShardCache lock poisoned");
         inner.tick += 1;
         inner.tick
-    }
-}
-
-pub struct SubscriberToken {
-    entry: Arc<Mutex<CachedState>>,
-}
-
-impl Drop for SubscriberToken {
-    fn drop(&mut self) {
-        let mut guard = self.entry.lock().expect("ShardCache lock poisoned");
-        guard.subscribers = guard.subscribers.saturating_sub(1);
     }
 }
 
@@ -174,23 +134,14 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn lru_evicts_unsubscribed() {
+    fn lru_evicts_oldest() {
         let c = ShardCache::new(2);
         c.insert("a", v(1));
         c.insert("b", v(1));
         c.insert("c", v(1));
+        // "a" is the least-recently-accessed entry and must be evicted.
+        assert!(c.get("a").is_none());
+        assert!(c.get("b").is_some());
         assert!(c.get("c").is_some());
-        let surviving = usize::from(c.get("a").is_some()) + usize::from(c.get("b").is_some());
-        assert_eq!(surviving, 1);
-    }
-
-    #[mz_ore::test]
-    fn subscribers_pin_cache_entry() {
-        let c = ShardCache::new(2);
-        let _token = c.subscribe("a");
-        c.insert("a", v(1));
-        c.insert("b", v(1));
-        c.insert("c", v(1));
-        assert!(c.get("a").is_some());
     }
 }

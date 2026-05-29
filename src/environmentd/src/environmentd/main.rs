@@ -1106,9 +1106,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             listen_addr: args.internal_persist_committer_listen_addr,
             max_cached_shards: mz_persist_client::cfg::PERSIST_COMMITTER_MAX_CACHED_SHARDS
                 .get(&persist_clients.cfg().configs),
-            cache_refresh_interval:
-                mz_persist_client::cfg::PERSIST_COMMITTER_CACHE_REFRESH_INTERVAL
-                    .get(&persist_clients.cfg().configs),
             heartbeat_interval: mz_persist_client::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL
                 .get(&persist_clients.cfg().configs),
         };

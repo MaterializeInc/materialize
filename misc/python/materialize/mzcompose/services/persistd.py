@@ -33,7 +33,6 @@ class Persistd(Service):
         ),
         listen_port: int = 6882,
         max_cached_shards: int = 10000,
-        cache_refresh_interval: str = "5s",
         stats_heartbeat_interval: str = "30s",
         command: list[str] | None = None,
         depends_on: list[str] = [],
@@ -44,7 +43,6 @@ class Persistd(Service):
                 f"--listen-addr=0.0.0.0:{listen_port}",
                 f"--consensus-url={consensus_url}",
                 f"--max-cached-shards={max_cached_shards}",
-                f"--cache-refresh-interval={cache_refresh_interval}",
                 f"--stats-heartbeat-interval={stats_heartbeat_interval}",
             ]
 

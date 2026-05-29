@@ -63,16 +63,6 @@ struct Args {
     #[clap(long, env = "MAX_CACHED_SHARDS", default_value = "10000")]
     max_cached_shards: usize,
 
-    /// TTL at which the committer re-reads subscribed shards from the
-    /// backing store. Mirrors `persist_committer_cache_refresh_interval`.
-    #[clap(
-        long,
-        env = "CACHE_REFRESH_INTERVAL",
-        value_parser = humantime_duration_parser,
-        default_value = "5s",
-    )]
-    cache_refresh_interval: Duration,
-
     /// Interval between INFO-level stats heartbeat lines. `0s` disables.
     #[clap(
         long,
@@ -151,7 +141,6 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
     let committer_config = CommitterConfig {
         listen_addr: args.listen_addr,
         max_cached_shards: args.max_cached_shards,
-        cache_refresh_interval: args.cache_refresh_interval,
         heartbeat_interval: args.stats_heartbeat_interval,
     };
     let _handle = start_committer(consensus, committer_metrics, committer_config)

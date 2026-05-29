@@ -16,8 +16,8 @@ use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 /// Metrics exposed by an in-envd `PersistCommitter` instance.
 #[derive(Clone, Debug)]
 pub struct CommitterMetrics {
-    /// Total RPCs, labeled by op (head, scan, cas, truncate, list_keys,
-    /// subscribe) and result (ok, mismatch, err_determinate, err_indeterminate).
+    /// Total RPCs, labeled by op (head, scan, cas, truncate, list_keys) and
+    /// result (ok, committed, mismatch, err_determinate, err_indeterminate).
     pub rpc_total: IntCounterVec,
     /// End-to-end RPC latency, including cache lookup and any wait inside
     /// the committer. Labeled by op.

@@ -7219,7 +7219,6 @@ name = "mz-persist-committer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
  "bytes",
  "futures",
@@ -7233,7 +7232,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
