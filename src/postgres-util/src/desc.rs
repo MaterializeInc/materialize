@@ -257,14 +257,20 @@ impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
     }
 
     fn from_proto(proto: ProtoPostgresKeyDesc) -> Result<Self, TryFromProtoError> {
+        // `cols` is `Vec<u16>` on the Rust side but `Vec<u32>` on the wire;
+        // a u32 value above 65535 used to panic via `.expect`, which is
+        // reachable from untrusted proto bytes.
+        let cols = proto
+            .cols
+            .into_iter()
+            .map(|c| {
+                u16::try_from(c).map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PostgresKeyDesc {
             oid: proto.oid,
             name: proto.name,
-            cols: proto
-                .cols
-                .into_iter()
-                .map(|c| c.try_into().expect("values roundtrip"))
-                .collect(),
+            cols,
             is_primary: proto.is_primary,
             nulls_not_distinct: proto.nulls_not_distinct,
         })
