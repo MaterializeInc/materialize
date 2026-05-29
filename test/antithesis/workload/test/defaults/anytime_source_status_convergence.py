@@ -164,9 +164,9 @@ def main() -> int:
             if status in _HEALTHY:
                 # Recovery transition: previously unhealthy → now healthy.
                 prev_unhealthy = last_unhealthy_at.get(key)
-                if prev_unhealthy is not None and prev_unhealthy[0] > last_healthy_at.get(
-                    key, 0.0
-                ):
+                if prev_unhealthy is not None and prev_unhealthy[
+                    0
+                ] > last_healthy_at.get(key, 0.0):
                     ever_recovered = True
                 last_healthy_at[key] = now
             else:
