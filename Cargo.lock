@@ -6433,6 +6433,7 @@ dependencies = [
  "tokio-metrics",
  "tokio-postgres",
  "tokio-stream",
+ "tonic",
  "tower",
  "tower-http",
  "tower-sessions",

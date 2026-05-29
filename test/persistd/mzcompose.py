@@ -27,12 +27,13 @@ SERVICES = [
         additional_system_parameter_defaults={
             "persist_consensus_use_committer": "true",
         },
+        # Materialized would otherwise auto-attach its own paired Persistd
+        # companion. Disable it here so this composition exercises the
+        # explicitly-configured standalone persistd container declared in
+        # SERVICES above.
+        external_persist_committer=False,
         depends_on=["persistd"],
         environment_extra=[
-            # Point both envd and clusterd subprocesses at the standalone
-            # persistd container. MZ_EXTERNAL_PERSIST_COMMITTER tells envd
-            # to skip its own in-process committer and dial this URL as a
-            # client, so all consensus traffic funnels through persistd.
             "MZ_PERSIST_COMMITTER_URL=http://persistd:6882",
             "MZ_EXTERNAL_PERSIST_COMMITTER=true",
         ],
