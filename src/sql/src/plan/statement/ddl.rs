@@ -5356,8 +5356,10 @@ pub fn plan_drop_objects(
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
             UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
+                // Defer the dependency check until all names are resolved, so a
+                // dependent that is itself being dropped in this same statement
+                // does not block a non-cascade drop.
+                plan_drop_item_name(scx, object_type, if_exists, name.clone())?.map(ObjectId::Item)
             }
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
@@ -5371,6 +5373,24 @@ pub fn plan_drop_objects(
             }),
         }
     }
+
+    // Now that the full set of explicitly-named items is known, run the
+    // non-cascade dependency check. A dependent that is itself being dropped in
+    // this statement does not block the drop, matching PostgreSQL.
+    if !cascade {
+        let dropped_items: BTreeSet<CatalogItemId> = referenced_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in &dropped_items {
+            let catalog_item = scx.catalog.get_item(id);
+            ensure_no_blocking_dependents(scx, object_type, catalog_item, &dropped_items)?;
+        }
+    }
+
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan {
@@ -5507,6 +5527,25 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<CatalogItemId>, PlanError> {
+    let Some(id) = plan_drop_item_name(scx, object_type, if_exists, name)? else {
+        return Ok(None);
+    };
+    if !cascade {
+        let catalog_item = scx.catalog.get_item(&id);
+        ensure_no_blocking_dependents(scx, object_type, catalog_item, &BTreeSet::new())?;
+    }
+    Ok(Some(id))
+}
+
+/// Resolves `name` to the [`CatalogItemId`] of the item to drop, performing the
+/// system-object check but *not* the dependency check. Returns `None` if the
+/// item does not exist and `if_exists` is set.
+fn plan_drop_item_name(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5529,31 +5568,44 @@ fn plan_drop_item(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-
-            if !cascade {
-                for id in catalog_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(object_type, dep) {
-                        return Err(PlanError::DependentObjectsStillExist {
-                            object_type: catalog_item.item_type().to_string(),
-                            object_name: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            dependents: vec![(
-                                dep.item_type().to_string(),
-                                scx.catalog.minimal_qualification(dep.name()).to_string(),
-                            )],
-                        });
-                    }
-                }
-                // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                //  relies on entry. Unfortunately, we don't have that information readily available.
-            }
             Some(catalog_item.id())
         }
         None => None,
     })
+}
+
+/// Errors if dropping `catalog_item` would leave a dangling dependent, i.e. an
+/// object that depends on it and is not itself being dropped. Dependents whose
+/// ids are in `also_dropped` are ignored, since they are being dropped as part
+/// of the same statement.
+fn ensure_no_blocking_dependents(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    catalog_item: &dyn CatalogItem,
+    also_dropped: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in catalog_item.used_by() {
+        if also_dropped.contains(id) {
+            continue;
+        }
+        let dep = scx.catalog.get_item(id);
+        if dependency_prevents_drop(object_type, dep) {
+            return Err(PlanError::DependentObjectsStillExist {
+                object_type: catalog_item.item_type().to_string(),
+                object_name: scx
+                    .catalog
+                    .minimal_qualification(catalog_item.name())
+                    .to_string(),
+                dependents: vec![(
+                    dep.item_type().to_string(),
+                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                )],
+            });
+        }
+    }
+    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+    //  relies on entry. Unfortunately, we don't have that information readily available.
+    Ok(())
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
