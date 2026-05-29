@@ -138,7 +138,16 @@ pub fn set_backend(b: Backend) {
 ///
 /// Panics on I/O failure. Use [`try_pageout`] to surface the error.
 pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
-    match backend() {
+    pageout_with(backend(), chunks)
+}
+
+/// Same as [`pageout`], but selects the backend explicitly. Bypasses the global
+/// atomic so callers (such as the column-pager layer) can dispatch per call
+/// without racing other writers.
+///
+/// Panics on I/O failure. Use [`try_pageout_with`] to surface the error.
+pub fn pageout_with(b: Backend, chunks: &mut [Vec<u64>]) -> Handle {
+    match b {
         Backend::Swap => swap::pageout_swap(chunks),
         Backend::File => file::pageout_file(chunks),
     }
@@ -148,7 +157,12 @@ pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
 /// instead of panicking. The swap backend cannot fail at I/O, so this is
 /// equivalent to `Ok(pageout(chunks))` when [`backend`] is [`Backend::Swap`].
 pub fn try_pageout(chunks: &mut [Vec<u64>]) -> std::io::Result<Handle> {
-    match backend() {
+    try_pageout_with(backend(), chunks)
+}
+
+/// Fallible counterpart to [`pageout_with`].
+pub fn try_pageout_with(b: Backend, chunks: &mut [Vec<u64>]) -> std::io::Result<Handle> {
+    match b {
         Backend::Swap => Ok(swap::pageout_swap(chunks)),
         Backend::File => file::try_pageout_file(chunks),
     }
