@@ -15,6 +15,8 @@
 //! service. Useful for isolating consensus traffic, for separately
 //! provisioning the committer pool, and as a stepping stone toward fully
 //! moving persist out of `environmentd`.
+//!
+//! See `doc/developer/design/20260527_persist_committer.md`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
