@@ -2,7 +2,7 @@
 {{- $column := .Get "column" -}}
 {{- $label := .Get "label" -}}
 {{- $pathArray := split (lower (.Get "data")) "/" -}}
-{{- $data := $.Site.Data -}}
+{{- $data := hugo.Data -}}
 {{- range $pathArray -}}
   {{- $data = index $data . -}}
 {{- end -}}

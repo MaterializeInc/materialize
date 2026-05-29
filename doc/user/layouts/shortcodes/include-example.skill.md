@@ -1,6 +1,6 @@
 {{- /* Skill output: include-example renders code examples from YAML */ -}}
 {{- $pathArray := split (lower (.Get "file")) "/" -}}
-{{- $data := .Site.Data -}}
+{{- $data := hugo.Data -}}
 {{- range $pathArray }}
   {{- $data = index $data . -}}
 {{- end }}

@@ -9,7 +9,7 @@
   {{- errorf "operator-table shortcode requires a 'planType' parameter" -}}
 {{- end -}}
 
-{{- $data := index $.Site.Data $dataFile -}}
+{{- $data := index hugo.Data $dataFile -}}
 
 {{- $filteredOperators := slice -}}
 {{- range $data.operators -}}

@@ -5,7 +5,7 @@
   {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
 {{end}}
 
-{{ range $.Site.Data.sql_funcs }}
+{{ range hugo.Data.sql_funcs }}
 
 {{ if not (isset $.Params 0) }}
 
@@ -84,7 +84,7 @@ in some way.  */}}
 
 {{end}}
 
-{{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}
+{{ end }}{{/*  {{ range hugo.Data.sql_funcs }} */}}
 
 {{/*  When someone is deeplinked to a td on the page, highlight the tr  */}}
 <script type="text/javascript">

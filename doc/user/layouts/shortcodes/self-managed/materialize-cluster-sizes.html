@@ -12,7 +12,7 @@ following default resource allocations:
 </tr>
 </thead>
 <tbody>
-{{ range $.Site.Data.self_managed.self_managed_cluster_sizes.cluster_sizes }}
+{{ range hugo.Data.self_managed.self_managed_cluster_sizes.cluster_sizes }}
 <tr>
 <td><code>{{ .size }}</code></td>
 <td><code>{{ .scale }}</code></td>

@@ -5,7 +5,7 @@
   {{- $releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) -}}
 {{- end -}}
 
-{{- range $.Site.Data.sql_funcs -}}
+{{- range hugo.Data.sql_funcs -}}
 
 {{- if not (isset $.Params 0) -}}
 

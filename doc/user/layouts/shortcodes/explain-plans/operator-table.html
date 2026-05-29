@@ -1,6 +1,6 @@
 {{ $dataFile := .Get "data" }}
 {{ $planType := .Get "planType" }}
-{{ $data := index $.Site.Data $dataFile }}
+{{ $data := index hugo.Data $dataFile }}
 
 {{ $filteredOperators := slice }}
 {{ range $data.operators }}

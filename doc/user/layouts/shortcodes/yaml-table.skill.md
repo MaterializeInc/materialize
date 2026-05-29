@@ -2,7 +2,7 @@
 {{- $pathArray := split (lower (.Get "data")) "/" -}}
 {{- $noHeader := .Get "noHeader" -}}
 {{- $columnsParam := .Get "columns" -}}
-{{- $data := $.Site.Data -}}
+{{- $data := hugo.Data -}}
 {{- range $pathArray }}
   {{- $data = index $data . -}}
 {{- end }}

@@ -1,6 +1,6 @@
 <table border="1" style="width:100%; border-collapse: collapse;">
     <tr>
-        {{ range $index, $item := $.Site.Data.self_managed.self_managed_cluster_sizes.cluster_sizes }}
+        {{ range $index, $item := hugo.Data.self_managed.self_managed_cluster_sizes.cluster_sizes }}
             {{ if eq (mod $index 3) 0 }}
                 </tr><tr>
             {{ end }}

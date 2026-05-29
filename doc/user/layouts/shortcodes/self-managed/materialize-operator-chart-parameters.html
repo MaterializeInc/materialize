@@ -1,5 +1,5 @@
 {{- $headings := slice -}}
-{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter }}
+{{ range hugo.Data.self_managed.materialize_operator_chart_parameter }}
 
 
 {{ $parts := split .key "." }}

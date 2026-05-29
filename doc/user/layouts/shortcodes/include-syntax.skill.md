@@ -1,6 +1,6 @@
 {{- /* Skill output: include-syntax renders code block and markdown table */ -}}
 {{- $pathArray := split (lower (.Get "file")) "/" -}}
-{{- $data := .Site.Data -}}
+{{- $data := hugo.Data -}}
 {{- range $pathArray }}
   {{- $data = index $data . -}}
 {{- end }}

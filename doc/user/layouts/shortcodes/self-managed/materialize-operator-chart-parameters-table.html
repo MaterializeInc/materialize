@@ -8,7 +8,7 @@
 </tr>
 </thead>
 <tbody>
-{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter }}
+{{ range hugo.Data.self_managed.materialize_operator_chart_parameter }}
 <tr>
 <td><a href='#{{ replace .key "." "" | urlize}}'><code>{{ .key }}</code></a></td>
 <td>

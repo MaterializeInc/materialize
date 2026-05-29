@@ -4,7 +4,7 @@
 {{- $additional_data := .Get "additional_data" | default "" -}}
 
 {{ $pathArray := split ("mysql_config_settings") "/" }}
-{{ $data := $.Site.Data }}
+{{ $data := hugo.Data }}
 
 {{ range $pathArray }}
   {{ $data = index $data . }}
