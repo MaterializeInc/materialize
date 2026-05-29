@@ -80,11 +80,12 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 *Literals (`--literals`, enabled by default):*
 - Query SQL is redacted with Materialize's own parser (`mz-sql-anonymize`),
   replacing all literals — strings, numbers, hex strings, intervals — with
-  `'<REDACTED>'`. **This is required by default**: if the helper binary is not
-  built, or a captured statement does not parse, the tool errors instead of
-  silently producing weaker output. Pass `--no-require-parser` to fall back to
-  a regex that only catches single-quoted strings (missing numbers,
-  dollar-quoted strings, and comments).
+  `'<REDACTED>'`. **The parser binary is required by default**: if it is not
+  built, the tool errors instead of silently redacting every query with the
+  weaker regex. Pass `--no-require-parser` to allow that regex fallback (it
+  only catches single-quoted strings, missing numbers, dollar-quoted strings,
+  and comments). Individual statements that do not parse fall back to the regex
+  with a warning regardless, and the verify pass still scans them.
 - `create_sql` strings (including connection hosts/users, sink topics, source
   options, and column defaults) → `'literal_1'`, `'literal_2'`, ... via regex.
   The parser is not used here because `to_ast_string_redacted()` intentionally

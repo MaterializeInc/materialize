@@ -581,10 +581,12 @@ def main() -> int:
     # strings, intervals, dollar-quoted and escape strings) where the regex only
     # caught single-quoted strings.
     #
-    # By default (--require-parser) the regex is NOT an acceptable substitute:
-    # if the parser binary is unavailable, or any individual statement does not
-    # parse, the tool errors rather than silently emitting weaker redaction.
-    # --no-require-parser opts into the regex fallback for those cases.
+    # --require-parser gates only the wholesale case: if the parser binary is
+    # unavailable, the tool errors rather than silently redacting every query
+    # with the weaker regex. Individual statements that do not parse fall back
+    # to the regex with a warning either way (this is a property of the captured
+    # SQL, not of whether the parser is present), and the verify pass still
+    # scans the result.
     if query_literal_targets:
         sqls = [q["sql"] for q in query_literal_targets]
         redacted = redact_literals_via_parser(sqls)
@@ -610,16 +612,14 @@ def main() -> int:
                 q["sql"] = anonymize_literals_in_sql(q["sql"])
         else:
             unparsed = [i for i, red in enumerate(redacted) if red is None]
-            if unparsed and args.require_parser:
+            if unparsed:
                 print(
-                    f"error: mz-sql-anonymize could not parse {len(unparsed)} of "
-                    f"{len(redacted)} captured queries, so their literals cannot "
-                    "be redacted with the parser. Pass --no-require-parser to "
-                    "redact these with the weaker regex instead (it only handles "
-                    "single-quoted strings).",
+                    f"warning: mz-sql-anonymize could not parse {len(unparsed)} of "
+                    f"{len(redacted)} captured queries; falling back to the regex "
+                    "for those (it only redacts single-quoted strings). The verify "
+                    "pass still scans them.",
                     file=sys.stderr,
                 )
-                return 1
             for q, red in zip(query_literal_targets, redacted):
                 q["sql"] = (
                     red if red is not None else anonymize_literals_in_sql(q["sql"])
