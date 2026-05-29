@@ -2734,7 +2734,6 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
 
 #[sqlfunc(
     output_type = "Option<i32>",
-    is_infix_op = true,
     sqlname = "array_lower",
     propagates_nulls = true,
     introduces_nulls = true
@@ -2791,7 +2790,6 @@ fn array_remove<'a>(
 
 #[sqlfunc(
     output_type = "Option<i32>",
-    is_infix_op = true,
     sqlname = "array_upper",
     propagates_nulls = true,
     introduces_nulls = true

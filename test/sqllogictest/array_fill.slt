@@ -374,7 +374,6 @@ ORDER BY o, i;
 0	0	null
 
 # array_lower/array_upper must respect the lower bounds of the array
-# (https://github.com/MaterializeInc/database-issues/issues/11278).
 
 query I
 SELECT array_lower(array_fill(0, ARRAY[3], ARRAY[5]), 1);
