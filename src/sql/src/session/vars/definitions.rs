@@ -2235,7 +2235,7 @@ feature_flags!(
     // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
     {
         name: enable_will_distinct_propagation,
-        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1.",
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
         default: true,
         enable_for_item_parsing: false,
     },

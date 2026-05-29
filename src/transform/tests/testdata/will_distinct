@@ -1,0 +1,125 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Focused regression tests for the WillDistinct transform's generalized
+# propagation, gated behind `enable_will_distinct_propagation`. Each test plants
+# an inner `Distinct` (a Reduce with no aggregates) that is shadowed by an outer
+# `Distinct` through exactly one intermediate operator. When propagation reaches
+# the inner Distinct it is rewritten away into a Map+Project, so the presence or
+# absence of an inner `Reduce`/`Distinct` node in the output tells us whether the
+# arm fired.
+
+cat
+(defsource x ([int64 int64] [[0]]))
+----
+ok
+
+# ---------------------------------------------------------------------------
+# TopK, limit 1, offset 0: masks magnitudes like a Distinct, so the inner
+# Distinct is redundant and is removed when the flag is on.
+# ---------------------------------------------------------------------------
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (top_k (reduce (get x) [#0 #1] []) [] [#0] 1 0) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  TopK order_by=[#0 asc nulls_first] limit=1
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# NEGATIVE (locks in the #1 fix): TopK limit 1 OFFSET 5. Which row survives
+# depends on the cumulative multiplicities of the skipped rows, so the inner
+# Distinct must NOT be removed even with the flag on.
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (top_k (reduce (get x) [#0 #1] []) [] [#0] 1 5) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  TopK order_by=[#0 asc nulls_first] limit=1 offset=5
+    Distinct project=[#0, #1]
+      Get x
+
+# CONTROL: with the flag OFF, the generalized TopK arm is inert and the inner
+# Distinct survives even for limit 1 offset 0 (reproduces historic behavior).
+build apply=WillDistinct
+(reduce (top_k (reduce (get x) [#0 #1] []) [] [#0] 1 0) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  TopK order_by=[#0 asc nulls_first] limit=1
+    Distinct project=[#0, #1]
+      Get x
+
+# ---------------------------------------------------------------------------
+# Sign-preserving unary operators: inner Distinct removed when flag is on.
+# ---------------------------------------------------------------------------
+
+# Map
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (map (reduce (get x) [#0 #1] []) [(call_binary add_int64 #0 #1)]) [#0 #1 #2] [])
+----
+Distinct project=[#0..=#2]
+  Map ((#0 + #1))
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# Filter
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (filter (reduce (get x) [#0 #1] []) [(call_binary gt #0 #1)]) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  Filter (#0 > #1)
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# Negate
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (negate (reduce (get x) [#0 #1] [])) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  Negate
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# Threshold
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (threshold (reduce (get x) [#0 #1] [])) [#0 #1] [])
+----
+Distinct project=[#0, #1]
+  Threshold
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# ---------------------------------------------------------------------------
+# Project requires a non-negative input. Over a plain (non-negative) Distinct
+# the inner Distinct is removed; under a Negate (negative) it is preserved
+# because two rows could collapse to one with cancelling signs.
+# ---------------------------------------------------------------------------
+
+# Non-negative Project: removed.
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (project (reduce (get x) [#0 #1] []) [#0]) [#0] [])
+----
+Distinct project=[#0]
+  Project (#0)
+    Project (#2, #3)
+      Map (#0, #1)
+        Get x
+
+# Project over a Negate (negative input): preserved.
+build apply=WillDistinct enable_will_distinct_propagation=true
+(reduce (project (negate (reduce (get x) [#0 #1] [])) [#0]) [#0] [])
+----
+Distinct project=[#0]
+  Project (#0)
+    Negate
+      Distinct project=[#0, #1]
+        Get x

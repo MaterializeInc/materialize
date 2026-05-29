@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Transform that allows expressions to arbitarily vary the magnitude of the multiplicity of each row.
+//! Transform that allows expressions to arbitrarily vary the magnitude of the multiplicity of each row.
 //!
 //! This is most commonly from a `Distinct` operation, which flattens all positive multiplicities to one.
 //! When a `Distinct` will certainly be applied, its input expressions are allowed to change the magnitudes
@@ -129,8 +129,19 @@ impl WillDistinct {
                             todo.push((input, derived.last_child(), false))
                         }
                     }
-                    MirRelationExpr::TopK { input, limit, .. } => {
+                    MirRelationExpr::TopK {
+                        input,
+                        limit,
+                        offset,
+                        ..
+                    } => {
+                        // A `TopK` masks input magnitudes (behaving like a `Distinct`) only when it
+                        // returns the single first row per group: `limit == 1` and `offset == 0`.
+                        // With a non-zero offset, *which* row survives depends on the cumulative
+                        // multiplicities of the rows skipped, so a descendant that alters magnitudes
+                        // could shift the offset boundary and select a different row.
                         if generalize
+                            && *offset == 0
                             && limit.as_ref().and_then(|e| e.as_literal_int64()) == Some(1)
                         {
                             todo.push((input, derived.last_child(), true));
@@ -138,6 +149,22 @@ impl WillDistinct {
                             todo.push((input, derived.last_child(), false));
                         }
                     }
+                    // The masking `Distinct` above depends only on the *signs* of multiplicities,
+                    // not their magnitudes. The following operators are sign-preserving: given the
+                    // same input signs they produce the same output signs, because they never sum
+                    // two distinct input rows into a single output row.
+                    //   * `Map`/`Filter`/`Threshold` pass rows through (Filter/Threshold may drop
+                    //     rows, but never merge them).
+                    //   * `Negate` flips every sign uniformly, which the magnitude-masking
+                    //     `Distinct` is invariant to.
+                    //   * `FlatMap` retains the input columns, so distinct input rows stay distinct
+                    //     in the output; only same-input duplicates are scaled, by a non-negative
+                    //     count. Hence no cross-row cancellation.
+                    // Because none of these can cancel rows against each other, the permission to
+                    // alter magnitudes pushes through unconditionally. `Project` and `Union`, by
+                    // contrast, *can* sum across rows (Project by dropping distinguishing columns,
+                    // Union by combining inputs), so they require the `NonNegative` gate below to
+                    // rule out sign-changing cancellation.
                     MirRelationExpr::Map { input, .. } => {
                         todo.push((input, derived.last_child(), generalize && distinct_by));
                     }
@@ -163,16 +190,10 @@ impl WillDistinct {
                             todo.push((input, derived.last_child(), false));
                         }
                     }
-                    // Although it would be nice to push distinct elision through joins, this works against
-                    // Semijoin elision that needs to see distinct-ed inputs.
-                    // MirRelationExpr::Join { inputs, .. } => {
-                    //     let children_rev = inputs.iter_mut().rev();
-                    //     todo.extend(
-                    //         children_rev
-                    //             .zip(derived.children_rev())
-                    //             .map(|(x, y)| (x, y, distinct_by)),
-                    //     );
-                    // }
+                    // `Join` deliberately falls through to the catch-all arm below (resetting the
+                    // bit to false). Pushing distinct elision through a join would work against
+                    // Semijoin elision, which needs to see distinct-ed inputs.
+                    //
                     // If all inputs to the union are non-negative, any distinct enforced above the expression can be
                     // communicated on to each input.
                     MirRelationExpr::Union { base, inputs } => {
