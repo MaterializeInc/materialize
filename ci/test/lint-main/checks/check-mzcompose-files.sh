@@ -50,6 +50,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/cluster-spec-sheet/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/orchestratord/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/workload-replay/mzcompose.py" `# Handled differently` \
+        -not -wholename "./test/aws-glue-schema-registry/mzcompose.py" `# 'aws' workflow runs against real AWS, opt-in via nightly only` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do

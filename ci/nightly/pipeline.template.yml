@@ -949,6 +949,23 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: aws-localstack
 
+      - id: aws-glue-schema-registry-real
+        label: AWS Glue Schema Registry (Real)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
+        agents:
+          # Because of scratch-aws-access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
+              run: aws
+
       - id: secrets-local-file
         label: "Secrets Local File"
         depends_on: build-aarch64
