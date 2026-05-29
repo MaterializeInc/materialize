@@ -240,6 +240,19 @@ def test_verify_accepts_both_placeholder_styles() -> None:
     assert mz_workload_anonymize.verify_anonymized(new, {}, args) == []
 
 
+def test_verify_exempts_config_statement_literals() -> None:
+    # A preserved SET/timeout literal in a config query must not be flagged.
+    new = {
+        "clusters": {},
+        "databases": {},
+        "queries": [
+            {"sql": "SET statement_timeout = '5s'", "statement_type": "set_variable"},
+        ],
+    }
+    args = mock.Mock(identifiers=True, literals=True)
+    assert mz_workload_anonymize.verify_anonymized(new, {}, args) == []
+
+
 def test_verify_exempts_cluster_literals() -> None:
     # Cluster create_sql keeps its SIZE literal; verify must not flag it.
     new = {
@@ -253,11 +266,14 @@ def test_verify_exempts_cluster_literals() -> None:
     assert mz_workload_anonymize.verify_anonymized(new, {}, args) == []
 
 
-def test_redact_via_parser_returns_none_without_binary(
+def test_anonymize_via_parser_returns_none_without_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mz_workload_anonymize, "_locate_redactor", lambda: None)
-    assert mz_workload_anonymize.redact_literals_via_parser(["SELECT 1"]) is None
+    assert (
+        mz_workload_anonymize.anonymize_sql_via_parser(["SELECT 1"], {}, True, True)
+        is None
+    )
 
 
 def test_regex_fallback_warns(
@@ -287,10 +303,35 @@ def test_require_parser_errors_without_binary(
 )
 def test_parser_path_redacts_numeric_literal(tmp_path: Any) -> None:
     # The parser path (unlike the regex) redacts numbers in query predicates.
-    rc, _out, text = run_tool(tmp_path, base_workload())
+    rc, _out, text = run_tool(tmp_path, base_workload(), require_parser=True)
     assert rc == 0
     assert "987654321" not in text
     assert "<REDACTED>" in text
+
+
+@pytest.mark.skipif(
+    mz_workload_anonymize._locate_redactor() is None,
+    reason="mz-sql-anonymize binary not built; run `cargo build --release -p mz-sql-anonymize`",
+)
+def test_parser_path_renames_table_reference(tmp_path: Any) -> None:
+    # End-to-end proof the AST path renames a custom object reference as a whole
+    # token (where the old text regex risked substring corruption). `zorp` and
+    # `zorpcol` are non-keyword names, so both must be renamed and neither may
+    # survive as a bare word.
+    import re as _re
+
+    wl = base_workload()
+    wl["databases"]["customers_db"]["public"]["tables"]["zorp"] = {
+        "create_sql": "CREATE TABLE zorp (zorpcol int)",
+        "columns": [{"name": "zorpcol", "type": "int4"}],
+        "rows": 1,
+    }
+    wl["queries"][0]["sql"] = "SELECT zorpcol FROM zorp"
+    rc, out, text = run_tool(tmp_path, wl, require_parser=True)
+    assert rc == 0
+    assert out is not None
+    assert not _re.search(r"(?<![A-Za-z0-9_])zorp(?![A-Za-z0-9_])", text), text
+    assert not _re.search(r"(?<![A-Za-z0-9_])zorpcol(?![A-Za-z0-9_])", text), text
 
 
 def cdc_workload() -> dict[str, Any]:

@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 mz-sql-parser = { path = "../sql-parser", default-features = false }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [dev-dependencies]

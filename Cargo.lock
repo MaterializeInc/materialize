@@ -7815,6 +7815,7 @@ version = "0.0.0"
 dependencies = [
  "mz-ore",
  "mz-sql-parser",
+ "serde",
  "serde_json",
 ]
 

@@ -75,21 +75,30 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 - Table names → `table_1`, `table_2`, ...
 - Column names → `column_1`, `column_2`, ...
 - View, materialized view, source, sink, connection names
-- All identifiers in `create_sql` definitions and queries
+- All identifier references in `create_sql` definitions and queries
+
+Identifier renaming is done on the parsed AST by `mz-sql-anonymize`, which
+renames whole identifier tokens. A text regex (the previous approach) corrupted
+SQL by matching identifiers as substrings or inside string literals; the AST
+does not.
 
 *Literals (`--literals`, enabled by default):*
-- Query SQL is redacted with Materialize's own parser (`mz-sql-anonymize`),
-  replacing all literals — strings, numbers, hex strings, intervals — with
-  `'<REDACTED>'`. **The parser binary is required by default**: if it is not
-  built, the tool errors instead of silently redacting every query with the
-  weaker regex. Pass `--no-require-parser` to allow that regex fallback (it
-  only catches single-quoted strings, missing numbers, dollar-quoted strings,
-  and comments). Individual statements that do not parse fall back to the regex
-  with a warning regardless, and the verify pass still scans them.
-- `create_sql` strings (including connection hosts/users, sink topics, source
-  options, and column defaults) → `'literal_1'`, `'literal_2'`, ... via regex.
-  The parser is not used here because `to_ast_string_redacted()` intentionally
-  does not redact DDL option strings.
+- Query SQL is redacted on the AST, replacing every literal — strings, numbers,
+  hex strings, intervals — with `'<REDACTED>'`.
+- `create_sql` strings (connection hosts/users, sink topics, source options,
+  column defaults) → `'literal_1'`, `'literal_2'`, ... via a blanket regex. The
+  AST is not used for these because option values like broker addresses are
+  typed fields the parser does not treat as redactable literals (the engine's
+  own redacted Display leaves them intact too).
+- Cluster sizing/replication and session/system config (`SET`/`RESET`/`ALTER
+  SYSTEM`, e.g. timeouts) are **preserved** — replay needs them and they are not
+  sensitive.
+
+**The parser binary is required by default**: if it is not built, the tool
+errors rather than fall back to the corruption-prone regex for everything. Pass
+`--no-require-parser` to allow that fallback. Individual statements that do not
+parse fall back to the regex with a warning regardless, and the verify pass
+still scans them.
 
 Build the helper once (required for the default `--require-parser` mode):
 ```bash
