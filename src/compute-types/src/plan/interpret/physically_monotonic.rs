@@ -151,11 +151,14 @@ impl Interpreter for SingleTimeMonotonic<'_> {
     ) -> Self::Domain {
         // In a single-time context, we propagate the monotonicity status of the
         // input, but only if the table function preserves the append-only
-        // property of its input (e.g., `repeat_row` does not). Additionally, the
-        // MFP applied after the table function must not contain temporal
-        // predicates, as those can result in the future removal of records. This
-        // matches the judgment made for `MirRelationExpr::FlatMap` (combined with
-        // `MirRelationExpr::Filter`) in the MIR monotonicity analysis.
+        // property of its input. A table function such as `repeat_row` can emit
+        // negative diffs and so does not preserve monotonicity; this is the only
+        // substantive check here. The post-MFP temporal-predicate check is, as in
+        // `mfp()` above, conservative defense-in-depth: temporal predicates only
+        // introduce retractions across timestamps and a one-shot dataflow runs at
+        // a single time. Together this mirrors the judgment made for
+        // `MirRelationExpr::FlatMap` (combined with `MirRelationExpr::Filter`) in
+        // the MIR monotonicity analysis.
         PhysicallyMonotonic(
             input.0 && func.preserves_monotonicity() && !mfp.has_temporal_predicates(),
         )
