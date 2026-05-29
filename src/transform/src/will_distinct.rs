@@ -53,7 +53,11 @@ impl crate::Transform for WillDistinct {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
-        self.apply(relation, derived, ctx.features.enable_will_distinct_propagation);
+        self.apply(
+            relation,
+            derived,
+            ctx.features.enable_will_distinct_propagation,
+        );
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
