@@ -21,7 +21,6 @@
 
 use std::borrow::Cow;
 use std::fmt::{self, Write};
-use std::ops::{Add, AddAssign};
 
 /// A composable SQL query string.
 ///
@@ -107,16 +106,16 @@ impl Sql {
         Self(Cow::Owned(sql))
     }
 
-    /// Wraps the body of an entire SQL request received over the external HTTP
-    /// or WebSocket SQL API (`/api/sql`).
+    /// Wraps the body of an entire SQL request received over an external API
+    /// endpoint that explicitly accepts arbitrary caller-supplied SQL — the
+    /// HTTP/WebSocket SQL API (`/api/sql`, via the [`serde::Deserialize`] impl
+    /// on [`Sql`]) and the MCP query tools.
     ///
-    /// **Do not use this constructor anywhere else.** It exists solely so that
-    /// the [`serde::Deserialize`] impl on [`Sql`] — used to decode JSON-encoded
-    /// HTTP/WebSocket SQL requests where the API explicitly accepts arbitrary
-    /// caller-supplied SQL — has a path to reach the unsafe construction.
-    /// Internal code must build SQL via [`Sql::new`], [`Sql::ident`],
-    /// [`Sql::literal`], the [`crate::sql!`] macro, or — when the SQL is
-    /// already trusted by other means — [`Sql::raw_unchecked`].
+    /// **Do not use this constructor anywhere else.** It marks the trust
+    /// boundary where a caller hands us a complete SQL request as opaque text.
+    /// Internal code that assembles SQL must build it via [`Sql::new`],
+    /// [`Sql::ident`], [`Sql::literal`], the [`crate::sql!`] macro, or — when the
+    /// SQL is already trusted by other means — [`Sql::raw_unchecked`].
     pub fn trusted_external_request(sql: String) -> Self {
         Self(Cow::Owned(sql))
     }
@@ -155,6 +154,11 @@ impl Sql {
 
     /// Creates a SQL fragment for a PostgreSQL positional parameter (e.g. `$1`).
     pub fn param(index: usize) -> Self {
+        // PostgreSQL parameters are one-based and limited to 65535.
+        assert!(
+            (1..=65535).contains(&index),
+            "PostgreSQL parameter index out of range: {index}"
+        );
         let mut out = String::new();
         out.push('$');
         let _ = write!(out, "{index}");
@@ -276,21 +280,6 @@ impl<'de> serde::Deserialize<'de> for Sql {
         Ok(Sql::trusted_external_request(String::deserialize(
             deserializer,
         )?))
-    }
-}
-
-impl Add for Sql {
-    type Output = Sql;
-
-    fn add(mut self, rhs: Sql) -> Self::Output {
-        self += rhs;
-        self
-    }
-}
-
-impl AddAssign for Sql {
-    fn add_assign(&mut self, rhs: Sql) {
-        self.0.to_mut().push_str(rhs.as_str());
     }
 }
 

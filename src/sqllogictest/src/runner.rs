@@ -61,6 +61,8 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
@@ -855,10 +857,9 @@ impl<'a> Runner<'a> {
             .await?
         {
             let name: &str = row.get("name");
-            let name = Ident::new_unchecked(name).to_ast_string_simple();
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE {name}"))
+                .batch_execute(sql!("DROP DATABASE {}", Sql::ident(name)).as_str())
                 .await?;
         }
         inner
@@ -880,7 +881,7 @@ impl<'a> Runner<'a> {
                 name => {
                     inner
                         .system_client
-                        .batch_execute(&format!("DROP CLUSTER {name}"))
+                        .batch_execute(sql!("DROP CLUSTER {}", Sql::ident(name)).as_str())
                         .await?
                 }
             }
@@ -929,19 +930,24 @@ impl<'a> Runner<'a> {
                 .await?
             {
                 let name: &str = row.get("name");
-                let name = Ident::new_unchecked(name).to_ast_string_simple();
                 inner
                     .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{name}"))
+                    .batch_execute(
+                        sql!("DROP CLUSTER REPLICA quickstart.{}", Sql::ident(name)).as_str(),
+                    )
                     .await?;
             }
             for i in 1..=self.config.replicas {
                 inner
                     .system_client
-                    .batch_execute(&format!(
-                        "CREATE CLUSTER REPLICA quickstart.r{i} SIZE '{}'",
-                        self.config.replica_size
-                    ))
+                    .batch_execute(
+                        sql!(
+                            "CREATE CLUSTER REPLICA quickstart.r{} SIZE {}",
+                            i,
+                            Sql::literal(&self.config.replica_size)
+                        )
+                        .as_str(),
+                    )
                     .await?;
             }
             inner
@@ -1450,10 +1456,9 @@ impl<'a> RunnerInner<'a> {
                 tsv_path,
             } => {
                 let tsv = tokio::fs::read(tsv_path).await?;
-                let table_name = Ident::new_unchecked(*table_name).to_ast_string_simple();
                 let copy = self
                     .client
-                    .copy_in(&*format!("COPY {table_name} FROM STDIN"))
+                    .copy_in(sql!("COPY {} FROM STDIN", Sql::ident(*table_name)).as_str())
                     .await?;
                 tokio::pin!(copy);
                 copy.send(bytes::Bytes::from(tsv)).await?;
