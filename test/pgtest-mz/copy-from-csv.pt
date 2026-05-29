@@ -21,8 +21,8 @@ ReadyForQuery
 CommandComplete {"tag":"CREATE TABLE"}
 ReadyForQuery {"status":"I"}
 
-# Note that we cannot differentiate between empty string and the quoted empty
-# string, both of which will generate NULL in MZ.
+# A quoted empty string decodes to the empty string, while an unquoted empty
+# field matches the (default, empty) NULL marker and decodes to NULL.
 send
 Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
 CopyData "1,one\n"
@@ -49,7 +49,7 @@ DataRow {"fields":["1","one"]}
 DataRow {"fields":["2","two"]}
 DataRow {"fields":["3","\"three\""]}
 DataRow {"fields":["4","fo,ur"]}
-DataRow {"fields":["5","NULL"]}
+DataRow {"fields":["5",""]}
 DataRow {"fields":["6","NULL"]}
 DataRow {"fields":["7","seven\n8,eight\n"]}
 CommandComplete {"tag":"SELECT 7"}
@@ -82,8 +82,9 @@ CommandComplete {"tag":"SELECT 2"}
 ReadyForQuery {"status":"I"}
 
 # Change options. Note that:
-# - After receiving terminating char, no other data should be accepted
-# - Quoted end of copy markers are still processed as end of copy markers
+# - After receiving the bare \. terminator, no other data is accepted
+# - The terminator is the bare, unquoted \. even with a custom QUOTE; the NULL
+#   marker (NS here) is only honored when the field is unquoted
 send
 Query {"query": "DELETE FROM t"}
 Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV, QUOTE '|', ESCAPE '#', NULL 'NS', HEADER true)"}
@@ -94,7 +95,7 @@ CopyData "3,|#|three#||\n"
 CopyData "4,|fo,ur|\n"
 CopyData "5,\"five\"\n"
 CopyData "6,||\n"
-CopyData "|\\.|\n"
+CopyData "\\.\n"
 CopyData "invalid data"
 CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
@@ -340,7 +341,7 @@ DataRow {"fields":["materialize","1","one"]}
 DataRow {"fields":["materialize","2","two"]}
 DataRow {"fields":["materialize","3","\"three\""]}
 DataRow {"fields":["materialize","4","fo,ur"]}
-DataRow {"fields":["materialize","5","NULL"]}
+DataRow {"fields":["materialize","5",""]}
 DataRow {"fields":["materialize","6","NULL"]}
 CommandComplete {"tag":"SELECT 6"}
 ReadyForQuery {"status":"I"}
@@ -381,7 +382,175 @@ DataRow {"fields":["user:materialize","1","one"]}
 DataRow {"fields":["user:materialize","2","two"]}
 DataRow {"fields":["user:materialize","3","\"three\""]}
 DataRow {"fields":["user:materialize","4","fo,ur"]}
-DataRow {"fields":["user:materialize","5","NULL"]}
+DataRow {"fields":["user:materialize","5",""]}
 DataRow {"fields":["user:materialize","6","NULL"]}
 CommandComplete {"tag":"SELECT 6"}
+ReadyForQuery {"status":"I"}
+
+# A quoted "\." field is data, not the end-of-copy marker: only a bare,
+# unquoted \. on its own line terminates the COPY, and rows after it are
+# discarded.
+send
+Query {"query": "CREATE TABLE t6 (i INT8, t TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t6 FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,before\n"
+CopyData "2,\"\\.\"\n"
+CopyData "3,after\n"
+CopyData "\\.\n"
+CopyData "4,ignored\n"
+CopyDone
+Query {"query": "SELECT * FROM t6 ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","before"]}
+DataRow {"fields":["2","\\."]}
+DataRow {"fields":["3","after"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# CRLF line endings (RFC 4180, the Windows/Excel default). csv-core places the
+# record boundary between \r and \n, so every non-first record's input begins
+# with an orphaned \n. Both the decoder's per-field quote probe and the pgwire
+# scanner's end-of-copy marker check must account for that, or a quoted NULL
+# marker corrupts to SQL NULL and a quoted "\." (plus every row after it) is
+# silently dropped. This single COPY exercises all of those on CRLF input:
+#   a,        -> unquoted empty NULL marker  => NULL
+#   b,""      -> quoted empty                => ""
+#   "",c      -> quoted empty leading field on an orphan-led record => ""
+#   d,"\."    -> quoted "\." is data         => \.
+#   \.        -> bare end-of-copy marker; the trailing e,ignored is discarded
+send
+Query {"query": "CREATE TABLE t7 (a TEXT, b TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t7 FROM STDIN WITH (FORMAT CSV)"}
+CopyData "a,\r\n"
+CopyData "b,\"\"\r\n"
+CopyData "\"\",c\r\n"
+CopyData "d,\"\\.\"\r\n"
+CopyData "\\.\r\n"
+CopyData "e,ignored\r\n"
+CopyDone
+Query {"query": "SELECT a, b FROM t7 ORDER BY a"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"},{"name":"b"}]}
+DataRow {"fields":["","c"]}
+DataRow {"fields":["a","NULL"]}
+DataRow {"fields":["b",""]}
+DataRow {"fields":["d","\\."]}
+CommandComplete {"tag":"SELECT 4"}
+ReadyForQuery {"status":"I"}
+
+# Lone CR line endings (old-Mac style). csv-core ends a CR record on the bare
+# \r, so the scanner's raw marker span is "\.\r"; a trailing-only strip would
+# miss it. Same expectations as the CRLF case above.
+send
+Query {"query": "CREATE TABLE t8 (a TEXT, b TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t8 FROM STDIN WITH (FORMAT CSV)"}
+CopyData "a,\r"
+CopyData "b,\"\"\r"
+CopyData "\"\",c\r"
+CopyData "d,\"\\.\"\r"
+CopyData "\\.\r"
+CopyData "e,ignored\r"
+CopyDone
+Query {"query": "SELECT a, b FROM t8 ORDER BY a"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"},{"name":"b"}]}
+DataRow {"fields":["","c"]}
+DataRow {"fields":["a","NULL"]}
+DataRow {"fields":["b",""]}
+DataRow {"fields":["d","\\."]}
+CommandComplete {"tag":"SELECT 4"}
+ReadyForQuery {"status":"I"}
+
+# Obscure edge case: the NULL marker is itself set to `\.`, colliding with the
+# end-of-copy marker's byte sequence. The two are still distinguished:
+#   - An unquoted `\.` *field* matches the NULL marker => SQL NULL.
+#   - A quoted `"\."` field is the literal string `\.` (quoting suppresses
+#     both NULL-marker and end-marker interpretation).
+#   - A bare `\.` on its own line (a single-field record) is the end-of-copy
+#     marker regardless of the NULL setting, and subsequent rows are dropped.
+send
+Query {"query": "CREATE TABLE t9 (i INT8, t TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t9 FROM STDIN WITH (FORMAT CSV, NULL '\\.')"}
+CopyData "1,\\.\n"
+CopyData "2,\"\\.\"\n"
+CopyData "3,after\n"
+CopyData "\\.\n"
+CopyData "4,ignored\n"
+CopyDone
+Query {"query": "SELECT i, t FROM t9 ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","NULL"]}
+DataRow {"fields":["2","\\."]}
+DataRow {"fields":["3","after"]}
+CommandComplete {"tag":"SELECT 3"}
 ReadyForQuery {"status":"I"}

@@ -130,6 +130,15 @@ pub enum ArrangementStrategy {
     TemporalBucketing,
 }
 
+impl std::fmt::Display for ArrangementStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrangementStrategy::Direct => write!(f, "Direct"),
+            ArrangementStrategy::TemporalBucketing => write!(f, "TemporalBucketing"),
+        }
+    }
+}
+
 /// An identifier for an LIR node.
 #[derive(
     Clone,
@@ -308,6 +317,20 @@ pub enum PlanNode {
         /// predicates so that it can be readily evaluated.
         /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
         mfp_after: MapFilterProject,
+        /// Strategy for forming the internal input arrangement built by `Reduce`
+        /// (materialized via `key_val_plan`).
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the keyed `(key, val)` stream feeding the
+        /// reduce. See `render_reduce` for the rationale on why this is
+        /// plumbed through `Reduce` rather than handled at the arrangement site.
+        ///
+        /// Note: unrelated to the hash buckets used by hierarchical reductions
+        /// (e.g. `ReducePlan::Hierarchical`'s `buckets`), which are an internal
+        /// sharding scheme for `min`/`max`-style aggregations. Here "bucketing"
+        /// refers exclusively to temporal (time-domain) bucketing of
+        /// future-stamped updates.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -319,6 +342,14 @@ pub enum PlanNode {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        /// Strategy for bucketing the input collection ahead of the Top-K operator.
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the per-row input stream at the top of
+        /// `render_topk`, covering all three `TopKPlan` arms uniformly. See
+        /// `PlanNode::Reduce::temporal_bucketing_strategy` for the underlying
+        /// convention.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -350,6 +381,15 @@ pub enum PlanNode {
         inputs: Vec<Plan>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        /// Per-input bucketing strategies. Lockstep with `inputs`: index `i` is the
+        /// strategy applied to `inputs[i]` before concatenation.
+        ///
+        /// Set by the lowering from each input's `has_future_updates` flag. Only
+        /// consolidating Unions (`consolidate_output: true`) carry non-`Direct`
+        /// entries, because bucketing only pays off ahead of a consolidating
+        /// downstream operator. See `PlanNode::Reduce::temporal_bucketing_strategy`
+        /// for the underlying convention.
+        temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -513,9 +553,14 @@ impl Plan {
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
 
-        if features.enable_consolidate_after_union_negate {
-            Self::refine_union_negate_consolidation(&mut dataflow);
-        }
+        // Note: `consolidate_output` for `Union` and per-input
+        // `temporal_bucketing_strategies` are decided at lowering time (see the
+        // `Union` arm of `lower_mir_expr_stack_safe`). The pre-existing
+        // `refine_union_negate_consolidation` pass — which used to flip
+        // `consolidate_output` to `true` for Unions with a `Negate` child — has
+        // been folded into the lowering, since lowering is the only point where
+        // the bucketing decision (which depends on `has_future_updates`) is
+        // available.
 
         if dataflow.is_single_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
@@ -634,38 +679,6 @@ impl Plan {
         mz_repr::explain::trace_plan(dataflow);
     }
 
-    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_union_negate_consolidation")
-    )]
-    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
-                match node {
-                    PlanNode::Union {
-                        inputs,
-                        consolidate_output,
-                        ..
-                    } => {
-                        if inputs
-                            .iter()
-                            .any(|input| matches!(input.node, PlanNode::Negate { .. }))
-                        {
-                            *consolidate_output = true;
-                        }
-                    }
-                    _ => {}
-                }
-                todo.extend(node.children_mut());
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
-    }
-
     /// Refines the plans of objects to be built as part of `dataflow` to take advantage
     /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
     /// one-shot SELECT query.
@@ -775,6 +788,7 @@ impl CollectionPlan for PlanNode {
             | PlanNode::Union {
                 inputs,
                 consolidate_output: _,
+                temporal_bucketing_strategies: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);
@@ -805,10 +819,12 @@ impl CollectionPlan for PlanNode {
                 key_val_plan: _,
                 plan: _,
                 mfp_after: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::TopK {
                 input,
                 top_k_plan: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::Negate { input }
             | PlanNode::Threshold {

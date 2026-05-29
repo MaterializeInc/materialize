@@ -1004,7 +1004,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
-        // Track whether we applied temporal bucketing, to avoid double-bucketing.
+        // Track whether we already applied temporal bucketing in this call, to
+        // avoid bucketing the same updates twice.
         let mut bucketed = false;
 
         // True iff at least one new arrangement will actually be built below. Bucketing only
@@ -1023,8 +1024,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
-            let oks = if will_create_arrangement
-                && matches!(strategy, ArrangementStrategy::TemporalBucketing)
+            let effective_strategy = if will_create_arrangement {
+                strategy
+            } else {
+                ArrangementStrategy::Direct
+            };
+            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
                 && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
             {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
@@ -1051,8 +1056,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP
                 // → ArrangeBy flows.
-                let oks = if !bucketed
-                    && matches!(strategy, ArrangementStrategy::TemporalBucketing)
+                let effective_strategy = if bucketed {
+                    ArrangementStrategy::Direct
+                } else {
+                    strategy
+                };
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
                     && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
                 {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY

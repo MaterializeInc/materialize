@@ -5722,7 +5722,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5859,7 +5859,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6012,7 +6012,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6309,7 +6309,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6802,7 +6802,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7008,7 +7008,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7190,7 +7190,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -7278,7 +7278,7 @@ name = "mz-pgcopy"
 version = "0.0.0"
 dependencies = [
  "bytes",
- "csv",
+ "csv-core",
  "itertools 0.14.0",
  "mz-ore",
  "mz-pgrepr",
@@ -8280,7 +8280,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.27.0-dev.0"
+version = "26.28.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",

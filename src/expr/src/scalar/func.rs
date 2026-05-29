@@ -1406,7 +1406,7 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
 fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
-        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
+        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap_or(i32::MAX) - 1,
     };
 
     let index = usize::try_from(index).map_err(|_| err.clone())?;
@@ -1426,7 +1426,7 @@ fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
 fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
-        valid_end: i32::try_from(bytes.len()).unwrap() - 1,
+        valid_end: i32::try_from(bytes.len()).unwrap_or(i32::MAX) - 1,
     };
     let i: &u8 = bytes
         .get(usize::try_from(index).map_err(|_| err.clone())?)

@@ -2181,3 +2181,78 @@ Used Indexes:
 Target cluster: no_replicas
 
 EOF
+
+# Default-format tests for the `Temporally-Bucketed` prefix on Reduce, TopK,
+# and Union. The default format only emits the prefix when the operator's
+# `temporal_bucketing_strategy` (or any per-input strategy for Union) is
+# `TemporalBucketing`; otherwise the operator is printed unchanged.
+
+statement ok
+CREATE TABLE events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+CREATE MATERIALIZED VIEW mv_default_reduce AS
+SELECT k, count(*)
+FROM events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k;
+----
+materialize.public.mv_default_reduce:
+  →Temporally-Bucketed Accumulable GroupAggregate
+    Simple aggregates: count(*)
+    →Read materialize.public.events
+
+Source materialize.public.events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: no_replicas
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+CREATE MATERIALIZED VIEW mv_default_topk AS
+SELECT k, event_time
+FROM events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY event_time LIMIT 5;
+----
+materialize.public.mv_default_topk:
+  →Temporally-Bucketed Non-monotonic TopK
+    Order By #1 asc nulls_last
+    Limit 5
+    →Read materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: no_replicas
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+CREATE MATERIALIZED VIEW mv_default_union AS
+SELECT k FROM events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM events WHERE event_time + INTERVAL '90 day' > mz_now();
+----
+materialize.public.mv_default_union:
+  →Threshold Diffs #0
+    →Arrange (#0)
+      →Temporally-Bucketed Consolidating Union
+        →Fused with Child Map/Filter/Project
+          Project: #0
+          Filter: (mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days)))
+            →Read materialize.public.events
+        →Negate Diffs
+          →Fused with Child Map/Filter/Project
+            Project: #0
+            Filter: (mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days)))
+              →Read materialize.public.events
+
+Target cluster: no_replicas
+
+EOF

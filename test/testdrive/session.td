@@ -84,7 +84,6 @@ TimeZone                                 UTC                     "Sets the time 
 transaction_isolation                    "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 unsafe_new_transaction_wall_time         ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
 welcome_message                          on                      "Whether to send a notice with a welcome message after a successful connection (Materialize)."
-enable_consolidate_after_union_negate    on                      "consolidation after Unions that have a Negated input (Materialize)."
 force_source_table_syntax                off                     "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources"
 
 > SET application_name = 'foo'
