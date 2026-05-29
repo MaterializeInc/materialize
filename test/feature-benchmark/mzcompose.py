@@ -352,9 +352,29 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm_volumes("mzdata")
+        # Tear down the persistd companion together with the metadata store it
+        # fronts. `materialized` auto-attaches a paired `materialized-persistd`;
+        # leaving it running while cockroach and mzdata are recreated would
+        # strand it against a fresh, empty consensus store (its schema gone),
+        # surfacing as an orphan container and a wedged next scenario. The
+        # companion is only a declared service inside the `mz` override, so the
+        # kill/rm must run there too.
+        with c.override(mz, clusterd):
+            c.kill(
+                "cockroach",
+                "materialized",
+                "clusterd",
+                "testdrive",
+                "materialized-persistd",
+            )
+            c.rm(
+                "cockroach",
+                "materialized",
+                "clusterd",
+                "testdrive",
+                "materialized-persistd",
+            )
+            c.rm_volumes("mzdata")
 
         if early_abort:
             result.empty()
