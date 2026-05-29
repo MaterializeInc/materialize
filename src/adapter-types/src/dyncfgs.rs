@@ -183,7 +183,7 @@ pub const ENABLE_MCP_AGENT: Config<bool> = Config::new(
 /// Agents can still use `get_data_products` and `get_data_product_details`.
 pub const ENABLE_MCP_AGENT_QUERY_TOOL: Config<bool> = Config::new(
     "enable_mcp_agent_query_tool",
-    false,
+    true,
     "Whether the MCP agent query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
 );
 
