@@ -368,9 +368,36 @@ def main() -> int:
                 consumer_state["reconnects"],
             )
 
-    # Stop the producer first, then drive the catch-up wait.
+    # Stop the producer, then *wait until it is actually dead* before
+    # taking the authoritative snapshot.  A plain
+    # `t_producer.join(timeout=15)` returns after 15 s regardless of
+    # whether the thread exited — if the producer is mid-retry inside
+    # a fault window (a single `execute_retry` can wait up to
+    # `_RETRY_BUDGET_S=180 s`), it stays alive past the join, lands a
+    # commit *after* the snapshot picks its read timestamp T, and that
+    # commit's row gets streamed by the still-running consumer.
+    # Result: authoritative (at T) = N, received = N+1 — the exact
+    # off-by-one spurious-events false positive observed across
+    # several runs even after the AS-OF-mz_now() and one-txn fixes.
+    #
+    # Poll for actual thread death up to a generous budget (covers
+    # `_RETRY_BUDGET_S` plus margin); if the producer still won't
+    # exit, bail to a sometimes-anchor rather than run a
+    # snapshot whose `authoritative` is not the producer's final state.
     producer_stop.set()
-    t_producer.join(timeout=15.0)
+    producer_join_deadline = time.time() + 240.0
+    while t_producer.is_alive() and time.time() < producer_join_deadline:
+        t_producer.join(timeout=2.0)
+    if t_producer.is_alive():
+        LOG.warning("producer thread did not exit within budget; bailing")
+        consumer_stop.set()
+        t_consumer.join(timeout=5.0)
+        sometimes(
+            False,
+            "subscribe-correctness: producer thread stopped cleanly before snapshot",
+            {"prefix": prefix},
+        )
+        return 0
 
     # Read the authoritative set AND the catch-up target timestamp in a
     # single read transaction, so they share one logical time.
