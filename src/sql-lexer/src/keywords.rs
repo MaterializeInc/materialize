@@ -140,6 +140,33 @@ impl Keyword {
             || self.is_reserved_in_column_alias()
             || self.is_reserved_in_scalar_expression()
     }
+
+    /// Reports whether a keyword has a special parser-dispatch form (e.g.
+    /// `POSITION(expr IN expr)`, `MAP[K => V]`) such that an unquoted
+    /// occurrence in expression position triggers the special grammar
+    /// rather than parsing as a plain identifier. The parser itself
+    /// disambiguates by looking at the next token, but `AstDisplay` has no
+    /// such context — so when emitting an `Ident` whose name matches one
+    /// of these, we force quoting to keep the round trip stable.
+    pub fn is_context_sensitive_keyword(self) -> bool {
+        matches!(
+            self,
+            ALL | ANY
+                | COALESCE
+                | EXISTS
+                | EXTRACT
+                | GREATEST
+                | LEAST
+                | MAP
+                | NORMALIZE
+                | NULLIF
+                | POSITION
+                | ROW
+                | SOME
+                | SUBSTRING
+                | TRIM
+        )
+    }
 }
 
 impl FromStr for Keyword {
