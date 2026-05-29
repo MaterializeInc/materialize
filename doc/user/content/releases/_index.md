@@ -15,6 +15,71 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.26.0
+*Released to Materialize Cloud: 2026-05-28* <br>
+*Released to Materialize Self-Managed: 2026-05-29* <br>
+
+This release includes Single Sign-On (SSO) for Self-Managed, a new Objects page
+in the Console, performance improvements, and bug fixes.
+
+### Single Sign-On (SSO) for Self-Managed
+
+{{< public-preview />}}
+
+Self-managed deployments can now configure single sign-on via any OIDC-compliant identity provider (Okta, Microsoft Entra ID, Auth0, Keycloak). Users authenticate via their IdP and receive a JWT token that Materialize validates; new users are auto-provisioned as database roles on first login, and existing users with matching emails map automatically to their current accounts. Enabling SSO is backward compatible: password-based auth continues to work for applications and service accounts.
+
+For more information, refer to:
+- [Single sign-on (SSO)](https://materialize.com/docs/security/self-managed/sso/)
+
+### Objects page
+
+The Console includes a new Objects page, which provides a unified view of all
+sources, materialized views, indexes and sinks. You can track real-time freshness
+metrics, hydration status, and cluster assignments. If an object is stale, you can diagnose why.
+If lag is inherited from upstream, you can visualize the critical path. And if an object itself
+is the cause of lag, you can diagnose the root cause.
+
+### Improvements {#v26.26-improvements}
+
+- **More performant temporal filters**: We've significantly improved the performance of
+  temporal filters. While specific results will vary by workload, in our tests we saw CPU utilization drop from 75% to
+  4% on workloads dominated by temporal filter evaluation.
+- **Faster DDL at scale**: DDL operations (`CREATE TABLE`, `DROP TABLE`,
+  etc.) are now up to 65% faster in environments with many objects by
+  eliminating a per-table loop that previously ran on every group commit.
+- **Faster storage usage collection**: Periodic storage usage collection is
+  now up to 17x faster at 10,000 shards, reducing coordinator stalls from
+  ~500ms to ~30ms per cycle.
+- **`dbt-materialize`: `PARTITION BY` support**: Added a `partition_by`
+  config option for materialized views, generating the `PARTITION BY (...)`
+  clause in `CREATE MATERIALIZED VIEW`.
+- **`dbt-materialize`: Unmanaged cluster support for blue/green
+  deployments**: The `deploy_init` macro now supports unmanaged clusters by
+  cloning each replica's size and availability zone, enabling blue/green
+  deployments for environments not using managed clusters.
+
+### Bug Fixes {#v26.26-bug-fixes}
+
+- Fixed wrong results for `JOIN ... USING (col) AS t` with `RIGHT` or
+  `FULL` joins.
+- Fixed `round()` producing `-0` for negative fractional values that round
+  to zero, causing mismatches in `DISTINCT`, `UNION`, and `GROUP BY`.
+- Fixed `list_length_max` returning incorrect results for list-of-lists with
+  `NULL` siblings before non-`NULL` sublists.
+- Fixed incorrect query results when casting `text` to `"char"` or `bytea`
+  in index lookups and equality filters.
+- Fixed incorrect query results when casting `text` to `name` or
+  `varchar(n)` in contexts that rely on uniqueness, such as `DISTINCT` or
+  joins.
+- Fixed MySQL sources failing to decode `TIMESTAMP` and `DATETIME` columns
+  when using `TEXT COLUMNS`.
+- Fixed `COPY FROM ... (FORMAT PARQUET)` producing range values that did not
+  compare equal to logically-identical values constructed in SQL.
+- Fixed missing audit log entries for `ALTER TABLE ADD COLUMN` and
+  `ALTER SOURCE ... SET (TIMESTAMP INTERVAL)`.
+- Fixed the Console Data Explorer page intermittently failing to load due to
+  a WebSocket connection race condition.
+
 ## v26.25.0
 *Released to Materialize Cloud: 2026-05-21* <br>
 *Released to Materialize Self-Managed: 2026-05-22* <br>
