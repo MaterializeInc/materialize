@@ -71,10 +71,13 @@ impl PersistCommitter {
     /// Time a single underlying-consensus call and record the elapsed time
     /// under `op` in `backing_duration_seconds`.
     ///
-    /// A failed op is logged at `warn` with its full cause chain. Without this
-    /// the backend's real error (e.g. a Postgres SQLSTATE) is invisible: the
-    /// per-op `debug` traces are off by default and the error returned to
-    /// clients is flattened to its top-level `Display` further up the stack.
+    /// An indeterminate failure is logged at `warn` with its full cause chain.
+    /// Without this the backend's real error (e.g. a Postgres SQLSTATE) is
+    /// invisible: the per-op `debug` traces are off by default and the error
+    /// returned to clients is flattened to its top-level `Display` further up
+    /// the stack. Determinate failures are intentionally not logged: the only
+    /// determinate error today is a CRDB serialization conflict, which is
+    /// routine and retried by the client, and would otherwise flood the log.
     async fn time_backing<F, T>(&self, op: &str, fut: F) -> Result<T, ExternalError>
     where
         F: std::future::Future<Output = Result<T, ExternalError>>,
@@ -85,7 +88,7 @@ impl PersistCommitter {
             .backing_duration_seconds
             .with_label_values(&[op])
             .observe(start.elapsed().as_secs_f64());
-        if let Err(err) = &out {
+        if let Err(err @ ExternalError::Indeterminate(_)) = &out {
             warn!(
                 op,
                 error = %err.display_with_causes(),
