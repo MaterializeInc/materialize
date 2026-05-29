@@ -20,7 +20,10 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
-    CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue
+    CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences,
+    ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement,
+    ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType,
+    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
