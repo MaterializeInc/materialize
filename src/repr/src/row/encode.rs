@@ -2134,6 +2134,14 @@ impl RowPacker<'_> {
             Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.
+                //
+                // `decPackedToNumber` (called via `Decimal::from_packed_bcd`)
+                // doesn't bounds-check its input and segfaults on empty bcd —
+                // reachable from untrusted proto bytes, so we reject before
+                // descending into the FFI.
+                if x.bcd.is_empty() {
+                    return Err("ProtoNumeric.bcd is empty".to_string());
+                }
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;
                 self.push(Datum::from(n))
             }
