@@ -528,10 +528,9 @@ impl HttpServer {
             // RFC 9728 Protected Resource Metadata. Public route — MCP
             // clients fetch it before they have a token. Sits on its own
             // router so the auth middleware never runs on it. The handler
-            // returns 404 when no OAuth authorization server is configured
-            // (`oidc_issuer` dyncfg unset) OR when the listener uses the
-            // `None` authenticator (no token would ever be validated), so
-            // it is safe to enable unconditionally whenever MCP is enabled.
+            // 404s when the listener does not advertise OAuth (see
+            // `McpOAuthDiscovery`) or `oidc_issuer` is unset, so it is safe
+            // to enable unconditionally whenever MCP is enabled.
             // RFC 9728 §3.1 lets clients look up per-resource metadata
             // via a path-suffixed well-known URI before falling back to
             // the bare one. The MCP endpoints share an identical
@@ -553,7 +552,9 @@ impl HttpServer {
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(oauth_metadata::DiscoveryConfig {
                     http_host_name: http_host_name.clone(),
-                    authenticator_kind,
+                    discovery: oauth_metadata::McpOAuthDiscovery::for_authenticator(
+                        authenticator_kind,
+                    ),
                 }))
                 .layer(Extension(oauth_metadata_metrics.clone()));
             router = router.merge(oauth_metadata_router);
@@ -1185,12 +1186,11 @@ async fn http_auth(
     // MCP can discover the authorization server. The `Basic` challenge
     // stays on these routes so existing curl/Bearer-already users still
     // see a usable challenge. See `crate::http::oauth_metadata` for the
-    // discovery document.
-    // OAuth discovery is only meaningful when the listener actually
-    // validates tokens. When the listener uses the `None` authenticator
-    // (anonymous_http_user), there is no OAuth flow to advertise.
+    // discovery document. The challenge and the discovery handler share
+    // `McpOAuthDiscovery` so they never disagree about whether OAuth is
+    // advertised on this listener.
     let (bearer_resource_metadata, bearer_scope) = if path.starts_with("/api/mcp/")
-        && !matches!(authenticator_kind, listeners::AuthenticatorKind::None)
+        && oauth_metadata::McpOAuthDiscovery::for_authenticator(authenticator_kind).is_enabled()
     {
         (
             oauth_metadata::metadata_url(&req, http_host_name.as_deref()),

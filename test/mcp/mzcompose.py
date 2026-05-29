@@ -868,7 +868,7 @@ def workflow_endpoints(c: Composition) -> None:
 def workflow_oauth_metadata_host_injection(c: Composition) -> None:
     with c.override(
         Materialized(
-            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_password.json",
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
         )
     ):
         c.up("materialized")
@@ -923,7 +923,7 @@ def workflow_oauth_metadata_extras(c: Composition) -> None:
     well-known aliases, and invalid-issuer rejection."""
     with c.override(
         Materialized(
-            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_password.json",
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
         )
     ):
         c.up("materialized")

@@ -5864,15 +5864,16 @@ fn test_mcp_agent_with_data_product() {
 /// which is the documented fallback path).
 #[mz_ore::test]
 fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
-    // Use the Frontegg-like Password authenticator setup so the MCP
-    // path actually hits the 401 (None authenticator would just default
-    // to anonymous_http_user). Frontegg is heavyweight to set up in a
-    // test, but Password gives us the same 401 surface for our purposes.
+    // An OIDC listener is the authenticator kind that advertises OAuth
+    // (see `McpOAuthDiscovery`); an unauthenticated MCP request on it 401s
+    // with both the Bearer and Basic challenges. (A `None` listener would
+    // default to anonymous_http_user and never challenge.) `with_oidc_auth`
+    // must precede `with_mcp_routes` because it replaces the listener config.
     let server = test_util::TestHarness::default()
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, true)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
-        .with_password_auth(Password("mz_system_password".to_string()))
         .start_blocking();
 
     for endpoint in ["agent", "developer"] {
@@ -5946,15 +5947,14 @@ fn test_sql_http_unauth_keeps_only_basic_challenge() {
 /// `oidc_issuer` is set. Pinning the JSON shape protects MCP clients
 /// from accidental contract drift.
 ///
-/// Uses `with_password_auth` because the discovery handler 404s on
-/// `None`-authenticator listeners (it would be misleading to publish a
-/// document when no token would ever be validated). Any authenticator
-/// kind other than `None` would do; Password is the lightest to set up
-/// in tests.
+/// Uses `with_oidc_auth` because the discovery handler only publishes on
+/// an OIDC listener — the one authenticator kind that validates bearer
+/// tokens against `oidc_issuer` (see `McpOAuthDiscovery`). The listener
+/// never validates a token in this test, so no live IdP is needed.
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_advertises_issuer() {
     let server = test_util::TestHarness::default()
-        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
@@ -6026,7 +6026,7 @@ fn test_oauth_protected_resource_metadata_advertises_issuer() {
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
     let server = test_util::TestHarness::default()
-        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, true)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
@@ -6070,7 +6070,7 @@ fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_rejects_invalid_issuer() {
     let server = test_util::TestHarness::default()
-        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
@@ -6102,7 +6102,7 @@ fn test_oauth_protected_resource_metadata_rejects_invalid_issuer() {
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
     let server = test_util::TestHarness::default()
-        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .start_blocking();
@@ -6134,7 +6134,7 @@ fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_end_to_end_flow() {
     let server = test_util::TestHarness::default()
-        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(

@@ -55,7 +55,7 @@ use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use http::{HeaderValue, StatusCode};
 use mz_adapter::Client;
-use mz_adapter_types::dyncfgs::OIDC_ISSUER;
+use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_ISSUER};
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::listeners;
@@ -71,10 +71,7 @@ use crate::http::Delayed;
 /// indefinitely from any caller on the network.
 const ADAPTER_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Scheme used in published URLs. OAuth 2.1 §3.1 requires `https` for
-/// all OAuth endpoints, and environmentd is fronted by TLS in every
-/// production deployment. Plain-HTTP local dev is not a supported
-/// OAuth flow.
+/// OAuth 2.1 §3.1 requires `https` for all OAuth endpoints.
 const PUBLISHED_SCHEME: &str = "https";
 
 /// The well-known path served by this module.
@@ -96,17 +93,12 @@ pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
     "/.well-known/oauth-protected-resource/api/mcp/developer";
 
-/// OAuth scope advertised for the MCP endpoints. We do not enforce
-/// scope server-side today (authorization happens at the SQL layer via
-/// RBAC), so a single coarse scope is the honest advertisement:
-/// clients know what to request and we don't overclaim per-route
-/// authorization we are not performing.
+/// OAuth scope advertised for the MCP endpoints. Not enforced
+/// server-side (authorization is at the SQL layer via RBAC).
 pub(crate) const MCP_SCOPE: &str = "mcp.read";
 
-/// `private` keeps shared caches (CDNs, forward proxies) from serving a
-/// document built for one listener to clients of another; one hour
-/// bounds how long an `oidc_issuer` change takes to be reflected
-/// in the field.
+/// `private` (not the RFC-default `public`): the document varies by host,
+/// so shared caches must not serve one listener's document to another.
 const METADATA_CACHE_CONTROL: &str = "private, max-age=3600";
 
 /// JSON shape returned by [`PROTECTED_RESOURCE_METADATA_PATH`]. A
@@ -131,17 +123,10 @@ pub(crate) struct ProtectedResourceMetadata {
     pub scopes_supported: Vec<String>,
 }
 
-/// Prometheus counter for the discovery endpoint, labeled by outcome.
-/// `status` label values are stable strings (rather than HTTP status
-/// numbers) so dashboards do not have to map integers to failure
-/// paths:
-///
-///   * `ok` — 200 with a metadata document.
-///   * `no_auth_listener` — 404, listener does not validate tokens.
-///   * `no_issuer` — 404, `oidc_issuer` is unset.
-///   * `invalid_issuer` — 503, `oidc_issuer` is not a valid URL.
-///   * `no_host` — 400, request had no usable host.
-///   * `adapter_unavailable` — 503, adapter client not ready.
+/// Prometheus counter for the discovery endpoint, labeled by a stable
+/// `status` string (`ok`, `disabled`, `no_issuer`, `invalid_issuer`,
+/// `no_host`, `adapter_unavailable`) so dashboards key off names rather
+/// than HTTP status codes.
 #[derive(Debug, Clone)]
 pub struct OauthMetadataMetrics {
     requests: IntCounterVec,
@@ -163,17 +148,54 @@ impl OauthMetadataMetrics {
     }
 }
 
+/// Whether and how an HTTP listener advertises OAuth 2.0 for its MCP
+/// routes. Derived once per listener from its authenticator and consulted
+/// by both the 401 `WWW-Authenticate` challenge and this discovery handler,
+/// so the two never disagree about whether OAuth is on offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum McpOAuthDiscovery {
+    /// The listener validates no OAuth bearer token, so there is no flow to
+    /// advertise. Covers `None`, `Password`, and `Sasl`.
+    Disabled,
+    /// Self-managed OIDC: the authorization server is the `oidc_issuer`
+    /// dyncfg, read at request time so an operator can change it without a
+    /// restart.
+    Oidc,
+    // Frontegg (cloud) validates tokens against its own pre-shared key
+    // rather than `oidc_issuer`, and its authorization server is the
+    // configured Frontegg URL. Advertising it needs a `Frontegg { issuer }`
+    // arm here plus edge plumbing; tracked in DEX-31.
+}
+
+impl McpOAuthDiscovery {
+    /// The single mapping from a listener's authenticator to its OAuth
+    /// advertisement behavior. Only `Oidc` validates bearer tokens against
+    /// `oidc_issuer`, so only `Oidc` advertises today.
+    pub(crate) fn for_authenticator(kind: listeners::AuthenticatorKind) -> Self {
+        match kind {
+            listeners::AuthenticatorKind::Oidc => Self::Oidc,
+            listeners::AuthenticatorKind::Frontegg
+            | listeners::AuthenticatorKind::Password
+            | listeners::AuthenticatorKind::Sasl
+            | listeners::AuthenticatorKind::None => Self::Disabled,
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 /// Per-listener config for the discovery handler. Carried as an axum
-/// `Extension` because the same environmentd process can serve
-/// listeners with different `authenticator_kind` and `http_host_name`.
+/// `Extension` because one environmentd process can serve listeners with
+/// different authenticators and `http_host_name`s.
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveryConfig {
     /// Operator-configured external host (without scheme). Beats the
     /// `Host` header when set.
     pub http_host_name: Option<String>,
-    /// `None` makes the handler refuse to publish: no OAuth flow to
-    /// advertise.
-    pub authenticator_kind: listeners::AuthenticatorKind,
+    /// How (or whether) this listener advertises OAuth.
+    pub discovery: McpOAuthDiscovery,
 }
 
 /// HTTP handler for [`PROTECTED_RESOURCE_METADATA_PATH`].
@@ -182,22 +204,21 @@ pub(crate) struct DiscoveryConfig {
 /// places no auth requirements on this endpoint; clients must be able to
 /// fetch it before they have a token.
 ///
-/// Returns 404 when this listener does not validate tokens (`None`
-/// authenticator) or has no issuer configured, 503 if the adapter client
-/// is not yet available (a brief window at startup), 400 if the request
-/// has no host information to construct a URL with, and 200 with the
-/// JSON document otherwise.
+/// Returns 404 when this listener does not advertise OAuth (see
+/// [`McpOAuthDiscovery`]) or has no issuer configured, 503 if the adapter
+/// client is not yet available (a brief window at startup), 400 if the
+/// request has no host information to construct a URL with, and 200 with
+/// the JSON document otherwise.
 pub(crate) async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Extension(config): Extension<DiscoveryConfig>,
     Extension(metrics): Extension<OauthMetadataMetrics>,
     req: Request,
 ) -> Response {
-    if matches!(
-        config.authenticator_kind,
-        listeners::AuthenticatorKind::None
-    ) {
-        metrics.inc("no_auth_listener");
+    if !config.discovery.is_enabled() {
+        // Listener validates no OAuth bearer token (None/Password/Sasl), so
+        // there is no authorization flow to advertise.
+        metrics.inc("disabled");
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -232,6 +253,21 @@ pub(crate) async fn handle_protected_resource_metadata(
         warn!(%issuer, error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
         metrics.inc("invalid_issuer");
         return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
+    }
+
+    // We still publish when no audience is configured (mirroring the
+    // authenticator, which warns and skips `aud` validation), but a resource
+    // server that does not bind tokens to its own audience is exposed to
+    // same-issuer token reuse, so make the gap visible to operators.
+    if OIDC_AUDIENCE
+        .get(system_vars.dyncfgs())
+        .as_array()
+        .is_none_or(|audiences| audiences.is_empty())
+    {
+        warn!(
+            "oauth-protected-resource: publishing with oidc_audience unset; tokens from this \
+             issuer are not audience-bound to this resource"
+        );
     }
 
     let metadata = ProtectedResourceMetadata {
@@ -505,7 +541,7 @@ mod tests {
         let metrics = OauthMetadataMetrics::register_into(&registry);
         for status in [
             "ok",
-            "no_auth_listener",
+            "disabled",
             "no_issuer",
             "invalid_issuer",
             "no_host",
