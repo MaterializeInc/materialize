@@ -37,7 +37,7 @@ Claude Code prompts before reading files outside your project. Since globally
 installed skills live under `~/.claude/skills/`, it may ask to approve reads
 each time the skill opens a new documentation subdirectory.
 
-To stop these prompts, grant read access to just the Materialize skill in
+To stop these prompts, grant read access to the `materialize-docs` skill in
 `~/.claude/settings.json`:
 
 ```json
