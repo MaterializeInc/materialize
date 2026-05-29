@@ -66,8 +66,8 @@ mutual
       {k : ColType} → (e : Expr sch_src k) →
         eval env_tgt (Expr.subst es e) =
         eval (fun i => eval env_tgt (es i)) e
-    | _, .lit d        => rfl
-    | _, .col i        => rfl
+    | _, .lit d        => by simp [Expr.subst, eval]
+    | _, .col i        => by simp [Expr.subst, eval]
     | _, .not a        => by simp [Expr.subst, eval, eval_subst es env_tgt a]
     | _, .plus a b     => by simp [Expr.subst, eval, eval_subst es env_tgt a, eval_subst es env_tgt b]
     | _, .minus a b    => by simp [Expr.subst, eval, eval_subst es env_tgt a, eval_subst es env_tgt b]
@@ -75,12 +75,21 @@ mutual
     | _, .divide a b   => by simp [Expr.subst, eval, eval_subst es env_tgt a, eval_subst es env_tgt b]
     | _, .eq a b       => by simp [Expr.subst, eval, eval_subst es env_tgt a, eval_subst es env_tgt b]
     | _, .lt a b       => by simp [Expr.subst, eval, eval_subst es env_tgt a, eval_subst es env_tgt b]
-    | _, .andN args    => by simp [Expr.subst, eval, evalList_subst es env_tgt args]
-    | _, .orN args     => by simp [Expr.subst, eval, evalList_subst es env_tgt args]
+    | _, .andN args    => by
+      simp only [Expr.subst, eval]
+      rw [evalAndN_lazy_eq_eager, evalAndN_lazy_eq_eager,
+          evalList_subst es env_tgt args]
+    | _, .orN args     => by
+      simp only [Expr.subst, eval]
+      rw [evalOrN_lazy_eq_eager, evalOrN_lazy_eq_eager,
+          evalList_subst es env_tgt args]
     | _, .ifThen c t e => by
       simp [Expr.subst, eval,
             eval_subst es env_tgt c, eval_subst es env_tgt t, eval_subst es env_tgt e]
-    | _, .coalesce args => by simp [Expr.subst, eval, evalList_subst es env_tgt args]
+    | _, .coalesce args => by
+      simp only [Expr.subst, eval]
+      rw [evalCoalesce_lazy_eq_eager, evalCoalesce_lazy_eq_eager,
+          evalList_subst es env_tgt args]
 
   theorem evalList_subst {n_src n_tgt : Nat}
       {sch_src : Schema n_src} {sch_tgt : Schema n_tgt}

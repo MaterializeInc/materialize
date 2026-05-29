@@ -66,7 +66,9 @@ top.
   null-propagation classes), `Mz.Variadic` (variadic absorption),
   `Mz.Coalesce` (per-kind coalesce equations).
 * **Expression layer.** `Mz.Expr` (mutual `Expr` / `ExprList`
-  GADT), `Mz.Eval` (mutual `eval` / `evalList`), `Mz.Subst`
+  GADT), `Mz.Eval` (mutual `eval` / `evalList` + structurally
+  lazy variadic partners `evalAndN_lazy` / `evalOrN_lazy` /
+  `evalCoalesce_lazy` with `eager`-form bridges), `Mz.Subst`
   (substitution + soundness), `Mz.MightError` (analyzer +
   per-primitive error-free lemmas), `Mz.OutputType` (per-`Expr`
   `ColSchema` derivation; `DatumSatisfies` / `RowSatisfies`

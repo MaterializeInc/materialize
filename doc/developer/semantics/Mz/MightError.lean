@@ -355,12 +355,13 @@ mutual
       {k : ColType} → (e : Expr sch k) →
         Expr.might_error e = false → ¬(eval env e).IsErr
     | _, .lit d, h => by
+      unfold eval
       cases d with
       | bool _ => intro hErr; cases hErr
       | int _  => intro hErr; cases hErr
       | null   => intro hErr; cases hErr
       | err _  => simp [Expr.might_error] at h
-    | _, .col i, _ => hEnv i
+    | _, .col i, _ => by unfold eval; exact hEnv i
     | _, .not a, h => by
       simp only [Expr.might_error] at h
       have iha := might_error_sound env hEnv a h
@@ -370,32 +371,32 @@ mutual
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
       have iha := might_error_sound env hEnv a h.1
       have ihb := might_error_sound env hEnv b h.2
-      show ¬(evalPlus (eval env a) (eval env b)).IsErr
+      unfold eval
       exact evalPlus_not_err iha ihb
     | _, .minus a b, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
       have iha := might_error_sound env hEnv a h.1
       have ihb := might_error_sound env hEnv b h.2
-      show ¬(evalMinus (eval env a) (eval env b)).IsErr
+      unfold eval
       exact evalMinus_not_err iha ihb
     | _, .times a b, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
       have iha := might_error_sound env hEnv a h.1
       have ihb := might_error_sound env hEnv b h.2
-      show ¬(evalTimes (eval env a) (eval env b)).IsErr
+      unfold eval
       exact evalTimes_not_err iha ihb
     | _, .divide _ _, h => by simp [Expr.might_error] at h
     | _, .eq a b, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
       have iha := might_error_sound env hEnv a h.1
       have ihb := might_error_sound env hEnv b h.2
-      show ¬(evalEq (eval env a) (eval env b)).IsErr
+      unfold eval
       exact evalEq_not_err iha ihb
     | _, .lt a b, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
       have iha := might_error_sound env hEnv a h.1
       have ihb := might_error_sound env hEnv b h.2
-      show ¬(evalLt (eval env a) (eval env b)).IsErr
+      unfold eval
       exact evalLt_not_err iha ihb
     | _, .ifThen c t e, h => by
       simp only [Expr.might_error, Bool.or_eq_false_iff] at h
@@ -412,17 +413,20 @@ mutual
     | _, .andN args, h => by
       simp only [Expr.might_error] at h
       have ih_args := args_might_error_sound env hEnv args h
-      show ¬(evalAndN (evalList env args)).IsErr
+      unfold eval
+      rw [evalAndN_lazy_eq_eager env args]
       exact evalAndN_not_err_of_all_safe _ ih_args
     | _, .orN args, h => by
       simp only [Expr.might_error] at h
       have ih_args := args_might_error_sound env hEnv args h
-      show ¬(evalOrN (evalList env args)).IsErr
+      unfold eval
+      rw [evalOrN_lazy_eq_eager env args]
       exact evalOrN_not_err_of_all_safe _ ih_args
     | _, .coalesce args, h => by
       simp only [Expr.might_error] at h
       have ih_args := args_might_error_sound env hEnv args h
-      show ¬(evalCoalesce (evalList env args)).IsErr
+      unfold eval
+      rw [evalCoalesce_lazy_eq_eager env args]
       cases hargs : evalList env args with
       | nil =>
         intro hRes

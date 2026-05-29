@@ -216,6 +216,7 @@ theorem coalesce_collapse {n : Nat} {sch : Schema n} {k : ColType}
   have hd := eval_satisfies_outputCols env hsat a
   have hdN : ¬(eval env a).IsNull := hd.1 hN
   have hdE : ¬(eval env a).IsErr := hd.2 hE
+  rw [eval_coalesce, evalCoalesce_lazy_eq_eager]
   show evalCoalesce (eval env a :: evalList env rest) = eval env a
   exact evalCoalesce_cons_concrete _ _ hdN hdE
 

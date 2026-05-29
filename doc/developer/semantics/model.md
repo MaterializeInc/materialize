@@ -159,16 +159,38 @@ ill-typed expressions structurally unconstructible — `Expr.not
 (.lit (.int 5))` fails to type-check because `Expr.not` requires
 `Expr sch .bool`.
 
-The big-step evaluator is mutual with `evalList`:
+The big-step evaluator is mutual with `evalList` plus the lazy
+variadic partners:
 
 ```
 eval     : (env : Env sch) → Expr sch k → Datum k
 evalList : (env : Env sch) → ExprList sch k → List (Datum k)
+evalAndN_lazy / evalOrN_lazy        : structural short-circuit
+evalCoalesce_lazy + null/err residue helpers
 ```
 
 with `Env sch := (i : Fin n) → Datum (sch.types.get i)` — a typed
 lookup function whose cells agree with the schema's declared
 types. No out-of-bounds case; column indices are `Fin n`.
+
+Laziness is structural, not result-faithful retrofitting:
+
+* `.ifThen c t e` dispatches inline on `eval env c` and only the
+  selected branch is evaluated.
+* `.andN args` walks `args` left to right and stops on the first
+  `.bool false` — subsequent args are not evaluated.
+* `.orN args` is the symmetric short-circuit on `.bool true`.
+* `.coalesce args` stops on the first concrete operand; residue
+  helpers track the `null > err` rule when no concrete exists.
+
+The eager list-mediated forms (`evalAndN` / `evalOrN` /
+`evalCoalesce` on `List (Datum k)`) survive in `Mz/PrimEval.lean`
+as the algebraic-laws layer.
+`evalAndN_lazy_eq_eager` / `evalOrN_lazy_eq_eager` /
+`evalCoalesce_lazy_eq_eager` discharge the lazy form to the
+eager one, so downstream proofs that reason about
+`evalAndN (evalList env args)` etc. continue to apply via a
+single rewrite.
 
 Static analyses:
 

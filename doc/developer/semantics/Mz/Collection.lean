@@ -491,14 +491,14 @@ theorem filter_cross_pushdown_left_inexact :
               Update (Schema.free 0))]
            [({ row := fun i => i.elim0, diff := 0, err_diff := 1 } :
               Update (Schema.free 0))])).head?.map (·.err_diff)
-    = some 1 := by decide
+    = some 1 := by native_decide
   have hRHS : (cross
     (filter (.lit (.bool false))
       [({ row := fun i => i.elim0, diff := 1, err_diff := 0 } :
          Update (Schema.free 0))])
     [({ row := fun i => i.elim0, diff := 0, err_diff := 1 } :
        Update (Schema.free 0))]).head?.map (·.err_diff)
-    = some 0 := by decide
+    = some 0 := by native_decide
   rw [h] at hLHS
   rw [hLHS] at hRHS
   cases hRHS

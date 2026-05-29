@@ -23,10 +23,20 @@ expressions; variadic absorbing operators (`.andN`, `.orN`,
 `.coalesce`) and branch-selecting `.ifThen` sit outside the
 monad and stay bespoke.
 
-**Status: pilot.** This module runs alongside `Mz/Datum.lean`
-and `Mz/PrimEval.lean` for comparison. No consumers depend on
-`Datum'`. If the pilot lands, a follow-up will migrate the
-canonical `Datum` to this encoding. -/
+**Status: archived reference.** Pilot landed but was not
+adopted — a follow-up comparison (see PR #36614 review thread)
+concluded the GADT track in `Mz/Datum.lean` stays canonical.
+The monadic encoding's wins (collapsed null/err propagation in
+seven strict primitives, ~28 redundant lines saved) did not
+offset the cost of migrating ~30 theorems across eight modules;
+the more interesting SQL operators (variadic absorption, coalesce
+residue, filter err-diff) sit outside the monad anyway.
+Companion modules (`Mz/CollectionM.lean`, `Mz/ExprM.lean`,
+`Mz/EvalM.lean`) were retired; one carry-over made it back into
+the canonical track — the lazy variadic structure now lives in
+`Mz/Eval.lean`. This file remains as a self-contained
+documented reference for the encoding. No consumers depend on
+`Datum'`. -/
 
 namespace Mz
 
@@ -151,6 +161,26 @@ def evalPlus' (a b : Datum' .int) : Datum' .int := do
   let m ← b
   return n + m
 
+/-- Integer subtraction. -/
+def evalMinus' (a b : Datum' .int) : Datum' .int := do
+  let n ← a
+  let m ← b
+  return n - m
+
+/-- Integer multiplication. -/
+def evalTimes' (a b : Datum' .int) : Datum' .int := do
+  let n ← a
+  let m ← b
+  return n * m
+
+/-- Integer division. `.int 0` divisor produces `.err
+.divisionByZero` via the `bind`'s body; strict propagation on
+`.null` / `.err _` operands handled by the monad. -/
+def evalDivide' (a b : Datum' .int) : Datum' .int := do
+  let n ← a
+  let m ← b
+  if m = 0 then .err .divisionByZero else .val (n / m)
+
 /-! ## Sanity probes -/
 
 example : evalNot' (.bool true) = .bool false := rfl
@@ -180,6 +210,19 @@ even though it's vacuous. -/
 
 instance : Ord Empty where
   compare a _ := a.elim
+
+/-- `DecidableEq (Concrete k)` for every `k`. Bool, Int already
+have stdlib instances; Empty is vacuous. -/
+instance Concrete.instDecidableEq : (k : ColType) → DecidableEq (Concrete k)
+  | .bool => inferInstance
+  | .int  => inferInstance
+  | .top  => fun a _ => a.elim
+
+/-- `Ord (Concrete k)` for every `k`. Used by `evalLt'`. -/
+instance Concrete.instOrd : (k : ColType) → Ord (Concrete k)
+  | .bool => inferInstance
+  | .int  => inferInstance
+  | .top  => inferInstance
 
 def evalEq' {k : ColType} [DecidableEq (Concrete k)]
     (a b : Datum' k) : Datum' .bool := do
@@ -233,6 +276,17 @@ def datumAnd (a b : Datum' .bool) : Datum' .bool :=
   | .null, _       => .null
   | _, .null       => .null
   | .bool true, .bool true => .bool true
+
+/-- Binary OR on `Datum' .bool`. Absorption: TRUE > ERR > NULL > FALSE. -/
+def datumOr (a b : Datum' .bool) : Datum' .bool :=
+  match a, b with
+  | .bool true, _ => .bool true
+  | _, .bool true => .bool true
+  | .err e, _     => .err e
+  | _, .err e     => .err e
+  | .null, _      => .null
+  | _, .null      => .null
+  | .bool false, .bool false => .bool false
 
 /-- Variadic AND. Right-fold via `datumAnd` (mirrors
 `evalAndN`). The absorption logic lives in `datumAnd`; the fold

@@ -94,15 +94,15 @@ every theorem about `eval` lifts to a witness that one particular
 admissible outcome is the one `eval` produces. -/
 theorem legal_of_eval {n : Nat} {sch : Schema n} (env : Env sch) :
     {k : ColType} → (e : Expr sch k) → LegalEval env e (eval env e)
-  | _, .lit d        => LegalEval.lit d
-  | _, .col i        => LegalEval.col i
-  | _, .not a        => LegalEval.notC (legal_of_eval env a)
-  | _, .plus a b     => LegalEval.plusOk (legal_of_eval env a) (legal_of_eval env b)
-  | _, .minus a b    => LegalEval.minusOk (legal_of_eval env a) (legal_of_eval env b)
-  | _, .times a b    => LegalEval.timesOk (legal_of_eval env a) (legal_of_eval env b)
-  | _, .divide a b   => LegalEval.divideOk (legal_of_eval env a) (legal_of_eval env b)
-  | _, .eq a b       => LegalEval.eqOk (legal_of_eval env a) (legal_of_eval env b)
-  | _, .lt a b       => LegalEval.ltOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .lit d        => by unfold eval; exact LegalEval.lit d
+  | _, .col i        => by unfold eval; exact LegalEval.col i
+  | _, .not a        => by unfold eval; exact LegalEval.notC (legal_of_eval env a)
+  | _, .plus a b     => by unfold eval; exact LegalEval.plusOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .minus a b    => by unfold eval; exact LegalEval.minusOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .times a b    => by unfold eval; exact LegalEval.timesOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .divide a b   => by unfold eval; exact LegalEval.divideOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .eq a b       => by unfold eval; exact LegalEval.eqOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .lt a b       => by unfold eval; exact LegalEval.ltOk (legal_of_eval env a) (legal_of_eval env b)
   | _, .ifThen c t e =>
     -- ifThen dispatches lazily on eval env c.
     match h : eval env c with
