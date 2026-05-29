@@ -3656,23 +3656,34 @@ DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
 
-# AWS Glue Schema Registry — Avro source format. Parser-only; the planner
-# rejects this variant with a "not yet implemented" error until the
-# follow-up PR.
+# AWS Glue Schema Registry — Avro source format. `seed: None` here reflects
+# the unpurified AST; purification fetches the schema and fills it in. The
+# round-trip parses `SEED VALUE SCHEMA '...'` (also accepted if written
+# directly).
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema')
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema')
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }] }))), envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }], seed: None }))), envelope: None })
+
+# Round-trip of a purified statement: the `SEED VALUE SCHEMA` clause that
+# purification emits must re-parse so persisted `create_sql` reloads. Parallels
+# the Confluent `SEED VALUE SCHEMA` case above; Glue has a value schema only.
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') SEED VALUE SCHEMA '{"some": "schema"}'
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') SEED VALUE SCHEMA '{"some": "schema"}'
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"some\": \"schema\"}" }) }))), envelope: None })
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [] }))), envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [], seed: None }))), envelope: None })
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY
@@ -3686,4 +3697,15 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING A
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'my-schema') ENVELOPE NONE
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }] }))), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("my-schema"))) }], seed: None }))), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+# Round-trip of a purified UPSERT statement: KEY FORMAT and VALUE FORMAT are
+# purified independently, so each Glue clause carries its own `SEED VALUE
+# SCHEMA`. This is the persisted `create_sql` shape for UPSERT/DEBEZIUM, which
+# require explicit KEY FORMAT + VALUE FORMAT under Glue.
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) KEY FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'key-schema') SEED VALUE SCHEMA '{"k": "key"}' VALUE FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'val-schema') SEED VALUE SCHEMA '{"v": "value"}' ENVELOPE UPSERT
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = bar) KEY FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'key-schema') SEED VALUE SCHEMA '{"k": "key"}' VALUE FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = 'val-schema') SEED VALUE SCHEMA '{"v": "value"}' ENVELOPE UPSERT
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: Some(KeyValue { key: Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("key-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"k\": \"key\"}" }) }), value: Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: SchemaName, value: Some(Value(String("val-schema"))) }], seed: Some(GlueAvroSeed { value_schema: "{\"v\": \"value\"}" }) }) }), envelope: Some(Upsert { value_decode_err_policy: [] }) })

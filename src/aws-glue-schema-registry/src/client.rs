@@ -239,6 +239,17 @@ impl DataFormat {
             _ => DataFormat::Unknown(format.as_str().to_string()),
         }
     }
+
+    /// Returns the canonical Glue data-format string (`AVRO`, `JSON`,
+    /// `PROTOBUF`), or the raw SDK-reported value for `Unknown`.
+    pub fn as_str(&self) -> &str {
+        match self {
+            DataFormat::Avro => "AVRO",
+            DataFormat::Json => "JSON",
+            DataFormat::Protobuf => "PROTOBUF",
+            DataFormat::Unknown(s) => s,
+        }
+    }
 }
 
 /// Lifecycle status of a Glue schema version.
