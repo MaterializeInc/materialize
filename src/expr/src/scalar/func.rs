@@ -3119,8 +3119,7 @@ mod test {
                 length,
             }];
             let elems = vec![Datum::Int32(0); length];
-            let datum =
-                arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+            let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
             let arr = match datum {
                 Datum::Array(arr) => arr,
                 other => panic!("expected array, got {other:?}"),
