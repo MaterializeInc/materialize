@@ -72,6 +72,10 @@ pub type UpsertValue = Result<Row, Box<UpsertError>>;
 )]
 pub struct UpsertKey([u8; 32]);
 
+impl columnation::Columnation for UpsertKey {
+    type InnerRegion = columnation::CopyRegion<UpsertKey>;
+}
+
 impl Debug for UpsertKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "0x")?;
@@ -368,6 +372,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
 where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    T: columnation::Columnation,
     FromTime: Timestamp + Clone + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(

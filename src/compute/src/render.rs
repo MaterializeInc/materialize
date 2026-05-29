@@ -161,8 +161,8 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
 pub mod context;
 pub(crate) mod errors;

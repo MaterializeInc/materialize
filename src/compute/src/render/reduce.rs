@@ -53,12 +53,12 @@ use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
-use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
-};
 use crate::typedefs::{
     ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
     RowRowSpine, RowSpine, RowValSpine,
+};
+use mz_row_spine::{
+    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {

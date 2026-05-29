@@ -6082,6 +6082,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-row-spine",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
@@ -7631,6 +7632,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-row-spine"
+version = "0.0.0"
+dependencies = [
+ "columnation",
+ "differential-dataflow",
+ "mz-ore",
+ "mz-repr",
+ "mz-timely-util",
+ "timely",
+]
+
+[[package]]
 name = "mz-s3-datagen"
 version = "0.0.0"
 dependencies = [
@@ -8029,6 +8042,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-rocksdb",
+ "mz-row-spine",
  "mz-sql-parser",
  "mz-sql-server-util",
  "mz-ssh-util",
@@ -8153,6 +8167,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnation",
  "csv-async",
  "derivative",
  "differential-dataflow",
