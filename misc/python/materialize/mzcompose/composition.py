@@ -651,11 +651,33 @@ class Composition:
         # Remember the old composition.
         old_compose = copy.deepcopy(self.compose)
 
+        # Collect both the explicit override services and any companions
+        # they pull in (e.g. a Materialized that auto-attaches a paired
+        # Persistd). Without this, override() would write a service whose
+        # `depends_on` references an undefined companion, and the next
+        # `docker compose` invocation rejects the project.
+        def _flatten(s: "MzComposeService") -> list["MzComposeService"]:
+            out = [s]
+            for companion in getattr(s, "companions", []):
+                out.extend(_flatten(companion))
+            return out
+
+        all_services: list["MzComposeService"] = []
+        for s in services:
+            all_services.extend(_flatten(s))
+
         # Update the composition with the new service definitions.
-        deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
-        for service in services:
+        deps = self._munge_services(
+            [(s.name, cast(dict, s.config)) for s in all_services]
+        )
+        explicit_names = {s.name for s in services}
+        for service in all_services:
+            # Only the explicit override targets are required to already
+            # exist in SERVICES; companions are allowed to be new because
+            # they piggyback on the parent service.
+            require_exists = fail_on_new_service and service.name in explicit_names
             assert (
-                not fail_on_new_service or service.name in self.compose["services"]
+                not require_exists or service.name in self.compose["services"]
             ), f"Service {service.name} not found in SERVICES: {list(self.compose['services'].keys())}"
             self.compose["services"][service.name] = service.config
 
@@ -665,8 +687,9 @@ class Composition:
 
         self._invalidate_compose_files()
 
-        # Ensure image freshness
-        self.pull_if_variable([service.name for service in services])
+        # Ensure image freshness (include companions so their images get
+        # pulled too).
+        self.pull_if_variable([service.name for service in all_services])
 
         try:
             # Run the next composition.
