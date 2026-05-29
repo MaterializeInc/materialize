@@ -2741,14 +2741,20 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
+fn array_lower<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
     if i < 1 {
-        return None;
+        return Ok(None);
     }
-    match a.dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Some(1),
-        None => None,
-    }
+    a.dims()
+        .into_iter()
+        .nth(i as usize - 1)
+        .map(|dim| {
+            let (lower, _upper) = dim.dimension_bounds();
+            lower
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange(lower.to_string().into()))
+        })
+        .transpose()
 }
 
 #[sqlfunc(
@@ -2800,9 +2806,10 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
         .into_iter()
         .nth(i as usize - 1)
         .map(|dim| {
-            dim.length
+            let (_lower, upper) = dim.dimension_bounds();
+            upper
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))
+                .map_err(|_| EvalError::Int32OutOfRange(upper.to_string().into()))
         })
         .transpose()
 }
