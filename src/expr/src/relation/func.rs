@@ -2970,10 +2970,14 @@ fn generate_subscripts_array(
                 .length
                 .try_into()
                 .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?;
-            let upper_bound = lower_bound
-                .checked_add(length - 1)
-                .ok_or_else(|| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?;
-            Ok(Box::new(generate_series::<i32>(lower_bound, upper_bound, 1)?))
+            let upper_bound = lower_bound.checked_add(length - 1).ok_or_else(|| {
+                EvalError::Int32OutOfRange(requested_dim.length.to_string().into())
+            })?;
+            Ok(Box::new(generate_series::<i32>(
+                lower_bound,
+                upper_bound,
+                1,
+            )?))
         }
         None => Ok(Box::new(iter::empty())),
     }
