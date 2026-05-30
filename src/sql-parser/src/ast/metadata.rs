@@ -246,13 +246,37 @@ impl AstDisplay for RawDataType {
             }
             RawDataType::Other { name, typ_mod } => {
                 // If the type name is a single unqualified identifier whose
-                // unquoted form clashes with a keyword that has its own
-                // special parser dispatch (e.g. `map` → `parse_map_type`,
-                // which then expects `[`), an unquoted emit would reparse
-                // through that dispatch and fail. Emit the always-quoted
-                // stable form in that case to keep the normal type-name path.
+                // unquoted form clashes with a keyword that `parse_data_type`
+                // either dispatches into a special grammar (`map[...]`) or
+                // canonicalizes to a different spelling (`string` → `text`,
+                // `bigint` → `int8`, …), an unquoted emit would reparse to a
+                // different AST. Force the always-quoted stable form in those
+                // cases so the round-trip preserves the original name.
                 let name_stable = name.to_ast_string_stable();
-                let needs_quote_to_disambiguate = matches!(name_stable.as_str(), r#""map""#);
+                // Only keywords that `parse_data_type` *renames* need
+                // quoting. Keywords whose canonicalized name matches the
+                // keyword text itself (`bpchar`, `varchar`, `time`,
+                // `timestamp`, `timestamptz`) round-trip unquoted via the
+                // keyword path.
+                let needs_quote_to_disambiguate = matches!(
+                    name_stable.as_str(),
+                    r#""map""#
+                        | r#""string""#
+                        | r#""bigint""#
+                        | r#""smallint""#
+                        | r#""dec""#
+                        | r#""decimal""#
+                        | r#""double""#
+                        | r#""float""#
+                        | r#""int""#
+                        | r#""integer""#
+                        | r#""real""#
+                        | r#""boolean""#
+                        | r#""bytes""#
+                        | r#""json""#
+                        | r#""char""#
+                        | r#""character""#
+                );
                 if needs_quote_to_disambiguate {
                     f.write_str(&name_stable);
                 } else {
