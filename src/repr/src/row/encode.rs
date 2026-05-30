@@ -2158,6 +2158,23 @@ impl RowPacker<'_> {
                             upper,
                         } = &**inner;
 
+                        // Range bounds must not be `Datum::Null` — `push_range_with`
+                        // panics on that invariant. Reject untrusted proto bytes
+                        // that would push a `Null` bound before calling it.
+                        let is_null_proto = |d: &ProtoDatum| {
+                            matches!(
+                                d.datum_type,
+                                Some(DatumType::Other(o))
+                                    if ProtoDatumOther::try_from(o)
+                                        == Ok(ProtoDatumOther::Null)
+                            )
+                        };
+                        if lower.as_deref().is_some_and(is_null_proto)
+                            || upper.as_deref().is_some_and(is_null_proto)
+                        {
+                            return Err("range bound cannot be Null".into());
+                        }
+
                         self.push_range_with(
                             RangeLowerBound {
                                 inclusive: *lower_inclusive,
