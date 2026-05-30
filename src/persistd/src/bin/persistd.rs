@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use async_trait::async_trait;
 use futures::StreamExt;
 use mz_build_info::{BuildInfo, build_info};
@@ -183,12 +183,18 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
             Ok(())
         }
         // The wrapper already logged the underlying cause at error level.
-        // Return an error so the process exits non-zero and its supervisor
-        // restarts it, re-running schema creation in `open`.
-        _ = schema_lost.notified() => Err(anyhow!(
-            "consensus relation vanished from the backing store; exiting so the supervisor \
-             restarts persistd and recreates the schema"
-        )),
+        // Exit non-zero directly rather than returning an error: that would
+        // bubble up to a `panic!` in `main`, which is slow (it prints a
+        // backtrace) and is counted as a failure by the test harness. A plain
+        // non-zero exit lets the supervisor restart persistd, re-running
+        // schema creation in `open`.
+        _ = schema_lost.notified() => {
+            error!(
+                "consensus relation vanished from the backing store; exiting so the supervisor \
+                 restarts persistd and recreates the schema"
+            );
+            std::process::exit(1);
+        }
     }
 }
 
