@@ -456,7 +456,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::Subscript { expr, positions } => {
-                f.write_node(&expr);
+                write_subscript_receiver(f, expr);
                 f.write_str("[");
 
                 let mut first = true;
@@ -550,6 +550,30 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
             | Expr::AnySubquery { .. }
             | Expr::AllSubquery { .. }
     );
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
+    }
+}
+
+/// Write `expr` as the receiver of a `[…]` subscript. An unparenthesized
+/// `Identifier(["map"])` reparses as `Token::Keyword(MAP)` followed by `[`,
+/// which dispatches to `parse_map` (the map-literal grammar) instead of a
+/// regular subscript. Parenthesize identifiers whose last component is a
+/// context-sensitive keyword so the round trip stays an identifier subscript.
+fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let needs_parens = if let Expr::Identifier(idents) = expr {
+        idents
+            .last()
+            .and_then(|id| id.as_keyword())
+            .map(|kw| kw.is_context_sensitive_keyword())
+            .unwrap_or(false)
+    } else {
+        false
+    };
     if needs_parens {
         f.write_str("(");
         f.write_node(expr);
