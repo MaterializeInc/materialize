@@ -1307,7 +1307,8 @@ impl Pretty {
                 if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
                     return self.doc_display(v, "function filter or over or order by");
                 }
-                let special = match v.name.to_ast_string_stable().as_str() {
+                let name_stable = v.name.to_ast_string_stable();
+                let special = match name_stable.as_str() {
                     r#""extract""# if v.args.len() == Some(2) => true,
                     r#""position""# if v.args.len() == Some(2) => true,
                     _ => false,
@@ -1315,9 +1316,35 @@ impl Pretty {
                 if special {
                     return self.doc_display(v, "special function");
                 }
+                // Mirror the same carve-out as the `AstDisplay for Function`
+                // impl: function names that clash with a keyword having its
+                // own special-grammar parser form (`(Kw, LParen)` dispatch in
+                // parse_prefix) must be quoted on emit, or the reparse goes
+                // through the special grammar instead of a regular call.
+                let needs_quote = matches!(
+                    name_stable.as_str(),
+                    r#""array""#
+                        | r#""coalesce""#
+                        | r#""exists""#
+                        | r#""extract""#
+                        | r#""greatest""#
+                        | r#""least""#
+                        | r#""map""#
+                        | r#""normalize""#
+                        | r#""nullif""#
+                        | r#""position""#
+                        | r#""row""#
+                        | r#""substring""#
+                        | r#""trim""#
+                );
+                let printed_name = if needs_quote {
+                    name_stable
+                } else {
+                    v.name.to_ast_string_simple()
+                };
                 let name = format!(
                     "{}({}",
-                    v.name.to_ast_string_simple(),
+                    printed_name,
                     if v.distinct { "DISTINCT " } else { "" }
                 );
                 bracket(name, comma_separate(|e| self.doc_expr(e), args), ")")
