@@ -38,7 +38,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::vec::{Broadcast, Map};
-use timely::dataflow::operators::{Capture, Leave, Probe};
+use timely::dataflow::operators::{Capture, Input, Leave, Probe};
 use timely::dataflow::{ProbeHandle, Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -751,6 +751,153 @@ mod tests {
     use crate::txns::TxnsHandle;
 
     use super::*;
+
+    /// One scripted action applied to the operator's two inputs.
+    #[derive(Debug, Clone)]
+    enum Action {
+        /// Send a `DataRemapEntry` on the remap input.
+        Remap {
+            physical_upper: u64,
+            logical_upper: u64,
+        },
+        /// Advance the remap input frontier to `ts` (empty antichain if `None`).
+        RemapFrontier(Option<u64>),
+        /// Send passthrough data records (as `(payload, time)`), then leave them buffered.
+        Pass { records: Vec<(i64, u64)> },
+        /// Advance the passthrough input frontier to `ts` (empty antichain if `None`).
+        PassFrontier(Option<u64>),
+        /// Step the worker once.
+        Step,
+    }
+
+    /// Runs `schedule` against the operator built by `build`, returning the
+    /// captured output events and the final exclusive output frontier. Each
+    /// event is shaped as `(payload, time, count)`, where `count` is synthesized
+    /// as `1` so the output looks like a differential collection.
+    fn run_schedule(
+        build: impl for<'a> Fn(
+            StreamVec<'a, u64, DataRemapEntry<u64>>,
+            StreamVec<'a, u64, i64>,
+            Antichain<u64>,
+        ) -> (StreamVec<'a, u64, i64>, PressOnDropButton),
+        until: Antichain<u64>,
+        schedule: &[Action],
+    ) -> (Vec<(i64, u64, i64)>, u64) {
+        let mut worker = Worker::new(
+            WorkerConfig::default(),
+            timely::communication::Allocator::Thread(
+                timely::communication::allocator::Thread::default(),
+            ),
+            Some(std::time::Instant::now()),
+        );
+
+        let (mut remap_handle, mut pass_handle, probe, capture) =
+            worker.dataflow::<u64, _, _>(|scope| {
+                let (remap_handle, remap_stream) = scope.new_input::<Vec<DataRemapEntry<u64>>>();
+                let (pass_handle, pass_stream) = scope.new_input::<Vec<i64>>();
+                let (out, _button) = build(remap_stream, pass_stream, until.clone());
+                let probe = ProbeHandle::new();
+                let out = out.probe_with(&probe);
+                (remap_handle, pass_handle, probe, out.capture())
+            });
+
+        // timely input handles can only `advance_to` forward in time. Track the
+        // last time used on each input so we can fail loudly with a useful
+        // message instead of panicking deep inside timely on a decreasing time.
+        let mut last_remap_ts = 0u64;
+        let mut last_pass_ts = 0u64;
+        for action in schedule {
+            match action.clone() {
+                // `Remap` is a `send` at the handle's current time, so it carries
+                // no explicit time and needs no monotonicity assert.
+                Action::Remap {
+                    physical_upper,
+                    logical_upper,
+                } => remap_handle.send(DataRemapEntry {
+                    physical_upper,
+                    logical_upper,
+                }),
+                Action::RemapFrontier(Some(ts)) => {
+                    assert!(
+                        ts >= last_remap_ts,
+                        "Action::RemapFrontier time {ts} < previous remap time {last_remap_ts}; per-input times must be non-decreasing"
+                    );
+                    last_remap_ts = ts;
+                    remap_handle.advance_to(ts);
+                }
+                Action::RemapFrontier(None) => {
+                    last_remap_ts = u64::MAX;
+                    remap_handle.advance_to(u64::MAX);
+                }
+                Action::Pass { records } => {
+                    for (payload, time) in records {
+                        assert!(
+                            time >= last_pass_ts,
+                            "Action::Pass time {time} < previous passthrough time {last_pass_ts}; per-input times must be non-decreasing"
+                        );
+                        last_pass_ts = time;
+                        // `advance_to` is what makes each record's time visible to
+                        // the operator; the subsequent `send` emits the payload at
+                        // that time. Both impls consume the identical schedule, so
+                        // the exact send mechanics need only be self-consistent.
+                        pass_handle.advance_to(time);
+                        pass_handle.send(payload);
+                    }
+                }
+                Action::PassFrontier(Some(ts)) => {
+                    assert!(
+                        ts >= last_pass_ts,
+                        "Action::PassFrontier time {ts} < previous passthrough time {last_pass_ts}; per-input times must be non-decreasing"
+                    );
+                    last_pass_ts = ts;
+                    pass_handle.advance_to(ts);
+                }
+                Action::PassFrontier(None) => {
+                    last_pass_ts = u64::MAX;
+                    pass_handle.advance_to(u64::MAX);
+                }
+                Action::Step => {
+                    worker.step();
+                }
+            }
+        }
+        // Drain: flush inputs and step until the output probe frontier stops
+        // advancing. A hard cap PANICS so a buggy operator that never settles
+        // fails loudly instead of silently returning partial results.
+        remap_handle.flush();
+        pass_handle.flush();
+        let mut last = probe.with_frontier(|f| f.to_owned());
+        let mut stable = 0;
+        for step in 0.. {
+            assert!(
+                step < 4096,
+                "run_schedule did not quiesce within 4096 steps"
+            );
+            worker.step();
+            let now = probe.with_frontier(|f| f.to_owned());
+            if now == last {
+                stable += 1;
+                // Require a few consecutive no-change steps so in-flight messages flush.
+                if stable >= 8 {
+                    break;
+                }
+            } else {
+                stable = 0;
+                last = now;
+            }
+        }
+
+        let frontier = probe.with_frontier(|f| *f.as_option().unwrap_or(&u64::MAX));
+        let mut output = Vec::new();
+        while let Ok(event) = capture.try_recv() {
+            if let Event::Messages(time, msgs) = event {
+                for payload in msgs {
+                    output.push((payload, time, 1));
+                }
+            }
+        }
+        (output, frontier)
+    }
 
     impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
