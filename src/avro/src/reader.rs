@@ -268,8 +268,8 @@ impl<R: AvroRead> Reader<R> {
         match util::read_long(&mut self.inner) {
             Ok(block_len) => {
                 self.messages_remaining = block_len as usize;
-                let block_bytes = util::read_long(&mut self.inner)?;
-                self.fill_buf(block_bytes as usize)?;
+                let block_bytes = util::safe_len(util::read_long(&mut self.inner)? as usize)?;
+                self.fill_buf(block_bytes)?;
                 let mut marker = [0u8; 16];
                 self.inner.read_exact(&mut marker)?;
 
