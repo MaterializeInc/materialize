@@ -1382,4 +1382,35 @@ mod tests {
         );
     }
 
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_per4_advance_after_remap_close() {
+        // Emit a remap entry whose logical_upper (10) exceeds its physical_upper
+        // (5). Close the remap input while the passthrough frontier is still
+        // below physical_upper (so the capability has NOT yet advanced to
+        // logical_upper), then advance the passthrough frontier up to
+        // physical_upper (5). The capability must still advance to logical_upper
+        // (10) using the remap entry retained across the close, not stall at the
+        // passthrough frontier (5). The async impl dropped the entry on close and
+        // stalled here (PER-4).
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 5,
+                logical_upper: 10,
+            },
+            Action::RemapFrontier(Some(10)),
+            Action::Step,
+            // Close remap before the passthrough frontier reaches physical_upper.
+            Action::RemapFrontier(None),
+            Action::Step,
+            // Only now does the passthrough frontier reach physical_upper.
+            Action::PassFrontier(Some(5)),
+            Action::Step,
+        ];
+        let (_output, frontier) = run_schedule(build_sync, Antichain::new(), &schedule);
+        assert_eq!(
+            frontier, 10,
+            "capability must advance to logical_upper after remap close, got {frontier}"
+        );
+    }
 }
