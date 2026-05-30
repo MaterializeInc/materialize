@@ -18,13 +18,14 @@
 //!
 //! See `doc/developer/design/20260527_persist_committer.md`.
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use futures::StreamExt;
 use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -40,8 +41,8 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_committer::metrics::CommitterMetrics;
 use mz_persist_committer::{CommitterConfig, start_committer};
-use tokio::sync::Notify;
-use tracing::{error, info, warn};
+use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -157,12 +158,36 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
         .context("opening consensus backend")?;
     info!("consensus backend ready");
 
-    // Watch for the consensus relation disappearing (e.g. the backing store
-    // was reset). See `TerminateOnMissingSchema`.
-    let schema_lost = Arc::new(Notify::new());
-    let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(TerminateOnMissingSchema {
+    // Recreate the schema in place if the backing store reports the consensus
+    // relation is missing, rather than failing forever. See
+    // `SelfHealingConsensus`. The factory rebuilds the same config the boot
+    // path used; opening it re-runs the idempotent schema DDL.
+    let reopen: ReopenFn = {
+        let consensus_url = args.consensus_url.clone();
+        let persist_cfg = persist_cfg.clone();
+        let postgres_metrics = persist_metrics.postgres_consensus.clone();
+        let configs = Arc::clone(&configs);
+        Box::new(move || {
+            let consensus_url = consensus_url.clone();
+            let persist_cfg = persist_cfg.clone();
+            let postgres_metrics = postgres_metrics.clone();
+            let configs = Arc::clone(&configs);
+            Box::pin(async move {
+                let consensus_cfg = ConsensusConfig::try_from(
+                    &consensus_url,
+                    Box::new(persist_cfg),
+                    postgres_metrics,
+                    configs,
+                )?;
+                let consensus: Arc<dyn Consensus + Send + Sync> = consensus_cfg.open().await?;
+                Ok(consensus)
+            })
+        })
+    };
+    let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(SelfHealingConsensus {
         inner: consensus,
-        schema_lost: Arc::clone(&schema_lost),
+        reopen,
+        heal_lock: Mutex::new(()),
     });
 
     let committer_metrics = CommitterMetrics::register(&metrics_registry);
@@ -174,79 +199,99 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
     let _handle = start_committer(consensus, committer_metrics, committer_config)
         .context("starting committer")?;
 
-    // Block until the process is signaled to exit or the consensus schema
-    // vanishes. Dropping `_handle` aborts the gRPC server and refresh tasks.
-    tokio::select! {
-        res = tokio::signal::ctrl_c() => {
-            res.context("waiting for shutdown signal")?;
-            info!("persistd shutting down");
-            Ok(())
-        }
-        // The wrapper already logged the underlying cause at error level.
-        // Exit non-zero directly rather than returning an error: that would
-        // bubble up to a `panic!` in `main`, which is slow (it prints a
-        // backtrace) and is counted as a failure by the test harness. A plain
-        // non-zero exit lets the supervisor restart persistd, re-running
-        // schema creation in `open`.
-        _ = schema_lost.notified() => {
-            error!(
-                "consensus relation vanished from the backing store; exiting so the supervisor \
-                 restarts persistd and recreates the schema"
-            );
-            std::process::exit(1);
-        }
-    }
+    // Block until the process is signaled to exit. Dropping `_handle` aborts
+    // the gRPC server and refresh tasks.
+    tokio::signal::ctrl_c()
+        .await
+        .context("waiting for shutdown signal")?;
+    info!("persistd shutting down");
+    Ok(())
 }
 
-/// Fire `schema_lost` and log if `err` reports the consensus relation is gone.
-fn flag_missing_schema(err: &ExternalError, schema_lost: &Notify) {
-    if err.is_undefined_table() {
-        error!(
-            error = %err.display_with_causes(),
-            "consensus relation does not exist; the backing store appears to have been reset. \
-             Terminating so the supervisor restarts persistd and recreates the schema",
-        );
-        schema_lost.notify_one();
-    }
-}
+/// A consensus handle, as returned by a [`ReopenFn`].
+type DynConsensus = Arc<dyn Consensus + Send + Sync>;
 
-/// A [`Consensus`] wrapper that detects the backing store losing the consensus
-/// relation and signals `persistd` to terminate.
+/// The future produced by a [`ReopenFn`].
+type ReopenFuture = Pin<Box<dyn Future<Output = anyhow::Result<DynConsensus>> + Send>>;
+
+/// Factory that re-opens the consensus backend, re-running the idempotent
+/// schema DDL in `PostgresConsensus::open`. Used by [`SelfHealingConsensus`].
+type ReopenFn = Box<dyn Fn() -> ReopenFuture + Send + Sync>;
+
+/// A [`Consensus`] wrapper that recreates the consensus schema in place when
+/// the backing store reports the relation is gone (SQLSTATE 42P01), rather
+/// than failing forever.
 ///
-/// `persistd` creates its schema exactly once, in `PostgresConsensus::open`,
-/// during startup. If the backing store is reset under a running `persistd`
-/// the relation disappears and every op then fails forever with SQLSTATE
-/// 42P01 (`undefined_table`); no in-process retry can clear it. Rather than
-/// spin silently, the standalone process treats this as fatal: this wrapper
-/// fires `schema_lost`, `run` exits non-zero, and the supervisor restarts
-/// `persistd`, which recreates the schema.
+/// `persistd`'s schema is created once, in `PostgresConsensus::open`. If the
+/// backing store is reset out from under a running `persistd` (a test harness
+/// wiping the metadata store between phases, a freshly provisioned store, ...)
+/// every op then fails with `undefined_table`, which no retry can clear.
+/// Reopening re-runs the idempotent `CREATE SCHEMA/TABLE IF NOT EXISTS` DDL,
+/// restoring service against the now-empty store without restarting the
+/// process. The freshly opened handle is discarded; the original connection
+/// pool finds the recreated table on retry.
 ///
 /// This policy is intentionally local to the standalone binary. The in-process
-/// committer in `environmentd` shares the same committer code but must never
-/// self-terminate, so it does not install this wrapper.
-#[derive(Debug)]
-struct TerminateOnMissingSchema {
+/// committer in `environmentd` shares the committer code but must never
+/// silently recreate a missing schema, which would mask catastrophic data
+/// loss; it does not install this wrapper.
+struct SelfHealingConsensus {
     inner: Arc<dyn Consensus + Send + Sync>,
-    schema_lost: Arc<Notify>,
+    reopen: ReopenFn,
+    /// Serializes heals so a burst of concurrent `undefined_table` errors does
+    /// not trigger a stampede of reopens. The DDL is idempotent, so redundant
+    /// reopens would be harmless, but serializing keeps it tidy.
+    heal_lock: Mutex<()>,
+}
+
+impl std::fmt::Debug for SelfHealingConsensus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelfHealingConsensus")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SelfHealingConsensus {
+    /// If `err` reports the consensus relation is missing, reopen the backing
+    /// store to recreate the schema and return `true` so the caller retries.
+    /// Returns `false` for any other error, or if the reopen itself failed.
+    async fn maybe_heal(&self, err: &ExternalError) -> bool {
+        if !err.is_undefined_table() {
+            return false;
+        }
+        let _guard = self.heal_lock.lock().await;
+        match (self.reopen)().await {
+            Ok(_fresh) => {
+                info!(
+                    "consensus relation was missing; recreated the schema after the backing \
+                     store was reset"
+                );
+                true
+            }
+            Err(e) => {
+                warn!(
+                    error = %e.display_with_causes(),
+                    "failed to reopen consensus to recreate the missing schema",
+                );
+                false
+            }
+        }
+    }
 }
 
 #[async_trait]
-impl Consensus for TerminateOnMissingSchema {
+impl Consensus for SelfHealingConsensus {
     fn list_keys(&self) -> ResultStream<'_, String> {
-        let schema_lost = Arc::clone(&self.schema_lost);
-        Box::pin(self.inner.list_keys().inspect(move |item| {
-            if let Err(err) = item {
-                flag_missing_schema(err, &schema_lost);
-            }
-        }))
+        // Administrative path; not retried on a missing schema. The reads
+        // clients drive (head/scan/cas) are what recover the schema.
+        self.inner.list_keys()
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let res = self.inner.head(key).await;
-        if let Err(err) = &res {
-            flag_missing_schema(err, &self.schema_lost);
+        match self.inner.head(key).await {
+            Err(e) if self.maybe_heal(&e).await => self.inner.head(key).await,
+            other => other,
         }
-        res
     }
 
     async fn compare_and_set(
@@ -254,11 +299,10 @@ impl Consensus for TerminateOnMissingSchema {
         key: &str,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        let res = self.inner.compare_and_set(key, new).await;
-        if let Err(err) = &res {
-            flag_missing_schema(err, &self.schema_lost);
+        match self.inner.compare_and_set(key, new.clone()).await {
+            Err(e) if self.maybe_heal(&e).await => self.inner.compare_and_set(key, new).await,
+            other => other,
         }
-        res
     }
 
     async fn scan(
@@ -267,18 +311,16 @@ impl Consensus for TerminateOnMissingSchema {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let res = self.inner.scan(key, from, limit).await;
-        if let Err(err) = &res {
-            flag_missing_schema(err, &self.schema_lost);
+        match self.inner.scan(key, from, limit).await {
+            Err(e) if self.maybe_heal(&e).await => self.inner.scan(key, from, limit).await,
+            other => other,
         }
-        res
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        let res = self.inner.truncate(key, seqno).await;
-        if let Err(err) = &res {
-            flag_missing_schema(err, &self.schema_lost);
+        match self.inner.truncate(key, seqno).await {
+            Err(e) if self.maybe_heal(&e).await => self.inner.truncate(key, seqno).await,
+            other => other,
         }
-        res
     }
 }

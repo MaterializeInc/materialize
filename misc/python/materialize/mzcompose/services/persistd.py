@@ -37,7 +37,6 @@ class Persistd(Service):
         command: list[str] | None = None,
         depends_on: list[str] = [],
         environment_extra: list[str] = [],
-        restart: str = "on-failure:5",
     ) -> None:
         if command is None:
             command = [
@@ -66,13 +65,6 @@ class Persistd(Service):
             "ports": [listen_port],
             "environment": environment,
             "depends_on": depends_graph,
-            # If the consensus schema vanishes (e.g. the backing store was
-            # reset), persistd exits non-zero so it can be restarted and
-            # recreate the schema. Without a restart policy the container
-            # would stay down and its DNS name would stop resolving, leaving
-            # dependents stuck on "connection refused". Bounded to avoid an
-            # unbounded crashloop when the backend is genuinely broken.
-            "restart": restart,
         }
 
         super().__init__(name=name, config=config)
