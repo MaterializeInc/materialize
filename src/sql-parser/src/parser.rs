@@ -314,7 +314,17 @@ struct Parser<'a> {
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
+    /// Number of `maybe_parse` calls that have failed (i.e. cost the parser
+    /// a speculative descent that produced nothing). Bounded by
+    /// [`MAX_SPECULATIVE_FAILURES`] to prevent exponential backtracking on
+    /// pathological input (e.g. deeply nested unbalanced parens).
+    speculative_failures: usize,
 }
+
+/// Cap on the number of [`Parser::maybe_parse`] calls that may fail in a
+/// single parse. Valid SQL needs a small constant number per token; far
+/// more than that means we're exploring an exponential backtrack tree.
+const MAX_SPECULATIVE_FAILURES: usize = 10_000;
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
@@ -351,6 +361,7 @@ impl<'a> Parser<'a> {
             tokens,
             index: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            speculative_failures: 0,
         }
     }
 
@@ -1931,11 +1942,15 @@ impl<'a> Parser<'a> {
     where
         F: FnMut(&mut Self) -> Result<T, ParserError>,
     {
+        if self.speculative_failures >= MAX_SPECULATIVE_FAILURES {
+            return None;
+        }
         let index = self.index;
         if let Ok(t) = f(self) {
             Some(t)
         } else {
             self.index = index;
+            self.speculative_failures += 1;
             None
         }
     }
