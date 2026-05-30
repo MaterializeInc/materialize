@@ -1313,11 +1313,39 @@ mod tests {
                 Event::Progress(progress) => Either::Left(progress),
                 Event::Messages(ts, data) => Either::Right((ts, data)),
             });
-        let expected = vec![
-            (3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            (3, vec![("4".to_owned(), 4, 1)]),
+        // Aggregate the captured records, ignoring the stream-level
+        // timestamp on each batch. The operator emits each container at
+        // whatever capability it currently holds (which is determined by
+        // its scheduling cadence and the upstream frontiers it has
+        // observed), so the per-batch `ts` is not deterministic and not
+        // part of the operator's contract. Per-record `(key, time, diff)`
+        // tuples are what callers see, and the differential invariant
+        // (stream `ts <= record time`) is checked separately below.
+        let mut actual_records: Vec<(String, u64, i64)> = actual_events
+            .iter()
+            .flat_map(|(_ts, data)| data.iter().cloned())
+            .collect();
+        actual_records.sort();
+        let expected_records: Vec<(String, u64, i64)> = vec![
+            ("2".to_owned(), 3, 1),
+            ("3".to_owned(), 3, 1),
+            ("4".to_owned(), 4, 1),
         ];
-        assert_eq!(actual_events, expected);
+        assert_eq!(actual_records, expected_records);
+
+        // Verify the differential invariant: each batch's stream
+        // timestamp `ts` must be `<= record_time` for every record it
+        // carries. The operator's contract requires this so that
+        // downstream differential operators can integrate the records
+        // at their declared times.
+        for (ts, data) in &actual_events {
+            for (_key, record_ts, _diff) in data {
+                assert!(
+                    ts <= record_ts,
+                    "differential invariant violated: stream ts {ts} > record time {record_ts}",
+                );
+            }
+        }
 
         // The number and contents of progress messages is not guaranteed and
         // depends on the downgrade behavior. The only thing we can assert is
