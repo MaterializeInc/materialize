@@ -245,40 +245,48 @@ impl AstDisplay for RawDataType {
                 f.write_str("]");
             }
             RawDataType::Other { name, typ_mod } => {
-                // If the type name is a single unqualified identifier whose
-                // unquoted form clashes with a keyword that `parse_data_type`
-                // either dispatches into a special grammar (`map[...]`) or
-                // canonicalizes to a different spelling (`string` → `text`,
-                // `bigint` → `int8`, …), an unquoted emit would reparse to a
-                // different AST. Force the always-quoted stable form in those
-                // cases so the round-trip preserves the original name.
-                let name_stable = name.to_ast_string_stable();
-                // Only keywords that `parse_data_type` *renames* need
-                // quoting. Keywords whose canonicalized name matches the
-                // keyword text itself (`bpchar`, `varchar`, `time`,
+                // If the first component of the type name clashes with a
+                // keyword that `parse_data_type` either dispatches into a
+                // special grammar (`map[...]`) or canonicalizes to a
+                // different spelling (`string` → `text`, `bigint` → `int8`,
+                // …), an unquoted emit would reparse to a different AST —
+                // either the canonicalizing branch fires and replaces the
+                // name outright, or (for a qualified name) the dispatch
+                // consumes the first part before the rest reaches the
+                // type-name parser. Force the always-quoted stable form in
+                // those cases. Keywords whose canonicalized name matches
+                // the keyword text itself (`bpchar`, `varchar`, `time`,
                 // `timestamp`, `timestamptz`) round-trip unquoted via the
-                // keyword path.
-                let needs_quote_to_disambiguate = matches!(
-                    name_stable.as_str(),
-                    r#""map""#
-                        | r#""string""#
-                        | r#""bigint""#
-                        | r#""smallint""#
-                        | r#""dec""#
-                        | r#""decimal""#
-                        | r#""double""#
-                        | r#""float""#
-                        | r#""int""#
-                        | r#""integer""#
-                        | r#""real""#
-                        | r#""boolean""#
-                        | r#""bytes""#
-                        | r#""json""#
-                        | r#""char""#
-                        | r#""character""#
-                );
-                if needs_quote_to_disambiguate {
-                    f.write_str(&name_stable);
+                // keyword path, so they're omitted here.
+                let first_ident_clashes = name
+                    .name()
+                    .0
+                    .first()
+                    .and_then(|id| id.as_keyword())
+                    .map(|kw| {
+                        use mz_sql_lexer::keywords::*;
+                        matches!(
+                            kw,
+                            MAP | STRING
+                                | BIGINT
+                                | SMALLINT
+                                | DEC
+                                | DECIMAL
+                                | DOUBLE
+                                | FLOAT
+                                | INT
+                                | INTEGER
+                                | REAL
+                                | BOOLEAN
+                                | BYTES
+                                | JSON
+                                | CHAR
+                                | CHARACTER
+                        )
+                    })
+                    .unwrap_or(false);
+                if first_ident_clashes {
+                    f.write_str(&name.to_ast_string_stable());
                 } else {
                     f.write_node(name);
                 }
