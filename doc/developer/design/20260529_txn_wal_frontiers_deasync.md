@@ -109,37 +109,43 @@ So the remap-driven downgrade never strands a record below the new cap.
 Step 4 before step 5 is the SQL-299 fix, forced by Fact 1 rather than bolted on.
 Steps 2 and 3 plus the `waiting_for_remap` gate are the replica-select-abort fix.
 
-The async `loop`/`continue` that walked remap entries one at a time collapses here, because step 2 folds all buffered remap entries eagerly.
-If the differential test (below) surfaces a stepwise case this misses — for example a passthrough frontier sitting between two entries' physical uppers — step 5 becomes an inner fixpoint loop over the folded remap state.
-That uncertainty is exactly what the differential test resolves.
+The async `loop`/`continue` that walked remap entries one at a time collapses here, because step 2 folds all buffered remap entries to the one with the largest `logical_upper` (asserting `physical_upper` stays monotone), and step 3 bumps `logical_upper` from the remap frontier.
+When several entries arrive in one activation this skips the intermediate `logical_upper`s and advances `cap` straight to the latest once its `physical_upper` is reached; the frontier still reaches the same final value, so it is a granularity, not a correctness, difference.
+This is the structure that shipped in the reverted PR 36537 (whose only defect was the SQL-299 ordering bug fixed by step 4), so it is production-proven for frontier advancement; the fuzz test additionally confirms no data loss under arbitrary interleavings.
 
 ### Intentional divergence from async
 
 The async impl sets `remap = None` on remap-input close, which disables the whole `cap.downgrade(logical_upper)` path and leaves the passthrough frontier as the only driver.
 That frontier is bounded by the physical upper, producing the PER-4 stall.
 The sync impl deliberately diverges: it **retains the last `remap`** after close and keeps advancing `cap` to `logical_upper` (step 6).
-This is the single legitimate point of divergence from the async reference, and the differential harness must special-case it.
+This is the single legitimate point of divergence from the async impl.
 
 ## Testing
 
-Tests are built in this order.
+All tests live in a single-worker harness that drives the operator on a scripted sequence of actions (send remap entry, advance remap frontier, send passthrough data, advance passthrough frontier, step) via `scope.new_input`, captures the output stream, and reports the final output frontier.
 
-1. **Regression tests, written first against the current async impl, which must pass.**
-   Deterministic, single-worker, hand-driven `worker.step()`:
+1. **Targeted regression tests, one per known failure.**
+   Deterministic, hand-driven schedules:
    * PER-4 stall: `cap` advances to `logical_upper` after the remap input closes.
-   * replica-targeted-select-abort: `SELECT AS OF MAX` blocks rather than completing empty.
-   * SQL-299: `SUBSCRIBE ... UP TO` returns the full row set with no tail loss.
-2. **Differential test, the backstop against unknown interleavings.**
-   Generate randomized interleavings of remap entries, passthrough data, and frontier advances; drive the async and sync operators on the identical schedule; assert identical emitted data and capability frontier.
-   The only allowed divergence is after the remap input closes, where the sync impl may advance further (PER-4): there, assert the sync frontier is `>=` the async frontier rather than equal.
-3. **Existing crate tests stay green.**
-   `data_subscribe`, `as_of_until`, `subscribe_shard_finalize`, `subscribe_shard_register_forget`.
+   * replica-targeted-select-abort: `SELECT AS OF MAX` blocks (capability retained) rather than completing empty.
+   * SQL-299: a record buffered when the passthrough frontier crosses `until` in one activation is emitted, not dropped.
+   Each test was confirmed to fail when its corresponding fix is reverted in the operator, proving it has teeth.
+2. **Oracle-free property fuzz test, the backstop against unknown interleavings.**
+   Generate randomized interleavings of remap entries, passthrough data, and frontier advances, and assert two sound properties of the sync operator directly:
+   * No data loss or duplication: the emitted payload multiset equals the sent payload multiset.
+     The operator passes through all passthrough data while it holds a capability, so this holds under arbitrary interleavings — including schedules that violate the remap emptiness contract, which only strengthens the test.
+   * No premature shutdown: with `until = ∅` and no passthrough close, the operator never legitimately drops its capability, so the output frontier stays finite.
 
-Regression tests for known bugs are necessary but insufficient: they guard only against failures already found.
-Both prior attempts died from unknown interleavings, which only the differential test catches.
+   An earlier design compared the sync operator against the async impl as a differential oracle.
+   That was abandoned: the async impl strands data on contract-violating random schedules (it trusts the emptiness contract and advances its capability past buffered data), so it is not a sound oracle in a synthetic harness, and making it sound would require faithfully re-modeling the data-shard/txns protocol in the generator — a second layer of subtle invariants as error-prone as the operator itself.
+   The direct property assertions catch the same bug classes (data loss, premature shutdown) without that risk.
+3. **Existing crate tests stay green.**
+   `data_subscribe`, `subscribe_shard_finalize`, `subscribe_shard_register_forget`, and `as_of_until` (relaxed: the deasynced operator emits each batch at its current capability, so per-batch stream timestamps are cadence-dependent and not contractual; the test now asserts the record set and the differential invariant `stream_ts <= record_time`).
+
+The async impl is removed entirely once the sync impl lands; it is not retained as a test oracle.
 
 ## Risks
 
 * The sync timely API exposes data via `for_each` and the frontier as a post-activation snapshot, not as the interleaved one-at-a-time event stream the async impl consumed.
   The conversion therefore relies on Fact 1 and Fact 2 to reorder work safely rather than reproducing the interleaving directly.
-* If step 5's straight-line decision proves insufficient, it escalates to a fixpoint loop; the differential test gates this decision.
+* The fuzz test asserts data preservation and non-shutdown but not exact frontier advancement; the specific frontier behaviors (PER-4 advance, AS-OF-MAX block) are covered by the targeted regression tests instead.
