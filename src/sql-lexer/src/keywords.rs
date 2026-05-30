@@ -70,7 +70,12 @@ impl Keyword {
             QUALIFY | WINDOW | ORDER | LIMIT | OFFSET | FETCH |
             OPTIONS | RETURNING |
             // Set operations.
-            UNION | EXCEPT | INTERSECT
+            UNION | EXCEPT | INTERSECT |
+            // SELECT projection modifiers: parser consumes these
+            // immediately after SELECT, so a bare `"distinct"` /
+            // `"all"` column reference round-trips to a quantifier
+            // instead of an identifier.
+            DISTINCT
         )
     }
 
