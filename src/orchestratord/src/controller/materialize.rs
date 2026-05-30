@@ -115,12 +115,12 @@ pub struct Config {
     pub environmentd_internal_sql_port: u16,
     pub environmentd_internal_http_port: u16,
     pub environmentd_internal_persist_pubsub_port: u16,
-    /// When set, orchestratord wires the in-envd persist committer:
-    /// creates a headless Service on this port and passes
-    /// `--persist-committer-url` / `--internal-persist-committer-listen-addr`
-    /// to envd. When `None`, no committer wiring is emitted, which is the
-    /// safe default for envd images that predate the committer flags.
-    pub environmentd_internal_persist_committer_port: Option<u16>,
+    /// Port the in-envd persist committer listens on, and the port of the
+    /// headless committer Service. The committer is wired only for envd images
+    /// new enough to understand the flags (see `meets_minimum_version` in
+    /// `generation.rs`); images that predate the flags are skipped, so this
+    /// always carries a value.
+    pub environmentd_internal_persist_committer_port: u16,
 
     pub default_certificate_specs: DefaultCertificateSpecs,
 

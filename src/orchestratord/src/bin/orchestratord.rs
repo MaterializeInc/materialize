@@ -198,13 +198,14 @@ pub struct Args {
     environmentd_internal_http_port: u16,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: u16,
-    /// Port the persist committer listens on inside `environmentd`. When
-    /// unset, orchestratord neither creates the headless committer Service
-    /// nor passes `--persist-committer-url` / `--internal-persist-committer-
-    /// listen-addr` to envd. Leave unset until the deployed envd image is
-    /// known to support these flags.
-    #[clap(long)]
-    environmentd_internal_persist_committer_port: Option<u16>,
+    /// Port the persist committer listens on inside `environmentd`, and the
+    /// port of the headless committer Service orchestratord creates. Mirrors
+    /// `--environmentd-internal-persist-pubsub-port`. The committer is wired
+    /// only for envd images new enough to understand the flags (gated on
+    /// `meets_minimum_version`); older images are left untouched, so this can
+    /// carry a default safely.
+    #[clap(long, default_value = "6882")]
+    environmentd_internal_persist_committer_port: u16,
 
     #[clap(long, default_value = "6875")]
     balancerd_sql_port: u16,

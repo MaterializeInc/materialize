@@ -73,6 +73,18 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
+/// Version that introduced the in-`environmentd` persist committer flags
+/// (`--persist-committer-url`, `--internal-persist-committer-listen-addr`).
+/// Older envd images reject these and exit on startup, so committer wiring is
+/// gated on this.
+static V26_27_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 27,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -157,9 +169,13 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
-        let persist_committer_service = config
-            .environmentd_internal_persist_committer_port
-            .map(|port| Box::new(create_persist_committer_service(mz, generation, port)));
+        let persist_committer_service = mz.meets_minimum_version(&V26_27_0_DEV0).then(|| {
+            Box::new(create_persist_committer_service(
+                mz,
+                generation,
+                config.environmentd_internal_persist_committer_port,
+            ))
+        });
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, mz, generation,
         ));
@@ -962,10 +978,12 @@ fn create_environmentd_statefulset_object(
         config.environmentd_internal_persist_pubsub_port
     ));
 
-    // Persist committer arguments are emitted only when the operator has
-    // been configured with a committer port. Older envd images do not
-    // understand these flags and will exit with status 2 on startup.
-    if let Some(port) = config.environmentd_internal_persist_committer_port {
+    // Persist committer arguments, mirroring the pubsub block above. Gated on
+    // the envd version that introduced the flags: older images do not
+    // understand them and would exit with status 2 on startup, which would
+    // break an upgrade from such an image.
+    if mz.meets_minimum_version(&V26_27_0_DEV0) {
+        let port = config.environmentd_internal_persist_committer_port;
         args.push(format!(
             "--persist-committer-url=http://{}:{}",
             mz.persist_committer_service_name(generation),
