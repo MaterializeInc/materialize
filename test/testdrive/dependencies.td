@@ -91,6 +91,54 @@ contains:cannot drop view "test1": still depended upon by view "test2"
 
 > DROP VIEW test1;
 
+# Test that a single DROP statement can drop an object together with its
+# dependents (without CASCADE): a dependent that is itself being dropped in the
+# same statement must not block the drop.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test1, test2, test3;
+
+# The order in which the objects are named must not matter.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test3, test1, test2;
+
+# Dropping an intermediate object together with its dependent still works while
+# leaving an upstream object in place.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test2, test3;
+
+# test1 has no dependents anymore, so it drops on its own.
+
+> DROP VIEW test1;
+
+# But omitting a dependent from the statement still errors without CASCADE.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+! DROP VIEW test1;
+contains:cannot drop view "test1": still depended upon by view "test2"
+
+> DROP VIEW test1 CASCADE;
+
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named view.
 

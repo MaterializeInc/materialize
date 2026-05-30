@@ -1197,6 +1197,7 @@ class Composition:
                 if isinstance(service, Service) and service.idle
             ]
         )
+        old_compose = None
         if idle:
             old_compose = copy.deepcopy(self.compose)
             for service_name, service in self.compose["services"].items():
@@ -1212,20 +1213,23 @@ class Composition:
             for service in services
         ]
 
-        self.capture_logs()
-        self.invoke(
-            "up",
-            *(["--detach"] if detach else []),
-            *(["--wait"] if wait else []),
-            *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
-            *service_names,
-            max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
-            build=os.getenv("CI_WAITING_FOR_BUILD"),
-        )
-
-        if idle:
-            self.compose = old_compose  # type: ignore
-            self._invalidate_compose_files()
+        try:
+            self.capture_logs()
+            self.invoke(
+                "up",
+                *(["--detach"] if detach else []),
+                *(["--wait"] if wait else []),
+                *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
+                build=os.getenv("CI_WAITING_FOR_BUILD"),
+            )
+        finally:
+            # Restore even on failure: otherwise the next test in the same
+            # composition would inherit the sleep-infinity entrypoint.
+            if old_compose is not None:
+                self.compose = old_compose  # type: ignore
+                self._invalidate_compose_files()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""

@@ -558,7 +558,7 @@ fn render_reader<'scope>(
                                     adjusting your retention policies to prevent this.",
                                 );
 
-                                let update = HealthStatusUpdate::halting(
+                                let update = HealthStatusUpdate::stalled(
                                     err_str.clone(),
                                     None,
                                 );

@@ -26,7 +26,7 @@ use mz_expr::Eval;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -37,8 +37,8 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
+use mz_row_spine::{RowRowColPagedBuilder, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -384,8 +384,8 @@ where
             let arranged = keyed
                 .mz_arrange_core::<
                     _,
-                    Col2ValBatcher<_, _, _, _>,
-                    RowRowBuilder<_, _>,
+                    Col2ValPagedBatcher<_, _, _, _>,
+                    RowRowColPagedBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >(
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(

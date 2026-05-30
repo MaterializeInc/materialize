@@ -1,0 +1,21 @@
+[package]
+name = "mz-row-spine"
+description = "Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+columnation.workspace = true
+differential-dataflow.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["region"] }
+mz-repr = { path = "../repr" }
+mz-timely-util = { path = "../timely-util", default-features = false }
+timely.workspace = true
+
+[features]
+default = ["mz-ore/default", "mz-timely-util/default"]

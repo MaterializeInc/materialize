@@ -19,15 +19,17 @@
 
 pub mod batcher;
 pub mod builder;
+pub mod builder_input;
 pub mod consolidate;
+pub mod merge_batcher;
 
 use std::hash::Hash;
 
 use columnar::Borrow;
 use columnar::bytes::indexed;
 use columnar::common::IterOwn;
+use columnar::{Clear, FromBytes, Index, Len};
 use columnar::{Columnar, Ref};
-use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
@@ -45,6 +47,19 @@ pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
 >;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+
+/// Pageable counterpart to [`Col2ValBatcher`]. Routes every chunk produced
+/// by chunking, merging, or extract through a [`crate::column_pager::ColumnPager`],
+/// so memory pressure can spill chains to a backing store without touching
+/// the merge / extract bodies.
+///
+/// Drop-in shape at the type level: both aliases take `(K, V, T, R)` and
+/// produce a `Batcher<Input = Column<((K, V), T, R)>, Output = Column<((K,
+/// V), T, R)>>`. Call sites can swap with `cargo fix`–style renaming once
+/// downstream `Trace`/`Builder` impls have been wired up. The pager itself
+/// defaults to [`crate::column_pager::ColumnPager::disabled`]; inject a
+/// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
+pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
@@ -66,6 +81,20 @@ pub enum Column<C: Columnar> {
 }
 
 impl<C: Columnar> Column<C> {
+    /// Empties the column, retaining the `Typed` variant's allocation so the
+    /// caller can refill it.
+    ///
+    /// [`columnar::Clear`] clears the typed container in place without
+    /// releasing its capacity. The serialized variants (`Bytes`/`Align`) own
+    /// no reusable typed buffer, so they are reset to an empty `Typed`.
+    #[inline]
+    pub fn clear(&mut self) {
+        match self {
+            Column::Typed(t) => t.clear(),
+            Column::Bytes(_) | Column::Align(_) => *self = Default::default(),
+        }
+    }
+
     /// Borrows the container as a reference.
     #[inline]
     pub fn borrow(&self) -> <C::Container as Borrow>::Borrowed<'_> {

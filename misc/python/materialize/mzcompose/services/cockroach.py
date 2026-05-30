@@ -28,8 +28,7 @@ if TYPE_CHECKING:
 
 
 class Cockroach(Service):
-    # TODO(def-): Bump when https://github.com/cockroachdb/cockroach/issues/158051 is fixed
-    DEFAULT_COCKROACH_TAG = "v24.2.0"
+    DEFAULT_COCKROACH_TAG = "v25.4.10"
 
     def __init__(
         self,
@@ -100,7 +99,7 @@ class Cockroach(Service):
             "-e",
             """
                 CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin&AWS_USE_PATH_STYLE=true';
                 BACKUP INTO 'external://backup_bucket';
                 DROP EXTERNAL CONNECTION backup_bucket;
             """,
@@ -120,7 +119,7 @@ class Cockroach(Service):
             """
                 DROP DATABASE defaultdb;
                 CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin&AWS_USE_PATH_STYLE=true';
                 RESTORE DATABASE defaultdb
                 FROM LATEST IN 'external://backup_bucket';
                 DROP EXTERNAL CONNECTION backup_bucket;

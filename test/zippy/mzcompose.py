@@ -47,7 +47,6 @@ from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.mz_actions import Mz0dtDeploy
 from materialize.zippy.scenarios import *  # noqa: F401 F403
@@ -90,7 +89,6 @@ def create_mzs(
 
 
 SERVICES = [
-    Zookeeper(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
     Postgres(),
@@ -193,7 +191,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenario_class = globals()[args.scenario]
 
     dependencies = [
-        "zookeeper",
         "redpanda",
         "ssh-bastion-host",
         "minio",

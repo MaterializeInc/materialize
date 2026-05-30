@@ -31,7 +31,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValPagedBatcher, columnar_exchange};
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -46,10 +46,10 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
+use mz_row_spine::{DatumSeq, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -1157,8 +1157,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = ok_stream
             .mz_arrange_core::<
                 _,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
+                Col2ValPagedBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(

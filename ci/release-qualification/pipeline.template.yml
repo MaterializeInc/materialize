@@ -276,6 +276,17 @@ steps:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
 
+  - id: kafka-matrix
+    label: Previous Kafka versions
+    depends_on: build-aarch64
+    timeout_in_minutes: 60
+    parallelism: 2
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-matrix
+
   - group: "MySQL: other versions"
     key: mysql-versions
     steps:
@@ -469,6 +480,35 @@ steps:
               args: [ "--pg-version=13.18" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+
+  - group: "SQL Server: other versions"
+    key: sql-server-versions
+    steps:
+      # SQL Server's upstream images are amd64-only, so this matrix runs on
+      # x86-64 agents.
+      - id: sql-server-cdc-2019
+        label: "SQL Server CDC w/ 2019"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        inputs: [test/sql-server-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc
+              args: [ "--sql-server-version=2019-CU32-ubuntu-20.04" ]
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
+
+      - id: sql-server-cdc-2025
+        label: "SQL Server CDC w/ 2025"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        inputs: [test/sql-server-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc
+              args: [ "--sql-server-version=2025-CU5-ubuntu-24.04" ]
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
 
   - group: "Platform checks"
     key: platform-checks
@@ -811,8 +851,8 @@ steps:
         agents:
           queue: linux-aarch64-small
 
-      - id: cluster-spec-sheet-environmentd
-        label: "Cluster spec sheet: Environmentd (against Staging)"
+      - id: cluster-spec-sheet-envd-qps-scalability
+        label: "Cluster spec sheet: Envd QPS Scalability (against Staging)"
         depends_on: build-aarch64
         timeout_in_minutes: 3600
         concurrency: 1
@@ -821,6 +861,34 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: cluster-spec-sheet
               run: default
-              args: [--cleanup, --target=cloud-staging, environmentd]
+              args: [--cleanup, --target=cloud-staging, envd_qps_scalability]
+        agents:
+          queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-envd-objects-scalability
+        label: "Cluster spec sheet: Envd Objects Scalability (against Staging)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet-cluster'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-staging, envd_objects_scalability]
+        agents:
+          queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-cluster-object-limits
+        label: "Cluster spec sheet: Cluster Object Limits (against Staging)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet-cluster'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-staging, cluster_object_limits]
         agents:
           queue: linux-aarch64-small

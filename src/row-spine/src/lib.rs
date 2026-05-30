@@ -7,12 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Packed-bytes differential dataflow spine [`Layout`]s for `Row`-valued
+//! arrangements.
+//!
+//! The spines defined here store `Row` keys and values as concatenated bytes
+//! in a single contiguous backing region (via `mz_ore::region::Region`, which
+//! uses lgalloc when available), instead of as separately-allocated heap
+//! objects. This gives cursor lookups block locality and lets the OS evict
+//! cold pages cleanly under memory pressure.
+//!
+//! [`Layout`]: differential_dataflow::trace::implementations::Layout
+
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
+    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -23,21 +34,38 @@ mod spines {
     use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::columnation::ColumnationStack;
+    use mz_timely_util::columnar::Column;
+    use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 
-    use crate::row_spine::{DatumContainer, OffsetOptimized};
-    use crate::typedefs::{KeyBatcher, KeyValBatcher};
+    use crate::{DatumContainer, OffsetOptimized};
+
+    /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
+    /// locally so this crate does not need to depend on `mz_compute`.
+    type KeyValBatcher<K, V, T, D> = MergeBatcher<
+        Vec<((K, V), T, D)>,
+        ColumnationChunker<((K, V), T, D)>,
+        ColInternalMerger<(K, V), T, D>,
+    >;
+    type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
     pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> = RcBuilder<
         OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
     >;
+
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
+    /// [`Col2ValPagedBatcher`] for the spillable arrange path.
+    ///
+    /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
+    pub type RowRowColPagedBuilder<T, R> =
+        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, Column<((Row, Row), T, R)>>>;
 
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
@@ -50,6 +78,12 @@ mod spines {
     pub type RowBuilder<T, R> =
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, ColumnationStack<((Row, ()), T, R)>>>;
 
+    pub type ValRowSpine<K, T, R> = Spine<Rc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
+    pub type ValRowBuilder<K, T, R> = RcBuilder<
+        OrdValBuilder<ValRowLayout<((K, Row), T, R)>, ColumnationStack<((K, Row), T, R)>>,
+    >;
+
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
         phantom: std::marker::PhantomData<U>,
@@ -58,6 +92,11 @@ mod spines {
         phantom: std::marker::PhantomData<U>,
     }
     pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
+        phantom: std::marker::PhantomData<U>,
+    }
+    /// Mirror of [`RowValLayout`] with the roles swapped: arbitrary `Columnation`
+    /// keys with `Row` values stored as packed bytes in a [`DatumContainer`].
+    pub struct ValRowLayout<U: Update<Val = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
 
@@ -95,6 +134,18 @@ mod spines {
         type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
+    impl<U: Update<Val = Row>> Layout for ValRowLayout<U>
+    where
+        U::Key: Columnation,
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        type KeyContainer = ColumnationStack<U::Key>;
+        type ValContainer = DatumContainer;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
+        type OffsetContainer = OffsetOptimized;
+    }
 }
 
 /// A `Row`-specialized container using dictionary compression.
@@ -105,7 +156,7 @@ mod container {
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
-    use mz_repr::{Datum, Row, RowPacker, read_datum};
+    use mz_repr::{Datum, Row, RowPacker, RowRef, read_datum};
 
     use super::bytes_container::BytesContainer;
 
@@ -205,12 +256,25 @@ mod container {
         }
     }
 
+    impl PushInto<&RowRef> for DatumContainer {
+        fn push_into(&mut self, item: &RowRef) {
+            self.bytes.push_into(item.data())
+        }
+    }
+
     #[derive(Debug)]
     pub struct DatumSeq<'a> {
         bytes: &'a [u8],
     }
 
     impl<'a> DatumSeq<'a> {
+        /// Borrow a `Row` as a `DatumSeq` so that it can be used to seek into a
+        /// trace whose key/value container is a [`DatumContainer`].
+        #[inline]
+        pub fn from_row(row: &'a Row) -> Self {
+            Self { bytes: row.data() }
+        }
+
         #[inline]
         pub fn copy_into(&self, row: &mut RowPacker) {
             // SAFETY: `self.bytes` is a correctly formatted row.
@@ -244,6 +308,12 @@ mod container {
     impl<'a> PartialEq<&Row> for DatumSeq<'a> {
         #[inline]
         fn eq(&self, other: &&Row) -> bool {
+            self.bytes.eq(other.data())
+        }
+    }
+    impl<'a> PartialEq<&RowRef> for DatumSeq<'a> {
+        #[inline]
+        fn eq(&self, other: &&RowRef) -> bool {
             self.bytes.eq(other.data())
         }
     }
@@ -291,7 +361,7 @@ mod container {
 
     #[cfg(test)]
     mod tests {
-        use crate::row_spine::DatumContainer;
+        use crate::DatumContainer;
         use differential_dataflow::trace::implementations::BatchContainer;
         use mz_repr::adt::date::Date;
         use mz_repr::adt::interval::Interval;
@@ -492,7 +562,7 @@ mod bytes_container {
     ///
     /// The backing storage for this batch will not be resized.
     pub struct BytesBatch {
-        offsets: crate::row_spine::OffsetOptimized,
+        offsets: crate::OffsetOptimized,
         storage: Region<u8>,
         len: usize,
     }
@@ -524,7 +594,7 @@ mod bytes_container {
 
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
-            let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
+            let mut offsets = crate::OffsetOptimized::with_capacity(item_cap + 1);
             offsets.push_into(0);
             Self {
                 offsets,
@@ -694,7 +764,7 @@ mod offset_opt {
 
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            crate::row_spine::offset_list_size(&self.spilled, callback);
+            crate::offset_list_size(&self.spilled, callback);
         }
     }
 }

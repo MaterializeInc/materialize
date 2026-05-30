@@ -2050,10 +2050,15 @@ where
         )
     })?;
 
-    let mut tm_delta = tm_diff - tm_diff % stride_ns;
+    let remainder = tm_diff % stride_ns;
+    let mut tm_delta = tm_diff - remainder;
 
-    if sub_stride {
-        tm_delta -= stride_ns;
+    if sub_stride && remainder != 0 {
+        tm_delta = tm_delta.checked_sub(stride_ns).ok_or_else(|| {
+            EvalError::DateBinOutOfRange(
+                "source and origin must not differ more than 2^63 nanoseconds".into(),
+            )
+        })?;
     }
 
     let res = origin
@@ -2732,23 +2737,23 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_lower",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc(is_infix_op = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
+fn array_lower<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
     if i < 1 {
-        return None;
+        return Ok(None);
     }
-    match a.dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Some(1),
-        None => None,
-    }
+    a.dims()
+        .into_iter()
+        .nth(i as usize - 1)
+        .map(|dim| {
+            let (lower, _upper) = dim.dimension_bounds();
+            lower
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange(lower.to_string().into()))
+        })
+        .transpose()
 }
 
 #[sqlfunc(
@@ -2783,13 +2788,7 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_upper",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc(is_infix_op = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -2800,9 +2799,10 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
         .into_iter()
         .nth(i as usize - 1)
         .map(|dim| {
-            dim.length
+            let (_lower, upper) = dim.dimension_bounds();
+            upper
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))
+                .map_err(|_| EvalError::Int32OutOfRange(upper.to_string().into()))
         })
         .transpose()
 }
@@ -3095,6 +3095,53 @@ mod test {
             .unwrap()
             .try_into()
             .unwrap()
+    }
+
+    #[mz_ore::test]
+    fn array_lower_upper_respect_lower_bound() {
+        use mz_repr::adt::array::ArrayDimension;
+        use mz_repr::{Datum, RowArena};
+
+        let arena = RowArena::new();
+
+        // Builds a one-dimensional array with the given lower bound and length,
+        // then returns (array_lower(_, 1), array_upper(_, 1)).
+        let bounds = |lower_bound: isize, length: usize| {
+            let dims = [ArrayDimension {
+                lower_bound,
+                length,
+            }];
+            let elems = vec![Datum::Int32(0); length];
+            let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+            let arr = match datum {
+                Datum::Array(arr) => arr,
+                other => panic!("expected array, got {other:?}"),
+            };
+            (array_lower(arr, 1).unwrap(), array_upper(arr, 1).unwrap())
+        };
+
+        // Default lower bound of 1: array_fill(0, ARRAY[3]).
+        assert_eq!(bounds(1, 3), (Some(1), Some(3)));
+        // Lower bound of 5: array_fill(0, ARRAY[3], ARRAY[5]) => [5:7].
+        assert_eq!(bounds(5, 3), (Some(5), Some(7)));
+        // Negative lower bound: array_fill(0, ARRAY[3], ARRAY[-3]) => [-3:-1].
+        assert_eq!(bounds(-3, 3), (Some(-3), Some(-1)));
+
+        // Out-of-range dimensions return None rather than the bound.
+        let dims = [ArrayDimension {
+            lower_bound: 5,
+            length: 3,
+        }];
+        let elems = vec![Datum::Int32(0); 3];
+        let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+        let arr = match datum {
+            Datum::Array(arr) => arr,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(array_lower(arr, 0).unwrap(), None);
+        assert_eq!(array_upper(arr, 0).unwrap(), None);
+        assert_eq!(array_lower(arr, 2).unwrap(), None);
+        assert_eq!(array_upper(arr, 2).unwrap(), None);
     }
 
     #[mz_ore::test]

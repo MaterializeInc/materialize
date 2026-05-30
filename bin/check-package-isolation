@@ -51,7 +51,7 @@ for i in "${!packages[@]}"; do
         failed+=("$pkg (--all-targets)")
     fi
     echo "--- :rust: cargo check -p $pkg (lib+bins, -D warnings)"
-    if ! RUSTFLAGS="-D warnings" cargo check --package "$pkg"; then
+    if ! RUSTFLAGS="--cfg=tokio_unstable -D warnings" cargo check --package "$pkg"; then
         failed+=("$pkg (lib+bins, -D warnings)")
     fi
 done

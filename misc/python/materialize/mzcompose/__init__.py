@@ -33,7 +33,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.9.4"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "8.2.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -494,6 +494,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
+    "enable_column_paged_batcher",
+    "column_paged_batcher_budget_fraction",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",

@@ -114,6 +114,10 @@ impl TimelyTimestamp for Subtime {
     }
 }
 
+impl columnation::Columnation for Subtime {
+    type InnerRegion = columnation::CopyRegion<Subtime>;
+}
+
 impl differential_dataflow::lattice::Lattice for Subtime {
     fn join(&self, other: &Self) -> Self {
         Subtime(std::cmp::max(self.0, other.0))

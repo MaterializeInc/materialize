@@ -22,11 +22,9 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     MySql(),
@@ -42,7 +40,7 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "materialized")
+    c.up("kafka", "schema-registry", "postgres", "mysql", "materialized")
     seed = random.getrandbits(16)
     c.run_testdrive_files(
         "--no-reset",

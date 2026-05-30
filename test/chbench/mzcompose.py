@@ -22,10 +22,8 @@ from materialize.mzcompose.services.metabase import Metabase
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
@@ -65,7 +63,6 @@ def workflow_no_load(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "mysql",

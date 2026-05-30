@@ -9,6 +9,10 @@
 
 # Mirrored to DockerHub
 
+# NB: SQL Server 2025 is not yet supported by Debezium 3.3.1, which is what
+# `test/debezium` runs against, and 2022-CU25 broke `sp_cdc_disable_db`
+# (error 22912, `sp_repldone failed`) for `test/sql-server-cdc*` — staying
+# on CU21 until both are resolved.
 FROM mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04
 
 ARG TARGETARCH

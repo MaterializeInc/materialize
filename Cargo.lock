@@ -6082,10 +6082,12 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-row-spine",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
+ "num-traits",
  "prometheus",
  "proptest",
  "prost",
@@ -7099,6 +7101,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "stacker",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-native-tls",
@@ -7629,6 +7632,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-row-spine"
+version = "0.0.0"
+dependencies = [
+ "columnation",
+ "differential-dataflow",
+ "mz-ore",
+ "mz-repr",
+ "mz-timely-util",
+ "timely",
+]
+
+[[package]]
 name = "mz-s3-datagen"
 version = "0.0.0"
 dependencies = [
@@ -8027,6 +8042,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-rocksdb",
+ "mz-row-spine",
  "mz-sql-parser",
  "mz-sql-server-util",
  "mz-ssh-util",
@@ -8151,6 +8167,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnation",
  "csv-async",
  "derivative",
  "differential-dataflow",
@@ -8373,12 +8390,15 @@ dependencies = [
  "differential-dataflow",
  "either",
  "futures-util",
+ "itertools 0.14.0",
  "lgalloc",
+ "lz4_flex",
  "mz-ore",
  "num-traits",
  "proptest",
  "rand 0.9.4",
  "serde",
+ "tempfile",
  "timely",
  "tokio",
  "tracing",

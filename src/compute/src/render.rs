@@ -161,8 +161,8 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
 pub mod context;
 pub(crate) mod errors;
@@ -1487,7 +1487,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
+pub trait RenderTimestamp: MzTimestamp + Default + Refines<mz_repr::Timestamp> {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
