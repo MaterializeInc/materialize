@@ -979,14 +979,17 @@ mod tests {
             Some(std::time::Instant::now()),
         );
 
-        let (mut remap_handle, mut pass_handle, probe, capture) =
+        // The button must outlive the run: dropping it presses the shutdown
+        // handle, which makes the operator drop its capability on the next
+        // activation. Hold it until after the drain loop completes.
+        let (remap_handle, pass_handle, probe, capture, _button) =
             worker.dataflow::<u64, _, _>(|scope| {
                 let (remap_handle, remap_stream) = scope.new_input::<Vec<DataRemapEntry<u64>>>();
                 let (pass_handle, pass_stream) = scope.new_input::<Vec<i64>>();
-                let (out, _button) = build(remap_stream, pass_stream, until.clone());
+                let (out, button) = build(remap_stream, pass_stream, until.clone());
                 let probe = ProbeHandle::new();
                 let out = out.probe_with(&probe);
-                (remap_handle, pass_handle, probe, out.capture())
+                (remap_handle, pass_handle, probe, out.capture(), button)
             });
 
         // timely input handles can only `advance_to` forward in time. Track the
@@ -994,6 +997,13 @@ mod tests {
         // message instead of panicking deep inside timely on a decreasing time.
         let mut last_remap_ts = 0u64;
         let mut last_pass_ts = 0u64;
+        // Held in `Option`s so a `*Frontier(None)` action can `take` and drop the
+        // handle, which closes the input to the empty antichain. Advancing to
+        // `u64::MAX` is NOT equivalent: it leaves the input's frontier at
+        // `Some(u64::MAX)`, which the operator (correctly) treats as a finite
+        // `logical_upper`/passthrough advance rather than a closed input.
+        let mut remap_handle = Some(remap_handle);
+        let mut pass_handle = Some(pass_handle);
         for action in schedule {
             match action.clone() {
                 // `Remap` is a `send` at the handle's current time, so it carries
@@ -1001,23 +1011,31 @@ mod tests {
                 Action::Remap {
                     physical_upper,
                     logical_upper,
-                } => remap_handle.send(DataRemapEntry {
-                    physical_upper,
-                    logical_upper,
-                }),
+                } => remap_handle
+                    .as_mut()
+                    .expect("remap input still open")
+                    .send(DataRemapEntry {
+                        physical_upper,
+                        logical_upper,
+                    }),
                 Action::RemapFrontier(Some(ts)) => {
                     assert!(
                         ts >= last_remap_ts,
                         "Action::RemapFrontier time {ts} < previous remap time {last_remap_ts}; per-input times must be non-decreasing"
                     );
                     last_remap_ts = ts;
-                    remap_handle.advance_to(ts);
+                    remap_handle
+                        .as_mut()
+                        .expect("remap input still open")
+                        .advance_to(ts);
                 }
+                // Drop the handle to close the input to the empty antichain.
                 Action::RemapFrontier(None) => {
                     last_remap_ts = u64::MAX;
-                    remap_handle.advance_to(u64::MAX);
+                    drop(remap_handle.take());
                 }
                 Action::Pass { records } => {
+                    let handle = pass_handle.as_mut().expect("passthrough input still open");
                     for (payload, time) in records {
                         assert!(
                             time >= last_pass_ts,
@@ -1028,8 +1046,8 @@ mod tests {
                         // the operator; the subsequent `send` emits the payload at
                         // that time. Both impls consume the identical schedule, so
                         // the exact send mechanics need only be self-consistent.
-                        pass_handle.advance_to(time);
-                        pass_handle.send(payload);
+                        handle.advance_to(time);
+                        handle.send(payload);
                     }
                 }
                 Action::PassFrontier(Some(ts)) => {
@@ -1038,11 +1056,15 @@ mod tests {
                         "Action::PassFrontier time {ts} < previous passthrough time {last_pass_ts}; per-input times must be non-decreasing"
                     );
                     last_pass_ts = ts;
-                    pass_handle.advance_to(ts);
+                    pass_handle
+                        .as_mut()
+                        .expect("passthrough input still open")
+                        .advance_to(ts);
                 }
+                // Drop the handle to close the input to the empty antichain.
                 Action::PassFrontier(None) => {
                     last_pass_ts = u64::MAX;
-                    pass_handle.advance_to(u64::MAX);
+                    drop(pass_handle.take());
                 }
                 Action::Step => {
                     worker.step();
@@ -1052,8 +1074,12 @@ mod tests {
         // Drain: flush inputs and step until the output probe frontier stops
         // advancing. A hard cap PANICS so a buggy operator that never settles
         // fails loudly instead of silently returning partial results.
-        remap_handle.flush();
-        pass_handle.flush();
+        if let Some(handle) = remap_handle.as_mut() {
+            handle.flush();
+        }
+        if let Some(handle) = pass_handle.as_mut() {
+            handle.flush();
+        }
         let mut last = probe.with_frontier(|f| f.to_owned());
         let mut stable = 0;
         for step in 0.. {
@@ -1305,4 +1331,55 @@ mod tests {
             assert!(max_progress_ts < until, "{max_progress_ts} < {until}");
         }
     }
+
+    /// Builds the sync operator for the harness.
+    fn build_sync<'a>(
+        remap: StreamVec<'a, u64, DataRemapEntry<u64>>,
+        pass: StreamVec<'a, u64, i64>,
+        until: Antichain<u64>,
+    ) -> (StreamVec<'a, u64, i64>, PressOnDropButton) {
+        txns_progress_frontiers::<String, (), u64, i64, i64, TxnsCodecDefault>(
+            remap,
+            pass,
+            "test",
+            ShardId::new(),
+            until,
+            0,
+        )
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_sql_299_up_to_no_tail_loss() {
+        // until = 0. A remap entry with physical_upper = 5 keeps the operator
+        // out of the `waiting_for_remap` state (5 > cap.time() = 0), so the
+        // until check actually fires. Buffer a record at time 0 (payload 4) and
+        // leave it pending. In the single activation, the operator sees both the
+        // buffered record and the passthrough frontier at 0, which already
+        // satisfies `until <= pass_frontier` and drops the capability. The
+        // record must be emitted before that drop, not discarded. Buffering at
+        // time 0 (the cap's time) is what makes the record and the
+        // until-crossing land in the same activation — with the ordered
+        // `new_input` handle, advancing the passthrough frontier past the record
+        // would deliver the record in an earlier activation and mask the bug.
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 5,
+                logical_upper: 5,
+            },
+            Action::RemapFrontier(Some(5)),
+            Action::Pass {
+                records: vec![(4, 0)],
+            },
+            Action::PassFrontier(None),
+            Action::Step,
+        ];
+        let (output, _frontier) = run_schedule(build_sync, Antichain::from_elem(0), &schedule);
+        let payloads: Vec<i64> = output.iter().map(|(p, _, _)| *p).collect();
+        assert!(
+            payloads.contains(&4),
+            "buffered record at time 0 must be emitted before until-driven shutdown, got {output:?}"
+        );
+    }
+
 }
