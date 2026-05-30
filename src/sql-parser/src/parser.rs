@@ -316,15 +316,18 @@ struct Parser<'a> {
     recursion_guard: RecursionGuard,
     /// Number of `maybe_parse` calls that have failed (i.e. cost the parser
     /// a speculative descent that produced nothing). Bounded by
-    /// [`MAX_SPECULATIVE_FAILURES`] to prevent exponential backtracking on
-    /// pathological input (e.g. deeply nested unbalanced parens).
+    /// [`SPECULATIVE_FAILURES_PER_TOKEN`] × `tokens.len()` to prevent
+    /// exponential backtracking on pathological input while leaving room
+    /// for deeply nested valid SQL.
     speculative_failures: usize,
 }
 
-/// Cap on the number of [`Parser::maybe_parse`] calls that may fail in a
-/// single parse. Valid SQL needs a small constant number per token; far
-/// more than that means we're exploring an exponential backtrack tree.
-const MAX_SPECULATIVE_FAILURES: usize = 10_000;
+/// Per-token cap on [`Parser::maybe_parse`] failures. Bounded by token
+/// count so deeply nested but valid SQL (e.g. parallel-workload generated
+/// queries with thousands of nested casts) has room to speculate, while
+/// still cutting off exponential backtracking on pathological input
+/// (the DoS case is 2^N failures on ~200 tokens; this cap is linear).
+const SPECULATIVE_FAILURES_PER_TOKEN: usize = 100;
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
@@ -1942,7 +1945,7 @@ impl<'a> Parser<'a> {
     where
         F: FnMut(&mut Self) -> Result<T, ParserError>,
     {
-        if self.speculative_failures >= MAX_SPECULATIVE_FAILURES {
+        if self.speculative_failures >= SPECULATIVE_FAILURES_PER_TOKEN * self.tokens.len() {
             return None;
         }
         let index = self.index;
