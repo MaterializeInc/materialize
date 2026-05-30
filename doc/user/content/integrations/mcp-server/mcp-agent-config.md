@@ -16,7 +16,7 @@ The following configurations are available for the `/api/mcp/agent` endpoint:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `enable_mcp_agent` | `true` | Enable or disable the `/api/mcp/agent` endpoint. When disabled, requests return `HTTP 503 (Service Unavailable)`.|
-| `enable_mcp_agent_query_tool` <a name="enable_mcp_agent_query_tool"></a> | `false` | Enable or disable the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query), which allows for queries with joins. {{< include-headless "/headless/mcp-agent-query-tool-warning" >}}|
+| `enable_mcp_agent_query_tool` <a name="enable_mcp_agent_query_tool"></a> | `true` | Enable or disable the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query), which allows for queries with joins. Enabled by default; to confine agents to user objects (and block system catalog access), set [`restrict_to_user_objects`](/integrations/mcp-server/mcp-agent-tools/#restrict-to-user-objects) on each agent role. {{< include-headless "/headless/mcp-agent-query-tool-warning" >}}|
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 ## Disabling the endpoint

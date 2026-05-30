@@ -554,8 +554,12 @@ either natural language or SQL:
 By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query),
 which allows arbitrary `SELECT` queries (including joins) on **all** objects for
 which the agent has `SELECT` privileges (not just the discoverable products), is
-disabled. To enable it, set the [`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-tools/#query).
+**enabled**. To confine an agent to user objects and block system catalog
+access, set
+[`restrict_to_user_objects`](/integrations/mcp-server/mcp-agent-tools/#restrict-to-user-objects)
+on its role. To disable the tool entirely, set the [`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+to `false`.
 
 {{< /note >}}
 

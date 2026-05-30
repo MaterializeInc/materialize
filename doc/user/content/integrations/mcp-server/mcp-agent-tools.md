@@ -99,20 +99,22 @@ Reads rows from a data product.
 
 Allows the agent to run arbitrary `SELECT` statements (including joins) against
 **any** object for which it has `SELECT` privileges (not just the discoverable
-objects). It is disabled by default.
+objects). It is enabled by default.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `cluster` | string | Yes | Exact cluster name from the data product details. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
 
-To enable the tool, set the [`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
-system parameter to `true`.
+Because the tool is enabled by default, an agent can read the system catalog
+objects (`mz_catalog.*`, `mz_internal.*`, `pg_catalog.*`, and
+`information_schema.*`) that its `SELECT` privileges allow, unless you confine
+it. To restrict an agent to user objects only and block system catalog access,
+see [Restrict `query` tool access to user objects only](#restrict-to-user-objects).
 
-To prevent an agent from querying the system catalog objects (`mz_catalog.*`,
-`mz_internal.*`, `pg_catalog.*`, and `information_schema.*`), see [Restrict
-`query` tool access to user objects only](#restrict-to-user-objects).
+To disable the tool entirely, set the [`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+system parameter to `false`.
 
 **Example response:**
 
