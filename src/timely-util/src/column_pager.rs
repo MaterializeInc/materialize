@@ -585,6 +585,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
     fn round_trip_swap_uncompressed() {
         let policy = TestPolicy::new(PageDecision::Page {
             backend: Backend::Swap,
@@ -621,6 +622,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn round_trip_file_uncompressed() {
         ensure_scratch();
         let policy = TestPolicy::new(PageDecision::Page {
@@ -636,6 +638,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn round_trip_file_lz4() {
         ensure_scratch();
         let policy = TestPolicy::new(PageDecision::Page {

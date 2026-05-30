@@ -855,6 +855,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
     fn batcher_seal_keeps_kept_chain_paged() {
         // Force-page policy; verify that after seal, the kept chain in
         // self.chains contains only Paged entries (no Resident).

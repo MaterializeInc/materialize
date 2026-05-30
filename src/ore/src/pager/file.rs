@@ -343,6 +343,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn pageout_writes_file_and_clears_capacity() {
         setup_dir();
         let mut chunks = [vec![10u64, 20, 30], vec![40, 50]];
@@ -364,6 +365,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_read_at_basic() {
         setup_dir();
         let mut chunks = [vec![1u64, 2, 3, 4, 5]];
@@ -374,6 +376,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_read_at_many_concats_and_coalesces() {
         setup_dir();
         let mut chunks = [vec![10u64, 20, 30, 40, 50, 60]];
@@ -385,6 +388,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     #[should_panic(expected = "out of bounds")]
     fn file_read_at_panics_on_oob() {
         setup_dir();
@@ -395,6 +399,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_take_returns_data_and_unlinks() {
         setup_dir();
         let mut chunks = [vec![7u64; 100]];
@@ -409,6 +414,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn file_drop_unlinks_when_not_taken() {
         setup_dir();
         let mut chunks = [vec![1u64, 2, 3]];
@@ -442,6 +448,7 @@ mod backend_tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
     fn try_read_at_file_surfaces_missing_file() {
         setup_dir();
         let mut chunks = [vec![1u64, 2, 3]];
