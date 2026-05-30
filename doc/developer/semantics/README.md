@@ -93,8 +93,7 @@ top.
 **Arity-cast scaffolding** (Mz.Schema + Mz.Collection):
 `Vector.cast_val`, `Vector.cast_eq_append_assoc`,
 `Schema.cast_mk`, `Schema.append_assoc_heq`, `Update.cast`,
-`Collection.cast`, `cast_rfl`, `crossOne_diff_assoc`,
-`crossOne_err_diff_assoc`, `crossOne_diff_eq`,
+`Collection.cast`, `cast_rfl`, `crossOne_diff_eq`,
 `crossOne_err_diff_eq`. The bilinear err-rule polynomial
 identity closes by `ring`.
 

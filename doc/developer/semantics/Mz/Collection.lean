@@ -259,15 +259,6 @@ theorem cast_rfl {n : Nat} {sch : Schema n} (l : Collection sch) :
 expressions — closed by `ring`. The row component is the non-trivial
 part of `cross_assoc` (deferred). -/
 
-theorem crossOne_diff_assoc (a b c : Int) :
-    (a * b) * c = a * (b * c) := by ring
-
-theorem crossOne_err_diff_assoc (dL eL dM eM dR eR : Int) :
-    (dL * dM) * eR + (dL * eM + eL * dM + eL * eM) * dR
-      + (dL * eM + eL * dM + eL * eM) * eR
-    = dL * (dM * eR + eM * dR + eM * eR) + eL * (dM * dR)
-      + eL * (dM * eR + eM * dR + eM * eR) := by ring
-
 /-- `crossOne`'s `diff` field is associative. The schemas differ on
 the two sides (cross of crosses lives at appended-twice arity); the
 `diff` field projects to `Int` regardless, so Eq is well-typed. -/
