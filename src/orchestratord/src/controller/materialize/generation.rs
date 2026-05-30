@@ -77,9 +77,9 @@ pub const V161: Version = Version::new(0, 161, 0);
 /// (`--persist-committer-url`, `--internal-persist-committer-listen-addr`).
 /// Older envd images reject these and exit on startup, so committer wiring is
 /// gated on this.
-static V26_27_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+static V26_28_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
-    minor: 27,
+    minor: 28,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -169,7 +169,7 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
-        let persist_committer_service = mz.meets_minimum_version(&V26_27_0_DEV0).then(|| {
+        let persist_committer_service = mz.meets_minimum_version(&V26_28_0_DEV0).then(|| {
             Box::new(create_persist_committer_service(
                 mz,
                 generation,
@@ -982,7 +982,7 @@ fn create_environmentd_statefulset_object(
     // the envd version that introduced the flags: older images do not
     // understand them and would exit with status 2 on startup, which would
     // break an upgrade from such an image.
-    if mz.meets_minimum_version(&V26_27_0_DEV0) {
+    if mz.meets_minimum_version(&V26_28_0_DEV0) {
         let port = config.environmentd_internal_persist_committer_port;
         args.push(format!(
             "--persist-committer-url=http://{}:{}",
