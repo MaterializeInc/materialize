@@ -1413,4 +1413,28 @@ mod tests {
             "capability must advance to logical_upper after remap close, got {frontier}"
         );
     }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_select_as_of_max_blocks() {
+        // Mimic `SELECT AS OF MAX`: a remap entry exists with physical_upper == 0
+        // (so physical_upper <= cap.time() and the operator waits for remap), no
+        // further remap update arrives, and the passthrough frontier reaches the
+        // empty antichain. The operator must NOT drop its capability (must keep
+        // blocking), so the output frontier stays finite (0), not u64::MAX.
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 0,
+                logical_upper: 0,
+            },
+            Action::RemapFrontier(Some(0)),
+            Action::PassFrontier(None),
+            Action::Step,
+        ];
+        let (_output, frontier) = run_schedule(build_sync, Antichain::new(), &schedule);
+        assert_eq!(
+            frontier, 0,
+            "operator must block (retain capability) while waiting for remap, got {frontier}"
+        );
+    }
 }
