@@ -129,7 +129,7 @@ where
     // Each of the `txns_frontiers` workers wants the full copy of the remap
     // information.
     let remap = remap.broadcast();
-    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C>(
+    let (passthrough, frontiers_button) = txns_progress_frontiers_async::<K, V, T, D, P, C>(
         remap,
         passthrough,
         name,
@@ -228,7 +228,7 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
-fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
+fn txns_progress_frontiers_async<'scope, K, V, T, D, P, C>(
     remap: StreamVec<'scope, T, DataRemapEntry<T>>,
     passthrough: StreamVec<'scope, T, P>,
     name: &str,
