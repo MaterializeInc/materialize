@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/reachability.rs
-revision: b0fa98e931
+revision: 9727769b0d
 ---
 
 # mz-compute::logging::reachability

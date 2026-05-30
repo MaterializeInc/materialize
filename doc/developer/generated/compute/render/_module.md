@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render.rs
-revision: 92cb1cf559
+revision: 3506b9aee8
 ---
 
 # mz-compute::render

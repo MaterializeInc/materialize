@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/lib.rs
-revision: ff83c23010
+revision: 9727769b0d
 ---
 
 # mz-compute
@@ -17,7 +17,6 @@ Materialize's compute layer: receives `ComputeCommand`s from the controller and 
 * `logging` — introspection dataflows (Timely, differential, reachability, compute-specific events)
 * `extensions` — wrappers around `arrange` and `reduce` that attach heap-size logging; temporal bucket operator
 * `typedefs` — shared type aliases for spines, agents, batchers, and data-bound traits
-* `row_spine` — `Row`-specialized spine layouts with `DatumContainer` and `OffsetOptimized`
 * `metrics` — Prometheus metrics for the replica
 * `memory_limiter` — process-global memory limit enforcer
 * `command_channel` — Timely dataflow-based command fan-out from worker 0 to all workers
