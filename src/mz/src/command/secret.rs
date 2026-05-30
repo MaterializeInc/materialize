@@ -20,6 +20,7 @@
 use std::io::{self, Write};
 
 use mz_postgres_util::{Sql, sql};
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::{context::RegionContext, error::Error};
 
@@ -88,7 +89,10 @@ pub async fn create(
     // For case 1) we pass through the expression as-is (it's a SQL expression, not a literal).
     // For case 2) we escape the value as a string literal.
     let value = if buffer.starts_with("decode") {
-        Sql::raw_unchecked(buffer)
+        // Validate that `buffer` parses as a single SQL expression.
+        let expr = mz_sql_parser::parser::parse_expr(&buffer)
+            .map_err(|e| Error::InvalidSecretExpression(e.to_string()))?;
+        Sql::raw_unchecked(expr.to_ast_string_stable())
     } else {
         Sql::literal(&buffer)
     };

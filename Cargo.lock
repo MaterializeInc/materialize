@@ -5576,6 +5576,7 @@ dependencies = [
  "mz-frontegg-client",
  "mz-ore",
  "mz-postgres-util",
+ "mz-sql-parser",
  "open",
  "openssl-probe 0.1.6",
  "reqwest 0.12.28",
