@@ -27,7 +27,7 @@ fn ensure_scratch() {
     set_scratch_dir(dir.path().to_owned());
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
 fn round_trip_swap() {
     set_backend(Backend::Swap);
@@ -39,7 +39,7 @@ fn round_trip_swap() {
     assert_eq!(dst, payload);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn round_trip_file() {
     ensure_scratch();
@@ -53,7 +53,7 @@ fn round_trip_file() {
     set_backend(Backend::Swap);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn handle_survives_backend_flip() {
     ensure_scratch();
@@ -74,7 +74,7 @@ fn handle_survives_backend_flip() {
     assert_eq!(dst2, payload);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 fn empty_input_yields_zero_len_handle() {
     set_backend(Backend::Swap);
     let mut chunks: [Vec<u64>; 0] = [];
@@ -83,7 +83,7 @@ fn empty_input_yields_zero_len_handle() {
     assert!(h.is_empty());
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 fn try_api_swap_round_trip() {
     set_backend(Backend::Swap);
     let payload: Vec<u64> = (0..128).collect();
@@ -99,7 +99,7 @@ fn try_api_swap_round_trip() {
     assert_eq!(dst2, payload);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn try_api_file_round_trip() {
     ensure_scratch();
@@ -113,7 +113,7 @@ fn try_api_file_round_trip() {
     set_backend(Backend::Swap);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 fn empty_input_file_backend_round_trip() {
     ensure_scratch();
     set_backend(Backend::File);
@@ -127,7 +127,7 @@ fn empty_input_file_backend_round_trip() {
     set_backend(Backend::Swap);
 }
 
-#[test] // allow(test-attribute)
+#[mz_ore::test]
 fn scatter_round_trip() {
     set_backend(Backend::Swap);
     let mut chunks = [vec![1u64, 2, 3], vec![4, 5], vec![6, 7, 8, 9]];
