@@ -28,6 +28,7 @@ fn ensure_scratch() {
 }
 
 #[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
 fn round_trip_swap() {
     set_backend(Backend::Swap);
     let payload: Vec<u64> = (0..1024).collect();
@@ -39,6 +40,7 @@ fn round_trip_swap() {
 }
 
 #[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn round_trip_file() {
     ensure_scratch();
     set_backend(Backend::File);
@@ -52,6 +54,7 @@ fn round_trip_file() {
 }
 
 #[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn handle_survives_backend_flip() {
     ensure_scratch();
     set_backend(Backend::File);
@@ -97,6 +100,7 @@ fn try_api_swap_round_trip() {
 }
 
 #[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `writev` on OS `linux`
 fn try_api_file_round_trip() {
     ensure_scratch();
     set_backend(Backend::File);
