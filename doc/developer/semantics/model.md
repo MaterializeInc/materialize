@@ -258,15 +258,25 @@ function — the kind is the index `k` of `Expr sch k`. The
 same reason.
 
 `Expr.outputCols sch e : ColSchema` in `Mz/OutputType.lean`
-derives the output `(nullable, errable)` bits per `Expr`. Precise
-on `.lit`, `.col`, and `.not` (preserves both bits). Tight
-`errable`-OR-of-inputs on `.plus` / `.minus` / `.times`, `.eq` /
-`.lt`, and `.ifThen` (OR over three arms). `.divide` is always
-errable. Variadic `.andN` / `.orN` / `.coalesce` remain
-conservative (mutual-recursion lifts are open follow-ups).
+derives the output `(nullable, errable)` bits per `Expr`. The
+`nullable` bit is tight everywhere: every primitive produces
+`.null` only from a `.null` operand (strict arithmetic /
+comparison / `.not`) or a `.null` branch (`.ifThen`), so `nullable`
+is the OR of the operands that can contribute a null — never an
+unconditional `true`. Variadic `nullable` is tight via the
+`ExprList` companions `argsNullable` (OR over operands, for
+`.andN` / `.orN`) and `coalesceNullable` (`false` exactly when some
+operand is statically guaranteed concrete, so `coalesce`
+short-circuits to it; empty `coalesce` is `.null`).
+The `errable` bit is tight on `.lit`, `.col`, `.not`, the
+`errable`-OR-of-inputs operators (`.plus` / `.minus` / `.times`,
+`.eq` / `.lt`, `.ifThen`), with `.divide` always errable; the
+variadic `errable` stays conservative `true` (a tight rule under
+the absorbing short-circuit is a separate refinement).
 Soundness theorem `eval_satisfies_outputCols` is mechanized in
-`Mz/OutputType.lean` via structural recursion + `evalX_not_err`
-lemmas from `MightError`.
+`Mz/OutputType.lean` via structural recursion mutual with the
+`ExprList` companions `args_not_null` / `args_concrete`, consuming
+the `evalX_not_err` / `evalX_not_null` per-primitive lemmas.
 
 `EnvErrFree_of_RowSatisfies` (in `Mz/OutputType.lean`) bridges
 `Schema.cellErrFree` + `RowSatisfies sch env` to `EnvErrFree env`
@@ -782,7 +792,7 @@ Relations and analyses a planner can cite today.
 | `refines` (`Row` / `Update` / `Collection`) | `Mz/Collection.lean` | Smyth-style lift + refl / trans | pushdown lift open (depends on `cross`) |
 | `Collection.Equiv`         | `Mz/Collection.lean`         | `unionAll` commutativity; `negate s ++ s ≈ []` retraction | most `=`-tagged rewrites not yet migrated |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` / `cross` / `filter` propagation; `EnvErrFree_of_RowSatisfies` bridge in `Mz/OutputType.lean` | — |
-| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation + `eval_satisfies_outputCols` soundness; `coalesce_collapse` schema-rider | precision direction (variadic / `.divide` static-safe-divisor) open |
+| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation + `eval_satisfies_outputCols` soundness (mutual `args_not_null` / `args_concrete`); tight `nullable` on every constructor; `coalesce_collapse` schema-rider | variadic `errable` precision and `.divide` static-safe-divisor open |
 | `might_error` + soundness  | `Mz/MightError.lean`         | `might_error_sound` + `evalCoalesce_not_err_of_some_safe` + variadic safety | — |
 
 ### Sketches and history
