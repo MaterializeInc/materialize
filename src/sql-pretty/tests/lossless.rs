@@ -61,3 +61,14 @@ fn alter_role_password_preserved() {
 fn materialized_view_as_of_preserved() {
     assert_lossless("CREATE MATERIALIZED VIEW mv AS SELECT 1 AS OF 12345");
 }
+
+#[mz_ore::test]
+fn csr_seed_protobuf_message_name_preserved() {
+    // A protobuf MESSAGE name containing a single quote must be escaped on
+    // display, or it produces an unterminated string literal on reparse.
+    assert_lossless(
+        "CREATE SOURCE s FROM KAFKA CONNECTION c (TOPIC 'baz') \
+         FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr \
+         SEED VALUE SCHEMA 'sch' MESSAGE 'a''b'",
+    );
+}
