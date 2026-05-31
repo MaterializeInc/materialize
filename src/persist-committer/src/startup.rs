@@ -64,7 +64,10 @@ pub fn start_committer(
     metrics: CommitterMetrics,
     config: CommitterConfig,
 ) -> anyhow::Result<CommitterHandle> {
-    let cache = Arc::new(ShardCache::new(config.max_cached_shards));
+    let cache = Arc::new(ShardCache::new(
+        config.max_cached_shards,
+        metrics.cached_shards.clone(),
+    ));
     let committer = Arc::new(PersistCommitter::new(
         Arc::clone(&consensus),
         Arc::clone(&cache),

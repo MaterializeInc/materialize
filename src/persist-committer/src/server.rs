@@ -458,8 +458,8 @@ mod tests {
         let consensus = Arc::new(MemConsensus::default());
         let consensus_dyn: Arc<dyn Consensus + Send + Sync> =
             Arc::<MemConsensus>::clone(&consensus);
-        let cache = Arc::new(ShardCache::new(100));
         let metrics = CommitterMetrics::for_tests();
+        let cache = Arc::new(ShardCache::new(100, metrics.cached_shards.clone()));
         let committer = PersistCommitter::new(consensus_dyn, cache, metrics);
         (consensus, committer)
     }
@@ -476,9 +476,10 @@ mod tests {
     async fn head_returns_cached_value_without_underlying() {
         // Underlying is empty; cache is pre-populated; head must return cache.
         let consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
-        let cache = Arc::new(ShardCache::new(100));
+        let metrics = CommitterMetrics::for_tests();
+        let cache = Arc::new(ShardCache::new(100, metrics.cached_shards.clone()));
         cache.insert("s1", v(5, 0xCC));
-        let committer = PersistCommitter::new(consensus, cache, CommitterMetrics::for_tests());
+        let committer = PersistCommitter::new(consensus, cache, metrics);
         let got = committer.head_inner("s1").await.unwrap();
         assert_eq!(got.unwrap().seqno, SeqNo(5));
     }

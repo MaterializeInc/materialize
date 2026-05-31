@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use mz_ore::metrics::IntGauge;
 use mz_persist::location::VersionedData;
 
 /// Per-shard cached state. The cache self-corrects only via the
@@ -28,6 +29,10 @@ pub struct CachedState {
 pub struct ShardCache {
     inner: Mutex<Inner>,
     max_shards: usize,
+    /// Number of shards currently cached. Set whenever the map grows (and,
+    /// implicitly, after an eviction within the same insert) so the heartbeat
+    /// can report cache occupancy.
+    cached_shards: IntGauge,
 }
 
 #[derive(Debug)]
@@ -37,13 +42,14 @@ struct Inner {
 }
 
 impl ShardCache {
-    pub fn new(max_shards: usize) -> Self {
+    pub fn new(max_shards: usize, cached_shards: IntGauge) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 map: BTreeMap::new(),
                 tick: 0,
             }),
             max_shards,
+            cached_shards,
         }
     }
 
@@ -79,6 +85,10 @@ impl ShardCache {
             last_access: tick,
         }));
         inner.map.insert(shard.to_string(), Arc::clone(&entry));
+        // `len()` here reflects any eviction above plus this insert, so it is
+        // the authoritative occupancy after the only path that resizes the map.
+        self.cached_shards
+            .set(i64::try_from(inner.map.len()).unwrap_or(i64::MAX));
         entry
     }
 
@@ -110,6 +120,12 @@ mod tests {
     use bytes::Bytes;
     use mz_persist::location::{SeqNo, VersionedData};
 
+    use crate::metrics::CommitterMetrics;
+
+    fn cache(max_shards: usize) -> ShardCache {
+        ShardCache::new(max_shards, CommitterMetrics::for_tests().cached_shards)
+    }
+
     fn v(seqno: u64) -> VersionedData {
         VersionedData {
             seqno: SeqNo(seqno),
@@ -119,7 +135,7 @@ mod tests {
 
     #[mz_ore::test]
     fn insert_advances_forward() {
-        let c = ShardCache::new(10);
+        let c = cache(10);
         c.insert("s1", v(5));
         c.insert("s1", v(7));
         assert_eq!(c.get("s1").unwrap().seqno, SeqNo(7));
@@ -127,15 +143,29 @@ mod tests {
 
     #[mz_ore::test]
     fn insert_never_goes_backward() {
-        let c = ShardCache::new(10);
+        let c = cache(10);
         c.insert("s1", v(7));
         c.insert("s1", v(5));
         assert_eq!(c.get("s1").unwrap().seqno, SeqNo(7));
     }
 
     #[mz_ore::test]
+    fn cached_shards_metric_tracks_occupancy() {
+        let metrics = CommitterMetrics::for_tests();
+        let c = ShardCache::new(2, metrics.cached_shards.clone());
+        assert_eq!(metrics.cached_shards.get(), 0);
+        c.insert("a", v(1));
+        assert_eq!(metrics.cached_shards.get(), 1);
+        c.insert("b", v(1));
+        assert_eq!(metrics.cached_shards.get(), 2);
+        // Capacity is 2; the third insert evicts one, so occupancy holds at 2.
+        c.insert("c", v(1));
+        assert_eq!(metrics.cached_shards.get(), 2);
+    }
+
+    #[mz_ore::test]
     fn lru_evicts_oldest() {
-        let c = ShardCache::new(2);
+        let c = cache(2);
         c.insert("a", v(1));
         c.insert("b", v(1));
         c.insert("c", v(1));
