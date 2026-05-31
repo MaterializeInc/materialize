@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pager/file.rs
-revision: 6d8705a7be
+revision: 6b2261cbfe
 ---
 
 # mz-ore::pager::file
