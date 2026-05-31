@@ -63,6 +63,18 @@ fn materialized_view_as_of_preserved() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn subscribe_relation_named_to_preserved() {
+    // `to` is the optional `SUBSCRIBE TO` keyword, so a relation literally
+    // named `to` must keep emitting the keyword or the name is dropped on
+    // reparse (displayed as `SUBSCRIBE to` -> `SUBSCRIBE TO <missing>`).
+    assert_lossless("SUBSCRIBE TO to");
+    assert_lossless("SUBSCRIBE t");
+    assert_lossless("SUBSCRIBE (SELECT 1)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn csr_seed_protobuf_message_name_preserved() {
     // A protobuf MESSAGE name containing a single quote must be escaped on
     // display, or it produces an unterminated string literal on reparse.

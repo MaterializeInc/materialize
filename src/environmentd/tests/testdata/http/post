@@ -239,7 +239,7 @@ http
 {"query":"subscribe (select * from t)"}
 ----
 200 OK
-{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE TO (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"copy (select 1) to stdout"}
@@ -460,7 +460,7 @@ http
 {"queries":[{"query":"subscribe (select * from t)","params":[]}]}
 ----
 200 OK
-{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"unsupported via this API: SUBSCRIBE TO (SELECT * FROM t)","code":"XX000"},"notices":[]}]}
 
 # Test detail and hint error fields.
 http
