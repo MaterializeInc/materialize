@@ -311,6 +311,15 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
                 "--persist-pubsub-url=http://persist-pubsub",
             ]
+        if self._meets_minimum_version("26.28.0-dev"):
+            # Like pubsub, the committer is hosted in environmentd and reached
+            # by clusterds over the `persist-committer` Service. Gated on the
+            # version that introduced the flags so upgrades from older images
+            # (which reject them) stay safe.
+            args += [
+                "--internal-persist-committer-listen-addr=0.0.0.0:6882",
+                "--persist-committer-url=http://persist-committer",
+            ]
         if self._meets_minimum_version("0.60.0-dev"):
             args += [
                 # Kind sets up a basic local-file storage class based on Rancher, named `standard`

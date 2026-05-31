@@ -30,6 +30,7 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.mysql import mysql_resources
+from materialize.cloudtest.k8s.persist_committer import PersistCommitterService
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
 from materialize.cloudtest.k8s.postgres import postgres_resources
 from materialize.cloudtest.k8s.redpanda import redpanda_resources
@@ -93,6 +94,7 @@ class MaterializeApplication(CloudtestApplicationBase):
                 apply_node_selectors=self.apply_node_selectors,
             ),
             PersistPubSubService(),
+            PersistCommitterService(),
             self.environmentd,
             self.materialized_alias,
             self.testdrive,
