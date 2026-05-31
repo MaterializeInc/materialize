@@ -127,6 +127,14 @@ steps:
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
+        retry:
+          automatic:
+            - signal_reason: agent_stop
+              limit: 2
+            - exit_status: 128
+              limit: 2
+            - exit_status: 199
+              limit: 2
 
       - id: devel-docker-tags
         label: Tag development docker images
