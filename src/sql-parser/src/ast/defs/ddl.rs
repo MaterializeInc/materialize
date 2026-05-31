@@ -429,7 +429,7 @@ impl AstDisplay for CsrSeedProtobufSchema {
         f.write_str("SCHEMA '");
         f.write_str(&display::escape_single_quote_string(&self.schema));
         f.write_str("' MESSAGE '");
-        f.write_str(&self.message_name);
+        f.write_str(&display::escape_single_quote_string(&self.message_name));
         f.write_str("'");
     }
 }
