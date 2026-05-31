@@ -1589,7 +1589,9 @@ impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
         f.write_str(" (");
         f.write_node(&display::comma_separated(columns));
         if !self.constraints.is_empty() {
-            f.write_str(", ");
+            if !columns.is_empty() {
+                f.write_str(", ");
+            }
             f.write_node(&display::comma_separated(constraints));
         }
         f.write_str(")");
