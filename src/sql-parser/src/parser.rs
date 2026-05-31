@@ -504,8 +504,26 @@ impl<'a> Parser<'a> {
                 .map_no_statement_parser_err(),
                 Token::LParen => {
                     self.prev_token();
+                    let query = self.parse_query().map_parser_err(StatementKind::Select)?;
+                    // `(SHOW TABLES)` parses as a `Query` whose `body` is a
+                    // `Show` node, but the same SQL without parens parses as
+                    // a top-level `Statement::Show`. Unwrap the degenerate
+                    // wrapper so the AST is independent of redundant parens
+                    // and the parse + display + reparse round trip is stable.
+                    if let Query {
+                        ctes: CteBlock::Simple(ctes),
+                        body: SetExpr::Show(show),
+                        order_by,
+                        limit: None,
+                        offset: None,
+                    } = &query
+                    {
+                        if ctes.is_empty() && order_by.is_empty() {
+                            return Ok(Statement::Show(show.clone()));
+                        }
+                    }
                     Ok(Statement::Select(SelectStatement {
-                        query: self.parse_query().map_parser_err(StatementKind::Select)?,
+                        query,
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
                     }))
                 }
