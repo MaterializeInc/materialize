@@ -96,10 +96,6 @@ skip = [
     # Used by tempfile
     { name = "linux-raw-sys", version = "0.4.15" },
     { name = "rustix", version = "0.38.44" },
-    # Used by axum
-    { name = "tower", version = "0.4.13" },
-    # Used by tower-lsp
-    { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
     { name = "itertools", version = "0.13.0" },
     # Used by pprof
@@ -108,6 +104,8 @@ skip = [
     { name = "socket2", version = "0.5.10" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
+    # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
+    { name = "quick-xml", version = "0.37.5" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
@@ -122,8 +120,6 @@ skip = [
     { name = "phf_shared", version = "0.11.3" },
     { name = "phf_generator", version = "0.11.2" },
     { name = "phf_codegen", version = "0.11.3" },
-    # insta
-    { name = "console", version = "0.15.11" },
     # duckdb
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow

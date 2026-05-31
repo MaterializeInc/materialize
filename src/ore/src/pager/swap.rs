@@ -226,6 +226,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
     fn take_single_chunk_zero_copy() {
         let v = vec![100u64; 1024];
         let ptr_before = v.as_ptr();

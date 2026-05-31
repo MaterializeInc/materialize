@@ -89,7 +89,7 @@ yansi = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
-mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
+mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
 serde_json.workspace = true

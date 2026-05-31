@@ -3385,12 +3385,15 @@ impl CopyRowScanner {
         self.end_marker_end = self
             .end_marker_end
             .and_then(|end| end.checked_sub(split_pos));
-        // Splits always occur at a completed-row boundary, so the in-progress
-        // record (if any) starts at the new beginning of the buffer. Record
-        // this invariant explicitly so the `saturating_sub` below doesn't
-        // silently paper over a bug that bisected an in-progress record.
+        // `record_start` is only maintained for the CSV path; the text and
+        // binary paths leave it at 0. For CSV, splits always occur at a
+        // completed-row boundary, so the in-progress record (if any) starts at
+        // the new beginning of the buffer. Assert that invariant so the
+        // `saturating_sub` below doesn't silently paper over a bug that
+        // bisected an in-progress record — but only when CSV is in use, since
+        // otherwise `record_start` is meaninglessly 0.
         soft_assert_or_log!(
-            self.record_start >= split_pos,
+            self.csv.is_none() || self.record_start >= split_pos,
             "split bisected an in-progress CSV record: record_start={} < split_pos={}",
             self.record_start,
             split_pos,
@@ -3476,6 +3479,30 @@ mod test {
             // Quoted "\." is data, not the marker.
             let data = join(&["before", "\"\\.\"", "after"]);
             assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_non_csv_split() {
+        // Regression: `record_start` is only maintained for the CSV path; the
+        // text and binary paths leave it at 0. `on_split` must therefore not
+        // assert `record_start >= split_pos` for those formats — that fires on
+        // every split of a large text/binary COPY stream (soft-assertions
+        // panic under test). Mirrors `COPY ... FROM STDIN` (default text
+        // format) splitting at a row boundary once the buffer fills.
+        for params in [
+            CopyFormatParams::Text(CopyTextFormatParams::default()),
+            CopyFormatParams::Binary,
+        ] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = b"1\thello world\t2\tsome text value here\n\
+                         3\thello world\t6\tsome text value here\n";
+            scanner.scan_new_bytes(data);
+            let split_pos = scanner.last_row_end().expect("a complete row");
+            assert!(split_pos > 0, "params={params:?}");
+            // Must not panic via the CSV-only `on_split` soft-assert.
+            scanner.on_split(split_pos);
+            assert_eq!(scanner.record_start, 0, "params={params:?}");
         }
     }
 
