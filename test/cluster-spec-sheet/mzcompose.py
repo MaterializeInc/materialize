@@ -18,9 +18,11 @@ import itertools
 import os
 import re
 import shlex
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any, TextIO
@@ -76,6 +78,25 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "max_objects_per_schema": "200000",
     "max_clusters": "50",
 }
+
+
+# --- Intra-region parallelism (see workflow_default / run_parallel) ---
+# Per-statement server-side timeout (ms). Generous headroom over any healthy
+# spec-sheet operation (tens of minutes at worst), but bounds a hung query or
+# crash-looping region to minutes instead of the multi-day Buildkite cap that
+# a missing timeout previously allowed. Set to 0 to disable.
+DEFAULT_STATEMENT_TIMEOUT_MS = 60 * 60 * 1000  # 60 minutes
+# Each parallel job owns a throwaway "quickstart" cluster for ad-hoc queries
+# issued before its measurement cluster `c` exists.
+PARALLEL_QUICKSTART_SIZE_CLOUD = "50cc"
+PARALLEL_QUICKSTART_SIZE_DOCKER = "scale=1,workers=1"
+# Clusters a single parallel job holds at its peak: its own quickstart, the
+# load-generator cluster `lg`, and the measurement cluster `c`.
+PARALLEL_CLUSTERS_PER_JOB = 3
+# Fraction of the configured server-side limits (max_credit_consumption_rate,
+# max_clusters) the scheduler may reserve, leaving headroom for estimate drift
+# and transient overlap while clusters are torn down / recreated.
+PARALLEL_LIMIT_SAFETY = 0.8
 
 
 def staging_version() -> str:
@@ -184,14 +205,44 @@ def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
 
 
 class ConnectionHandler:
-    def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
+    def __init__(
+        self,
+        new_connection: Callable[..., psycopg.Connection],
+        *,
+        dbname: str | None = None,
+        cluster: str | None = None,
+        statement_timeout_ms: int | None = None,
+    ) -> None:
+        # ``new_connection`` accepts ``dbname`` / ``cluster`` /
+        # ``statement_timeout_ms`` keyword args; the values stored here are
+        # re-applied on every (re)connect so that the worker's database,
+        # default cluster, and statement timeout survive a dropped connection
+        # (e.g. a TLS EOF against a crash-looping region).
         self.new_connection = new_connection
-        self.connection = self.new_connection()
+        self.dbname = dbname
+        self.cluster = cluster
+        self.statement_timeout_ms = statement_timeout_ms
+        self.connection = self._open()
         self.cursor: psycopg.Cursor | None = None
+
+    def _open(self) -> psycopg.Connection:
+        return self.new_connection(
+            dbname=self.dbname,
+            cluster=self.cluster,
+            statement_timeout_ms=self.statement_timeout_ms,
+        )
+
+    def set_default_cluster(self, cluster: str) -> None:
+        """Make subsequent (re)connections default to ``cluster``.
+
+        Used after a job's measurement cluster is (re)created so that a
+        mid-measurement reconnect resumes on the right cluster instead of the
+        bootstrap quickstart cluster."""
+        self.cluster = cluster
 
     def __ensure_connection(self):
         if not self.connection or self.connection.closed:
-            self.connection = self.new_connection()
+            self.connection = self._open()
 
     def __enter__(self) -> psycopg.Cursor:
         self.__ensure_connection()
@@ -228,7 +279,11 @@ class ScenarioRunner:
         connection: ConnectionHandler,
         results_writer: csv.DictWriter,
         target: "BenchTarget",
+        write_lock: "threading.Lock | None" = None,
     ) -> None:
+        # Serializes writes to ``results_writer``; parallel workers writing to
+        # the same CSV stream must share one lock.
+        self.write_lock = write_lock or threading.Lock()
         self.scenario = scenario
         self.scenario_version = scenario_version
         self.scale = scale
@@ -240,6 +295,16 @@ class ScenarioRunner:
         self.replica_size: str | None = None
         self.target = target
         self.envd_cpus: int | None = None
+        # Cluster names used by the generic helpers and scenario SQL. Defaults
+        # match the historical hard-coded names so the serial path is
+        # unchanged; the parallel driver overrides them per worker so
+        # concurrently-running jobs don't collide on the global cluster
+        # namespace.
+        self.cluster: str = "c"
+        self.lg_cluster: str = "lg"
+        # Prefix for log lines, set per worker in parallel mode so interleaved
+        # output is attributable.
+        self.log_prefix: str = ""
 
     def add_result(
         self,
@@ -259,31 +324,32 @@ class ScenarioRunner:
         on streams whose schema doesn't include them
         (``csv.DictWriter(extrasaction="ignore")``).
         """
-        self.results_writer.writerow(
-            {
-                "scenario": self.scenario,
-                "scenario_version": self.scenario_version,
-                "scale": self.scale,
-                "mode": self.mode,
-                "category": category,
-                "test_name": name,
-                "cluster_size": self.replica_size,
-                "envd_cpus": self.envd_cpus,
-                "repetition": repetition,
-                "size_bytes": size_bytes,
-                "time_ms": time_ms,
-                "qps": qps,
-                "healthy": healthy,
-                "failure_mode": failure_mode,
-            }
-        )
+        with self.write_lock:
+            self.results_writer.writerow(
+                {
+                    "scenario": self.scenario,
+                    "scenario_version": self.scenario_version,
+                    "scale": self.scale,
+                    "mode": self.mode,
+                    "category": category,
+                    "test_name": name,
+                    "cluster_size": self.replica_size,
+                    "envd_cpus": self.envd_cpus,
+                    "repetition": repetition,
+                    "size_bytes": size_bytes,
+                    "time_ms": time_ms,
+                    "qps": qps,
+                    "healthy": healthy,
+                    "failure_mode": failure_mode,
+                }
+            )
 
     def run_query(
         self, query: str, fetch: bool = False, retries: int = 5, **params
     ) -> list | None:
         query = dedent(query).strip()
         if "CREATE SECRET" not in query:
-            print(f"> {query} {params or ''}")
+            print(f"{self.log_prefix}> {query} {params or ''}")
         for retry in range(retries + 1):
             try:
                 with self.connection as cur:
@@ -315,7 +381,7 @@ class ScenarioRunner:
         setup_delay: float = 0.0,
     ) -> None:
         print(
-            f"--- Running {name} for {self.replica_size} with {repetitions} repetitions..."
+            f"{self.log_prefix}--- Running {name} for {self.replica_size} with {repetitions} repetitions..."
         )
         for repetition in range(repetitions):
 
@@ -527,6 +593,12 @@ class ClusterScalingScenario(ABC):
     def __init__(self, scale: int | float, replica_size: str | None) -> None:
         self.scale = scale
         self.replica_size = replica_size
+        # Cluster names this workload emits in its SQL. Defaults match the
+        # historical hard-coded names; the parallel driver overrides them per
+        # worker (via the wrapping sweep's `apply_namespace`) so concurrent
+        # jobs don't collide on the global cluster namespace.
+        self.cluster: str = "c"
+        self.lg_cluster: str = "lg"
 
     @abstractmethod
     def name(self) -> str: ...
@@ -556,14 +628,14 @@ class TpchScenario(ClusterScalingScenario):
     def setup(self) -> list[str]:
         return [
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
-            "DROP CLUSTER IF EXISTS lg CASCADE;",
-            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;",
+            f"CREATE CLUSTER {self.lg_cluster} SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER {self.lg_cluster} FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
             "SELECT COUNT(*) > 0 FROM region;",
         ]
 
     def drop(self) -> list[str]:
-        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
+        return [f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
@@ -612,10 +684,10 @@ class TpchScenario(ClusterScalingScenario):
             size_of_index="lineitem_primary_idx",
             setup=[
                 "SELECT count(*) > 0 FROM lineitem;",
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+                f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 0);",
             ],
             query=[
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
+                f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
             ],
         )
@@ -632,14 +704,14 @@ class TpchScenarioMV(ClusterScalingScenario):
     def setup(self) -> list[str]:
         return [
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
-            "DROP CLUSTER IF EXISTS lg CASCADE;",
-            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;",
+            f"CREATE CLUSTER {self.lg_cluster} SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER {self.lg_cluster} FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
             "SELECT COUNT(*) > 0 FROM region;",
         ]
 
     def drop(self) -> list[str]:
-        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
+        return [f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
@@ -706,10 +778,10 @@ class TpchScenarioMV(ClusterScalingScenario):
             "materialized_view_restart",
             setup=[
                 "SELECT count(*) > 0 FROM mv_lineitem;",
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+                f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 0);",
             ],
             query=[
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
+                f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
             ],
         )
@@ -726,9 +798,9 @@ class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
     def setup(self) -> list[str]:
         return [
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
-            "DROP CLUSTER IF EXISTS lg CASCADE;",
-            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;",
+            f"CREATE CLUSTER {self.lg_cluster} SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER {self.lg_cluster} FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
             "SELECT COUNT(*) > 0 FROM region;",
             """
             CREATE VIEW revenue (supplier_no, total_revenue) AS
@@ -1491,7 +1563,7 @@ class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
         ]
 
     def drop(self) -> list[str]:
-        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
+        return [f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;"]
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create indexes on inputs
@@ -1560,14 +1632,14 @@ class AuctionScenario(ClusterScalingScenario):
             "DROP VIEW IF EXISTS years CASCADE;",
             "DROP VIEW IF EXISTS items CASCADE;",
             "DROP TABLE IF EXISTS empty CASCADE;",
-            "DROP CLUSTER IF EXISTS lg CASCADE;",
+            f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;",
         ]
 
     def setup(self) -> list[str]:
         return [
-            "DROP CLUSTER IF EXISTS lg CASCADE;",
-            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            "SET cluster = 'lg';",
+            f"DROP CLUSTER IF EXISTS {self.lg_cluster} CASCADE;",
+            f"CREATE CLUSTER {self.lg_cluster} SIZE '{self.replica_size}';",
+            f"SET cluster = '{self.lg_cluster}';",
             "CREATE TABLE empty (e TIMESTAMP);",
             """
             -- Supporting view to translate ids into text.
@@ -1948,9 +2020,9 @@ class AuctionScenario(ClusterScalingScenario):
             "peek_serving",
             "index_restart",
             size_of_index="bids_id_idx",
-            setup=["ALTER CLUSTER c SET (REPLICATION FACTOR 0);"],
+            setup=[f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 0);"],
             query=[
-                "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
+                f"ALTER CLUSTER {runner.cluster} SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM bids WHERE id = 123412341234) SELECT * FROM data, t;",
             ],
             setup_delay=2,
@@ -2202,7 +2274,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
             "postgres",
             setup=["DROP SOURCE IF EXISTS pg_source CASCADE;"],
             query=[
-                "CREATE SOURCE pg_source IN CLUSTER c FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tbl AS pg_table);",
+                f"CREATE SOURCE pg_source IN CLUSTER {runner.cluster} FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tbl AS pg_table);",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE pg_table FROM SOURCE qa_cluster_spec_sheet_pg_source (REFERENCE tbl);",
                 ("SELECT count(*) FROM pg_table;", [(50000000,)]),
@@ -2214,7 +2286,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
             "mysql",
             setup=["DROP SOURCE IF EXISTS mysql_source CASCADE;"],
             query=[
-                "CREATE SOURCE mysql_source IN CLUSTER c FROM MYSQL CONNECTION mysql_conn FOR TABLES (admin.tbl AS mysql_table);",
+                f"CREATE SOURCE mysql_source IN CLUSTER {runner.cluster} FROM MYSQL CONNECTION mysql_conn FOR TABLES (admin.tbl AS mysql_table);",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE mysql_table FROM SOURCE mysql_source (REFERENCE admin.tbl);",
                 ("SELECT count(*) FROM mysql_table;", [(50000000,)]),
@@ -2226,7 +2298,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
             "kafka",
             setup=["DROP SOURCE IF EXISTS kafka_table CASCADE;"],
             query=[
-                "CREATE SOURCE kafka_table IN CLUSTER c FROM KAFKA CONNECTION kafka_conn (TOPIC 'qa_cluster_spec_sheet_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;",
+                f"CREATE SOURCE kafka_table IN CLUSTER {runner.cluster} FROM KAFKA CONNECTION kafka_conn (TOPIC 'qa_cluster_spec_sheet_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE kafka_table FROM SOURCE kafka_source;",
                 ("SELECT count(*) FROM kafka_table;", [(50000000,)]),
@@ -2370,9 +2442,10 @@ def _recreate_cluster_c(
     cluster-startup sanity check before the scenario runs (relies on
     `_prepare_probe_table` having already created ``t``).
     """
-    runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
+    cluster = runner.cluster
+    runner.run_query(f"DROP CLUSTER IF EXISTS {cluster} CASCADE")
     try:
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
+        runner.run_query(f"CREATE CLUSTER {cluster} SIZE '{replica_size}'")
     except psycopg.errors.DatabaseError as e:
         if skip_if_unavailable_label is None or isinstance(e, OperationalError):
             raise
@@ -2382,7 +2455,10 @@ def _recreate_cluster_c(
             f"({type(e).__name__}: {str(e).strip()}); skipping."
         )
         return False
-    runner.run_query("SET cluster = 'c'")
+    runner.run_query(f"SET cluster = '{cluster}'")
+    # Pin the measurement cluster as the connection default so a mid-measure
+    # reconnect resumes on it rather than the bootstrap quickstart cluster.
+    runner.connection.set_default_cluster(cluster)
     if smoke_test:
         runner.run_query("SELECT * FROM t")
     return True
@@ -2472,6 +2548,23 @@ class ScalePoint:
     n: int | None = None
 
 
+@dataclass(frozen=True)
+class Namespace:
+    """Per-worker isolation for a parallel job.
+
+    The database isolates relations / indexes (which are database-scoped);
+    the cluster names are globally unique because clusters are *not*
+    database-scoped in Materialize. ``quickstart`` is a throwaway cluster the
+    worker uses for ad-hoc queries before its measurement cluster ``cluster``
+    exists."""
+
+    database: str
+    cluster: str
+    lg_cluster: str
+    quickstart: str
+    log_prefix: str
+
+
 class Scenario(ABC):
     """A benchmark scenario: a sweep over scale points plus per-point
     measurement.
@@ -2519,6 +2612,34 @@ class Scenario(ABC):
 
     def teardown(self, runner: ScenarioRunner) -> None:
         pass
+
+    # --- Intra-region parallelism hooks (see run_parallel) ---
+
+    def parallel_safe(self) -> bool:
+        """Whether this scenario may run concurrently with others in the same
+        region. False for scenarios with region-global side effects — e.g.
+        `EnvdCpuSweep` reconfigures environmentd's CPU allocation (a region
+        restart), and envd-objects / cluster-object-limits push global
+        catalog/limit state — which must run in isolation."""
+        return False
+
+    def split_by_point(self) -> bool:
+        """Whether each scale point may run as its own independent parallel
+        job (own database + clusters + data). Only meaningful when
+        `parallel_safe()`."""
+        return False
+
+    def apply_namespace(self, ns: "Namespace") -> None:
+        """Rebind the scenario's cluster names to a per-worker namespace so
+        concurrent jobs don't collide on the global cluster namespace. The
+        per-worker database isolates relations/indexes. Default: no-op."""
+        pass
+
+    def peak_credits(self, points: list[ScalePoint], target: "BenchTarget") -> float:
+        """Estimated peak credits/hour this job holds, for the scheduler's
+        credit budget. Conservative over-estimates are safe (they just reduce
+        concurrency)."""
+        return 0.0
 
 
 class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
@@ -3139,9 +3260,12 @@ class StrongScalingSweep(_ClusterSizeSweepBase):
     workload: setup runs once in ``prepare``, the cluster is recreated for
     each size in ``apply``, and ``measure`` defers to ``workload.run``."""
 
-    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+    def __init__(
+        self, name: str, workload: ClusterScalingScenario, split_points: bool = True
+    ) -> None:
         self._name = name
         self._workload = workload
+        self._split_points = split_points
 
     def name(self) -> str:
         return self._name
@@ -3151,6 +3275,26 @@ class StrongScalingSweep(_ClusterSizeSweepBase):
 
     def stream_key(self) -> str:
         return "cluster"
+
+    def parallel_safe(self) -> bool:
+        return True
+
+    def split_by_point(self) -> bool:
+        return self._split_points
+
+    def apply_namespace(self, ns: "Namespace") -> None:
+        self._workload.cluster = ns.cluster
+        self._workload.lg_cluster = ns.lg_cluster
+
+    def peak_credits(self, points: list[ScalePoint], target: "BenchTarget") -> float:
+        # lg is fixed at the workload's (scale-1) size for strong scaling; the
+        # measurement cluster `c` varies per point. Peak = lg + largest c.
+        lg = extract_cluster_size(self._workload.replica_size or "0cc")
+        c = max(
+            (extract_cluster_size(p.cluster_size) for p in points if p.cluster_size),
+            default=0.0,
+        )
+        return lg + c
 
     def prepare(self, runner: ScenarioRunner) -> None:
         runner.scale = self._workload.scale
@@ -3176,10 +3320,13 @@ class WeakScalingSweep(_ClusterSizeSweepBase):
     """Sweep cluster size AND dataset size in lockstep. The workload's setup
     is rerun at each point with ``scale = initial_scale * replica_scale``."""
 
-    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+    def __init__(
+        self, name: str, workload: ClusterScalingScenario, split_points: bool = True
+    ) -> None:
         self._name = name
         self._workload = workload
         self._initial_scale = workload.scale
+        self._split_points = split_points
 
     def name(self) -> str:
         return self._name
@@ -3189,6 +3336,25 @@ class WeakScalingSweep(_ClusterSizeSweepBase):
 
     def stream_key(self) -> str:
         return "cluster"
+
+    def parallel_safe(self) -> bool:
+        return True
+
+    def split_by_point(self) -> bool:
+        return self._split_points
+
+    def apply_namespace(self, ns: "Namespace") -> None:
+        self._workload.cluster = ns.cluster
+        self._workload.lg_cluster = ns.lg_cluster
+
+    def peak_credits(self, points: list[ScalePoint], target: "BenchTarget") -> float:
+        # Both lg and `c` scale with the point for weak scaling. Peak = 2x the
+        # largest point's size.
+        c = max(
+            (extract_cluster_size(p.cluster_size) for p in points if p.cluster_size),
+            default=0.0,
+        )
+        return 2 * c
 
     def prepare(self, runner: ScenarioRunner) -> None:
         with runner.connection as cur:
@@ -3410,6 +3576,11 @@ def cloud_disable_enable_and_wait(
 
     time.sleep(10)
 
+    # The region (and possibly its hostname) was just re-enabled; drop any
+    # cached hostname so the next connection re-resolves it.
+    if isinstance(target, CloudTarget):
+        target.invalidate_hostname()
+
     assert "materialize.cloud" in target.composition.cloud_hostname()
     wait_for_envd(target)
 
@@ -3568,6 +3739,304 @@ def log_environment_info(target: "BenchTarget") -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# Intra-region parallelism
+#
+# The cluster-scaling scenarios are independent and self-contained, so within
+# a single region we run them — and, for sweeps that opt in via
+# `split_by_point()`, each of their scale points — as concurrent jobs. Each
+# job gets its own database (isolating relations / indexes) and its own
+# globally-unique cluster names (clusters are not database-scoped), builds its
+# own data, and tears everything down at the end.
+#
+# Concurrency is bounded by a `ResourceGovernor` so we never knowingly exceed
+# the region's `max_credit_consumption_rate` / `max_clusters`, plus a hard
+# thread cap (`--max-parallelism`). Scenarios with region-global side effects
+# (envd CPU reconfiguration, envd-objects, cluster-object-limits) declare
+# `parallel_safe() == False` and run serially in isolation.
+# ---------------------------------------------------------------------------
+
+
+class ResourceGovernor:
+    """Bounds concurrent jobs by credit-rate and cluster-count budgets.
+
+    A job reserves its estimated peak credits and cluster count before
+    creating any clusters and releases them once its clusters are dropped, so
+    the scheduler never knowingly exceeds the configured limits. A single
+    reservation is capped to the whole budget so an over-large job runs alone
+    rather than deadlocking."""
+
+    def __init__(self, credit_budget: float, cluster_budget: int) -> None:
+        self._cv = threading.Condition()
+        self._credit_budget = max(credit_budget, 0.0)
+        self._cluster_budget = max(cluster_budget, 1)
+        self._credits_avail = self._credit_budget
+        self._clusters_avail = self._cluster_budget
+
+    def acquire(self, credits: float, clusters: int) -> tuple[float, int]:
+        credits = min(max(credits, 0.0), self._credit_budget)
+        clusters = min(max(clusters, 1), self._cluster_budget)
+        with self._cv:
+            while not (
+                self._credits_avail >= credits and self._clusters_avail >= clusters
+            ):
+                self._cv.wait()
+            self._credits_avail -= credits
+            self._clusters_avail -= clusters
+        return (credits, clusters)
+
+    def release(self, reservation: tuple[float, int]) -> None:
+        credits, clusters = reservation
+        with self._cv:
+            self._credits_avail += credits
+            self._clusters_avail += clusters
+            self._cv.notify_all()
+
+
+def _sanitize_ident(s: str) -> str:
+    """Turn an arbitrary label into a safe SQL identifier fragment."""
+    out = re.sub(r"[^a-z0-9_]+", "_", s.lower()).strip("_")
+    # Bound length so concatenated names stay well within identifier limits.
+    return (out or "x")[:48]
+
+
+def _quickstart_size(target: "BenchTarget") -> str:
+    return (
+        PARALLEL_QUICKSTART_SIZE_DOCKER
+        if isinstance(target, DockerTarget)
+        else PARALLEL_QUICKSTART_SIZE_CLOUD
+    )
+
+
+def _make_namespace(scenario_name: str, point_label: str) -> Namespace:
+    base = _sanitize_ident(f"{scenario_name}_{point_label}")
+    return Namespace(
+        database=f"csheet_{base}",
+        cluster=f"c_{base}",
+        lg_cluster=f"lg_{base}",
+        quickstart=f"qs_{base}",
+        log_prefix=f"[{scenario_name} {point_label}] ",
+    )
+
+
+@dataclass
+class _Job:
+    scenario: Scenario
+    points: list[ScalePoint]
+    namespace: Namespace
+    credits: float
+
+
+def _expand_jobs(
+    name: str,
+    spec: "ScenarioSpec",
+    args: argparse.Namespace,
+    target: "BenchTarget",
+    max_scale: int,
+) -> list[_Job]:
+    """Expand a parallel-safe scenario into one or more independent jobs.
+
+    A fresh `Scenario` instance is built per job so concurrent jobs never
+    share mutable workload state."""
+    base = spec.factory(args, target)
+    points = list(base.scale_points(target, max_scale))
+    if not points:
+        return []
+    qs_credits = extract_cluster_size(_quickstart_size(target))
+    jobs: list[_Job] = []
+    if base.split_by_point():
+        for pt in points:
+            scenario = spec.factory(args, target)
+            jobs.append(
+                _Job(
+                    scenario=scenario,
+                    points=[pt],
+                    namespace=_make_namespace(name, pt.label),
+                    credits=scenario.peak_credits([pt], target) + qs_credits,
+                )
+            )
+    else:
+        jobs.append(
+            _Job(
+                scenario=base,
+                points=points,
+                namespace=_make_namespace(name, "all"),
+                credits=base.peak_credits(points, target) + qs_credits,
+            )
+        )
+    return jobs
+
+
+def _bootstrap_namespace(
+    conn: ConnectionHandler, ns: Namespace, quickstart_size: str
+) -> None:
+    with conn as cur:
+        cur.execute(f"DROP DATABASE IF EXISTS {ns.database} CASCADE".encode())
+        cur.execute(f"CREATE DATABASE {ns.database}".encode())
+        cur.execute(f"DROP CLUSTER IF EXISTS {ns.quickstart} CASCADE".encode())
+        cur.execute(f"CREATE CLUSTER {ns.quickstart} SIZE '{quickstart_size}'".encode())
+
+
+def _teardown_namespace_clusters(conn: ConnectionHandler, ns: Namespace) -> None:
+    for cluster in (ns.cluster, ns.lg_cluster, ns.quickstart):
+        try:
+            with conn as cur:
+                cur.execute(f"DROP CLUSTER IF EXISTS {cluster} CASCADE".encode())
+        except Exception as e:
+            print(f"WARNING: failed to drop cluster {cluster}: {e}")
+
+
+def run_job(
+    job: _Job,
+    target: "BenchTarget",
+    max_scale: int,
+    writer: csv.DictWriter,
+    write_lock: threading.Lock,
+    governor: ResourceGovernor,
+    statement_timeout_ms: int | None,
+) -> None:
+    ns = job.namespace
+    reservation = governor.acquire(job.credits, PARALLEL_CLUSTERS_PER_JOB)
+    try:
+        quickstart_size = _quickstart_size(target)
+        # Bootstrap the worker database + quickstart cluster on a short-lived
+        # default-database connection.
+        boot = ConnectionHandler(
+            target.new_connection, statement_timeout_ms=statement_timeout_ms
+        )
+        try:
+            boot.retryable(lambda: _bootstrap_namespace(boot, ns, quickstart_size))
+        finally:
+            try:
+                boot.connection.close()
+            except Exception:
+                pass
+        # Worker connection scoped to the namespace's database and quickstart
+        # cluster; the scenario switches to `lg`/`c` as it runs.
+        conn = ConnectionHandler(
+            target.new_connection,
+            dbname=ns.database,
+            cluster=ns.quickstart,
+            statement_timeout_ms=statement_timeout_ms,
+        )
+        try:
+            run_scenario(
+                job.scenario,
+                writer,
+                conn,
+                target,
+                max_scale,
+                points=job.points,
+                namespace=ns,
+                write_lock=write_lock,
+            )
+        finally:
+            _teardown_namespace_clusters(conn, ns)
+            try:
+                conn.connection.close()
+            except Exception:
+                pass
+            # Drop the database from a fresh default-database connection
+            # (can't drop the database the worker connection is attached to).
+            cleanup = ConnectionHandler(
+                target.new_connection, statement_timeout_ms=statement_timeout_ms
+            )
+            try:
+                cleanup.retryable(
+                    lambda: cleanup.connection.cursor().execute(
+                        f"DROP DATABASE IF EXISTS {ns.database} CASCADE".encode()
+                    )
+                )
+            except Exception as e:
+                print(f"WARNING: failed to drop database {ns.database}: {e}")
+            finally:
+                try:
+                    cleanup.connection.close()
+                except Exception:
+                    pass
+    finally:
+        governor.release(reservation)
+
+
+def run_parallel(
+    composition: Composition,
+    scenario_names: list[str],
+    args: argparse.Namespace,
+    target: "BenchTarget",
+    max_scale: int,
+    streams: "dict[str, OpenStream]",
+    statement_timeout_ms: int | None,
+    run_serial: "Callable[[str], None]",
+) -> None:
+    """Run the requested scenarios with intra-region parallelism.
+
+    Parallel-safe scenarios are fanned into jobs and run concurrently under a
+    `ResourceGovernor`; non-parallel-safe scenarios (region-global side
+    effects) run serially first, in isolation. Exceptions are collected and
+    the first is re-raised (mirroring `Composition.test_parts`)."""
+    parallel_specs: list[tuple[str, ScenarioSpec]] = []
+    serial_names: list[str] = []
+    for name in scenario_names:
+        spec = SCENARIOS_BY_NAME[name]
+        if spec.factory(args, target).parallel_safe():
+            parallel_specs.append((name, spec))
+        else:
+            serial_names.append(name)
+
+    exceptions: list[Exception] = []
+
+    # Region-global scenarios run one at a time, before the parallel pool.
+    for name in serial_names:
+        print(f"--- SCENARIO (serial): {name}")
+        try:
+            run_serial(name)
+        except Exception as e:
+            print(f"^^^ +++ serial scenario {name} failed: {e}")
+            exceptions.append(e)
+
+    jobs: list[_Job] = []
+    for name, spec in parallel_specs:
+        jobs.extend(_expand_jobs(name, spec, args, target, max_scale))
+
+    if jobs:
+        governor = ResourceGovernor(
+            args.parallel_credit_budget, args.parallel_cluster_budget
+        )
+        write_locks = {key: threading.Lock() for key in streams}
+        print(
+            f"--- Running {len(jobs)} parallel jobs "
+            f"(max_parallelism={args.max_parallelism}, "
+            f"credit_budget={args.parallel_credit_budget}, "
+            f"cluster_budget={args.parallel_cluster_budget})"
+        )
+        with ThreadPoolExecutor(max_workers=args.max_parallelism) as executor:
+            futures = {
+                executor.submit(
+                    run_job,
+                    job,
+                    target,
+                    max_scale,
+                    streams[job.scenario.stream_key()].writer,
+                    write_locks[job.scenario.stream_key()],
+                    governor,
+                    statement_timeout_ms,
+                ): job
+                for job in jobs
+            }
+            for fut in as_completed(futures):
+                job = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    print(f"^^^ +++ job {job.namespace.log_prefix}failed: {e}")
+                    exceptions.append(e)
+
+    if exceptions:
+        if len(exceptions) > 1:
+            print(f"Further exceptions were raised:\n{exceptions[1:]}")
+        raise exceptions[0]
+
+
 def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Run the bench workflow by default
@@ -3600,6 +4069,61 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         type=int,
         default=32,
         help="Maximum scale to test. For QPS scenarios, this directly corresponds to the number of CPU cores given to envd.",
+    )
+    parser.add_argument(
+        "--max-parallelism",
+        type=int,
+        default=1,
+        help=(
+            "Maximum number of parallel-safe scenario jobs to run concurrently "
+            "within a single region. 1 (default) preserves the serial behavior. "
+            ">1 enables intra-region parallelism, additionally bounded by "
+            "--parallel-credit-budget and --parallel-cluster-budget. Scenarios "
+            "with region-global side effects (envd qps/objects, "
+            "cluster-object-limits) always run serially."
+        ),
+    )
+    parser.add_argument(
+        "--statement-timeout",
+        type=int,
+        default=DEFAULT_STATEMENT_TIMEOUT_MS,
+        help=(
+            "Per-statement server-side timeout in milliseconds applied to all "
+            "benchmark connections, so a hung query / crash-looping region "
+            "fails in bounded time instead of blocking until the Buildkite "
+            f"timeout. Default {DEFAULT_STATEMENT_TIMEOUT_MS} ms. Set to 0 to "
+            "disable."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-credit-budget",
+        type=float,
+        default=PARALLEL_LIMIT_SAFETY
+        * float(
+            MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS[
+                "max_credit_consumption_rate"
+            ]
+        ),
+        help=(
+            "Total estimated credits/hour the parallel scheduler may reserve "
+            "across concurrent jobs. Defaults to "
+            f"{PARALLEL_LIMIT_SAFETY:g} x the configured "
+            "max_credit_consumption_rate."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-cluster-budget",
+        type=int,
+        default=int(
+            PARALLEL_LIMIT_SAFETY
+            * float(MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS["max_clusters"])
+        ),
+        help=(
+            "Total clusters the parallel scheduler may reserve across "
+            "concurrent jobs (each job holds "
+            f"{PARALLEL_CLUSTERS_PER_JOB}). Defaults to "
+            f"{PARALLEL_LIMIT_SAFETY:g} x the configured max_clusters."
+        ),
     )
     parser.add_argument(
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
@@ -3739,29 +4263,46 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             spec.key: _open_stream(spec, base_name) for spec in RESULT_STREAMS
         }
 
+        statement_timeout_ms = args.statement_timeout or None
+
+        def run_serial_scenario(scenario_name: str) -> None:
+            conn = ConnectionHandler(
+                target.new_connection, statement_timeout_ms=statement_timeout_ms
+            )
+
+            # Misc setup cluster for any ad-hoc queries the scenario runs
+            # before its own cluster `c` exists.
+            size = "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
+            with conn as cur:
+                cur.execute("DROP CLUSTER IF EXISTS quickstart;")
+                cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
+
+            spec = SCENARIOS_BY_NAME[scenario_name]
+            scenario = spec.factory(args, target)
+            writer = streams[scenario.stream_key()].writer
+            print(f"--- SCENARIO: Running {spec.log_label}")
+            run_scenario(scenario, writer, conn, target, max_scale)
+
         def process(scenario_name: str) -> None:
             with composition.test_case(scenario_name):
-                conn = ConnectionHandler(target.new_connection)
-
-                # Misc setup cluster for any ad-hoc queries the scenario runs
-                # before its own cluster `c` exists.
-                size = (
-                    "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
-                )
-                with conn as cur:
-                    cur.execute("DROP CLUSTER IF EXISTS quickstart;")
-                    cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
-
-                spec = SCENARIOS_BY_NAME[scenario_name]
-                scenario = spec.factory(args, target)
-                writer = streams[scenario.stream_key()].writer
-                print(f"--- SCENARIO: Running {spec.log_label}")
-                run_scenario(scenario, writer, conn, target, max_scale)
+                run_serial_scenario(scenario_name)
 
         test_failed = True
         try:
             scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
-            composition.test_parts(scenarios_list, process)
+            if args.max_parallelism and args.max_parallelism > 1:
+                run_parallel(
+                    composition,
+                    scenarios_list,
+                    args,
+                    target,
+                    max_scale,
+                    streams,
+                    statement_timeout_ms,
+                    run_serial_scenario,
+                )
+            else:
+                composition.test_parts(scenarios_list, process)
             test_failed = False
         finally:
             for stream in streams.values():
@@ -3788,13 +4329,36 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                 stream.spec.analyze(stream.path)
 
 
+def _connection_options(
+    cluster: str | None, statement_timeout_ms: int | None
+) -> str | None:
+    """Build a libpq ``options`` string of ``-c key=val`` server settings.
+
+    Settings passed this way are applied at connection startup and persist
+    across reconnects, so a worker's default cluster and statement timeout
+    survive a dropped connection. Returns ``None`` when there is nothing to
+    set."""
+    parts: list[str] = []
+    if statement_timeout_ms is not None and statement_timeout_ms > 0:
+        parts.append(f"statement_timeout={int(statement_timeout_ms)}")
+    if cluster is not None:
+        parts.append(f"cluster={cluster}")
+    return " ".join(f"-c {p}" for p in parts) if parts else None
+
+
 class BenchTarget:
     composition: Composition
 
     @abstractmethod
     def initialize(self) -> None: ...
     @abstractmethod
-    def new_connection(self) -> psycopg.Connection: ...
+    def new_connection(
+        self,
+        *,
+        dbname: str | None = None,
+        cluster: str | None = None,
+        statement_timeout_ms: int | None = None,
+    ) -> psycopg.Connection: ...
     @abstractmethod
     def cleanup(self) -> None: ...
     @abstractmethod
@@ -3839,6 +4403,22 @@ class CloudTarget(BenchTarget):
         # doesn't accept a custom version).
         self.version = version
         assert (version is not None) == is_staging
+        # The cloud hostname is stable for the life of a region; resolving it
+        # spawns an `mz region show` subprocess, so cache it (and guard the
+        # cache for concurrent connects in parallel mode). Invalidated whenever
+        # the region is re-enabled (which can change the hostname).
+        self._hostname_lock = threading.Lock()
+        self._hostname_cache: str | None = None
+
+    def host(self) -> str:
+        with self._hostname_lock:
+            if self._hostname_cache is None:
+                self._hostname_cache = self.composition.cloud_hostname()
+            return self._hostname_cache
+
+    def invalidate_hostname(self) -> None:
+        with self._hostname_lock:
+            self._hostname_cache = None
 
     def dbbench_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
@@ -3878,15 +4458,22 @@ class CloudTarget(BenchTarget):
             isinstance(self.new_app_password, str) and "mzp_" in self.new_app_password
         )
 
-    def new_connection(self) -> psycopg.Connection:
+    def new_connection(
+        self,
+        *,
+        dbname: str | None = None,
+        cluster: str | None = None,
+        statement_timeout_ms: int | None = None,
+    ) -> psycopg.Connection:
         assert self.new_app_password is not None
         conn = psycopg.connect(
-            host=self.composition.cloud_hostname(),
+            host=self.host(),
             port=6875,
             user=self.username,
             password=self.new_app_password,
-            dbname="materialize",
+            dbname=dbname or "materialize",
             sslmode="require",
+            options=_connection_options(cluster, statement_timeout_ms),
         )
         conn.autocommit = True
         return conn
@@ -3925,8 +4512,24 @@ class DockerTarget(BenchTarget):
         print("Starting local Materialize instance ...")
         self.composition.up("materialized")
 
-    def new_connection(self) -> psycopg.Connection:
-        return self.composition.sql_connection(user="mz_system", port=6877)
+    def new_connection(
+        self,
+        *,
+        dbname: str | None = None,
+        cluster: str | None = None,
+        statement_timeout_ms: int | None = None,
+    ) -> psycopg.Connection:
+        startup_params: dict[str, str] = {}
+        if cluster is not None:
+            startup_params["cluster"] = cluster
+        if statement_timeout_ms is not None:
+            startup_params["statement_timeout"] = str(int(statement_timeout_ms))
+        return self.composition.sql_connection(
+            user="mz_system",
+            port=6877,
+            database=dbname or "materialize",
+            startup_params=startup_params,
+        )
 
     def cleanup(self) -> None:
         print("Stopping local Materialize instance ...")
@@ -3946,6 +4549,9 @@ def run_scenario(
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
+    points: list[ScalePoint] | None = None,
+    namespace: "Namespace | None" = None,
+    write_lock: "threading.Lock | None" = None,
 ) -> None:
     """Run a `Scenario` end-to-end: prepare, sweep, teardown.
 
@@ -3953,6 +4559,11 @@ def run_scenario(
     count) and how to measure each point; this driver just threads the
     lifecycle calls. ``apply`` returning False skips a single point;
     raising `_StopSweep` short-circuits the rest of the sweep.
+
+    ``points`` restricts the sweep to a given subset (used by the parallel
+    driver, which fans a scenario's points out into independent jobs).
+    ``namespace`` rebinds the scenario + runner to a per-worker database /
+    cluster names so concurrent jobs don't collide.
     """
     runner = ScenarioRunner(
         scenario.name(),
@@ -3962,11 +4573,21 @@ def run_scenario(
         connection,
         results_writer,
         target=target,
+        write_lock=write_lock,
     )
+    if namespace is not None:
+        scenario.apply_namespace(namespace)
+        runner.cluster = namespace.cluster
+        runner.lg_cluster = namespace.lg_cluster
+        runner.log_prefix = namespace.log_prefix
+    if points is None:
+        points = list(scenario.scale_points(target, max_scale))
     scenario.prepare(runner)
     try:
-        for point in scenario.scale_points(target, max_scale):
-            print(f"--- {scenario.name()} ({scenario.mode()}): {point.label}")
+        for point in points:
+            print(
+                f"{runner.log_prefix}--- {scenario.name()} ({scenario.mode()}): {point.label}"
+            )
             try:
                 proceed = scenario.apply(runner, point)
             except _StopSweep as e:
@@ -4060,6 +4681,10 @@ SCENARIOS: list[ScenarioSpec] = [
         lambda a, t: StrongScalingSweep(
             SCENARIO_SOURCE_INGESTION_STRONG,
             SourceIngestionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+            # Each point reads the same external Postgres/MySQL/Kafka sources;
+            # keep the points serial within a single job rather than hammering
+            # those external systems from concurrent jobs.
+            split_points=False,
         ),
         groups=("cluster", "source_ingestion"),
     ),

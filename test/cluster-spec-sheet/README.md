@@ -39,6 +39,44 @@ In this case, the environment variables are not required.
 bin/mzcompose --find cluster-spec-sheet run default --target=docker
 ```
 
+## Intra-region parallelism
+
+By default scenarios run serially against a single region. Pass
+`--max-parallelism=N` (N > 1) to run independent, parallel-safe scenarios — and,
+for the cluster-scaling sweeps, each of their per-size points — concurrently
+within the *same* region, each in its own database with its own
+uniquely-named clusters (`c_*`, `lg_*`, `qs_*`). This avoids needing multiple
+regions: the long pole drops from "sum of all scenarios" to roughly the slowest
+single point.
+
+Concurrency is bounded so we never knowingly exceed the region's limits:
+
+* A `ResourceGovernor` reserves each job's estimated peak credits/hour and its
+  cluster count before creating any clusters, capped by
+  `--parallel-credit-budget` (default `0.8 x max_credit_consumption_rate`) and
+  `--parallel-cluster-budget` (default `0.8 x max_clusters`). An over-large job
+  is allowed to run alone rather than deadlock.
+* `--max-parallelism` is an additional hard cap on concurrent jobs.
+
+Scenarios with region-global side effects — `envd_qps_scalability` (which
+reconfigures environmentd's CPU allocation, i.e. a region restart),
+`envd_objects_scalability`, and `cluster_object_limits` — are **not**
+parallel-safe and always run serially in isolation, even when
+`--max-parallelism > 1`.
+
+All connections also carry a `--statement-timeout` (default 60 minutes) so a
+hung query or crash-looping region fails in bounded time instead of blocking
+until the Buildkite timeout.
+
+Because the parallel path changes how (not what) the cluster-scaling scenarios
+are executed and cannot be exercised against Cloud locally, validate it with a
+staging run before enabling it in the production pipeline, e.g.:
+
+```
+bin/mzcompose --find cluster-spec-sheet run default cluster_compute \
+    --target=cloud-staging --max-parallelism=8
+```
+
 ## Scenarios
 
 There are four kinds of scenarios:
