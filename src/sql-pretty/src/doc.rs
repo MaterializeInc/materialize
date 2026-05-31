@@ -627,8 +627,12 @@ impl Pretty {
         v: &'a SubscribeStatement<T>,
     ) -> RcDoc<'a> {
         let doc = match &v.relation {
-            SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", self.doc_display_pass(name)),
-            SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
+            // Always emit the optional `TO` keyword so a relation named with the
+            // bare keyword `to` round-trips (see `SubscribeStatement` display).
+            SubscribeRelation::Name(name) => {
+                nest_title("SUBSCRIBE TO", self.doc_display_pass(name))
+            }
+            SubscribeRelation::Query(query) => bracket("SUBSCRIBE TO (", self.doc_query(query), ")"),
         };
         let mut docs = vec![doc];
         if !v.options.is_empty() {

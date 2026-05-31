@@ -3890,7 +3890,11 @@ pub struct SubscribeStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SUBSCRIBE ");
+        // Always emit the optional `TO` keyword. Without it, a relation whose
+        // name is the bare keyword `to` (e.g. `SUBSCRIBE TO to`) would display
+        // as `SUBSCRIBE to`, which re-parses with `to` consumed as the optional
+        // keyword, dropping the relation name.
+        f.write_str("SUBSCRIBE TO ");
         f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
