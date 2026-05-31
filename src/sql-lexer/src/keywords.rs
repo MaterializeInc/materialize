@@ -72,10 +72,10 @@ impl Keyword {
             // Set operations.
             UNION | EXCEPT | INTERSECT |
             // SELECT projection modifiers: parser consumes these
-            // immediately after SELECT, so a bare `"distinct"` /
-            // `"all"` column reference round-trips to a quantifier
-            // instead of an identifier.
-            DISTINCT
+            // immediately after SELECT, so a bare `"all"` /
+            // `"distinct"` column reference round-trips to a
+            // quantifier instead of an identifier.
+            ALL | DISTINCT
         )
     }
 
