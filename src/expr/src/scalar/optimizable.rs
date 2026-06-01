@@ -15,11 +15,12 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use mz_ore::stack::RecursionLimitError;
 use serde::Serialize;
 
 use crate::scalar::columns::Columns;
 use crate::scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::visit::VisitChildren;
+use crate::visit::{Visit, VisitChildren};
 use crate::{MirScalarExpr, func};
 
 /// A scalar expression type that can be optimized inside a `MapFilterProject`.
@@ -57,6 +58,14 @@ pub trait OptimizableExpr:
     ///
     /// Returns `(lower_bounds, upper_bounds)` for use in `MfpPlan`.
     fn extract_temporal_bounds(temporal: Vec<Self>) -> Result<(Vec<Self>, Vec<Self>), String>;
+
+    /// Visit in a pre-traversal. Defaults to the `Visit` implementation, but overridable.
+    fn visit_pre<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
+    where
+        F: FnMut(&Self),
+    {
+        Visit::visit_pre(self, f)
+    }
 }
 
 impl OptimizableExpr for MirScalarExpr {
@@ -159,5 +168,13 @@ impl OptimizableExpr for MirScalarExpr {
         }
 
         Ok((lower_bounds, upper_bounds))
+    }
+
+    fn visit_pre<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
+    where
+        F: FnMut(&Self),
+    {
+        self.visit_pre(f);
+        Ok(())
     }
 }
