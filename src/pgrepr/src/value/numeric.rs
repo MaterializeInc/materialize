@@ -318,3 +318,30 @@ fn test_to_from_sql_roundtrip() {
     let d_from_sql = Numeric::from_sql(&Type::NUMERIC, &out).unwrap();
     assert_eq!(r.0, d_from_sql.0);
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+fn test_from_sql_extreme_weight_no_overflow() {
+    // `(units - weight - 1) * 4` is computed in i32 because `weight` is an
+    // attacker-controlled i16 from the wire: extreme values overflowed the old
+    // i16 arithmetic (panic under overflow checks, silent wraparound
+    // otherwise). `from_sql` must return a result, never panic. Regression for
+    // the value_decode_binary cargo-fuzz finding.
+    fn header(units: i16, weight: i16, sign: u16, in_scale: i16) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&units.to_be_bytes());
+        b.extend_from_slice(&weight.to_be_bytes());
+        b.extend_from_slice(&sign.to_be_bytes());
+        b.extend_from_slice(&in_scale.to_be_bytes());
+        b
+    }
+    for (weight, in_scale) in [
+        (i16::MAX, 0),
+        (i16::MIN, 0),
+        (-28174, -28271), // exact fuzz repro
+        (13606, -28272),
+    ] {
+        // units = 0 (no trailing digits); the header alone triggered the overflow.
+        let _ = Numeric::from_sql(&Type::NUMERIC, &header(0, weight, 0, in_scale));
+    }
+}
