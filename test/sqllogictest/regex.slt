@@ -30,7 +30,23 @@ asdf asdf NULL
 asdfjkl asdf NULL
 jkl NULL jkl
 
-# TODO - Test that the columns have the correct nullability, once they actually do (database-issues#612)
+# Regression test for database-issues#612: capture groups that always
+# participate in a match produce non-nullable columns, while those guarded by a
+# `?`, `*`, or `{0,n}` quantifier or an alternation branch are nullable.
+statement ok
+CREATE VIEW regex_nullability AS
+SELECT * FROM regexp_extract('(?P<g1>a)(?P<g2>b)?(?P<g3>(?P<g4>c)|d)', 'x') AS r
+
+query TT
+SELECT c.name, c.nullable::text
+FROM mz_columns c JOIN mz_views v ON c.id = v.id
+WHERE v.name = 'regex_nullability'
+ORDER BY c.position
+----
+g1  false
+g2  true
+g3  false
+g4  true
 
 # Standard regex matching.
 query TTT
