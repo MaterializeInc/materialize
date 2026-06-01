@@ -790,7 +790,7 @@ where
 /// Pop a chunk from `stash` or allocate a fresh one. Stashed chunks are
 /// already cleared via `recycle_chunk`, so they're ready for push.
 #[inline]
-fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
+pub(crate) fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
     stash.pop().unwrap_or_default()
 }
 
@@ -803,7 +803,7 @@ fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
 /// cheaply, and pushing them onto `stash` would only displace useful
 /// recycled allocations.
 #[inline]
-fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
+pub(crate) fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
     if let Column::Typed(c) = &mut chunk {
         c.clear();
         stash.push(chunk);

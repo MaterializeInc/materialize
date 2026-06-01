@@ -40,7 +40,41 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::column_pager::{self, ColumnPager, PagedColumn};
 use crate::columnar::Column;
-use crate::columnar::batcher::ColumnChunker;
+use crate::columnar::batcher::{ColumnChunker, empty_chunk, recycle_chunk};
+
+/// Cap on per-batcher recycled-chunk pool. The stash holds
+/// `Column::Typed` entries whose leaf `Vec`s have been `clear`ed but retain
+/// capacity, so each one is roughly one chunk's worth of resident bytes.
+/// These allocations are *not* tracked by [`ColumnPager`]'s `ResidentTicket`
+/// accounting — the budget doesn't see them — so an unbounded pool would let
+/// per-batcher resident overhead drift arbitrarily under sustained churn.
+///
+/// The cap is a safety net, not a target. Each `merge_chains` call tends to
+/// recycle ~3 chunks more than it pops on trailing teardown (the final two
+/// heads plus an empty result), so a tight cap fires on every call. When it
+/// fires, the dropped chunk's leaf allocations are freed, and the next use
+/// pays the geometric `Vec` regrowth tax — roughly 2× the chunk's bytes in
+/// memcpy traffic, ~hundreds of µs per chunk. That defeats the recycling
+/// win for workloads that produced the regression this stash was added to
+/// fix.
+///
+/// 16 covers the working set with comfortable headroom: even a heavily-
+/// consolidating merge that nets +10 chunks per call settles well below the
+/// cap, so drops happen only during sustained bursts. Worst-case per-batcher
+/// overhead is ~16 × one chunk's resident capacity (~32 MiB at the row-row
+/// shape's typical leaf sizing). The upstream `differential_dataflow`
+/// `MergeBatcher` stash, which the legacy columnation path runs through, is
+/// itself unbounded — so this isn't a regression in budget visibility versus
+/// what production already accepted.
+const STASH_CAP: usize = 16;
+
+/// Recycle `chunk` only if the stash isn't already at `STASH_CAP`. See
+/// [`STASH_CAP`] for the cap rationale.
+fn recycle_capped<C: Columnar>(chunk: Column<C>, stash: &mut Vec<Column<C>>) {
+    if stash.len() < STASH_CAP {
+        recycle_chunk(chunk, stash);
+    }
+}
 
 /// Drives the merge-batcher over [`Column`] chunks routed through a
 /// [`ColumnPager`].
@@ -64,6 +98,14 @@ where
     chains: Vec<VecDeque<PagedColumn<(D, T, R)>>>,
     lower: Antichain<T>,
     frontier: Antichain<T>,
+    /// Recycled empty `Column::Typed` chunks. Drained heads and shipped result
+    /// buffers feed in here; subsequent merge / extract calls pop from here
+    /// instead of starting from a zero-capacity `Column::default()`. Mirrors
+    /// the stash carried by the upstream `differential_dataflow` merge-batcher
+    /// framework, which this type forks. Without it, each shipped chunk
+    /// triggers a fresh per-leaf grow cycle and per-merge-round allocation
+    /// dominates the inner loop.
+    stash: Vec<Column<(D, T, R)>>,
     /// Optional override. `None` means "read [`column_pager::global_pager`]
     /// fresh on every use" — the production path, so worker_config dyncfg
     /// changes that re-install the process-global pager take effect on the
@@ -197,6 +239,7 @@ where
             chains: Vec::new(),
             lower: Antichain::from_elem(T::minimum()),
             frontier: Antichain::new(),
+            stash: Vec::new(),
             pager_override: None,
             logger,
             operator_id,
@@ -241,12 +284,14 @@ where
         {
             let pager = &pager;
             let frontier = &mut self.frontier;
+            let stash = &mut self.stash;
             extract_chain(
                 FetchIter::new(merged, pager),
                 upper.borrow(),
                 frontier,
                 |paged| readied.push(pager.take(paged)),
                 |paged| kept_chain.push_back(paged),
+                stash,
             );
         }
 
@@ -299,17 +344,19 @@ where
     /// per chunk produced, so the result chain holds `PagedColumn`s and the
     /// caller never sees a fully materialized merge result.
     fn merge_by(
-        &self,
+        &mut self,
         a: VecDeque<PagedColumn<(D, T, R)>>,
         b: VecDeque<PagedColumn<(D, T, R)>>,
     ) -> VecDeque<PagedColumn<(D, T, R)>> {
         let mut output: VecDeque<PagedColumn<(D, T, R)>> = VecDeque::new();
         let pager = self.pager();
         let pager = &pager;
+        let stash = &mut self.stash;
         merge_chains(
             FetchIter::new(a, pager),
             FetchIter::new(b, pager),
             |paged| output.push_back(paged),
+            stash,
         );
         output
     }
@@ -370,6 +417,12 @@ where
 /// emits finished output chunks through `sink` after routing them through
 /// the pager exposed by [`FetchIter::pager`].
 ///
+/// `stash` is a pool of empty `Column::Typed` chunks. Drained heads and
+/// shipped result buffers get recycled into it; the next result chunk is
+/// pulled from it instead of starting from a zero-capacity default. This
+/// matches the recycling discipline the upstream `differential_dataflow`
+/// merge-batcher carries via `Merger::merge`'s `stash` parameter.
+///
 /// Whole-chunk passthrough is omitted: peeking endpoints on a paged head
 /// would force materialization with no clean way to undo it. A follow-up can
 /// add it back gated on `PagedColumn::Resident` heads (where peeks are free)
@@ -378,6 +431,7 @@ pub fn merge_chains<D, T, R, Sink>(
     list1: FetchIter<'_, D, T, R>,
     list2: FetchIter<'_, D, T, R>,
     mut sink: Sink,
+    stash: &mut Vec<Column<(D, T, R)>>,
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -395,7 +449,7 @@ pub fn merge_chains<D, T, R, Sink>(
         list2.next().unwrap_or_default(),
     ];
     let mut positions = [0usize, 0usize];
-    let mut result: Column<(D, T, R)> = Column::default();
+    let mut result: Column<(D, T, R)> = empty_chunk(stash);
 
     loop {
         let upper_l = heads[0].borrow().len();
@@ -407,15 +461,25 @@ pub fn merge_chains<D, T, R, Sink>(
         let yielded = result.merge_from(&mut heads, &mut positions);
 
         if positions[0] >= heads[0].borrow().len() {
-            heads[0] = list1.next().unwrap_or_default();
+            let old = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
+            recycle_capped(old, stash);
             positions[0] = 0;
         }
         if positions[1] >= heads[1].borrow().len() {
-            heads[1] = list2.next().unwrap_or_default();
+            let old = std::mem::replace(&mut heads[1], list2.next().unwrap_or_default());
+            recycle_capped(old, stash);
             positions[1] = 0;
         }
         if yielded || result.at_capacity() {
             sink(pager.page(&mut result));
+            // `pager.page` either took `result`'s allocation (Skip path leaves
+            // a zero-cap default) or kept the Typed buffer (Paged / Compressed
+            // paths clear in place). Pull a fresh chunk from the stash so the
+            // next `merge_from` starts with retained capacity; if the stash is
+            // empty, fall back to whatever `result` already is.
+            if let Some(reuse) = stash.pop() {
+                result = reuse;
+            }
         }
     }
 
@@ -429,6 +493,7 @@ pub fn merge_chains<D, T, R, Sink>(
         &mut result,
         &mut sink,
         pager,
+        stash,
     );
     drain_side(
         &mut heads[1],
@@ -437,11 +502,23 @@ pub fn merge_chains<D, T, R, Sink>(
         &mut result,
         &mut sink,
         pager,
+        stash,
     );
 
     if !result.is_empty() {
         sink(pager.page(&mut result));
+    } else {
+        // Empty `result` may still carry a useful Typed allocation; recycle
+        // so subsequent calls (next `merge_by`, the seal `extract_chain`)
+        // can pick it up.
+        recycle_capped(result, stash);
     }
+    // Recycle the now-exhausted (or default) head slots too — for `Resident`
+    // heads that finished naturally, this preserves their Typed allocation
+    // for the next call.
+    let [h0, h1] = heads;
+    recycle_capped(h0, stash);
+    recycle_capped(h1, stash);
 }
 
 /// Helper for `merge_chains`'s drain phase: copy a partially-consumed head
@@ -454,6 +531,7 @@ fn drain_side<D, T, R, Sink>(
     result: &mut Column<(D, T, R)>,
     sink: &mut Sink,
     pager: &ColumnPager,
+    stash: &mut Vec<Column<(D, T, R)>>,
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -468,6 +546,9 @@ fn drain_side<D, T, R, Sink>(
     }
     if !result.is_empty() {
         sink(pager.page(result));
+        if let Some(reuse) = stash.pop() {
+            *result = reuse;
+        }
     }
     for paged in rest.into_paged() {
         sink(paged);
@@ -478,12 +559,17 @@ fn drain_side<D, T, R, Sink>(
 /// routing each filled keep/ship chunk through its sink after pageing.
 /// Mirrors the per-chunk ship-threshold yield already inside
 /// `Column::extract`.
+///
+/// `stash` carries recycled `Column::Typed` buffers in and out so the
+/// per-chunk extract loop doesn't restart from zero capacity each time
+/// `keep_buf` / `ship_buf` ships and the source `buffer` is dropped.
 pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
     merged: FetchIter<'_, D, T, R>,
     upper: AntichainRef<T>,
     frontier: &mut Antichain<T>,
     mut ship: SinkShip,
     mut keep: SinkKeep,
+    stash: &mut Vec<Column<(D, T, R)>>,
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -494,8 +580,8 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
     SinkKeep: FnMut(PagedColumn<(D, T, R)>),
 {
     let pager = merged.pager();
-    let mut keep_buf: Column<(D, T, R)> = Column::default();
-    let mut ship_buf: Column<(D, T, R)> = Column::default();
+    let mut keep_buf: Column<(D, T, R)> = empty_chunk(stash);
+    let mut ship_buf: Column<(D, T, R)> = empty_chunk(stash);
 
     for mut buffer in merged {
         let mut position = 0;
@@ -504,17 +590,29 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
             buffer.extract(&mut position, upper, frontier, &mut keep_buf, &mut ship_buf);
             if keep_buf.at_capacity() {
                 keep(pager.page(&mut keep_buf));
+                if let Some(reuse) = stash.pop() {
+                    keep_buf = reuse;
+                }
             }
             if ship_buf.at_capacity() {
                 ship(pager.page(&mut ship_buf));
+                if let Some(reuse) = stash.pop() {
+                    ship_buf = reuse;
+                }
             }
         }
+        // Buffer fully consumed; recycle whatever Typed allocation it had.
+        recycle_capped(buffer, stash);
     }
     if !keep_buf.is_empty() {
         keep(pager.page(&mut keep_buf));
+    } else {
+        recycle_capped(keep_buf, stash);
     }
     if !ship_buf.is_empty() {
         ship(pager.page(&mut ship_buf));
+    } else {
+        recycle_capped(ship_buf, stash);
     }
 }
 
@@ -641,10 +739,12 @@ mod tests {
         let q1 = to_chain(chain1, &pager);
         let q2 = to_chain(chain2, &pager);
         let mut output: Vec<PagedColumn<KvUpdate>> = Vec::new();
+        let mut stash: Vec<Column<KvUpdate>> = Vec::new();
         merge_chains(
             FetchIter::new(q1, &pager),
             FetchIter::new(q2, &pager),
             |paged| output.push(paged),
+            &mut stash,
         );
         collect_pc(&output, &pager)
     }
@@ -716,10 +816,12 @@ mod tests {
         assert!(matches!(q2.front().unwrap(), PagedColumn::Paged { .. }));
 
         let mut output: Vec<PagedColumn<KvUpdate>> = Vec::new();
+        let mut stash: Vec<Column<KvUpdate>> = Vec::new();
         merge_chains(
             FetchIter::new(q1, &pager),
             FetchIter::new(q2, &pager),
             |paged| output.push(paged),
+            &mut stash,
         );
 
         // Output entries should also have been routed through the pager.
@@ -753,6 +855,7 @@ mod tests {
         let mut frontier: Antichain<u64> = Antichain::new();
         let mut ship: Vec<PagedColumn<KvUpdate>> = Vec::new();
         let mut keep: Vec<PagedColumn<KvUpdate>> = Vec::new();
+        let mut stash: Vec<Column<KvUpdate>> = Vec::new();
 
         extract_chain(
             FetchIter::new(chain, &pager),
@@ -760,6 +863,7 @@ mod tests {
             &mut frontier,
             |p| ship.push(p),
             |p| keep.push(p),
+            &mut stash,
         );
 
         let shipped = collect_pc(&ship, &pager);
