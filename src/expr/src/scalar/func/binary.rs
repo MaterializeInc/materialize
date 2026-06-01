@@ -12,8 +12,7 @@
 use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
-use crate::Eval;
-use crate::EvalError;
+use crate::{Eval, EvalError};
 
 /// A description of an SQL binary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum

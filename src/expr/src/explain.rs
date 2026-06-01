@@ -30,7 +30,8 @@ use crate::{
 };
 
 pub use crate::explain::text::{
-    HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode, fmt_text_constant_rows,
+    HumanizeDisplay, HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode,
+    fmt_text_constant_rows,
 };
 
 mod json;
