@@ -79,6 +79,19 @@ impl Keyword {
         )
     }
 
+    /// Reports whether this keyword begins a query body (`SELECT`, `VALUES`,
+    /// `TABLE …`, etc.).
+    ///
+    /// When `AstDisplay` parenthesizes an expression (e.g. to disambiguate a
+    /// field access like `(expr).f`) and that expression's leading token is a
+    /// bare identifier with one of these names, the re-parser treats the
+    /// parentheses as a subquery and the identifier as its leading clause
+    /// (e.g. `(table & x)` parses as a `TABLE`-query). Such identifiers must be
+    /// quoted to round-trip. `SELECT`/`WITH` are already `is_always_reserved`.
+    pub fn begins_query_body(self) -> bool {
+        matches!(self, WITH | SELECT | VALUES | SHOW | TABLE)
+    }
+
     /// Reports whether this keyword requires quoting when used in scalar expressions.
     ///
     /// These are the keywords `Parser::parse_prefix` won't parse as an identifier.
