@@ -106,6 +106,10 @@ skip = [
     { name = "quick-xml", version = "0.31.0" },
     # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
     { name = "quick-xml", version = "0.37.5" },
+    # Used by opendal via iceberg
+    { name = "quick-xml", version = "0.38.4" },
+    # Used by sentry
+    { name = "reqwest", version = "0.13.3" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
