@@ -170,12 +170,22 @@ fn from_proto_with_type(
     for b in buffers.into_iter().map(|b| b.into_rust()) {
         builder = builder.add_buffer(b?);
     }
-    for c in children
-        .into_iter()
-        .zip_eq(fields_for_type(&data_type))
-        .map(|(c, field)| from_proto_with_type(c, Some(field.data_type())))
-    {
-        builder = builder.add_child_data(c?);
+    // `children` is reconstructed from the wire, so its count may disagree with
+    // what `data_type` expects. Guard the length explicitly and reject a mismatch
+    // as a decode error (corrupted/crafted parts must not crash readers); the
+    // `zip_eq` below is then infallible.
+    let fields = fields_for_type(&data_type);
+    if children.len() != fields.len() {
+        return Err(TryFromProtoError::RowConversionError(format!(
+            "ProtoArrayData for {:?} has {} children but its data type expects {}",
+            data_type,
+            children.len(),
+            fields.len(),
+        )));
+    }
+    for (c, field) in children.into_iter().zip_eq(fields) {
+        let c = from_proto_with_type(c, Some(field.data_type()))?;
+        builder = builder.add_child_data(c);
     }
 
     // Construct the builder which validates all inputs and aligns data.
@@ -809,6 +819,25 @@ mod tests {
     use mz_ore::assert_none;
     use mz_proto::ProtoType;
     use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn from_proto_child_count_mismatch_is_error() {
+        // A `ProtoArrayData` whose child count disagrees with its declared data
+        // type must decode to an error, not panic via `zip_eq`. Regression for
+        // the array_data_proto_roundtrip cargo-fuzz finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x0a, 0x18, 0x32, 0x22, 0x00, 0x18, 0x0a, 0x18, 0x32, 0x22, 0x00, 0x2a, 0x00,
+            0x2a, 0x00, 0xe0, 0x32, 0x24,
+        ];
+        let proto =
+            crate::arrow::ProtoArrayData::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<arrow::array::ArrayData, _> = proto.into_rust();
+        assert!(
+            result.is_err(),
+            "child-count mismatch must be a decode error"
+        );
+    }
 
     #[mz_ore::test]
     fn trim_proto() {
