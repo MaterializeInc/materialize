@@ -64,7 +64,7 @@ mod rule;
 
 pub use delete_on_drop::*;
 pub use prometheus::Opts as PrometheusOpts;
-pub use rule::{NameLookup, Rule};
+pub use rule::{NameLookup, ObjectName, Rule};
 
 /// Define a metric for use in materialize.
 #[macro_export]

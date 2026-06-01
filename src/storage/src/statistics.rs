@@ -67,24 +67,23 @@ pub(crate) struct SourceStatisticsMetricDefs {
 }
 
 fn source_name_rule() -> Rule {
-    Rule::ObjectNameLookup {
-        object_id_label: "source_id".into(),
-        output_label: "source_name".into(),
-    }
+    Rule::object_name_lookup_with_default_labels("source_id", "source_name")
 }
 
 fn parent_source_name_rule() -> Rule {
+    // A source metric also carries `source_id`, whose rule already writes the
+    // default `schema_name`/`database_name` labels, so the parent must use
+    // distinct label names to avoid colliding with it.
     Rule::ObjectNameLookup {
         object_id_label: "parent_source_id".into(),
-        output_label: "parent_source_name".into(),
+        output_object_label: "parent_source_name".into(),
+        output_schema_label: "parent_source_schema_name".into(),
+        output_database_label: "parent_source_database_name".into(),
     }
 }
 
 fn sink_name_rule() -> Rule {
-    Rule::ObjectNameLookup {
-        object_id_label: "sink_id".into(),
-        output_label: "sink_name".into(),
-    }
+    Rule::object_name_lookup_with_default_labels("sink_id", "sink_name")
 }
 
 impl SourceStatisticsMetricDefs {

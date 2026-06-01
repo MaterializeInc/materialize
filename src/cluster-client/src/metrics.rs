@@ -48,10 +48,7 @@ impl ControllerMetrics {
                         replica_id_label: "replica_id".into(),
                         output_label: "replica_name".into(),
                     },
-                    Rule::ObjectNameLookup {
-                        object_id_label: "collection_id".into(),
-                        output_label: "collection_name".into(),
-                    },
+                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
                 ],
             )),
             dataflow_wallclock_lag_seconds_sum: metrics_registry.register(metric!(
@@ -68,10 +65,7 @@ impl ControllerMetrics {
                         replica_id_label: "replica_id".into(),
                         output_label: "replica_name".into(),
                     },
-                    Rule::ObjectNameLookup {
-                        object_id_label: "collection_id".into(),
-                        output_label: "collection_name".into(),
-                    },
+                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
                 ],
             )),
             dataflow_wallclock_lag_seconds_count: metrics_registry.register(metric!(
@@ -88,10 +82,7 @@ impl ControllerMetrics {
                         replica_id_label: "replica_id".into(),
                         output_label: "replica_name".into(),
                     },
-                    Rule::ObjectNameLookup {
-                        object_id_label: "collection_id".into(),
-                        output_label: "collection_name".into(),
-                    },
+                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
                 ],
             )),
         }

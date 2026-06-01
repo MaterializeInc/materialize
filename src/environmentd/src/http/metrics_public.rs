@@ -29,8 +29,9 @@ use http_body_util::BodyExt;
 use mz_adapter::catalog::Catalog;
 use mz_adapter_types::dyncfgs::ENABLE_PUBLIC_METRICS_ENDPOINT;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::metrics::{MetricsRegistry, NameLookup, Rule};
+use mz_ore::metrics::{MetricsRegistry, NameLookup, ObjectName, Rule};
 use mz_repr::GlobalId;
+use mz_sql::names::RawDatabaseSpecifier;
 use prometheus::Encoder;
 use prometheus::proto::{LabelPair, MetricFamily};
 
@@ -95,11 +96,20 @@ impl NameLookup for CatalogLookup<'_> {
             .map(|r| r.name.clone())
     }
 
-    fn object_name(&self, global_id: &str) -> Option<String> {
+    fn object_name(&self, global_id: &str) -> Option<ObjectName> {
         let gid = GlobalId::from_str(global_id).ok()?;
-        self.0
-            .try_get_entry_by_global_id(&gid)
-            .map(|e| e.name().item.clone())
+        let entry = self.0.try_get_entry_by_global_id(&gid)?;
+        let full = self.0.resolve_full_name(entry.name(), None);
+        let database = match full.database {
+            RawDatabaseSpecifier::Name(name) => name,
+            // For ambient objects, the database name is an empty string.
+            RawDatabaseSpecifier::Ambient => String::new(),
+        };
+        Some(ObjectName {
+            database,
+            schema: full.schema,
+            object: full.item,
+        })
     }
 }
 
@@ -363,7 +373,7 @@ mod tests {
     struct FakeCatalog {
         clusters: BTreeMap<String, String>,
         replicas: BTreeMap<(String, String), String>,
-        objects: BTreeMap<String, String>,
+        objects: BTreeMap<String, ObjectName>,
     }
 
     impl NameLookup for FakeCatalog {
@@ -375,7 +385,7 @@ mod tests {
                 .get(&(cluster_id.to_owned(), replica_id.to_owned()))
                 .cloned()
         }
-        fn object_name(&self, global_id: &str) -> Option<String> {
+        fn object_name(&self, global_id: &str) -> Option<ObjectName> {
             self.objects.get(global_id).cloned()
         }
     }
@@ -457,7 +467,14 @@ mod tests {
         let catalog = FakeCatalog {
             clusters: BTreeMap::from([("u1".into(), "quickstart".into())]),
             replicas: BTreeMap::from([(("u1".into(), "u2".into()), "r1".into())]),
-            objects: BTreeMap::from([("s1".into(), "my_collection".into())]),
+            objects: BTreeMap::from([(
+                "s1".into(),
+                ObjectName {
+                    database: "materialize".into(),
+                    schema: "public".into(),
+                    object: "my_collection".into(),
+                },
+            )]),
         };
 
         // The rules `mz_dataflow_wallclock_lag_seconds` advertises, keyed on the
@@ -474,10 +491,7 @@ mod tests {
                     replica_id_label: "replica_id".into(),
                     output_label: "replica_name".into(),
                 },
-                Rule::ObjectNameLookup {
-                    object_id_label: "collection_id".into(),
-                    output_label: "collection_name".into(),
-                },
+                Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
             ],
         )]);
 
@@ -492,8 +506,11 @@ mod tests {
         // Names resolved by the proxy rules.
         assert_eq!(value("cluster_name"), Some("quickstart"));
         assert_eq!(value("replica_name"), Some("r1"));
-        // Object name resolved by the metric's advertised rule.
+        // Object name resolved by the metric's advertised rule, split into the
+        // object, schema, and database labels.
         assert_eq!(value("collection_name"), Some("my_collection"));
+        assert_eq!(value("schema_name"), Some("public"));
+        assert_eq!(value("database_name"), Some("materialize"));
     }
 
     #[mz_ore::test]
