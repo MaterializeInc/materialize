@@ -2370,8 +2370,17 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ("disk", "If the replica has a local disk."),
         ]),
         // `config.location` is a serde-tagged enum: `{"Unmanaged": {...}}` or
-        // `{"Managed": {...}}`. For unmanaged replicas all orchestrator-facing
-        // fields (size, availability_zone, disk) are NULL.
+        // `{"Managed": {...}}`. For replicas with an unmanaged location all
+        // orchestrator-facing fields (size, availability_zone, disk) are NULL.
+        //
+        // `availability_zone` reconstructs the historical column meaning from
+        // the durable `Managed` location, which stores an `availability_zones`
+        // list rather than a single zone. For a managed cluster that list is the
+        // provisioned AZ pool. For an unmanaged cluster it is the user's single
+        // `AVAILABILITY ZONE` pin as a 0- or 1-element list. The public column
+        // has only ever surfaced the latter, so we join the owning cluster to
+        // learn its managed-ness and take element 0 of the list only when the
+        // cluster is unmanaged, NULL otherwise.
         //
         // `disk` mirrors `cluster_replica_size_has_disk`, joining
         // `mz_cluster_replica_size_internal` for both `swap_enabled` and
@@ -2397,7 +2406,10 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'cluster_id') AS cluster_id,
     data->'value'->'config'->'location'->'Managed'->>'size' AS size,
-    data->'value'->'config'->'location'->'Managed'->>'availability_zone' AS availability_zone,
+    CASE
+        WHEN NOT COALESCE(owning_cluster.managed, false) THEN
+            data->'value'->'config'->'location'->'Managed'->'availability_zones'->>0
+    END AS availability_zone,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     CASE
         WHEN data->'value'->'config'->'location' ? 'Managed' THEN
@@ -2408,7 +2420,14 @@ FROM (
     SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
-    ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'",
+    ON internal.size = data->'value'->'config'->'location'->'Managed'->>'size'
+LEFT JOIN (
+    SELECT
+        data->'key'->'id' AS id,
+        jsonb_typeof(data->'value'->'config'->'variant') = 'object' AS managed
+    FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Cluster'
+) owning_cluster
+    ON owning_cluster.id = data->'value'->'cluster_id'",
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {

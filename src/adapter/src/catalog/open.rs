@@ -988,6 +988,9 @@ fn add_new_remove_old_builtin_clusters_migration(
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
+                        auto_scaling_strategy: None,
+                        reconfiguration: None,
+                        burst: None,
                     }),
                     workload_class: None,
                 },
@@ -1323,7 +1326,7 @@ pub(crate) fn builtin_cluster_replica_config(
 ) -> mz_catalog::durable::ReplicaConfig {
     mz_catalog::durable::ReplicaConfig {
         location: mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
+            availability_zones: Vec::new(),
             billed_as: None,
             pending: false,
             internal: false,

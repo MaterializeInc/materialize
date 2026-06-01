@@ -35,11 +35,12 @@ pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
 pub use crate::durable::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterSystemConfiguration, ClusterVariant,
+    BurstState, Cluster, ClusterConfig, ClusterReplica, ClusterSystemConfiguration, ClusterVariant,
     ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
-    NetworkPolicy, ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth,
-    Schema, SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
-    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
+    NetworkPolicy, ReconfigurationState, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
+    ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
+    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    UnfinalizedShard,
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};

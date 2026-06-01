@@ -623,6 +623,9 @@ Snapshot {
                         },
                         optimizer_feature_overrides: [],
                         schedule: Manual,
+                        auto_scaling_strategy: None,
+                        reconfiguration: None,
+                        burst: None,
                     },
                 ),
             },
@@ -685,7 +688,7 @@ Snapshot {
                 location: Managed(
                     ManagedLocation {
                         size: "scale=1,workers=1",
-                        availability_zone: None,
+                        availability_zones: [],
                         internal: false,
                         billed_as: None,
                         pending: false,

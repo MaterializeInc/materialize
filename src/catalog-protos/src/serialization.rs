@@ -29,8 +29,8 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
-    PolicyAddress,
+    AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, OnHydration, OnTimeoutAction, PolicyAddress,
 };
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
@@ -663,6 +663,52 @@ impl RustType<crate::objects::ClusterSchedule> for ClusterSchedule {
                 hydration_time_estimate: csro.rehydration_time_estimate.into_rust()?,
             }),
         }
+    }
+}
+
+impl RustType<crate::objects::AutoScalingStrategy> for AutoScalingStrategy {
+    fn into_proto(&self) -> crate::objects::AutoScalingStrategy {
+        crate::objects::AutoScalingStrategy {
+            on_hydration: self.on_hydration.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: crate::objects::AutoScalingStrategy) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            on_hydration: proto.on_hydration.into_rust()?,
+        })
+    }
+}
+
+impl RustType<crate::objects::OnHydration> for OnHydration {
+    fn into_proto(&self) -> crate::objects::OnHydration {
+        crate::objects::OnHydration {
+            hydration_size: self.hydration_size.clone(),
+            linger_duration: self.linger_duration.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: crate::objects::OnHydration) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            hydration_size: proto.hydration_size,
+            linger_duration: proto.linger_duration.into_rust()?,
+        })
+    }
+}
+
+impl RustType<crate::objects::OnTimeoutAction> for OnTimeoutAction {
+    fn into_proto(&self) -> crate::objects::OnTimeoutAction {
+        match self {
+            OnTimeoutAction::Commit => crate::objects::OnTimeoutAction::Commit,
+            OnTimeoutAction::Rollback => crate::objects::OnTimeoutAction::Rollback,
+        }
+    }
+
+    fn from_proto(proto: crate::objects::OnTimeoutAction) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            crate::objects::OnTimeoutAction::Commit => OnTimeoutAction::Commit,
+            crate::objects::OnTimeoutAction::Rollback => OnTimeoutAction::Rollback,
+        })
     }
 }
 

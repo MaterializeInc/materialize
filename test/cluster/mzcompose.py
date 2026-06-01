@@ -1455,6 +1455,45 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
 
+def workflow_test_replica_availability_zone_catalog(c: Composition) -> None:
+    """Regression test for the public mz_cluster_replicas.availability_zone
+    catalog column.
+
+    That column is a BuiltinMaterializedView that reaches into the durable
+    ClusterReplica JSON. The durable Managed location stores an
+    `availability_zones` list, so the view has to reconstruct the historical
+    single-zone column: an unmanaged cluster replica's AVAILABILITY ZONE pin,
+    NULL for a managed cluster (whose list is the provisioned pool). A wrong
+    JSON key or a missing managed-ness join silently NULLs the column.
+    test/sqllogictest/singlereplica_mz_cluster_replicas.slt cannot catch this:
+    its environment has no availability zones configured, so any user-specified
+    AVAILABILITY ZONE is rejected and the column never goes non-NULL there. Boot
+    environmentd with a configured availability-zone pool so the pin is
+    accepted."""
+
+    materialized = Materialized(
+        options=[
+            "--availability-zone=us-east-1a",
+            "--availability-zone=us-east-1b",
+            "--availability-zone=us-east-1c",
+        ],
+        additional_system_parameter_defaults={
+            "enable_managed_cluster_availability_zones": "true",
+        },
+    )
+
+    with c.override(materialized, Testdrive()):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone.td")
+        c.kill("materialized")
+
+    # Restart and re-assert: the column is recomputed from durable state on
+    # boot, exercising the rebuild-from-durable concretization path too.
+    with c.override(materialized, Testdrive(no_reset=True)):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone-after-restart.td")
+
+
 def workflow_test_system_table_indexes(c: Composition) -> None:
     """Test system table indexes."""
 

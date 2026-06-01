@@ -36,8 +36,7 @@ use mz_catalog::memory::objects::{
     TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
-    UnmanagedReplicaLocation,
+    ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
@@ -2433,17 +2432,16 @@ impl CatalogState {
             }
             mz_catalog::durable::ReplicaLocation::Managed {
                 size,
-                availability_zone,
+                // The AZ list the replica was provisioned under: provisioning
+                // paths pass the cluster's pool as `allowed_availability_zones`
+                // to stamp it, while rebuilds from durable state pass `None` to
+                // keep it. For an unmanaged cluster's replica it is the single
+                // user-pinned AZ.
+                availability_zones,
                 billed_as,
                 internal,
                 pending,
             } => {
-                if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    let message = "tried concretize managed replica with specific availability zones and availability zone";
-                    return Err(Error {
-                        kind: ErrorKind::Internal(message.to_string()),
-                    });
-                }
                 self.ensure_valid_replica_size(allowed_sizes, &size, allow_disabled)?;
                 let cluster_replica_sizes = &self.cluster_replica_sizes;
 
@@ -2453,13 +2451,9 @@ impl CatalogState {
                         .get(&size)
                         .expect("catalog out of sync")
                         .clone(),
-                    availability_zones: match (availability_zone, allowed_availability_zones) {
-                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                        (None, Some([])) => ManagedReplicaAvailabilityZones::FromCluster(None),
-                        (None, Some(azs)) => {
-                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
-                        }
-                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
+                    availability_zones: match allowed_availability_zones {
+                        Some(azs) => azs.to_vec(),
+                        None => availability_zones,
                     },
                     size,
                     billed_as,
