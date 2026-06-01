@@ -512,7 +512,13 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             proto.latest_rollup_key.into_rust()?,
         );
         if let Some(field_diffs) = proto.field_diffs {
-            debug_assert_eq!(field_diffs.validate(), Ok(()));
+            // `field_diffs` is decoded from an untrusted blob, so validate it and
+            // return a decode error on a malformed/crafted diff rather than a
+            // `debug_assert` (which panics under debug assertions / fuzzing and
+            // is compiled out in release, where the bad data flowed through).
+            field_diffs
+                .validate()
+                .map_err(TryFromProtoError::InvalidPersistState)?;
             for field_diff in field_diffs.iter() {
                 let (field, diff) = field_diff?;
                 match field {
