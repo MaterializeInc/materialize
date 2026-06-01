@@ -271,7 +271,7 @@ may split into **6a** (SQL surface + validations) and **6b** (burst strategy + o
 
 ## PR 1 — Durable state model + migration
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review
 
 **Goal.** Add every *additive, behaviourally-inert* durable field the controller will need,
 with one catalog migration (v85→v86) defaulting them for existing clusters. No reads of the
@@ -283,7 +283,7 @@ new fields yet → no behaviour change.
   - `ReconfigurationState { target: ReconfigurationTarget, deadline: mz_repr::Timestamp }`, where `ReconfigurationTarget { size, replication_factor, availability_zones, logging }` (decision 4).
   - `BurstState { burst_size: String, linger_duration: Duration, steady_hydrated_at: Option<mz_repr::Timestamp> }`.
   - Add the three as `Option<...>` fields on `ClusterVariantManaged` (decision 3), `None` by default.
-- **Provisioned AZ list on managed replicas:** add a `Vec<String>` (the AZ list the replica was provisioned under) to durable `ReplicaLocation::Managed`, alongside the existing `availability_zone` user-pin. Backfill existing managed replicas with their cluster's current `availability_zones`. (Needed so the controller can tell realized- from target-shape replicas by config shape, including AZ divergence.)
+- **Provisioned AZ list on managed replicas:** collapse durable `ReplicaLocation::Managed`'s single `availability_zone` user-pin into an `availability_zones: Vec<String>` recording the zones the replica was provisioned under — a managed cluster's `AVAILABILITY ZONES` pool, or an unmanaged replica's pin as a zero-/one-element list. Backfill existing managed replicas from their cluster's current `availability_zones` and unmanaged-cluster replicas from their pin. (Needed so the controller can tell realized- from target-shape replicas by config shape, including AZ divergence.) The in-memory `ManagedReplicaAvailabilityZones` enum is kept here and removed in a follow-up commit — it can only become a bare `Vec` once this durable field stores the list unconditionally.
 - Migration `v85_to_v86.rs`: snapshot proto, bump `CATALOG_VERSION`, default new fields to `None`/empty, backfill the AZ list, generate encodings. Thread the new fields through all `From`/`RustType` conversions and any exhaustive matches.
 
 **Scope (out).** No reads of the new fields. **Not** here: `replication_factor` normalization
@@ -298,12 +298,12 @@ catalog upgrade unit tests + `generate_missing_encodings`; confirm the round-tri
 v86 with new fields defaulted and managed replicas' AZ lists backfilled; no behaviour change.
 
 **Checklist.**
-- [ ] Decide records placement (3), target shape (4).
-- [ ] Add types (durable, memory, proto) + conversions for `AutoScalingStrategy`, `ReconfigurationState`/`ReconfigurationTarget`, `BurstState`.
-- [ ] Add provisioned AZ list to durable `ReplicaLocation::Managed`; update all construction/read sites to set it.
-- [ ] Write `v85_to_v86.rs`; bump `CATALOG_VERSION`; snapshot proto; backfill AZ list; generate encodings.
-- [ ] `cargo fmt` + `cargo check` clean; upgrade tests pass.
-- [ ] Update this tracker (status + Progress Log).
+- [x] Decide records placement (3 — on durable `ClusterVariantManaged`), target shape (4 — `ReconfigurationTarget { size, replication_factor, availability_zones, logging }`).
+- [x] Add types (durable, memory, proto) + conversions for `AutoScalingStrategy`/`OnHydration`, `ReconfigurationState`/`ReconfigurationTarget`, `BurstState`.
+- [x] Collapse durable `ReplicaLocation::Managed` `availability_zone` → `availability_zones: Vec<String>`; update all construction/conversion sites (the controller→durable `From` maps both `ManagedReplicaAvailabilityZones` variants to the list; concretize re-derives the managed pool from the cluster and reads the list as the pin for unmanaged clusters).
+- [x] Write `v85_to_v86.rs`; bump `CATALOG_VERSION` to 86; snapshot proto (`objects_v86.rs` + hashes); backfill AZ list; generate encodings (`objects_v86.txt`).
+- [x] `cargo fmt` + `cargo check -p mz-catalog -p mz-catalog-protos -p mz-adapter` clean; catalog-protos snapshot tests + catalog durable/upgrade tests pass (incl. four new migration tests and `proptest_state_update_kind_roundtrip`).
+- [x] Update this tracker (status + Progress Log).
 
 ---
 
@@ -593,6 +593,73 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-01_ — **PR 1 AZ modeling reworked (durable collapse; commit 1 of 2).** Reworked the
+  durable availability-zone change rather than carrying forward the two-field shape from the entries
+  below: the managed `ReplicaLocation`'s single `availability_zone` user-pin is **collapsed** into one
+  `availability_zones: Vec<String>` (the zones the replica was provisioned under — a managed cluster's
+  `AVAILABILITY ZONES` pool, or an unmanaged replica's pin as a 0/1-element list), replacing the
+  separate `provisioned_availability_zones` field. The two were mutually exclusive (concretize even
+  errored if both were set) and both collapse to a list at the orchestrator, so the split was
+  redundant. v86 is unshipped, so it is revised in place — one migration, the collapsed shape. The
+  controller→durable `From` maps both `ManagedReplicaAvailabilityZones` variants to the list;
+  concretize stays inert (re-derives the managed pool from the cluster, reads the list as the pin for
+  unmanaged clusters), so PR 1 stays dark. The in-memory `ManagedReplicaAvailabilityZones` enum is
+  kept in this commit and removed in commit 2 — it is the persistence discriminator until the durable
+  field stores the list unconditionally, so it cannot become a bare `Vec` any earlier. Per decision,
+  the stable public `mz_cluster_replicas.availability_zone` column is left unchanged; commit 2 adds a
+  comment documenting the future plural-`text list` rename (an outward-facing break held out of this
+  dark PR). Cheap checks: `cargo fmt` + `cargo check -p mz-catalog -p mz-catalog-protos -p mz-adapter`
+  clean; full `durable::` suite (163 passed, incl. `test_proto_serialization_stability`,
+  `proptest_state_update_kind_roundtrip`, v85↔v86 json-compat round-trips, migration tests);
+  `objects_v86.txt` regenerated.
+- _2026-06-01_ — **PR 1 boundary refactor.** Removed the deviation that the in-memory
+  `ClusterVariantManaged` embedded durable-only autoscaling types (which forced serde derives on
+  those durable types, unlike every other durable type). Re-homed each type per the existing
+  convention, by kind: (1) the *user-configured policy* `AutoScalingStrategy`/`OnHydration` moved to
+  `mz_sql::plan` and is now referenced by **both** layers with no conversion, exactly like
+  `ClusterSchedule` (its `RustType<proto::…>` impls live in `mz-catalog-protos`'s `serialization.rs`
+  alongside `ClusterSchedule`'s, per Rust's orphan rules); (2) the *in-flight runtime* records
+  `ReconfigurationState`/`ReconfigurationTarget`/`BurstState` stay durable-only and lose their serde
+  derives, with new in-memory mirror types in `memory::objects` carrying serde and `From` conversions
+  in both directions, mirroring the `optimizer_feature_overrides` pattern (runtime controller state
+  does not belong in the SQL planning crate, and `mz-cluster-controller` does not exist until PR 2).
+  Purely a relocation of Rust type definitions/derives and conversion plumbing: the proto message
+  types, `objects_v86.rs`/`objects_v86.txt`/`objects_hashes.json`, and the v85→v86 migration are
+  untouched, so the on-disk encoding and migration semantics are unchanged and PR 1 stays dark (no
+  new field is read). Cheap checks: `cargo fmt --check` + `cargo check` + `cargo clippy` on
+  `mz-sql`/`mz-catalog`/`mz-catalog-protos`/`mz-adapter` clean; `mz-catalog-protos` snapshot tests
+  and the full `mz-catalog durable::` suite (163 passed, incl. `test_proto_serialization_stability`,
+  `proptest_state_update_kind_roundtrip`, the json-compat round-trips, and the v85→v86 migration
+  tests) pass.
+- _2026-06-01_ — **PR 1 review follow-up.** Addressed the review of the implementation commit:
+  (1) clarified the contract of `provisioned_availability_zones` and made the two write paths
+  agree — it is now the cluster-imposed AZ pool on both, so `FromReplica` (a non-managed cluster's
+  managed location) contributes only the single `availability_zone` user-pin and an empty list,
+  matching the migration's empty backfill for unmanaged-cluster replicas; (2) rewrote `v85_to_v86.rs`
+  to use `JsonCompatible::convert` for unchanged sub-structures (per the directory convention),
+  reconstructing only the managed `Cluster` variant and managed `ReplicaLocation`, and to skip
+  byte-identical unmanaged records rather than emit no-op retract+add pairs; (3) added a `nota bene`
+  documenting why the durable autoscaling types carry serde derives (the in-memory mirror backing
+  `dump()` requires them) — the review's suggestion to drop them was declined because removing them
+  breaks compilation. Cheap checks: `cargo fmt --check` + `cargo check -p mz-catalog
+  -p mz-catalog-protos -p mz-adapter` clean; full `durable::` test suite (163 passed, incl. the 18
+  new generated json-compat round-trip proptests and `test_proto_serialization_stability`) and the
+  catalog-protos snapshot tests pass.
+- _2026-06-01_ — **PR 1 implemented** (durable state model + migration v85→v86, additive/inert).
+  Added durable + in-memory + proto types `AutoScalingStrategy`/`OnHydration`,
+  `ReconfigurationState`/`ReconfigurationTarget`, `BurstState` as `Option` fields on
+  `ClusterVariantManaged` (decision 3), with target shape `{ size, replication_factor,
+  availability_zones, logging }` (decision 4). Added `provisioned_availability_zones: Vec<String>`
+  to durable `ReplicaLocation::Managed`; new managed replicas derive it from
+  `ManagedReplicaAvailabilityZones` in the controller→durable `From`, and the migration backfills
+  existing managed replicas from their cluster's `availability_zones`. Bumped `CATALOG_VERSION` to 86,
+  snapshotted `objects_v86.rs` (+ `objects_hashes.json`), wrote `v85_to_v86.rs` (rewrites every
+  managed `Cluster`/`ClusterReplica` record), and generated `objects_v86.txt`. No new fields are read
+  yet → no behaviour change; the `pending` drop and rf-normalization stay deferred to later PRs
+  (decision 7). Cheap checks: `cargo fmt` clean; `cargo check -p mz-catalog -p mz-catalog-protos
+  -p mz-adapter` clean. Tests run: catalog-protos snapshot assertions + all 144 catalog durable tests
+  (incl. four new migration unit tests and the proto round-trip proptest). Did **not** run the full
+  optimized/release build or `cargo test` over the whole workspace.
 - _2026-06-01_ — Reordered the rollout: burst is the last *feature* PR (PR 6), so all of PRs 1–6
   land **dark**. Enabling is an operational LaunchDarkly flip + prod bake (not a code change);
   the final PR 7 (flip defaults to true + remove legacy paths + drop `pending`) lands **only after**

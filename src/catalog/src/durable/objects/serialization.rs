@@ -26,7 +26,8 @@ use crate::durable::objects::{
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
+    BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+    ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
 };
 
 use super::{RoleAuthKey, RoleAuthValue};
@@ -75,6 +76,9 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                auto_scaling_strategy,
+                reconfiguration,
+                burst,
             }) => proto::ClusterVariant::Managed(proto::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -82,6 +86,9 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: *replication_factor,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
+                auto_scaling_strategy: auto_scaling_strategy.into_proto(),
+                reconfiguration: reconfiguration.into_proto(),
+                burst: burst.into_proto(),
             }),
             ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged,
         }
@@ -97,8 +104,67 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: managed.replication_factor,
                 optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 schedule: managed.schedule.into_rust()?,
+                auto_scaling_strategy: managed.auto_scaling_strategy.into_rust()?,
+                reconfiguration: managed.reconfiguration.into_rust()?,
+                burst: managed.burst.into_rust()?,
             })),
         }
+    }
+}
+
+impl RustType<proto::ReconfigurationState> for ReconfigurationState {
+    fn into_proto(&self) -> proto::ReconfigurationState {
+        proto::ReconfigurationState {
+            target: self.target.into_proto(),
+            deadline: self.deadline.into(),
+            on_timeout: self.on_timeout.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationState) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            target: proto.target.into_rust()?,
+            deadline: mz_repr::Timestamp::new(proto.deadline),
+            on_timeout: proto.on_timeout.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ReconfigurationTarget> for ReconfigurationTarget {
+    fn into_proto(&self) -> proto::ReconfigurationTarget {
+        proto::ReconfigurationTarget {
+            size: self.size.clone(),
+            replication_factor: self.replication_factor,
+            availability_zones: self.availability_zones.clone(),
+            logging: self.logging.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationTarget) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            size: proto.size,
+            replication_factor: proto.replication_factor,
+            availability_zones: proto.availability_zones,
+            logging: proto.logging.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::BurstState> for BurstState {
+    fn into_proto(&self) -> proto::BurstState {
+        proto::BurstState {
+            burst_size: self.burst_size.clone(),
+            linger_duration: self.linger_duration.into_proto(),
+            steady_hydrated_at: self.steady_hydrated_at.map(Into::into),
+        }
+    }
+
+    fn from_proto(proto: proto::BurstState) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            burst_size: proto.burst_size,
+            linger_duration: proto.linger_duration.into_rust()?,
+            steady_hydrated_at: proto.steady_hydrated_at.map(mz_repr::Timestamp::new),
+        })
     }
 }
 
@@ -130,13 +196,13 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
             }),
             ReplicaLocation::Managed {
                 size,
-                availability_zone,
+                availability_zones,
                 billed_as,
                 internal,
                 pending,
             } => proto::ReplicaLocation::Managed(proto::ManagedLocation {
                 size: size.to_string(),
-                availability_zone: availability_zone.clone(),
+                availability_zones: availability_zones.clone(),
                 billed_as: billed_as.clone(),
                 internal: *internal,
                 pending: *pending,
@@ -151,7 +217,7 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
                 computectl_addrs: location.computectl_addrs,
             }),
             proto::ReplicaLocation::Managed(location) => Ok(ReplicaLocation::Managed {
-                availability_zone: location.availability_zone,
+                availability_zones: location.availability_zones,
                 billed_as: location.billed_as,
                 internal: location.internal,
                 size: location.size,

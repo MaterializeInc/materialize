@@ -30,6 +30,7 @@ pub(crate) mod state_update;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
@@ -44,7 +45,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
+use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, OnTimeoutAction};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 
@@ -351,6 +352,49 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
+    /// User-configured autoscaling policy, distinct from the in-flight runtime
+    /// records below.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
+    /// In-flight graceful reconfiguration the controller is converging on.
+    pub reconfiguration: Option<ReconfigurationState>,
+    /// In-flight hydration burst the controller is running.
+    pub burst: Option<BurstState>,
+}
+
+/// An in-flight graceful reconfiguration: the config shape the cluster is
+/// moving to plus the deadline by which it must complete.
+///
+/// `ALTER` writes this record and returns; the realized config (`cluster.size`,
+/// ...) is advanced by the controller only at cut-over. A past `deadline` with
+/// the record still present is a timeout tombstone.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationState {
+    pub target: ReconfigurationTarget,
+    pub deadline: mz_repr::Timestamp,
+    /// The action the controller applies if `deadline` passes before the
+    /// target hydrates. Success takes precedence: a hydrated target cuts over
+    /// regardless of this field.
+    pub on_timeout: OnTimeoutAction,
+}
+
+/// The full config shape a reconfiguration is moving the cluster to, so a
+/// combined size + replication-factor + availability-zone change is one record.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationTarget {
+    pub size: String,
+    pub replication_factor: u32,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+}
+
+/// An active hydration burst the controller is running.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BurstState {
+    pub burst_size: String,
+    pub linger_duration: Duration,
+    /// When the steady-state replicas were first observed hydrated. Absent
+    /// until that observation; the linger countdown runs from this point.
+    pub steady_hydrated_at: Option<mz_repr::Timestamp>,
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
@@ -474,8 +518,16 @@ pub enum ReplicaLocation {
     },
     Managed {
         size: String,
-        /// `Some(az)` if the AZ was specified by the user and must be respected;
-        availability_zone: Option<String>,
+        /// The availability zones the replica was provisioned under.
+        ///
+        /// For a replica of a managed cluster this is the cluster's
+        /// `AVAILABILITY ZONES` pool at provision time; the cluster controller
+        /// compares it against a cluster's target `availability_zones` to tell
+        /// realized- from target-shape replicas (including an
+        /// `AVAILABILITY ZONES` divergence). For a replica of an unmanaged
+        /// cluster it is the user-pinned `AVAILABILITY ZONE`, as a zero- or
+        /// one-element list. Empty when no zones constrain placement.
+        availability_zones: Vec<String>,
         internal: bool,
         billed_as: Option<String>,
         pending: bool,
@@ -503,21 +555,24 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     internal,
                     pending,
                 },
-            ) => ReplicaLocation::Managed {
-                size,
-                availability_zone:
-                    if let mz_controller::clusters::ManagedReplicaAvailabilityZones::FromReplica(
-                        Some(az),
-                    ) = availability_zones
-                    {
-                        Some(az)
-                    } else {
-                        None
-                    },
-                internal,
-                billed_as,
-                pending,
-            },
+            ) => {
+                use mz_controller::clusters::ManagedReplicaAvailabilityZones;
+                // Both shapes record the zones the replica was provisioned
+                // under: a managed cluster's `AVAILABILITY ZONES` pool, or an
+                // unmanaged cluster's single user-pinned AZ as a zero- or
+                // one-element list.
+                let availability_zones = match availability_zones {
+                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.into_iter().collect(),
+                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs.unwrap_or_default(),
+                };
+                ReplicaLocation::Managed {
+                    size,
+                    availability_zones,
+                    internal,
+                    billed_as,
+                    pending,
+                }
+            }
         }
     }
 }
