@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 3506b9aee8
+revision: cc7f2656e3
 ---
 
 # mz-row-spine
@@ -31,7 +31,6 @@ All batchers use `MergeBatcher` from `differential_dataflow` with `ColumnationCh
 All builders use `RcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKeyBuilder` with a `ColumnationStack` input:
 
 * `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
-* `RowRowColPagedBuilder<T, R>` — `RowRowBuilder` variant that consumes `Column` chunks (from `mz_timely_util::columnar`); pairs with `Col2ValPagedBatcher` for the column-paged spillable-arrange path.
 
 ## Layout structs (internal)
 

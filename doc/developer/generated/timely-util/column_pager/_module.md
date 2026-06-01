@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager.rs
-revision: 6b2261cbfe
+revision: cc7f2656e3
 ---
 
 # timely-util::column_pager
@@ -43,10 +43,4 @@ The serialization uses the existing `ContainerBytes` protocol on `Column<C>`, so
 - **Uncompressed, other variants**: the column is serialized via `ContainerBytes::into_bytes`, then the byte buffer is widened to `Vec<u64>` and handed to the pager.
 - **Compressed**: serialized bytes stream through an lz4 `FrameEncoder` directly into the output buffer; no intermediate uncompressed allocation is materialized.
 
-## Process-global pager
-
-A `static GLOBAL_PAGER` (`RwLock<ColumnPager>`) defaults to `ColumnPager::disabled()` until `set_global_pager` is called. `global_pager()` returns a cheap clone of the current value.
-
-A `static TIERED_POLICY` (`Arc<TieredPolicy>`) is a persistent singleton. `apply_tiered_config` reconfigures it in place via `TieredPolicy::reconfigure` so that in-flight `ResidentTicket`s — which hold `Arc`s to this same instance — continue to credit the correct budget atomic after operator-driven reconfigurations. When the feature is disabled, `ColumnPager::disabled()` is installed instead; in-flight tickets still credit the singleton harmlessly.
-
-The `metrics` and `policy` submodules provide Prometheus instrumentation and the concrete `TieredPolicy` implementation respectively.
+The `policy` submodule provides the concrete `TieredPolicy` implementation.

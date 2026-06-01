@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager/policy.rs
-revision: 3506b9aee8
+revision: cc7f2656e3
 ---
 
 # timely-util::column_pager::policy
@@ -22,13 +22,8 @@ Resident columns can move between Timely workers freely, so accounting cannot be
 | Field | Type | Purpose |
 |---|---|---|
 | `budget` | `AtomicUsize` | Remaining bytes available for resident columns |
-| `configured` | `AtomicUsize` | Last-configured total; used by `reconfigure` to compute the adjustment delta |
-| `backend` | `AtomicU8` | Backend selection for `PageDecision::Page` outcomes |
-| `codec` | `AtomicU8` | Codec selection for `PageDecision::Page` outcomes |
-
-### `reconfigure`
-
-Adjusts the budget by `new_total - prev_total` so in-flight `ResidentTicket`s — which credit this same atomic when they drop — stay coherent with the resized pool. Backend and codec selection take effect on the very next `decide` call. Shrinking the configured total below the current in-flight resident set saturates `budget` at zero; subsequent `decide` calls page out until ticket releases bring the pool back above zero.
+| `backend` | `Backend` | Backend selection for `PageDecision::Page` outcomes |
+| `codec` | `Option<Codec>` | Codec selection for `PageDecision::Page` outcomes |
 
 ### `try_consume`
 
