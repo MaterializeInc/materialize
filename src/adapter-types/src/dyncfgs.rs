@@ -142,11 +142,13 @@ pub const OIDC_GROUP_ROLE_SYNC_ENABLED: Config<bool> = Config::new(
     "Enable OIDC JWT group-to-role membership sync on login.",
 );
 
-/// The JWT claim name that contains group memberships.
+/// The JWT claim path that contains group memberships. May be a bare claim
+/// name (e.g. `groups`) or a dot-separated path into nested objects (e.g.
+/// `customClaims.groups`).
 pub const OIDC_GROUP_CLAIM: Config<&'static str> = Config::new(
     "oidc_group_claim",
     "groups",
-    "JWT claim name containing group memberships for role sync.",
+    "JWT claim path containing group memberships for role sync. Supports dot-separated paths into nested objects (e.g. customClaims.groups).",
 );
 
 /// Whether to reject login when group sync fails (strict/fail-closed mode).
