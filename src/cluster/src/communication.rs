@@ -84,6 +84,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use mz_ore::retry::Retry;
 use regex::Regex;
+use timely::communication::Hooks;
 use timely::communication::allocator::ProcessBuilder;
 use timely::communication::allocator::generic::AllocatorBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
@@ -163,20 +164,24 @@ where
     }
 
     // Choose the intra-process allocator flavor up front.
+    // TODO(CLU-99): wire our zero-copy pager into the timely 0.30 spill policy
+    // instead of passing `None` here.
     let process_allocators = if enable_zero_copy_binary {
-        ProcessBuilder::new_bytes_vector(workers, refill.clone())
+        ProcessBuilder::new_bytes_vector(workers, refill.clone(), None)
     } else {
-        ProcessBuilder::new_typed_vector(workers, refill.clone())
+        ProcessBuilder::new_typed_vector(workers, refill.clone(), None)
     };
 
-    match initialize_networking_from_sockets(
-        process_allocators,
-        sockets,
-        process,
-        workers,
+    // Since timely 0.30 the refill, spill policy, and per-thread logger hook are
+    // bundled into `Hooks`. We don't install a comm logger, and the spill policy
+    // is left unset pending CLU-99.
+    let hooks = Hooks {
+        log_fn: Arc::new(|_| None),
         refill,
-        Arc::new(|_| None),
-    ) {
+        spill: None,
+    };
+
+    match initialize_networking_from_sockets(process_allocators, sockets, process, workers, hooks) {
         Ok((tcp_builders, guard)) => {
             info!(process = process, "successfully initialized network");
             let builders = tcp_builders

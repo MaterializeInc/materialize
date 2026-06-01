@@ -19,9 +19,12 @@
 //! hold [`PagedColumn`] entries — letting the [`ColumnPager`] page chunks
 //! out as they're produced and fetch them back lazily during merge / extract.
 //!
-//! Reuses the resident building blocks from [`super::batcher`]:
-//! [`ColumnChunker`] (input consolidation) and the inherent
+//! Reuses the resident building blocks from [`super::batcher`]: the inherent
 //! `Column::merge_from` / `Column::extract` methods (per-chunk merge / split).
+//! Input consolidation happens upstream: since differential-dataflow 0.24 the
+//! chunker ([`super::batcher::ColumnChunker`]) is supplied to the arrange
+//! operator separately, so this batcher receives already-consolidated
+//! [`Column`] chunks via [`PushInto`].
 //!
 //! [`differential_dataflow`]: differential_dataflow::trace::implementations::merge_batcher
 
@@ -30,17 +33,17 @@ use std::collections::VecDeque;
 use columnar::{Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, Logger};
-use differential_dataflow::trace::{Batcher, Builder, Description};
+use differential_dataflow::trace::{Batcher, Description};
 use timely::Accountable;
 use timely::PartialOrder;
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::column_pager::{self, ColumnPager, PagedColumn};
 use crate::columnar::Column;
-use crate::columnar::batcher::{ColumnChunker, empty_chunk, recycle_chunk};
+use crate::columnar::batcher::{empty_chunk, recycle_chunk};
 
 /// Max recycled empty chunks held in the per-batcher stash. Deliberately
 /// tight: the stash is a hot-buffer cache for the result/keep/ship churn,
@@ -94,7 +97,6 @@ where
     T: Columnar,
     R: Columnar,
 {
-    chunker: ColumnChunker<(D, T, R)>,
     chains: Vec<VecDeque<PagedColumn<(D, T, R)>>>,
     lower: Antichain<T>,
     frontier: Antichain<T>,
@@ -226,7 +228,6 @@ where
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
 {
-    type Input = Column<(D, T, R)>;
     type Output = Column<(D, T, R)>;
     type Time = T;
 
@@ -235,7 +236,6 @@ where
         // `column_pager::global_pager` per call, so dyncfg-driven re-installs
         // take effect on the next chunk.
         Self {
-            chunker: ColumnChunker::default(),
             chains: Vec::new(),
             lower: Antichain::from_elem(T::minimum()),
             frontier: Antichain::new(),
@@ -246,26 +246,11 @@ where
         }
     }
 
-    fn push_container(&mut self, container: &mut Self::Input) {
-        let pager = self.pager();
-        self.chunker.push_into(container);
-        while let Some(chunk) = self.chunker.extract() {
-            let paged = pager.page(chunk);
-            self.insert_chain(VecDeque::from([paged]));
-        }
-    }
-
-    fn seal<B: Builder<Input = Self::Output, Time = Self::Time>>(
+    fn seal(
         &mut self,
         upper: Antichain<Self::Time>,
-    ) -> B::Output {
+    ) -> (Vec<Self::Output>, Description<Self::Time>) {
         let pager = self.pager();
-        // Finish chunker, fold any tail chunks in.
-        while let Some(chunk) = self.chunker.finish() {
-            let paged = pager.page(chunk);
-            self.insert_chain(VecDeque::from([paged]));
-        }
-
         // Merge all remaining chains into one.
         while self.chains.len() > 1 {
             let a = self.chain_pop().unwrap();
@@ -304,22 +289,38 @@ where
             upper.clone(),
             Antichain::from_elem(T::minimum()),
         );
-        let seal = B::seal(&mut readied, description);
         self.lower = upper;
 
         // Drop the recycle stash now that this round's hot work is done.
-        // The next merge after the next `push_container` will re-pay one
+        // The next merge after the next `push_into` will re-pay one
         // chunk's worth of leaf-`Vec` grow tax, but that's a few hundred µs
         // amortized over a seal cycle, well worth handing the leaf bytes
         // back to the allocator so they're not held resident across what
         // may be a quiet stretch.
         self.stash.clear();
 
-        seal
+        (readied, description)
     }
 
     fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
         self.frontier.borrow()
+    }
+}
+
+impl<D, T, R> PushInto<Column<(D, T, R)>> for ColumnMergeBatcher<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    /// Accept an already-consolidated chunk from the upstream chunker, route
+    /// it through the pager, and insert it as a singleton chain.
+    fn push_into(&mut self, mut chunk: Column<(D, T, R)>) {
+        let pager = self.pager();
+        let paged = pager.page(&mut chunk);
+        self.insert_chain(VecDeque::from([paged]));
     }
 }
 
@@ -932,50 +933,22 @@ mod tests {
 
     // ----- ColumnMergeBatcher end-to-end ------------------------------------
 
-    /// Trivial Builder used by `seal`: collects inputs into a Vec for the
-    /// test to inspect.
-    #[derive(Default)]
-    struct VecBuilder;
-    impl differential_dataflow::trace::Builder for VecBuilder {
-        type Input = Column<KvUpdate>;
-        type Time = u64;
-        type Output = Vec<KvUpdate>;
-        fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-            Self
-        }
-        fn push(&mut self, _chunk: &mut Self::Input) {}
-        fn done(
-            self,
-            _description: differential_dataflow::trace::Description<u64>,
-        ) -> Self::Output {
-            Vec::new()
-        }
-        fn seal(
-            chain: &mut Vec<Self::Input>,
-            _description: differential_dataflow::trace::Description<u64>,
-        ) -> Self::Output {
-            let mut out = Vec::new();
-            for c in chain.drain(..) {
-                out.extend(collect_column(&c));
-            }
-            out
-        }
-    }
-
     #[mz_ore::test]
     fn batcher_seal_round_trip() {
         let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
             differential_dataflow::trace::Batcher::new(None, 0);
         // Two pushes; second has an equal-key collision with the first.
-        let mut input1 = col(&[((1, 1), 0, 1), ((2, 0), 0, 1), ((3, 0), 0, 1)]);
-        let mut input2 = col(&[((2, 0), 0, 2), ((4, 0), 0, 1)]);
-        differential_dataflow::trace::Batcher::push_container(&mut b, &mut input1);
-        differential_dataflow::trace::Batcher::push_container(&mut b, &mut input2);
+        // Inputs arrive pre-consolidated chunk-by-chunk since the chunker
+        // moved out of the batcher in differential 0.24.
+        let input1 = col(&[((1, 1), 0, 1), ((2, 0), 0, 1), ((3, 0), 0, 1)]);
+        let input2 = col(&[((2, 0), 0, 2), ((4, 0), 0, 1)]);
+        b.push_into(input1);
+        b.push_into(input2);
 
         // Seal everything (upper = ∞-ish, here just past any time we used).
         let upper = Antichain::from_elem(u64::MAX);
-        let out: Vec<KvUpdate> =
-            differential_dataflow::trace::Batcher::seal::<VecBuilder>(&mut b, upper);
+        let (chain, _description) = differential_dataflow::trace::Batcher::seal(&mut b, upper);
+        let out: Vec<KvUpdate> = chain.iter().flat_map(collect_column).collect();
 
         // (2, 0)@0 was pushed with +1 then +2; sums to +3 after consolidation.
         let mut expected = vec![
@@ -1026,11 +999,11 @@ mod tests {
         // shipped. Use enough records to fill at least one chunk.
         let n: u64 = 200;
         for i in 0..n {
-            let mut input = col(&[((i, 0), i % 10, 1)]);
-            differential_dataflow::trace::Batcher::push_container(&mut b, &mut input);
+            let input = col(&[((i, 0), i % 10, 1)]);
+            b.push_into(input);
         }
         let upper = Antichain::from_elem(5u64);
-        let _ = differential_dataflow::trace::Batcher::seal::<VecBuilder>(&mut b, upper);
+        let _ = differential_dataflow::trace::Batcher::seal(&mut b, upper);
 
         // Anything kept (times >= 5) should be sitting in b.chains as paged.
         let kept_records: usize = b

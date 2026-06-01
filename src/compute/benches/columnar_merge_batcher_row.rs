@@ -28,18 +28,18 @@
 //! consume the same pre-built [`Column<Tuple>`] inputs so the chunker
 //! sees identical input shape.
 
-use std::marker::PhantomData;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use differential_dataflow::trace::Batcher;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_repr::{Datum, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker, ColumnMerger};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 use rand::{Rng, SeedableRng, rngs::StdRng};
+use timely::container::ContainerBuilder;
 use timely::container::PushInto;
 use timely::progress::Antichain;
 
@@ -50,16 +50,15 @@ type Tuple = (Data, Time, Diff);
 
 /// Legacy path: input is `Column<Tuple>`, chunker produces
 /// `ColumnationStack<Tuple>` chunks, merger operates on those.
-type ColumnationBatcher = MergeBatcher<
-    Column<Tuple>,
-    Chunker<ColumnationStack<Tuple>>,
-    ColInternalMerger<Data, Time, Diff>,
->;
+type ColumnationBatcher = MergeBatcher<ColInternalMerger<Data, Time, Diff>>;
+/// Chunker feeding [`ColumnationBatcher`].
+type ColumnationBatcherChunker = Chunker<ColumnationStack<Tuple>>;
 
 /// All-`Column` path: input is `Column<Tuple>`, chunker produces
 /// `Column<Tuple>` chunks, merger operates on those.
-type ColumnBatcher =
-    MergeBatcher<Column<Tuple>, ColumnChunker<Tuple>, ColumnMerger<Data, Time, Diff>>;
+type ColumnBatcher = MergeBatcher<ColumnMerger<Data, Time, Diff>>;
+/// Chunker feeding [`ColumnBatcher`].
+type ColumnBatcherChunker = ColumnChunker<Tuple>;
 
 /// Per-side payload-byte targets. Element counts are derived from
 /// [`ROW_PAYLOAD_BYTES`]. Same shape as [`columnar_merger_row`] so
@@ -79,27 +78,6 @@ const ROW_PAYLOAD_BYTES: usize = 32;
 /// push. Round size is bounded so every config triggers at least one
 /// internal `merge_by` chain compaction.
 const PER_ROUND: usize = 4 * 1024;
-
-/// No-op `Builder` so we can call `Batcher::seal` without dragging in a
-/// real trace builder. Drops chunks as they arrive — for benchmarking the
-/// batcher's internals we don't care what `seal` produces, only that we
-/// drive the merge + extract path.
-struct NoopBuilder<C>(PhantomData<C>);
-
-impl<C: 'static> Builder for NoopBuilder<C> {
-    type Input = C;
-    type Time = Time;
-    type Output = ();
-
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        Self(PhantomData)
-    }
-    fn push(&mut self, _chunk: &mut Self::Input) {}
-    fn done(self, _description: Description<Self::Time>) -> Self::Output {}
-    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
-        chain.clear();
-    }
-}
 
 /// Build a deterministic `Row` from `key`. 24-character hex string suffix
 /// overflows `CompactBytes`'s inline budget so columnation actually
@@ -220,18 +198,26 @@ fn rounds_to_columns(rounds: &[Vec<Tuple>]) -> Vec<Column<Tuple>> {
 /// `B::Output` because the columnation path produces `ColumnationStack`
 /// chunks while the column path produces `Column` chunks; the no-op
 /// builder accommodates either.
-fn drive_batcher<B>(prebuilt_rounds: &[Column<Tuple>])
+fn drive_batcher<B, Chu>(prebuilt_rounds: &[Column<Tuple>])
 where
-    B: Batcher<Input = Column<Tuple>, Time = Time>,
+    B: Batcher<Time = Time>,
+    Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut Column<Tuple>>,
     B::Output: 'static,
 {
     let mut batcher = B::new(None, 0);
+    let mut chunker = Chu::default();
     for round in prebuilt_rounds {
         let mut col = round.clone();
-        batcher.push_container(&mut col);
+        chunker.push_into(&mut col);
+        while let Some(chunk) = chunker.extract() {
+            batcher.push_into(std::mem::take(chunk));
+        }
+    }
+    while let Some(chunk) = chunker.finish() {
+        batcher.push_into(std::mem::take(chunk));
     }
     let upper = Antichain::from_elem(Time::MAX);
-    let _: () = batcher.seal::<NoopBuilder<B::Output>>(upper);
+    let _ = batcher.seal(upper);
 }
 
 fn bench_batcher(c: &mut Criterion) {
@@ -279,7 +265,9 @@ fn bench_batcher(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("columnation", &id), &(), |bencher, _| {
                 bencher.iter_batched(
                     || prebuilt.clone(),
-                    |rounds| drive_batcher::<ColumnationBatcher>(&rounds),
+                    |rounds| {
+                        drive_batcher::<ColumnationBatcher, ColumnationBatcherChunker>(&rounds)
+                    },
                     BatchSize::LargeInput,
                 );
             });
@@ -287,7 +275,7 @@ fn bench_batcher(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("column", &id), &(), |bencher, _| {
                 bencher.iter_batched(
                     || prebuilt.clone(),
-                    |rounds| drive_batcher::<ColumnBatcher>(&rounds),
+                    |rounds| drive_batcher::<ColumnBatcher, ColumnBatcherChunker>(&rounds),
                     BatchSize::LargeInput,
                 );
             });

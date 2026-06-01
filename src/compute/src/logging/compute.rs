@@ -22,6 +22,7 @@ use differential_dataflow::trace::{BatchReader, Cursor};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
@@ -435,6 +436,7 @@ pub(super) fn construct<'scope>(
                 let trace = stream
                     .mz_arrange_core::<
                         _,
+                        batcher::Chunker<_>,
                         Col2ValBatcher<_, _, _, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,

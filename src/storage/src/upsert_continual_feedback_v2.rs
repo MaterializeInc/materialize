@@ -68,7 +68,6 @@
 //! `ts < p` is already persisted and dropped.
 
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::difference::{IsZero, Semigroup};
@@ -77,10 +76,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{
-    MergeBatcher, container::VecMerger,
-};
-use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
+use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, vec::VecMerger};
+use differential_dataflow::trace::{Batcher, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_row_spine::{DatumSeq, ValRowBatcher, ValRowBuilder, ValRowSpine};
@@ -133,40 +130,12 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
 // Data is pushed in unsorted; the batcher maintains geometrically-sized sorted
 // chains and consolidates via the UpsertDiff Semigroup automatically.
 
-type UpsertBatcher<T, FromTime> = MergeBatcher<
-    Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
-    ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
-    VecMerger<UpsertKey, T, UpsertDiff<FromTime>>,
->;
+type UpsertBatcher<T, FromTime> = MergeBatcher<VecMerger<UpsertKey, T, UpsertDiff<FromTime>>>;
 
-/// A minimal [`Builder`] that captures sealed chains without copying.
-///
-/// Used with [`MergeBatcher::seal`] to extract sorted, consolidated chunks
-/// directly as `Vec<Vec<...>>`.
-struct CapturingBuilder<D, T>(D, PhantomData<T>);
-
-impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
-    type Input = D;
-    type Time = T;
-    type Output = Vec<D>;
-
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        unimplemented!()
-    }
-
-    fn push(&mut self, _chunk: &mut Self::Input) {
-        unimplemented!()
-    }
-
-    fn done(self, _description: Description<Self::Time>) -> Self::Output {
-        unimplemented!()
-    }
-
-    #[inline]
-    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
-        std::mem::take(chain)
-    }
-}
+/// The chunker that consolidates raw `Vec` input into the chunks
+/// [`UpsertBatcher`] consumes. Since differential-dataflow 0.24 the chunker
+/// lives outside the batcher.
+type UpsertChunker<T, FromTime> = ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>;
 
 // The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
 // land in a columnation arena (`UpsertKey` is `[u8; 32]` + `Copy`, so it uses
@@ -294,6 +263,8 @@ where
     let encoded = persist_keyed.map(|(k, v)| (k, upsert_value_to_row(&v)));
     let persist_arranged = arrange_core::<
         _,
+        _,
+        mz_timely_util::columnation::ColumnationChunker<((UpsertKey, Row), T, Diff)>,
         ValRowBatcher<UpsertKey, T, Diff>,
         ValRowBuilder<UpsertKey, T, Diff>,
         ValRowSpine<UpsertKey, T, Diff>,
@@ -343,8 +314,12 @@ where
         // UpsertDiff Semigroup as data is pushed in, bounding memory to
         // O(unique key-time pairs) even during large initial snapshots.
         let mut batcher: UpsertBatcher<T, FromTime> = Batcher::new(None, 0);
+        // Since differential-dataflow 0.24 the batcher no longer chunks its own
+        // input; this chunker consolidates raw `Vec` input into the chunks the
+        // batcher consumes.
+        let mut chunker: UpsertChunker<T, FromTime> = Default::default();
         // Scratch buffer for accumulating source events before flushing to
-        // the batcher. Drained on each iteration via `push_container`.
+        // the batcher. Drained on each iteration via the chunker.
         let mut push_buffer: Vec<(UpsertKey, T, UpsertDiff<FromTime>)> = Vec::new();
         // Capability held at the minimum time of any buffered data. When
         // Some, the operator may still produce output; when None, the
@@ -413,11 +388,15 @@ where
                 }
             }
 
-            // Flush buffered events into the batcher. This triggers the
-            // chunker + geometric chain merging, which consolidates entries
-            // for the same (key, time) via the UpsertDiff Semigroup.
+            // Flush buffered events through the chunker into the batcher. This
+            // triggers the chunker + geometric chain merging, which consolidates
+            // entries for the same (key, time) via the UpsertDiff Semigroup.
             if !push_buffer.is_empty() {
-                batcher.push_container(&mut push_buffer);
+                use timely::container::{ContainerBuilder as _, PushInto as _};
+                chunker.push_into(&mut push_buffer);
+                while let Some(chunk) = chunker.extract() {
+                    batcher.push_into(std::mem::take(chunk));
+                }
             }
 
             // ── Step 2: Read persist frontier ─────────────────────────────
@@ -498,7 +477,14 @@ where
                 && !persist_upper.less_than(cap.time())
                 && PartialOrder::less_than(&persist_upper, &input_upper)
             {
-                let sealed = batcher.seal::<CapturingBuilder<_, _>>(input_upper.clone());
+                // Flush any partial chunk into the batcher before sealing.
+                {
+                    use timely::container::{ContainerBuilder as _, PushInto as _};
+                    while let Some(chunk) = chunker.finish() {
+                        batcher.push_into(std::mem::take(chunk));
+                    }
+                }
+                let (sealed, _description) = batcher.seal(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
@@ -541,7 +527,11 @@ where
                 // input_upper) or ineligible entries being pushed back.
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
                 if !ineligible.is_empty() {
-                    batcher.push_container(&mut ineligible);
+                    use timely::container::{ContainerBuilder as _, PushInto as _};
+                    chunker.push_into(&mut ineligible);
+                    while let Some(chunk) = chunker.extract() {
+                        batcher.push_into(std::mem::take(chunk));
+                    }
                 }
 
                 let has_remaining = !remaining_frontier.is_empty() || min_ineligible_ts.is_some();

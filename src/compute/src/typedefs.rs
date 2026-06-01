@@ -18,7 +18,7 @@ use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
-use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
+use mz_timely_util::columnation::ColInternalMerger;
 
 use mz_row_spine::RowValBuilder;
 
@@ -121,11 +121,7 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowErrorSer, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
-pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
-    Vec<((K, V), T, D)>,
-    ColumnationChunker<((K, V), T, D)>,
-    ColInternalMerger<(K, V), T, D>,
->;
+pub type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:

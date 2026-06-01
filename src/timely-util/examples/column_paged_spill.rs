@@ -45,6 +45,7 @@ use mz_timely_util::column_pager::policy::TieredPolicy;
 use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
 use mz_timely_util::columnar::Col2ValPagedBatcher;
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use timely::dataflow::InputHandle;
 use timely::dataflow::channels::pact::Pipeline;
@@ -53,6 +54,7 @@ use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 
 type Update = ((u64, u64), u64, i64);
 
+type MyChunker = ColumnChunker<Update>;
 type MyBatcher = Col2ValPagedBatcher<u64, u64, u64, i64>;
 type MyBuilder = RcBuilder<OrdValBuilder<Vector<Update>, Column<Update>>>;
 type MySpine = Spine<Rc<OrdValBatch<Vector<Update>>>>;
@@ -129,7 +131,7 @@ fn run_dataflow(cfg: &Config, label: &str) -> Duration {
             // Demo wires the raw DD operator; production paths go through
             // `MzArrange::mz_arrange_core` in `mz-compute`.
             #[allow(clippy::disallowed_methods)]
-            let arranged = arrange_core::<_, MyBatcher, MyBuilder, MySpine>(
+            let arranged = arrange_core::<_, _, MyChunker, MyBatcher, MyBuilder, MySpine>(
                 stream,
                 Pipeline,
                 "ColumnPagedSpillArrange",

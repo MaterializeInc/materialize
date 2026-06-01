@@ -21,7 +21,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
@@ -34,6 +33,7 @@ use mz_expr::{BinaryFunc, Columns, Eval, EvalError, MirScalarExpr, UnaryFunc, fu
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -548,7 +548,12 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             })
             .into();
         let result = partial
-            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, _>,
+            >(
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
@@ -584,10 +589,7 @@ where
     T: MzTimestamp,
     Bu: Builder<
             Time = T,
-            Input: Container
-                       + InternalMerge
-                       + ClearContainer
-                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
+            Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
@@ -607,7 +609,12 @@ where
     // built-in view mz_introspection.mz_expected_group_size_advice.
     let arranged = input
         .clone()
-        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        .mz_arrange::<
+            ColumnationChunker<_>,
+            RowRowBatcher<_, _>,
+            RowRowBuilder<_, _>,
+            RowRowSpine<_, _>,
+        >(
             "Arranged TopK input",
         );
 
