@@ -1106,8 +1106,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .map(|(values, _cnt)| *values)
                     .collect::<Vec<_>>();
                 for func in aggrs.iter() {
-                    let column_iter =
-                        (0..source_iters.len()).map(|i| (source_iters[i].next().unwrap(), Diff::ONE));
+                    let column_iter = (0..source_iters.len())
+                        .map(|i| (source_iters[i].next().unwrap(), Diff::ONE));
                     row_packer.push(func.eval(column_iter, &RowArena::new()));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.

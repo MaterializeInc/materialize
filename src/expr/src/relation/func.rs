@@ -1791,7 +1791,10 @@ impl OneByOneAggr for NaiveOneByOneAggr {
                 )
             } else {
                 self.agg.eval(
-                    self.input.iter().rev().map(|r| (r.unpack_first(), Diff::ONE)),
+                    self.input
+                        .iter()
+                        .rev()
+                        .map(|r| (r.unpack_first(), Diff::ONE)),
                     temp_storage,
                 )
             });
@@ -2030,8 +2033,8 @@ impl AggregateFunc {
     ///
     /// Each aggregate consumes the multiplicity (`diff`) in whatever way is most
     /// efficient: `count` sums the diffs, multiplicity-insensitive aggregates
-    /// (see [`AggregateFunc::ignores_multiplicity`]) ignore them, and everything
-    /// else expands each datum into `diff` copies (see [`expand_counts`]).
+    /// (see `AggregateFunc::ignores_multiplicity`) ignore them, and everything
+    /// else expands each datum into `diff` copies (see `expand_counts`).
     pub fn eval<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = (Datum<'a>, Diff)>,
