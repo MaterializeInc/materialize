@@ -2915,7 +2915,7 @@ impl VisitChildren<Self> for HirRelationExpr {
     }
 
     fn children(&self) -> Vec<&Self> {
-        // We have to carefully collect subqueries from any scalars we encounter
+        // we visit subqueries _first_, then the input
         let mut v: Vec<&HirRelationExpr> = vec![];
         use HirRelationExpr::*;
         match self {
@@ -2942,10 +2942,10 @@ impl VisitChildren<Self> for HirRelationExpr {
                 input,
                 predicates: scalars,
             } => {
-                v.push(&*input);
                 for scalar in scalars {
                     v.append(&mut scalar.direct_subqueries());
                 }
+                v.push(&*input);
             }
             Reduce {
                 input,
@@ -2953,10 +2953,10 @@ impl VisitChildren<Self> for HirRelationExpr {
                 aggregates,
                 expected_group_size: _,
             } => {
-                v.push(&*input);
                 for agg in aggregates {
                     v.append(&mut agg.expr.direct_subqueries());
                 }
+                v.push(&*input);
             }
             TopK {
                 input,
@@ -2966,11 +2966,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset,
                 expected_group_size: _,
             } => {
-                v.push(&*input);
                 if let Some(limit) = limit {
                     v.append(&mut limit.direct_subqueries());
                 }
                 v.append(&mut offset.direct_subqueries());
+                v.push(&*input);
             }
             Project { input, outputs: _ }
             | Distinct { input }
@@ -2988,9 +2988,9 @@ impl VisitChildren<Self> for HirRelationExpr {
                 on,
                 kind: _,
             } => {
+                v.append(&mut on.direct_subqueries());
                 v.push(&*left);
                 v.push(&*right);
-                v.append(&mut on.direct_subqueries());
             }
             Union { base, inputs } => {
                 v.push(&*base);
@@ -3002,7 +3002,7 @@ impl VisitChildren<Self> for HirRelationExpr {
     }
 
     fn children_mut(&mut self) -> Vec<&mut Self> {
-        // We have to carefully collect subqueries from any scalars we encounter
+        // we visit subqueries _first_, then the input
         let mut v = vec![];
         use HirRelationExpr::*;
         match self {
@@ -3029,10 +3029,10 @@ impl VisitChildren<Self> for HirRelationExpr {
                 input,
                 predicates: scalars,
             } => {
-                v.push(&mut **input);
                 for scalar in scalars {
                     v.append(&mut scalar.direct_subqueries_mut());
                 }
+                v.push(&mut **input);
             }
             Reduce {
                 input,
@@ -3040,10 +3040,10 @@ impl VisitChildren<Self> for HirRelationExpr {
                 aggregates,
                 expected_group_size: _,
             } => {
-                v.push(&mut **input);
                 for agg in aggregates {
                     v.append(&mut agg.expr.direct_subqueries_mut());
                 }
+                v.push(&mut **input);
             }
             TopK {
                 input,
@@ -3053,11 +3053,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset,
                 expected_group_size: _,
             } => {
-                v.push(&mut **input);
                 if let Some(limit) = limit {
                     v.append(&mut limit.direct_subqueries_mut());
                 }
                 v.append(&mut offset.direct_subqueries_mut());
+                v.push(&mut **input);
             }
             Project { input, outputs: _ }
             | Distinct { input }
@@ -3075,9 +3075,9 @@ impl VisitChildren<Self> for HirRelationExpr {
                 on,
                 kind: _,
             } => {
+                v.append(&mut on.direct_subqueries_mut());
                 v.push(&mut **left);
                 v.push(&mut **right);
-                v.append(&mut on.direct_subqueries_mut());
             }
             Union { base, inputs } => {
                 v.push(&mut **base);
