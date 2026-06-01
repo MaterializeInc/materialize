@@ -213,12 +213,12 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET default_timestamp_interval = '0';
 ----
-db error: ERROR:  parameter "default_timestamp_interval" cannot have value "0ns": only supports durations greater than zero
+db error: ERROR: parameter "default_timestamp_interval" cannot have value "0ns": only supports durations greater than zero
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET default_timestamp_interval = '-1';
 ----
-db error: ERROR:  parameter "default_timestamp_interval" requires a "duration" value
+db error: ERROR: parameter "default_timestamp_interval" requires a "duration" value
 
 statement ok
 ALTER SOURCE s SET (TIMESTAMP INTERVAL '2s')
