@@ -124,37 +124,46 @@ impl CsvDecoderState {
                         }
                     };
 
-                    // skip header rows, do not send them into dataflow
-                    if self.next_row_is_header {
-                        self.next_row_is_header = false;
-
-                        if let Ok(Some(row)) = &result {
-                            let mismatched = row
-                                .iter()
-                                .zip_eq(self.header_names.iter().flatten())
-                                .enumerate()
-                                .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
-                            if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DecodeErrorKind::Text(
-                                    format!(
-                                        "source file contains incorrect columns '{:?}', \
-                                     first mismatched column at index {} expected={} actual={}",
-                                        row,
-                                        i + 1,
-                                        expected,
-                                        actual
-                                    )
-                                    .into(),
-                                ));
-                            }
-                        }
-                        if chunk.is_empty() {
-                            break Ok(None);
-                        } else if result.is_err() {
-                            break result;
-                        }
-                    } else {
+                    // Header rows are validated but never sent into the dataflow;
+                    // every other record is handed straight back to the caller.
+                    if !self.next_row_is_header {
                         break result;
+                    }
+                    self.next_row_is_header = false;
+
+                    let row = match result {
+                        // Don't swallow a parse error just because it occurred on
+                        // the header row.
+                        Err(e) => break Err(e),
+                        Ok(Some(row)) => row,
+                        // An empty record (`ends_valid == 0`) already breaks out of
+                        // the loop above, so a decoded record always carries a row.
+                        Ok(None) => unreachable!("decoded record without a row"),
+                    };
+
+                    let mismatched = row
+                        .iter()
+                        .zip_eq(self.header_names.iter().flatten())
+                        .enumerate()
+                        .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
+                    if let Some((i, (actual, expected))) = mismatched {
+                        break Err(DecodeErrorKind::Text(
+                            format!(
+                                "source file contains incorrect columns '{:?}', \
+                             first mismatched column at index {} expected={} actual={}",
+                                row,
+                                i + 1,
+                                expected,
+                                actual
+                            )
+                            .into(),
+                        ));
+                    }
+
+                    // Header looks good. If the chunk is exhausted we're done for
+                    // now; otherwise loop around to decode the first data row.
+                    if chunk.is_empty() {
+                        break Ok(None);
                     }
                 }
             }
