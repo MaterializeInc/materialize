@@ -75,6 +75,17 @@ fn subscribe_relation_named_to_preserved() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn parenthesized_show_with_modifiers_preserved() {
+    // A parenthesized SHOW carrying ORDER BY/LIMIT/OFFSET survives as a query
+    // body (it can't be unwrapped into a top-level `Statement::Show`, which
+    // takes no modifiers), so it must keep its parens to round-trip.
+    assert_lossless("(SHOW foo ORDER BY bar)");
+    assert_lossless("(SHOW foo LIMIT 1)");
+    assert_lossless("(SHOW foo OFFSET 1)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn csr_seed_protobuf_message_name_preserved() {
     // A protobuf MESSAGE name containing a single quote must be escaped on
     // display, or it produces an unterminated string literal on reparse.
