@@ -203,11 +203,22 @@ following fields:
 The following example Kubernetes manifest includes configuration for OIDC
 authentication:
 
-```hc {hl_lines="15 25"}
+```yaml {hl_lines="6-15 26 36 38"}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: materialize-environment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-system-params
+  namespace: materialize-environment
+data:
+  # Create an empty system parameter configmap for later steps
+  system-params.json: |
+    {
+    }
 ---
 apiVersion: v1
 kind: Secret
@@ -230,6 +241,7 @@ spec:
   backendSecretName: materialize-backend
   authenticatorKind: Oidc
   requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
+  systemParameterConfigmapName: mz-system-params # Adding a system parameter configmap requires a rollout
 ```
 
 Apply the updated manifest to your Kubernetes cluster. See
@@ -265,10 +277,11 @@ Materialize, including tokens issued for other applications. **Always set
 
 ### Configure via ConfigMap
 
-Create a ConfigMap with your OIDC parameters and reference it in the Materialize
-CR's `spec.systemParameterConfigmapName` field. At this point, your manifest should look like:
+In [Step 2](#step-2-enable-oidc-authentication), you already created an empty
+`mz-system-params` ConfigMap. Now, populate that ConfigMap with your
+OIDC parameters by editing its `data`. At this point, your manifest should look like:
 
-```yaml {hl_lines="9-13 36"}
+```yaml {hl_lines="9-13"}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -283,28 +296,6 @@ data:
       "console_oidc_client_id": "YOUR_CLIENT_ID",
       "console_oidc_scopes": "openid email"
     }
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: materialize-backend
-  namespace: materialize-environment
-stringData:
-  metadata_backend_url: ...
-  persist_backend_url: ...
-  license_key: ...
-  external_login_password_mz_system: "enter_mz_system_password"
----
-apiVersion: materialize.cloud/v1alpha1
-kind: Materialize
-metadata:
-  name: 12345678-1234-1234-1234-123456789012
-  namespace: materialize-environment
-spec:
-  authenticatorKind: Oidc
-  backendSecretName: materialize-backend
-  requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
-  systemParameterConfigmapName: mz-system-params
 ```
 
 {{< note >}}
@@ -314,8 +305,8 @@ authentication claim references `email`, `console_oidc_scopes` includes the
 `email` scope to ensure that claim is present in the token.
 {{</ note >}}
 
-Apply the updated manifest to your Kubernetes cluster. For more on configuring
-system parameters via a ConfigMap, see [System parameters
+Apply the updated ConfigMap to your Kubernetes cluster. For more
+on configuring system parameters via a ConfigMap, see [System parameters
 configuration](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
 
 ### Configure via SQL
