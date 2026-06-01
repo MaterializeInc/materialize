@@ -593,6 +593,18 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-01_ — **PR 1 AZ modeling reworked (in-memory cleanup; commit 2 of 2).** Removed the
+  in-memory `ManagedReplicaAvailabilityZones` enum, replacing the `ManagedReplicaLocation`
+  availability-zone field with a bare `Vec<String>` (empty = unconstrained). With the durable field
+  now storing the list unconditionally (commit 1), the in-memory→durable `From` is a passthrough,
+  concretize fills the list directly (managed pool re-derived from the cluster, durable list as the
+  pin for unmanaged), the orchestrator maps empty→no-constraint, and the convert-to-managed check
+  iterates the pin(s) — all behaviour-preserving. Per decision, the stable public
+  `mz_cluster_replicas.availability_zone` column is left unchanged (still the unmanaged replica's
+  single pin, now derived from the list + the cluster's managed-ness); the `guswynn` TODO is replaced
+  with a comment recording the future plural-`text list` rename and its consumers (console types, dbt
+  macros, docs, slt). Cheap checks: `cargo fmt` + `cargo check -p mz-controller -p mz-catalog
+  -p mz-adapter` clean; `durable::` suite (163 passed).
 - _2026-06-01_ — **PR 1 AZ modeling reworked (durable collapse; commit 1 of 2).** Reworked the
   durable availability-zone change rather than carrying forward the two-field shape from the entries
   below: the managed `ReplicaLocation`'s single `availability_zone` user-pin is **collapsed** into one
