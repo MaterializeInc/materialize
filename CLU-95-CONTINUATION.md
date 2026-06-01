@@ -1,9 +1,248 @@
 # CLU-95 — continuation notes
 
-> Status: **investigation / understanding phase, no fix written yet.** A repro
-> harness exists at `test/clu-95-repro/mzcompose.py` but is NOT yet confirmed to
-> reproduce. This doc is the handoff: theory, evidence, code map, open
-> questions, repro plan, and candidate fixes.
+> Status: **root-cause mechanism identified from build 1248 logs; fix not written.**
+> A repro harness exists at `test/clu-95-repro/mzcompose.py` but is NOT yet confirmed to reproduce.
+> The 2026-06-01 update at the bottom supersedes much of the leased-expiry theory below — read it first.
+
+## Update 2026-06-01 — confirmed manifestation: compute `remove_replica` hold-accounting bug (incidents-and-escalations#39)
+
+Downloaded `services.log` (115 MiB) from the failing release-qualification build 1248, job "Long Workload Replay (100% initial data) 1" (`019e5287-c728-49cb-95bd-a0f62ec2992e`).
+The manifestation is now unambiguous and rules out the leader/follower leased-expiry framing for this build.
+
+### Open Question 1 answered: single-env ungraceful restart, NOT 0dt
+
+* Only one mz service: `workload-replay-materialized-1`.
+  No leader/follower.
+* `deploy_generation=0` on every boot; never bumped.
+  The "0dt preflight checks" line runs unconditionally — its presence is not evidence of 0dt.
+* Sequence: boot 01:52:28 → ~22 min of workload-replay traffic → kill at 02:14:21 (composition `sanity_restart_mz`) → first bootstrap panic at 02:14:32 → crash loop, identical panic bounds on each retry.
+
+### u732 identity (catalog-side)
+
+* `central_db_prod.analytics.stg_audiences`, MV with `REFRESH = ON COMMIT`.
+  ON COMMIT is the default and does **not** trigger the REFRESH-MV upper-rounding code path, so the design-doc `apply_refresh` concerns do not apply here.
+* Inputs `[s472, s473, s485, s515, s527, u100, u103, u198, u228, u269]`.
+  s472/s473/s485/s515/s527 are system tables (`mz_audit_events` family, `mz_materialized_views`, etc.).
+* Host cluster `sigma_prod` (id `u77`), `balanced_large_14_90`, `MANAGED = true`, `REPLICATION FACTOR = 1`, `SCHEDULE = MANUAL`.
+* Created at 02:08:40 with `as_of=[1779502118000]`.
+
+### Panic numbers, decoded
+
+* `input.since = 1779502433000` = 2026-05-23T02:13:53.000Z.
+  Driven by storage inputs s527 / s472 (their read frontiers at restart time).
+* `u732.upper = 1779502402492` = 2026-05-23T02:13:22.492Z.
+  Last durable persist sink upper before the kill.
+* Gap = ~30.5 s.
+  Persist `since` is monotonic, so this state survives the restart and crashes the env on every subsequent boot.
+
+### u77 clusterd lifecycle (the leased-expiry theory does not apply)
+
+* `cluster-u77-replica-u77-gen-0` booted 01:52:51.
+* First abnormal event on u77: 02:14:21 `WARN mz_persist_client::rpc: pubsub client error: BrokenPipe`, followed by `ctp connection failed: unexpected end of file` — i.e. environmentd dying as part of `sanity_restart_mz`.
+* u77 did not crash during the 22-min workload window; it held its leased ReadHandles throughout.
+  The hold-lapse / #6885 framing is **not** the mechanism for THIS build.
+
+### Smoking gun: 02:12:03 hold-accounting bursts (load-bearing)
+
+At 02:12:03 — ~111 s before the kill — environmentd emits a burst of **30+** WARN lines:
+
+```
+WARN mz_compute_client::controller::instance:
+  dropping per-replica read hold without equivalent global read hold
+  replica_id=u18 collection_id=… input_id=…
+  replica_hold_since=Antichain { elements: [T_R] }
+  global_hold_since=Some(Antichain { elements: [T_G] })
+```
+
+Properties of every warning in the burst:
+
+* All on `replica_id=u18` (central_compute_prod — `balanced_xxxxxlarge_64_412`, the big shared compute cluster).
+* `T_R < T_G` in every case, by 10–80 s.
+* Listed inputs are `u-`-prefixed (u522, u272, u273, u336, u337, u338, u137, u162, u348, u75, u76, u235, u240, u332, u343, u737) — NOT s472/s527 directly.
+* Burst is co-located with environmentd creating new dataflows on cluster u30 around the same instant.
+
+### Code reference
+
+`src/compute-client/src/controller/instance.rs:1157-1186`, function `Instance::remove_replica`.
+The comment **is the bug**, verbatim:
+
+> Before dropping the replica state (and the contained input read holds), log read holds that are the last line of defense against compaction of a dataflow's storage inputs.
+> **If the corresponding global read hold has already been released, dropping the per-replica read hold will allow compaction, which can cause the replica to panic trying to install the dataflow.**
+> This exists primarily to help diagnose incidents-and-escalations#39.
+
+The existing WARN is a diagnostic marker placed where the actual gating bug lives.
+"incidents-and-escalations#39" is where the unfixed root cause is tracked.
+
+### Mechanism (consistent with all evidence)
+
+1. Replica `R` has a dataflow whose per-replica hold on storage input `I` is at `T_R`.
+2. Some path advances the global compute hold on `I` to `T_G > T_R` (e.g., a different dependent dataflow's hold-down advances, and the per-replica hold isn't reflected back into the global meet).
+3. `R` is removed via compute `remove_replica`.
+   The per-replica hold drops with it.
+4. Storage controller's `compare_and_downgrade_since(I)` now meets only the remaining readers, all at `≥ T_G`.
+5. Persist `since(I)` jumps forward, past where some still-existing dependent's durable upper sits.
+6. Composition restart.
+   Bootstrap reads `I.since` (durably at `T_G`) and dependent MV's durable upper at `≤ T_R`.
+   `as_of_selection` lower > upper ⟹ hard-constraint panic.
+
+The warnings prove (1)+(2) for replica u18 at 02:12:03.
+Whether s472/s527 specifically also lost a per-replica protective hold via u18 (or another removed replica) is the next thing to confirm — a warning is only printed when `T_R < T_G`; if they were exactly equal at removal time, the same compaction-forward happens silently.
+
+### Why u18 was removed at 02:12:03 — not yet identified
+
+* No `ALTER CLUSTER` in services.log (`grep -c "ALTER CLUSTER" = 0`).
+* Only one `dropped replica` log line in the whole file, from `quickstart` cluster teardown at startup.
+* u18 compute-side replica was removed without a paired storage-side `drop_replica`, suggesting either:
+  * a compute-only `remove_replica` triggered by replica reconciliation during DDL bursts,
+  * a `DROP CLUSTER REPLICA central_compute_prod.r…` from the captured workload-replay statements,
+  * or scheduler activity related to `SCHEDULE = MANUAL` / REFRESH MV scheduling.
+* Read ~30 lines before services.log:72663 to identify the triggering action.
+
+### Why the WARN exists — and why CLU-34 is not the fix for CLU-95
+
+The WARN at `instance.rs:1167` was added in **PR #35937** specifically as the diagnostic marker for **incidents-and-escalations#39**.
+Teskje's own theory in #39 (slow-path SELECT canceled mid-install, then controller-replica reconnect) describes the **render-time** variant of the bug: the replica panics while trying to render a dataflow whose inputs already compacted past its as-of.
+For the render-time variant the proposed fix is **CLU-34**: report read-hold-failure back to controller so it ignores rendering errors for dataflows it has already dropped.
+
+**CLU-34 does NOT fix CLU-95.**
+CLU-95 is the **bootstrap-time** consequence of the same bug class.
+By the time bootstrap reaches `as_of_selection`, the durable persist `since` on the input is already past `step_back(dependent.upper)`.
+Data is gone, not just the hold.
+Reporting an error back from the (long-gone) replica's rendering attempt cannot un-compact persist.
+
+### Variants of the bug class to consider
+
+All share the same root: **a per-replica read hold is the only thing pinning an input below where the global hold sits, and the per-replica hold is released without an equivalent global hold being established first.**
+
+1. **Cancelled slow-path SELECT + controller-replica reconnect** (teskje's theory, render-time symptom).
+   Global drops first (peek cancelled), connection severs (timeout), replica state recreated without the per-replica hold, inputs compact, replica panics on render.
+2. **Two-replica cluster, slow replica fails to render in time.**
+   Fast replica makes progress, controller drops global hold based on fast replica, slow replica's per-replica hold lapses or is never acquired, inputs compact, slow replica panics.
+   Build 1248 has **no** multi-replica clusters (`grep "REPLICATION FACTOR = [0-9]+"` yields only `= 1`), so this variant is NOT what fired in 1248 — but is a valid alternate trigger of the same bug class.
+3. **Long-lived MV + replica re-creation** (this is the CLU-95 / build 1248 manifestation).
+   MV on replica R has per-replica hold at `step_back(MV.upper) = T_R`.
+   Global hold on the input has somehow advanced to `T_G > T_R`.
+   R is removed (DROP CLUSTER REPLICA, ALTER CLUSTER, or compute-controller-side reconnect drop without storage drop — note build 1248 had NO storage `dropped replica` log other than at startup).
+   R's per-replica hold is released; input compacts to `T_G`; bootstrap on next env restart panics.
+
+### Three-pronged fix framing
+
+Reading teskje's CLU-34 comment ff86489c carefully: the value isn't "retry the dataflow."
+It's the **report-don't-panic** pattern.
+That pattern maps to CLU-95 at three levels, each addressing a different concern:
+
+1. **Upstream prevention — fix the hold-accounting bug**.
+   This is the only fix that prevents NEW corruption.
+   Tracked under incidents-and-escalations#39.
+   Concretely, in compute controller:
+   * keep `global_hold(I) >= meet(per-replica_hold(I))` as an invariant at all times, or
+   * on per-replica hold drop, transfer to a controller-owned critical hold before releasing (so the meet never lifts), or
+   * block per-replica drop until storage acknowledges `since(I) <= replica_hold_since`.
+2. **Bootstrap-time report-don't-panic — CLU-95-specific safety net**.
+   Replace the `soft_panic_or_log!` in `as_of_selection::apply_constraint` with a per-collection structured error.
+   Controller catches the error, marks that collection unhealthy, **skips installing its dataflow**, and finishes bootstrap.
+   Subsequent queries against the broken collection return an error explaining the cause.
+   Other collections work as usual; the env starts up.
+   This does NOT violate Moritz's determinism argument from CLU-34: the controller never invents a new as-of for the broken MV — it just refuses to start it.
+   Strictly more general than the `prune_dropped_collections` empty-input safety net.
+   Independent of #1: ships orthogonally, covers envs whose persist state is already corrupted.
+3. **Render-time report-don't-panic — the original CLU-34 moral successor**.
+   Clusterd's `cannot serve requested as_of` becomes an `Err` back to the controller instead of a panic.
+   Controller decides: force replica reconnect (for transient leases) or mark dataflow degraded.
+   Determinism is preserved — the controller never bumps as-of, it only triggers reconnect-and-reconcile.
+   CLU-34 itself was **canceled 2026-06-01** because the proposed "retry" mechanic was wrong-shaped; the report-don't-panic principle survives, just not its CLU-34 framing.
+
+#4 from the previous version of this doc (#35933-style topological `since` init for user MVs) is for the new/replacement MV variant — not THIS bug.
+
+### Open Questions — updated
+
+1. ~~Read-only / 0dt vs single-env?~~ **Single-env restart, plain `sanity_restart_mz` kill.**
+2. **Live: gating bug in compute hold accounting** (incidents-and-escalations#39).
+3. What action triggered the u18 compute-side `remove_replica` at 02:12:03?
+   No `ALTER CLUSTER` in log (count = 0).
+   Only one `dropped replica` log line, from quickstart teardown at startup.
+   Compute-only `remove_replica` was called without paired storage `drop_replica`, which points at a controller-replica reconnect path (teskje variant 1) or compute-controller-internal reconciliation, not a SQL-driven drop.
+4. Did s472 / s527 ever have a per-replica hold whose `T_R < T_G` at the moment of a `remove_replica`?
+   The WARN only fires when strictly less-than at removal time.
+   Compaction-forward also occurs when equal at removal, and silently.
+   Need to instrument or grep more carefully — search whether u77, or any other replica reading s472/s527, was removed.
+5. Was there a controller-replica reconnect on u18 (or others) around 02:12:03 that we can confirm from the log (e.g., persist pubsub error, ctp connection failed, replica reconcile)?
+
+## Reproducer redesign
+
+The existing harness exercises kill+restart and DROP/recreate at the SQL level.
+It does NOT exercise:
+
+* Controller-replica connection severance while a dataflow is mid-install.
+* Cancelled slow-path SELECT during hydration window.
+* Two-replica clusters with one slow replica.
+* Targeted clusterd kill (it kills the whole composition).
+
+### Knobs to add
+
+* **Run clusterd as a separate `Clusterd` service in mzcompose** (not as a subprocess of `Materialized`), so it can be paused / killed independently via `docker kill`, `docker pause`, or `compose.kill(service)`.
+* **FAILPOINTS env var.** The `fail` crate is in the codebase (`doc/developer/failpoints.md`).
+  Useful failpoints to add for this work (small code change):
+  * `compute_instance::remove_replica::before_release` — pause/panic between the diagnostic WARN and the actual `drop(replica)`.
+  * `compute_instance::install_dataflow::after_global_hold_drop_before_per_replica` — to materialize teskje's variant 1.
+  * `compute_controller::replica_reconnect::skip_re_install_holds` — model the reconnect-state-recreation race directly.
+
+### Proposed mzcompose workflows (add to `test/clu-95-repro/mzcompose.py`)
+
+1. **`cancelled-peek-reconnect`** (teskje variant 1):
+   single env, single-replica cluster `c` with explicit `Clusterd`.
+   Create table `t` and MV `mv ON CLUSTER c` reading `t`.
+   Loop: issue a heavy slow-path `SELECT` on `c`, cancel after 100 ms, immediately `docker kill -s 9 clusterd-c`, let it restart, wait `compaction_lag + 5 s`, `sanity_restart_mz`, scan bootstrap for `failed to apply hard as-of constraint`.
+2. **`replica-removal-under-load`** (build 1248 variant):
+   two clusters `c_writer` (RF=1) and `c_compute` (RF=1) each on their own Clusterd, both reading a shared table `t`.
+   `c_writer` hosts MV with a deliberately slow upper-advance (large batches, infrequent commits).
+   On `c_compute`, repeatedly install/drop dataflows reading the same `t` (or the same MV) to drive global hold forward.
+   Then issue `DROP CLUSTER REPLICA c_compute.r` (or `ALTER CLUSTER c_compute SET (REPLICATION FACTOR 0)`).
+   Wait, `sanity_restart_mz`, scan.
+3. **`two-replica-slow`** (variant 2):
+   one cluster `c` with `REPLICATION FACTOR 2`, with one replica on a CPU-throttled Clusterd (via `cpus:` in compose or `docker update --cpus`).
+   Create a heavy MV on `c`.
+   Drop the fast replica.
+   `sanity_restart_mz`.
+   Scan.
+4. **`failpoint-targeted`** (if we add the failpoint above):
+   single env, single-replica cluster.
+   Create MV.
+   Enable `FAILPOINTS=compute_instance::remove_replica::before_release=pause(5s)`.
+   `DROP CLUSTER REPLICA` and during the 5 s pause, force adapter to advance global hold via fresh dataflow installs.
+   Resume, `sanity_restart`, scan.
+
+Tag each workflow with a checked log marker so we can tell whether the WARN at `instance.rs:1167` fired during the run — if it did, the bug class manifested even if the eventual bootstrap didn't panic.
+
+### Where the harness should add assertions / tooling
+
+* On every reboot of `materialized`, scan the new log for `failed to apply hard as-of constraint`.
+  If found, raise.
+* Also scan for `dropping per-replica read hold without equivalent global read hold` — if present, the hazard class fired (whether or not we got the bootstrap panic this run).
+* Capture services.log + journalctl into the workdir on assertion failure.
+
+### Repro harness results (2026-06-01)
+
+Implemented and ran both new workflows. Results:
+
+* `cancelled-peek-reconnect` (30 iters, mz_unsafe.mz_sleep slow query + cancel + clusterd docker-kill reconnect, REFRESH EVERY 120s MV): **0 WARN, 0 panic**.
+* `replica-removal-under-load` (40 iters, churn MVs on compute cluster + DROP CLUSTER REPLICA + recreate, REFRESH EVERY 20s MV on writer cluster): **0 WARN, 0 panic**.
+
+Conclusion: with a single dependent dataflow + a single input, the global hold and per-replica hold advance lockstep — we never produce the `replica_hold.since < global_hold.since` asymmetry the WARN requires.
+Build 1248 saw the WARN despite RF=1 because it had hundreds of MVs sharing system-table inputs under sustained concurrent DDL — that volume creates the async window.
+
+Recommendation: **do not pursue a SQL-driven deterministic repro further.**
+The cheapest deterministic test is a Rust unit test against `compute-client::Instance` that drives `install_dataflow` + frontier downgrades + `remove_replica` directly to construct the asymmetry.
+That same test then locks down the fix for #39.
+
+The harness workflows are still useful as smoke tests once a fix exists, but they should not be the primary regression signal.
+
+---
+
+The pre-2026-06-01 notes below are kept for reference but are partly superseded:
+the leader/follower leased-expiry framing in particular is NOT the mechanism for build 1248.
+
+---
 
 ## The bug
 

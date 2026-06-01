@@ -1164,24 +1164,22 @@ impl Instance {
         // the dataflow.
         //
         // This exists primarily to help diagnose incidents-and-escalations#39.
-        for (collection_id, replica_collection) in &replica.collections {
-            let collection = self.collections.get(collection_id);
-            for replica_hold in &replica_collection.input_read_holds {
-                let input_id = replica_hold.id();
-                let global_hold = collection.and_then(|c| c.storage_dependencies.get(&input_id));
-                let unprotected = global_hold
-                    .is_none_or(|h| PartialOrder::less_than(replica_hold.since(), h.since()));
-                if unprotected {
-                    tracing::warn!(
-                        replica_id = %id,
-                        %collection_id,
-                        %input_id,
-                        replica_hold_since = ?replica_hold.since(),
-                        global_hold_since = ?global_hold.map(|h| h.since()),
-                        "dropping per-replica read hold without equivalent global read hold",
-                    );
-                }
-            }
+        let unprotected = find_unprotected_replica_holds(
+            replica
+                .collections
+                .iter()
+                .map(|(cid, rc)| (*cid, rc.input_read_holds.as_slice())),
+            |cid| self.collections.get(&cid).map(|c| &c.storage_dependencies),
+        );
+        for u in unprotected {
+            tracing::warn!(
+                replica_id = %id,
+                collection_id = %u.collection_id,
+                input_id = %u.input_id,
+                replica_hold_since = ?u.replica_since,
+                global_hold_since = ?u.global_since,
+                "dropping per-replica read hold without equivalent global read hold",
+            );
         }
         drop(replica);
 
@@ -3282,5 +3280,200 @@ impl Drop for ReplicaCollectionIntrospection {
         let row = self.write_frontier_row();
         let updates = vec![(row, Diff::MINUS_ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
+    }
+}
+
+/// A per-replica input read hold whose corresponding global storage-dependency
+/// hold has either been released or has advanced strictly past it. Dropping
+/// the replica releases this hold, after which the storage controller can
+/// compact the input forward to the global hold's `since` — past the
+/// per-replica's `since`, which is the only thing that was protecting the
+/// replica's dependent dataflow.
+///
+/// See `find_unprotected_replica_holds` and incidents-and-escalations#39.
+struct UnprotectedReplicaHold {
+    collection_id: GlobalId,
+    input_id: GlobalId,
+    replica_since: Antichain<Timestamp>,
+    global_since: Option<Antichain<Timestamp>>,
+}
+
+/// Returns the per-replica input read holds that are the *last line of defense*
+/// against compaction of a dataflow's storage inputs — i.e., those whose
+/// matching global storage-dependency hold is missing or has advanced strictly
+/// past them.
+///
+/// This is the diagnostic check introduced by PR #35937 (extracted here so it
+/// can be unit-tested). The condition it identifies is the root cause shape of
+/// incidents-and-escalations#39 (which is also what CLU-95 manifests on
+/// bootstrap): once a replica with such a hold is removed, its inputs can
+/// compact past where a still-installed dependent collection's durable upper
+/// sits, leaving as-of selection unable to choose a valid as-of on the next
+/// bootstrap.
+fn find_unprotected_replica_holds<'a>(
+    replica_collections: impl IntoIterator<Item = (GlobalId, &'a [ReadHold])>,
+    storage_deps_for: impl Fn(GlobalId) -> Option<&'a BTreeMap<GlobalId, ReadHold>>,
+) -> Vec<UnprotectedReplicaHold> {
+    let mut out = Vec::new();
+    for (collection_id, replica_holds) in replica_collections {
+        let global_deps = storage_deps_for(collection_id);
+        for replica_hold in replica_holds {
+            let input_id = replica_hold.id();
+            let global_hold = global_deps.and_then(|m| m.get(&input_id));
+            let unprotected = global_hold
+                .is_none_or(|h| PartialOrder::less_than(replica_hold.since(), h.since()));
+            if unprotected {
+                out.push(UnprotectedReplicaHold {
+                    collection_id,
+                    input_id,
+                    replica_since: replica_hold.since().clone(),
+                    global_since: global_hold.map(|h| h.since().clone()),
+                });
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::Timestamp;
+    use tokio::sync::mpsc;
+
+    /// Construct a ReadHold whose `since` is a single-element antichain at
+    /// `ts`. The change channel goes nowhere — the tests don't care about
+    /// refcount accounting on drop, only about the comparison of `since`
+    /// values inside `find_unprotected_replica_holds`.
+    fn make_hold(id: GlobalId, ts: u64) -> ReadHold {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let tx = Arc::new(move |id, changes| tx.send((id, changes)));
+        ReadHold::new(id, Antichain::from_elem(Timestamp::from(ts)), tx)
+    }
+
+    fn user(n: u64) -> GlobalId {
+        GlobalId::User(n)
+    }
+
+    /// Documented bug-class scenario from incidents-and-escalations#39 /
+    /// CLU-95: a per-replica input hold sits at the dataflow's install
+    /// least-time (T = 10), while the corresponding global storage-dependency
+    /// hold has been downgraded forward (T = 20) by a later
+    /// `apply_read_hold_change`. The replica's hold is the only thing
+    /// protecting the input at T = 10..20 — dropping the replica releases
+    /// that protection.
+    #[mz_ore::test]
+    fn replica_hold_older_than_global_is_flagged_unprotected() {
+        let mv = user(100);
+        let input = user(1);
+
+        let mut per_replica: BTreeMap<GlobalId, Vec<ReadHold>> = BTreeMap::new();
+        per_replica.insert(mv, vec![make_hold(input, 10)]);
+
+        let mut global: BTreeMap<GlobalId, BTreeMap<GlobalId, ReadHold>> = BTreeMap::new();
+        let mut deps = BTreeMap::new();
+        deps.insert(input, make_hold(input, 20));
+        global.insert(mv, deps);
+
+        let unprotected = find_unprotected_replica_holds(
+            per_replica.iter().map(|(cid, v)| (*cid, v.as_slice())),
+            |cid| global.get(&cid),
+        );
+
+        assert_eq!(
+            unprotected.len(),
+            1,
+            "expected exactly one unprotected hold"
+        );
+        let u = &unprotected[0];
+        assert_eq!(u.collection_id, mv);
+        assert_eq!(u.input_id, input);
+        assert_eq!(
+            u.replica_since,
+            Antichain::from_elem(Timestamp::from(10u64))
+        );
+        assert_eq!(
+            u.global_since,
+            Some(Antichain::from_elem(Timestamp::from(20u64))),
+        );
+    }
+
+    /// Steady state: replica's `update_input_frontier` has caught the
+    /// per-replica hold up with the global. Removing the replica is safe;
+    /// no warning should fire.
+    #[mz_ore::test]
+    fn equal_holds_are_protected() {
+        let mv = user(100);
+        let input = user(1);
+
+        let mut per_replica: BTreeMap<GlobalId, Vec<ReadHold>> = BTreeMap::new();
+        per_replica.insert(mv, vec![make_hold(input, 20)]);
+
+        let mut global: BTreeMap<GlobalId, BTreeMap<GlobalId, ReadHold>> = BTreeMap::new();
+        let mut deps = BTreeMap::new();
+        deps.insert(input, make_hold(input, 20));
+        global.insert(mv, deps);
+
+        let unprotected = find_unprotected_replica_holds(
+            per_replica.iter().map(|(cid, v)| (*cid, v.as_slice())),
+            |cid| global.get(&cid),
+        );
+
+        assert!(unprotected.is_empty(), "equal holds must not flag");
+    }
+
+    /// Edge case: the collection has been removed from `self.collections`
+    /// (e.g. DROP MATERIALIZED VIEW reached the controller before
+    /// `remove_replica` ran), so no global storage-dependency hold exists.
+    /// The replica's hold was the *only* protection — dropping it without
+    /// any global hold to fall back on is also flagged.
+    #[mz_ore::test]
+    fn missing_global_is_flagged_unprotected() {
+        let mv = user(100);
+        let input = user(1);
+
+        let mut per_replica: BTreeMap<GlobalId, Vec<ReadHold>> = BTreeMap::new();
+        per_replica.insert(mv, vec![make_hold(input, 10)]);
+
+        // No matching entry in the global map at all.
+        let global: BTreeMap<GlobalId, BTreeMap<GlobalId, ReadHold>> = BTreeMap::new();
+
+        let unprotected = find_unprotected_replica_holds(
+            per_replica.iter().map(|(cid, v)| (*cid, v.as_slice())),
+            |cid| global.get(&cid),
+        );
+
+        assert_eq!(unprotected.len(), 1);
+        assert_eq!(unprotected[0].global_since, None);
+    }
+
+    /// Mixed: one collection's holds are equal (safe), another collection's
+    /// per-replica hold lags global (unprotected). Only the lagging one is
+    /// reported.
+    #[mz_ore::test]
+    fn only_lagging_collections_are_flagged() {
+        let mv_safe = user(100);
+        let mv_buggy = user(200);
+        let input = user(1);
+
+        let mut per_replica: BTreeMap<GlobalId, Vec<ReadHold>> = BTreeMap::new();
+        per_replica.insert(mv_safe, vec![make_hold(input, 20)]);
+        per_replica.insert(mv_buggy, vec![make_hold(input, 10)]);
+
+        let mut global: BTreeMap<GlobalId, BTreeMap<GlobalId, ReadHold>> = BTreeMap::new();
+        let mut deps_safe = BTreeMap::new();
+        deps_safe.insert(input, make_hold(input, 20));
+        global.insert(mv_safe, deps_safe);
+        let mut deps_buggy = BTreeMap::new();
+        deps_buggy.insert(input, make_hold(input, 20));
+        global.insert(mv_buggy, deps_buggy);
+
+        let unprotected = find_unprotected_replica_holds(
+            per_replica.iter().map(|(cid, v)| (*cid, v.as_slice())),
+            |cid| global.get(&cid),
+        );
+
+        assert_eq!(unprotected.len(), 1);
+        assert_eq!(unprotected[0].collection_id, mv_buggy);
     }
 }
