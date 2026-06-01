@@ -184,6 +184,9 @@ impl Coordinator {
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 });
             }
         }
@@ -196,6 +199,9 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
+                auto_scaling_strategy: _,
+                reconfiguration: _,
+                burst: _,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
@@ -627,6 +633,9 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -732,7 +741,9 @@ impl Coordinator {
         reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
+            // Concretized below from the cluster config; this intermediate value
+            // is discarded, so the list is left empty here.
+            availability_zones: Vec::new(),
             billed_as: None,
             internal: false,
             size: size.clone(),
@@ -853,7 +864,9 @@ impl Coordinator {
                     }
 
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
-                        availability_zone,
+                        // The user-pinned `AVAILABILITY ZONE`, if any, as a zero-
+                        // or one-element list.
+                        availability_zones: availability_zone.into_iter().collect(),
                         billed_as,
                         internal,
                         size: size.clone(),
@@ -936,7 +949,9 @@ impl Coordinator {
                     None => None,
                 };
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
-                    availability_zone,
+                    // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
+                    // one-element list.
+                    availability_zones: availability_zone.into_iter().collect(),
                     billed_as,
                     internal,
                     size,
@@ -1036,6 +1051,9 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &cluster.config.variant
         else {
             panic!("expected existing managed cluster config");
@@ -1047,6 +1065,9 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1213,6 +1234,9 @@ impl Coordinator {
             logging: _,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &mut new_config.variant
         else {
             panic!("expected new managed cluster config");
