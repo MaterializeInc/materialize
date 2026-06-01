@@ -144,6 +144,11 @@ impl Regex {
 /// capture group it reaches is non-nullable. It stops descending at any node
 /// that introduces an optional context — an optional repetition or an
 /// alternation — since nothing beneath such a node is guaranteed to match.
+///
+/// The recursion depth is bounded by the AST nesting depth. This is safe
+/// because the only caller obtains `ast` from `regex_syntax`'s parser, whose
+/// default `nest_limit` (250) rejects more deeply nested patterns before we
+/// ever get here.
 fn collect_non_nullable_capture_groups(ast: &regex_syntax::ast::Ast, groups: &mut BTreeSet<u32>) {
     use regex_syntax::ast::Ast;
     match ast {
@@ -477,6 +482,13 @@ mod tests {
             // though groups *inside* the branches do not.
             ("(a|b)", &[0, 1]),
             ("((a)|(b))", &[0, 1]),
+            // The soundness crux: a group that *wraps* an optional sub-expression
+            // still always captures (the empty string), so it is non-nullable —
+            // unlike a group that is *itself* made optional (`(a)?`, tested
+            // above). Note the difference in `?`/`*` position.
+            ("(a*)", &[0, 1]),
+            ("(a?)", &[0, 1]),
+            ("(a*)(b)?", &[0, 1]),
             // Nesting inside an optional construct is contagious.
             ("((a)(b))?", &[0]),
             // A required group following an optional one is still required.

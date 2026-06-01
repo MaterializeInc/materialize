@@ -32,10 +32,12 @@ jkl NULL jkl
 
 # Regression test for database-issues#612: capture groups that always
 # participate in a match produce non-nullable columns, while those guarded by a
-# `?`, `*`, or `{0,n}` quantifier or an alternation branch are nullable.
+# `?`, `*`, or `{0,n}` quantifier or an alternation branch are nullable. The
+# haystack is a column rather than a literal so that the table function isn't
+# constant-folded into an (always non-nullable) empty constant.
 statement ok
 CREATE VIEW regex_nullability AS
-SELECT * FROM regexp_extract('(?P<g1>a)(?P<g2>b)?(?P<g3>(?P<g4>c)|d)', 'x') AS r
+SELECT r.* FROM data, regexp_extract('(?P<g1>a)(?P<g2>b)?(?P<g3>(?P<g4>c)|d)', data.input) AS r
 
 query TT
 SELECT c.name, c.nullable::text
