@@ -93,11 +93,6 @@ class BenchmarkScenarioMetric(Generic[T]):
             return f"{self.this():>11.3f}"
 
     def other(self) -> T:
-        # `_points` has length 1 when the runner ran only the THIS side
-        # (e.g. `--skip-other`); treat the absent baseline as `None` so
-        # report rendering falls through to its `None` formatting.
-        if len(self._points) < 2:
-            return None  # type: ignore[return-value]
         return self._points[1]
 
     def other_as_str(self) -> str:

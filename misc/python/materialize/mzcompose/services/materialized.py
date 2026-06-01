@@ -71,8 +71,6 @@ class Materialized(Service):
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
         memory: str | None = None,
-        memory_swap: str | None = None,
-        mem_swappiness: int | None = None,
         cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
@@ -333,15 +331,6 @@ class Materialized(Service):
             if cpu:
                 limits["cpus"] = cpu
             config["deploy"] = {"resources": {"limits": limits}}
-
-        # Swap controls live as top-level compose v2 service keys, not under
-        # `deploy.resources`. `memswap_limit > mem_limit` lets the container use
-        # host swap so the kernel can page out anonymous memory rather than OOM.
-        # `mem_swappiness=100` biases the kernel toward swapping aggressively.
-        if memory_swap is not None:
-            config["memswap_limit"] = memory_swap
-        if mem_swappiness is not None:
-            config["mem_swappiness"] = mem_swappiness
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
