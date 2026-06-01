@@ -872,7 +872,16 @@ impl Pretty {
         &'a self,
         v: &'a SelectStatement<T>,
     ) -> RcDoc<'a> {
-        let mut doc = self.doc_query(&v.query);
+        let query = self.doc_query(&v.query);
+        // A query whose body is a bare `SHOW` only reparses when
+        // parenthesized — top-level `SHOW` is dispatched directly and can't
+        // carry ORDER BY/LIMIT. Mirror the same carve-out as `AstDisplay for
+        // SelectStatement`.
+        let mut doc = if matches!(v.query.body, SetExpr::Show(_)) {
+            bracket("(", query, ")")
+        } else {
+            query
+        };
         if let Some(as_of) = &v.as_of {
             doc = intersperse_line_nest([doc, self.doc_as_of(as_of)]);
         }
