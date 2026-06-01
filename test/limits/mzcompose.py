@@ -13,7 +13,9 @@ to prevent regressions in basic functionality for larger installations.
 """
 
 import contextlib
+import csv
 import json
+import math
 import re
 import sys
 import time
@@ -35,9 +37,13 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import (
+    METADATA_STORE,
+    metadata_store_services,
+)
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -933,6 +939,76 @@ class ViewsMaterializedNested(Generator):
         print(f"{cls.COUNT}")
 
 
+class ClustersWithMaterializedViews(Generator):
+    """Creates many small managed clusters, each hosting a few materialized
+    views. Stresses the controller's per-cluster bookkeeping and the
+    orchestrator launching many replicas concurrently.
+
+    Each cluster runs its own `scale=1,workers=1` replica, so cluster memory
+    grows roughly linearly with `COUNT`. The materialized views are kept
+    trivial (a projection over a tiny table) so that per-view arrangement
+    memory is negligible and the test isolates the per-cluster overhead.
+    """
+
+    # Each cluster spawns its own replica process, so we cannot create as many
+    # clusters as we do tables. Cap to keep the orchestrator and memory bounded
+    # under the materialized memory limit.
+    COUNT = min(Generator.COUNT, 50)
+    MAX_COUNT = 100
+
+    # Number of materialized views hosted on each cluster.
+    MVS_PER_CLUSTER = 16
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_clusters = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * cls.MVS_PER_CLUSTER * 10};"
+        )
+        print("$ postgres-execute connection=mz_system")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * cls.MVS_PER_CLUSTER * 10};"
+        )
+        # The testdrive default connection runs as ADMIN_USER, which needs the
+        # CREATECLUSTER system privilege to create the clusters below.
+        print("$ postgres-execute connection=mz_system")
+        print(f'GRANT CREATECLUSTER ON SYSTEM TO "{ADMIN_USER}";')
+
+        # Shared input for all materialized views. Kept tiny so per-view
+        # arrangement memory is negligible and the test isolates the
+        # per-cluster overhead.
+        print("> CREATE TABLE t (f1 INTEGER);")
+        print("> INSERT INTO t VALUES (1);")
+
+        # Drop any clusters left over from a previous (smaller) run so the
+        # scenario is idempotent under --find-limit, which reruns with an
+        # increasing COUNT.
+        for i in cls.all():
+            print(f"> DROP CLUSTER IF EXISTS c{i} CASCADE;")
+
+        for i in cls.all():
+            print(f"> CREATE CLUSTER c{i} SIZE = 'scale=1,workers=1';")
+            for j in range(1, cls.MVS_PER_CLUSTER + 1):
+                print(
+                    f"> CREATE MATERIALIZED VIEW mv{i}_{j} IN CLUSTER c{i} AS "
+                    f"SELECT f1 + {j} AS f1 FROM t;"
+                )
+
+        # Validate that every materialized view on every cluster is hydrated
+        # and returns the expected value.
+        for i in cls.all():
+            for j in range(1, cls.MVS_PER_CLUSTER + 1):
+                print(f"> SELECT f1 FROM mv{i}_{j};")
+                print(f"{1 + j}")
+
+        # Drop the clusters again so they do not leak into subsequent
+        # scenarios: `header()` resets the `public` schema but not clusters.
+        for i in cls.all():
+            print(f"> DROP CLUSTER c{i} CASCADE;")
+
+
 class CTEs(Generator):
     COUNT = min(
         Generator.COUNT, 10
@@ -1819,6 +1895,70 @@ MAX_CLUSTERS = 8
 MAX_REPLICAS = 4
 MAX_NODES = 4
 
+
+def make_materialized(
+    metadata_store: str = METADATA_STORE,
+    external_persist_committer: bool = True,
+    use_committer: bool = True,
+    memory: str = "8G",
+) -> Materialized:
+    """Construct the limits `Materialized` service.
+
+    Factored out so the `committer-comparison` workflow can override the
+    metadata store and committer per variant without duplicating the
+    TLS/frontegg/listener configuration.
+
+    `external_metadata_store=True` forces an external store (see the
+    `EXTERNAL_METADATA_STORE_ADDRESS` caveat below); `metadata_store` selects
+    the backend. `external_persist_committer` toggles the paired persistd
+    companion: True runs the committer in persistd, False keeps it in-process.
+    `use_committer` gates the `persist_consensus_use_committer` flag: False is
+    the no-committer baseline where clusterds compare_and_append directly to
+    consensus (set as a startup default because the flag needs a restart to
+    take effect). `memory` is the container limit; the default 8G matches the
+    `main` scenarios' calibration, but the comparison workflow raises it so the
+    committer variants don't OOM at high MV counts.
+    """
+    extra_system_params = (
+        None if use_committer else {"persist_consensus_use_committer": "false"}
+    )
+    return Materialized(
+        memory=memory,
+        additional_system_parameter_defaults=extra_system_params,
+        # Managed clusters (e.g. ClustersWithMaterializedViews) run their
+        # replicas as clusterd subprocesses inside this container, sharing its
+        # CPU cgroup. `cpu` is a ceiling, not a reservation, so raising it never
+        # exceeds the host's cores nor breaks smaller CI agents.
+        cpu="28",
+        default_size=1,
+        options=[
+            # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
+            "--tls-mode=require",
+            "--tls-key=/secrets/materialized.key",
+            "--tls-cert=/secrets/materialized.crt",
+            f"--frontegg-tenant={TENANT_ID}",
+            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+            f"--frontegg-admin-role={ADMIN_ROLE}",
+        ],
+        depends_on=["test-certs"],
+        volumes_extra=[
+            "secrets:/secrets",
+        ],
+        sanity_restart=False,
+        # Always use an external metadata store. `EXTERNAL_METADATA_STORE_ADDRESS`
+        # defaults to `False` (internal postgres) unless the env var is set, which
+        # would silently bypass the external store and disable persistd; force
+        # external here and let `metadata_store` pick the backend (default
+        # postgres-metadata, override with EXTERNAL_METADATA_STORE=cockroach).
+        external_metadata_store=True,
+        metadata_store=metadata_store,
+        external_persist_committer=external_persist_committer,
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        support_external_clusterd=True,
+    )
+
+
 SERVICES = [
     Kafka(),
     Postgres(
@@ -1870,31 +2010,8 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
-    Cockroach(in_memory=True),
-    Materialized(
-        memory="8G",
-        cpu="2",
-        default_size=1,
-        options=[
-            # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
-            "--tls-mode=require",
-            "--tls-key=/secrets/materialized.key",
-            "--tls-cert=/secrets/materialized.crt",
-            f"--frontegg-tenant={TENANT_ID}",
-            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
-            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
-            f"--frontegg-admin-role={ADMIN_ROLE}",
-        ],
-        depends_on=["test-certs"],
-        volumes_extra=[
-            "secrets:/secrets",
-        ],
-        sanity_restart=False,
-        external_metadata_store=True,
-        metadata_store="cockroach",
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
-        support_external_clusterd=True,
-    ),
+    *metadata_store_services(),
+    make_materialized(),
     Mz(app_password=""),
 ]
 
@@ -1915,7 +2032,7 @@ service_names = [
     "materialized",
     "balancerd",
     "frontegg-mock",
-    "cockroach",
+    METADATA_STORE,
     "clusterd_1_1_1",
     "clusterd_1_1_2",
     "clusterd_1_2_1",
@@ -2248,6 +2365,279 @@ def run_scenarios(
 
     if failures:
         raise FailedTestExecutionError(errors=failures)
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Nearest-rank percentile of `values` (0..100). Returns 0.0 if empty."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    # Nearest-rank: rank = ceil(pct/100 * n), 1-indexed.
+    rank = max(1, math.ceil(pct / 100.0 * len(ordered)))
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def workflow_committer_comparison(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Compare freshness and hydration across metadata stores (cockroach vs
+    postgres) and committer modes (in-process vs persistd) under a swept
+    clusters x MVs workload.
+
+    For each of the four variants the workflow brings up a clean Materialize
+    with the variant's metadata store and committer, then builds the workload
+    incrementally over the requested sizes. At each size it waits for all MVs
+    to hydrate (`mz_compute_hydration_statuses`) and samples write-frontier
+    freshness (`mz_wallclock_lag_history`, recorded every 1s). Results are
+    written to a CSV and printed as a summary table.
+
+    All SQL runs as `mz_system` on the internal port, so no balancerd /
+    frontegg / external clusterd are needed: the workload uses managed clusters
+    whose replicas run inside the Materialized container.
+    """
+    parser.add_argument(
+        "--sizes",
+        default="25,50,100",
+        help="comma-separated cluster counts to sweep (ascending)",
+    )
+    parser.add_argument("--mvs-per-cluster", type=int, default=16)
+    parser.add_argument(
+        "--stores",
+        default="cockroach,postgres-metadata",
+        help="comma-separated metadata stores to include (cockroach, "
+        "postgres-metadata) — e.g. just 'cockroach' to probe crdb's limit",
+    )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=15,
+        help="number of 1s lag observations to let accumulate before sampling",
+    )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=10.0,
+        help="time to wait after hydration before the lag window starts",
+    )
+    parser.add_argument("--hydration-timeout", type=int, default=900)
+    parser.add_argument(
+        "--tick-interval",
+        default="500ms",
+        help="default_timestamp_interval; lower = higher per-MV write rate "
+        "(500ms => ~2 writes/s per MV)",
+    )
+    parser.add_argument(
+        "--memory",
+        default="32G",
+        help="materialized memory limit; raised above the 8G default so the "
+        "in-process committer variants don't OOM at high MV counts",
+    )
+    parser.add_argument(
+        "--output",
+        default="committer_comparison.csv",
+        help="CSV output path (relative to repo root)",
+    )
+    args = parser.parse_args()
+
+    sizes = sorted(int(s) for s in args.sizes.split(","))
+    mvs = args.mvs_per_cluster
+    max_objects = max(sizes) * mvs
+
+    # (label, metadata_store service name, committer). committer=False is the
+    # baseline: no committer, clusterds compare_and_append directly to
+    # consensus (persist_consensus_use_committer off). committer=True runs the
+    # committer in a persistd companion.
+    variants = [
+        ("crdb / no committer", "cockroach", False),
+        ("crdb / persistd", "cockroach", True),
+        ("psql / no committer", "postgres-metadata", False),
+        ("psql / persistd", "postgres-metadata", True),
+    ]
+    wanted_stores = {s.strip() for s in args.stores.split(",")}
+    variants = [v for v in variants if v[1] in wanted_stores]
+
+    fieldnames = [
+        "variant",
+        "metadata_store",
+        "committer",
+        "n_clusters",
+        "mvs_per_cluster",
+        "n_objects",
+        "hydrate_ok",
+        "batch_hydrate_wall_s",
+        "hydration_ms_max",
+        "hydration_ms_mean",
+        "hydration_ms_p95",
+        "lag_ms_max",
+        "lag_ms_mean",
+        "lag_ms_p95",
+    ]
+    results: list[dict] = []
+
+    def run_all(stmts: list[str]) -> None:
+        """Run a batch of statements on one short-lived mz_system connection.
+
+        Used for the DDL burst (contiguous, no sleeps) so we don't reconnect
+        per statement.
+        """
+        with c.sql_cursor(port=6877, user="mz_system") as cur:
+            for s in stmts:
+                cur.execute(s.encode())
+
+    def fetch(sql: str) -> list:
+        """Run a query on a fresh mz_system connection and return all rows.
+
+        Fresh per call so a long idle (the freshness settle window) can't leave
+        us holding a connection the server has already reaped.
+        """
+        with c.sql_cursor(port=6877, user="mz_system") as cur:
+            cur.execute(sql.encode())
+            return cur.fetchall()
+
+    for label, store, committer in variants:
+        print(f"--- Variant: {label} (store={store}, committer={committer})")
+        # Clean slate: each variant gets a fresh metadata store and mzdata so
+        # state from a prior variant can't leak in.
+        c.down(destroy_volumes=True)
+
+        store_service = (
+            Cockroach(in_memory=True) if store == "cockroach" else PostgresMetadata()
+        )
+        with c.override(
+            store_service,
+            make_materialized(
+                metadata_store=store,
+                external_persist_committer=committer,
+                use_committer=committer,
+                memory=args.memory,
+            ),
+            fail_on_new_service=False,
+        ):
+            # The metadata store and test-certs start automatically via
+            # materialized's depends_on.
+            c.up("materialized")
+
+            # Record freshness every second instead of the 60s default so the
+            # lag window has enough observations to sample. Shared 1Hz-ticking
+            # input `t` is kept tiny so per-MV arrangement memory is negligible
+            # and the load is dominated by per-tick persist writes, not data.
+            run_all(
+                [
+                    "ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'",
+                    # Faster table tick => higher per-MV write rate, pushing
+                    # steady-state committer load past what direct CaS sustains.
+                    f"ALTER SYSTEM SET default_timestamp_interval = '{args.tick_interval}'",
+                    f"ALTER SYSTEM SET max_clusters = {max(sizes) * 10}",
+                    f"ALTER SYSTEM SET max_materialized_views = {max_objects * 10}",
+                    f"ALTER SYSTEM SET max_objects_per_schema = {max_objects * 10}",
+                    "CREATE TABLE t (f1 INTEGER)",
+                    "INSERT INTO t VALUES (1)",
+                ]
+            )
+
+            created = 0
+            for n in sizes:
+                # Build incrementally up to N clusters so each size reuses the
+                # catalog from the previous one. The whole burst runs on one
+                # connection (no sleeps) for speed; the probes below use fresh
+                # connections so a long idle can't leave us on a reaped one.
+                t_create = time.time()
+                burst: list[str] = []
+                for i in range(created + 1, n + 1):
+                    burst.append(f"CREATE CLUSTER c{i} SIZE = 'scale=1,workers=1'")
+                    for j in range(1, mvs + 1):
+                        burst.append(
+                            f"CREATE MATERIALIZED VIEW mv{i}_{j} IN CLUSTER c{i} "
+                            f"AS SELECT f1 + {j} AS f1 FROM t"
+                        )
+                run_all(burst)
+                created = n
+                n_objects = n * mvs
+
+                # Phase 1: wait for all MVs to hydrate.
+                deadline = time.time() + args.hydration_timeout
+                hydrated = 0
+                while time.time() < deadline:
+                    rows = fetch("""
+                        SELECT count(*) FILTER (WHERE hs.hydrated)
+                        FROM mz_internal.mz_compute_hydration_statuses hs
+                        JOIN mz_materialized_views mv ON mv.id = hs.object_id
+                        WHERE mv.name LIKE 'mv%'
+                        """)
+                    hydrated = int(rows[0][0])
+                    if hydrated >= n_objects:
+                        break
+                    time.sleep(1.0)
+                hydrate_wall = time.time() - t_create
+                hydrate_ok = hydrated >= n_objects
+
+                # Per-object hydration time from the catalog.
+                hyd = [float(r[0]) for r in fetch("""
+                        SELECT EXTRACT(EPOCH FROM hs.hydration_time) * 1000
+                        FROM mz_internal.mz_compute_hydration_statuses hs
+                        JOIN mz_materialized_views mv ON mv.id = hs.object_id
+                        WHERE mv.name LIKE 'mv%' AND hs.hydration_time IS NOT NULL
+                        """)]
+
+                # Phase 2: let steady-state freshness observations accumulate,
+                # then aggregate per-object worst lag over the window.
+                window = args.samples
+                time.sleep(args.settle_seconds + window)
+                lag = [float(r[0]) for r in fetch(f"""
+                        SELECT EXTRACT(EPOCH FROM max(h.lag)) * 1000
+                        FROM mz_internal.mz_wallclock_lag_history h
+                        JOIN mz_materialized_views mv ON mv.id = h.object_id
+                        WHERE mv.name LIKE 'mv%'
+                          AND h.lag IS NOT NULL
+                          AND h.occurred_at > now() - INTERVAL '{window} seconds'
+                        GROUP BY h.object_id
+                        """)]
+
+                row = {
+                    "variant": label,
+                    "metadata_store": store,
+                    "committer": committer,
+                    "n_clusters": n,
+                    "mvs_per_cluster": mvs,
+                    "n_objects": n_objects,
+                    "hydrate_ok": hydrate_ok,
+                    "batch_hydrate_wall_s": round(hydrate_wall, 2),
+                    "hydration_ms_max": round(max(hyd), 1) if hyd else 0.0,
+                    "hydration_ms_mean": (
+                        round(sum(hyd) / len(hyd), 1) if hyd else 0.0
+                    ),
+                    "hydration_ms_p95": round(_percentile(hyd, 95), 1),
+                    "lag_ms_max": round(max(lag), 1) if lag else 0.0,
+                    "lag_ms_mean": round(sum(lag) / len(lag), 1) if lag else 0.0,
+                    "lag_ms_p95": round(_percentile(lag, 95), 1),
+                }
+                results.append(row)
+                print(
+                    f"    n={n} objects={n_objects} hydrate_ok={hydrate_ok} "
+                    f"wall={row['batch_hydrate_wall_s']}s "
+                    f"hyd_max={row['hydration_ms_max']}ms "
+                    f"lag_max={row['lag_ms_max']}ms lag_p95={row['lag_ms_p95']}ms"
+                )
+
+    with open(args.output, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"\nWrote {len(results)} rows to {args.output}\n")
+
+    # Summary table.
+    header = (
+        f"{'variant':20} {'n_obj':>6} {'hyd_ok':>6} {'wall_s':>7} "
+        f"{'hyd_max':>8} {'hyd_p95':>8} {'lag_max':>8} {'lag_p95':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in results:
+        print(
+            f"{r['variant']:20} {r['n_objects']:>6} {str(r['hydrate_ok']):>6} "
+            f"{r['batch_hydrate_wall_s']:>7} {r['hydration_ms_max']:>8} "
+            f"{r['hydration_ms_p95']:>8} {r['lag_ms_max']:>8} {r['lag_ms_p95']:>8}"
+        )
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
