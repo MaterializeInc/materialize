@@ -159,6 +159,10 @@ SERVICES = [
     # Overridden below
     Materialized(),
     Clusterd(),
+    # Dedicated clusterd for scenarios that run their workload on a separate
+    # process (e.g. DifferentialJoinHydration); only started when a scenario
+    # opts in via `MEMORY_CLUSTERD_SERVICE`.
+    Clusterd(name="clusterd_join", workers=16),
     Testdrive(),
     Mz(app_password=""),
 ]
@@ -277,8 +281,26 @@ def run_one_scenario(
                 mem_swappiness=mem_swappiness,
             )
 
+        # Scenarios whose workload runs on a dedicated process opt in by
+        # pointing `MEMORY_CLUSTERD_SERVICE` at this extra clusterd; only then
+        # do we spin it up.
+        clusterd_join = (
+            create_clusterd_service(
+                clusterd_image,
+                size,
+                additional_system_parameter_defaults,
+                memory=memory,
+                memory_swap=memory_swap,
+                mem_swappiness=mem_swappiness,
+                name="clusterd_join",
+                workers=16,
+            )
+            if scenario_class.MEMORY_CLUSTERD_SERVICE == "clusterd_join"
+            else None
+        )
+
         start_overridden_mz_clusterd_and_cockroach(
-            c, mz, clusterd, instance, balancerd, first_run
+            c, mz, clusterd, instance, balancerd, first_run, clusterd_join
         )
         first_run = False
 
@@ -345,15 +367,17 @@ def run_one_scenario(
                     assert (
                         aggregation.measurement_type == metric.measurement_type
                         or aggregation.measurement_type is None
-                    ), f"Aggregation contains {aggregation.measurement_type} but metric contains {metric.measurement_type} as measurement type"
+                    ), (
+                        f"Aggregation contains {aggregation.measurement_type} but metric contains {metric.measurement_type} as measurement type"
+                    )
                     metric.append_point(
                         aggregation.aggregate(),
                         aggregation.unit(),
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("cockroach", "materialized", "clusterd", "clusterd_join", "testdrive")
+        c.rm("cockroach", "materialized", "clusterd", "clusterd_join", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -416,12 +440,16 @@ def create_clusterd_service(
     memory: str | None = None,
     memory_swap: str | None = None,
     mem_swappiness: int | None = None,
+    name: str = "clusterd",
+    workers: int = 1,
 ) -> Clusterd:
     return Clusterd(
+        name=name,
         image=clusterd_image,
         memory=memory,
         memory_swap=memory_swap,
         mem_swappiness=mem_swappiness,
+        workers=workers,
     )
 
 
@@ -432,12 +460,15 @@ def start_overridden_mz_clusterd_and_cockroach(
     instance: str,
     balancerd: bool,
     first_run: bool,
+    extra_clusterd: Clusterd | None = None,
 ) -> None:
-    with c.override(mz, clusterd):
+    overrides = [mz, clusterd] + ([extra_clusterd] if extra_clusterd else [])
+    with c.override(*overrides):
         c.up(
             "cockroach",
             "materialized",
             "clusterd",
+            *(["clusterd_join"] if extra_clusterd else []),
             *(["balancerd"] if balancerd else []),
         )
         if first_run:
@@ -640,7 +671,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    print(dedent(f"""
+    print(
+        dedent(f"""
             this_tag: {args.this_tag}
             this_size: {args.this_size}
             this_balancerd: {args.this_balancerd}
@@ -649,7 +681,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             other_size: {args.other_size}
             other_balancerd: {args.other_balancerd}
 
-            root_scenario: {args.root_scenario}"""))
+            root_scenario: {args.root_scenario}""")
+    )
 
     specified_root_scenario = globals()[args.root_scenario]
 

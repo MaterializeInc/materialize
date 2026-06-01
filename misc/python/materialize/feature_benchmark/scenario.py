@@ -29,6 +29,11 @@ class RootScenario:
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
     }
+    # Which clusterd container `MEMORY_CLUSTERD` measures. Scenarios that run
+    # their workload on a dedicated extra clusterd (see the feature-benchmark
+    # `mzcompose.py`) override this so the measurement tracks that container
+    # rather than the default, otherwise-idle, `clusterd`.
+    MEMORY_CLUSTERD_SERVICE: str = "clusterd"
 
     def __init__(
         self, scale: float, mz_version: MzVersion, default_size: int, seed: int
@@ -103,12 +108,12 @@ class RootScenario:
     def unique_values(self) -> str:
         """Returns a string of the form 'a1.f1 + (a2.f1 * 10) + (a2.f1 * 100) ...'"""
         return " + ".join(
-            f"(a{i+1}.f1 * {10**i})" for i in range(0, ceil(self.scale()))
+            f"(a{i + 1}.f1 * {10**i})" for i in range(0, ceil(self.scale()))
         )
 
     def join(self) -> str:
         """Returns a string of the form 'ten AS a1 , ten AS a2 , ten AS a3 ...'"""
-        return ", ".join(f"ten AS a{i+1}" for i in range(0, ceil(self.scale())))
+        return ", ".join(f"ten AS a{i + 1}" for i in range(0, ceil(self.scale())))
 
     def keyschema(self) -> str:
         return (

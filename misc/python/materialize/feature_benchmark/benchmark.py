@@ -159,9 +159,9 @@ class Benchmark:
         timestamps: list[WallclockDuration] = []
         benchmark = scenario.benchmark()
         for benchmark_item in benchmark if isinstance(benchmark, list) else [benchmark]:
-            assert isinstance(
-                benchmark_item, MeasurementSource
-            ), f"Benchmark item is of type {benchmark_item.__class__} but not a MeasurementSource"
+            assert isinstance(benchmark_item, MeasurementSource), (
+                f"Benchmark item is of type {benchmark_item.__class__} but not a MeasurementSource"
+            )
             item_timestamps = benchmark_item.run(executor=self._executor)
             timestamps.extend(item_timestamps)
 
@@ -191,15 +191,15 @@ class Benchmark:
     def _validate_measurement_timestamps(
         self, scenario_name: str, timestamps: list[WallclockDuration]
     ) -> None:
-        assert (
-            len(timestamps) == 2
-        ), f"benchmark() did not return exactly 2 timestamps: scenario: {scenario_name}, timestamps: {timestamps}"
-        assert (
-            timestamps[0].unit == timestamps[1].unit
-        ), f"benchmark() returned timestamps with different units: scenario: {scenario_name}, timestamps: {timestamps}"
-        assert timestamps[1].is_equal_or_after(
-            timestamps[0]
-        ), f"Second timestamp reported not greater than first: scenario: {scenario_name}, timestamps: {timestamps}"
+        assert len(timestamps) == 2, (
+            f"benchmark() did not return exactly 2 timestamps: scenario: {scenario_name}, timestamps: {timestamps}"
+        )
+        assert timestamps[0].unit == timestamps[1].unit, (
+            f"benchmark() returned timestamps with different units: scenario: {scenario_name}, timestamps: {timestamps}"
+        )
+        assert timestamps[1].is_equal_or_after(timestamps[0]), (
+            f"Second timestamp reported not greater than first: scenario: {scenario_name}, timestamps: {timestamps}"
+        )
 
     def _collect_performance_measurement(
         self, i: int, performance_measurement: Measurement
@@ -214,7 +214,9 @@ class Benchmark:
         if memory_measurement_type == MeasurementType.MEMORY_MZ:
             value = self._executor.DockerMemMz()
         elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
-            value = self._executor.DockerMemClusterd()
+            value = self._executor.DockerMemClusterd(
+                self._scenario_cls.MEMORY_CLUSTERD_SERVICE
+            )
         else:
             raise ValueError(f"Unknown measurement type {memory_measurement_type}")
         memory_measurement = Measurement(

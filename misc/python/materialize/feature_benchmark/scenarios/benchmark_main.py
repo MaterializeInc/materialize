@@ -176,13 +176,16 @@ true
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td("""
+        return Td(
+            """
 > SELECT 1;
   /* A */
 1
 > SELECT f1 FROM v1 ORDER BY f1 DESC LIMIT 1000
   /* B */
-""" + "\n".join([str(x) for x in range(self.n() - 1000, self.n())]))
+"""
+            + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
+        )
 
 
 class FastPathLimit(FastPath):
@@ -196,13 +199,16 @@ class FastPathLimit(FastPath):
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(dedent("""
+        return Td(
+            dedent("""
                 > SELECT 1;
                   /* A */
                 1
                 > SELECT * FROM v1 LIMIT 100
                   /* B */
-                """) + "\n".join([str(x) for x in range(1, 101)]))
+                """)
+            + "\n".join([str(x) for x in range(1, 101)])
+        )
 
 
 class DML(Scenario):
@@ -604,7 +610,7 @@ true
 
 > SELECT MIN(f1), MAX(f1) AS f1 FROM v1
   /* B */
-0 {self.n()-1}
+0 {self.n() - 1}
 """)
 
 
@@ -634,7 +640,7 @@ true
 
 > SELECT * FROM v2
   /* B */
-0 {self.n()-1}
+0 {self.n() - 1}
 """)
 
 
@@ -658,7 +664,7 @@ true
 
 > SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
   /* B */
-{self.n()} 0 {self.n()-1}
+{self.n()} 0 {self.n() - 1}
 """)
 
 
@@ -688,7 +694,7 @@ true
 
 > SELECT * FROM v2
   /* B */
-{self.n()} 0 {self.n()-1}
+{self.n()} 0 {self.n() - 1}
 """)
 
 
@@ -985,14 +991,20 @@ ALTER SYSTEM SET enable_column_paged_batcher = true;
 class DifferentialJoinHydration(Dataflow):
     """Non-leaf parent for the linear-join hydration benchmark family.
 
-    Holds the shared `init` / `benchmark` (replica-toggle hydration loop) so
-    Baseline and File variants only need to override `shared()` with the
-    dyncfgs they want set. Has subclasses, so the feature-benchmark runner
-    treats it as non-leaf and never executes it directly — pick one of the
-    leaf classes via `--root-scenario`.
+    The join (`v2`) runs on a dedicated **external** clusterd (`clusterd_join`,
+    16 workers) wired in as an *unmanaged* replica, rather than an in-process
+    managed cluster. That puts the join arrangement in its own process — so its
+    memory is captured by `memory_clusterd` (see `MEMORY_CLUSTERD_SERVICE`) and
+    the topology matches a real deployment. `v1` stays on the default cluster,
+    so toggling `join_cluster`'s replica only tears down `v2`'s dataflow.
 
-    Run both leaves under a memory-capped Materialized (`--this-memory=2g`)
-    so the baseline has to swap and the paged-file variant has somewhere
+    Hydration is triggered by dropping the replica before defining `v2` and
+    re-creating it after `/* A */`; the `CREATE CLUSTER REPLICA` is the rebuild
+    we time. Baseline and File leaves only override `shared()` with the dyncfgs
+    they want set; they inherit `init` / `benchmark` here.
+
+    Run both leaves under a memory-capped Materialized (`--this-memory=2g`) so
+    the baseline has to swap and the paged-file variant has somewhere
     predictable to spill.
     """
 
@@ -1003,11 +1015,28 @@ class DifferentialJoinHydration(Dataflow):
     # means almost everything spills under that cap.
     SCALE = 8
 
+    # Measure the dedicated join clusterd (where `v2`'s arrangement lives),
+    # not the otherwise-idle default `clusterd` that only hosts `v1`. The
+    # feature-benchmark `mzcompose.py` spins up `clusterd_join` (16 workers)
+    # when a scenario points this at it.
+    MEMORY_CLUSTERD_SERVICE = "clusterd_join"
+
+    # Unmanaged replica pinned to the `clusterd_join` container (a single
+    # 16-worker process), matching the previous managed `SIZE
+    # 'scale=1,workers=16'`.
+    _JOIN_REPLICA = (
+        "(STORAGECTL ADDRESSES ['clusterd_join:2100'], "
+        "STORAGE ADDRESSES ['clusterd_join:2103'], "
+        "COMPUTECTL ADDRESSES ['clusterd_join:2101'], "
+        "COMPUTE ADDRESSES ['clusterd_join:2102'], "
+        "WORKERS 16)"
+    )
+
     def init(self) -> list[Action]:
-        # `v1` lives on the default cluster, not `join_cluster`, so the
-        # replication-factor toggle in `benchmark` only tears down `v2`'s
-        # dataflow. Keeps the measurement scoped to the join-arrangement
-        # rebuild we're trying to measure.
+        # `v1` lives on the default cluster, not `join_cluster`, so the replica
+        # toggle in `benchmark` only tears down `v2`'s dataflow. The unmanaged
+        # `join_cluster` is created (and owned) by `mz_system`; `materialize`
+        # gets privileges so it can create `v2` in it and read from it.
         return [
             self.view_ten(),
             TdAction(f"""
@@ -1016,19 +1045,25 @@ class DifferentialJoinHydration(Dataflow):
 > SELECT COUNT(*) FROM v1
 {self.n()}
 
-> CREATE CLUSTER join_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+CREATE CLUSTER join_cluster REPLICAS (r1 {self._JOIN_REPLICA});
+GRANT ALL PRIVILEGES ON CLUSTER join_cluster TO materialize;
 """),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        # Match HydrateIndex's pattern: take the cluster offline *before*
-        # defining the object so the dataflow doesn't pre-hydrate. The
-        # `REPLICATION FACTOR 1` flip after `/* A */` is the actual
-        # hydration trigger we want to time.
+        # Take the cluster offline by dropping its replica *before* defining
+        # `v2`, so the dataflow doesn't pre-hydrate. Re-creating the replica
+        # after `/* A */` is the actual hydration we time. Replica management
+        # goes through `mz_system` (the cluster's owner).
         return Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2
 
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 0)
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+DROP CLUSTER REPLICA IF EXISTS join_cluster.r1
 
 > CREATE MATERIALIZED VIEW v2
   IN CLUSTER join_cluster
@@ -1037,7 +1072,10 @@ class DifferentialJoinHydration(Dataflow):
 > SELECT 1
   /* A */
 1
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 1)
+
+$ postgres-execute connection=mz_system
+CREATE CLUSTER REPLICA join_cluster.r1 {self._JOIN_REPLICA}
+
 > SET CLUSTER = join_cluster
 > SELECT * FROM v2
   /* B */
@@ -1083,12 +1121,15 @@ ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
 class FullOuterJoin(Dataflow):
     def benchmark(self) -> BenchmarkingSequence:
         columns_select = ", ".join(
-            [f"a{i+1}.f1 AS f{i+1}" for i in range(0, floor(self.scale()))]
+            [f"a{i + 1}.f1 AS f{i + 1}" for i in range(0, floor(self.scale()))]
         )
-        columns_using = ", ".join([f"f{i+1}" for i in range(0, floor(self.scale()))])
-        inserts = "\n".join([f"> INSERT INTO ten VALUES ({i+1})" for i in range(0, 10)])
+        columns_using = ", ".join([f"f{i + 1}" for i in range(0, floor(self.scale()))])
+        inserts = "\n".join(
+            [f"> INSERT INTO ten VALUES ({i + 1})" for i in range(0, 10)]
+        )
 
-        return [Td(f"""
+        return [
+            Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2 CASCADE;
 
 > DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
@@ -1112,7 +1153,8 @@ class FullOuterJoin(Dataflow):
 > SELECT * FROM v2;
   /* B */
 {self.n()} {self.n()}
-""")]
+""")
+        ]
 
 
 class Finish(Scenario):
@@ -1141,7 +1183,7 @@ true
 
 > SELECT f2 FROM v1 ORDER BY 1 DESC LIMIT 1
   /* B */
-{self.n()-1}
+{self.n() - 1}
 """)
 
 
@@ -1185,7 +1227,10 @@ true
 
 class KafkaUpsert(Kafka):
     def shared(self) -> Action:
-        return TdAction(self.keyschema() + self.schema() + f"""
+        return TdAction(
+            self.keyschema()
+            + self.schema()
+            + f"""
 $ kafka-create-topic topic=kafka-upsert
 
 $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
@@ -1193,7 +1238,8 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}}
 {{"f1": 2}} {{"f2": 2}}
-""")
+"""
+        )
 
     def benchmark(self) -> MeasurementSource:
         return Td(f"""
@@ -1226,12 +1272,16 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 class KafkaUpsertUnique(Kafka):
     def shared(self) -> Action:
-        return TdAction(self.keyschema() + self.schema() + f"""
+        return TdAction(
+            self.keyschema()
+            + self.schema()
+            + f"""
 $ kafka-create-topic topic=upsert-unique partitions=16
 
 $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-""")
+"""
+        )
 
     def benchmark(self) -> MeasurementSource:
         return Td(f"""
@@ -1269,12 +1319,16 @@ class KafkaRestart(ScenarioDisabled):
     """
 
     def shared(self) -> Action:
-        return TdAction(self.keyschema() + self.schema() + f"""
+        return TdAction(
+            self.keyschema()
+            + self.schema()
+            + f"""
 $ kafka-create-topic topic=kafka-recovery partitions=8
 
 $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-""")
+"""
+        )
 
     def init(self) -> Action:
         return TdAction(f"""
@@ -1339,7 +1393,7 @@ class KafkaRestartBig(ScenarioBig):
                     "--max-message-size=32",
                     "--min-message-size=32",
                     "--key-min=256",
-                    f"--key-max={256+(self.n()**2)}",
+                    f"--key-max={256 + (self.n() ** 2)}",
                 ],
             ),
             # Add 256 EOF markers with key values <= 256.
@@ -1470,12 +1524,16 @@ class ExactlyOnce(Sink):
         return ScenarioVersion.create(1, 2, 0)
 
     def shared(self) -> Action:
-        return TdAction(self.keyschema() + self.schema() + f"""
+        return TdAction(
+            self.keyschema()
+            + self.schema()
+            + f"""
 $ kafka-create-topic topic=sink-input partitions=16
 
 $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-""")
+"""
+        )
 
     def init(self) -> Action:
         return TdAction(f"""
@@ -1516,7 +1574,8 @@ $ kafka-create-topic topic={self._topic}
 
     def benchmark(self) -> MeasurementSource:
         topic = self._topic
-        return Td(f"""
+        return Td(
+            f"""
 > SELECT 1
   /* A */
 1
@@ -1546,7 +1605,9 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > SELECT * FROM sink1_check_v
   /* B */
-""" + str(self.n()))
+"""
+            + str(self.n())
+        )
 
 
 class IcebergSink(Sink):
@@ -1803,12 +1864,15 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
         return ScenarioVersion.create(1, 2, 0)
 
     def shared(self) -> Action:
-        create_topics = "\n".join(f"""
+        create_topics = "\n".join(
+            f"""
 $ kafka-create-topic topic=many-kafka-sources-{i}
 
 $ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repeat={self.COUNT_SOURCE_ENTRIES}
 {{"f2": ${{kafka-ingest.iteration}}}}
-""" for i in range(0, self.n()))
+"""
+            for i in range(0, self.n())
+        )
 
         return TdAction(self.schema() + create_topics)
 
@@ -1832,11 +1896,15 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 """)
 
     def benchmark(self) -> BenchmarkingSequence:
-        drop_sources = "\n".join(f"""
+        drop_sources = "\n".join(
+            f"""
 > DROP SOURCE IF EXISTS kafka_source{i} CASCADE;
-""" for i in range(0, self.n()))
+"""
+            for i in range(0, self.n())
+        )
 
-        create_sources = "\n".join(f"""
+        create_sources = "\n".join(
+            f"""
 > CREATE SOURCE kafka_source{i}
   IN CLUSTER kafka_source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}');
@@ -1844,7 +1912,9 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 > CREATE TABLE kafka_source{i}_tbl FROM SOURCE kafka_source{i} (REFERENCE "testdrive-many-kafka-sources-{i}-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE;
-""" for i in range(0, self.n()))
+"""
+            for i in range(0, self.n())
+        )
 
         check_sources = "\n".join(
             f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i}_tbl;\ntrue"
@@ -1852,7 +1922,9 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
         )
 
         return [
-            Td(self.schema() + f"""
+            Td(
+                self.schema()
+                + f"""
 {drop_sources}
 
 > SELECT 1;
@@ -1865,7 +1937,8 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 > SELECT 1;
   /* B */
 1
-"""),
+"""
+            ),
         ]
 
 
@@ -1976,7 +2049,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
     def benchmark(self) -> MeasurementSource:
         insertions = "\n".join(
             [
-                f"INSERT INTO t1 (f2) SELECT x FROM generate_series(1, {self.n()/1000}) as x;\nCOMMIT;"
+                f"INSERT INTO t1 (f2) SELECT x FROM generate_series(1, {self.n() / 1000}) as x;\nCOMMIT;"
                 for i in range(0, 1000)
             ]
         )
@@ -2094,11 +2167,16 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
             """)
 
     def benchmark(self) -> MeasurementSource:
-        insertions = "\n".join([dedent(f"""
+        insertions = "\n".join(
+            [
+                dedent(f"""
                     SET @i:=0;
-                    INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {round(self.n()/1000)};
+                    INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {round(self.n() / 1000)};
                     COMMIT;
-                    """) for i in range(0, 1000)])
+                    """)
+                for i in range(0, 1000)
+            ]
+        )
 
         return Td(f"""
 > SELECT 1;
@@ -2227,7 +2305,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_
     def benchmark(self) -> MeasurementSource:
         insertions = "\n".join(
             [
-                f"INSERT INTO t1 (f2) SELECT TOP ({round(self.n()/1000)}) n FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) AS numbers;"
+                f"INSERT INTO t1 (f2) SELECT TOP ({round(self.n() / 1000)}) n FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) AS numbers;"
                 for i in range(0, 1000)
             ]
         )
@@ -2284,10 +2362,13 @@ class ConnectionLatency(Coordinator):
     SCALE = 2  # Many connections * many measurements = TCP port exhaustion
 
     def benchmark(self) -> MeasurementSource:
-        connections = "\n".join("""
+        connections = "\n".join(
+            """
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
-""" for i in range(0, 2 * self.n()))
+"""
+            for i in range(0, 2 * self.n())
+        )
 
         return Td(f"""
 > SET auto_route_introspection_queries TO false
@@ -2332,19 +2413,23 @@ class StartupLoaded(Scenario):
     MAX_SCALE = 1.5
 
     def shared(self) -> Action:
-        return TdAction(self.schema() + """
+        return TdAction(
+            self.schema()
+            + """
 $ kafka-create-topic topic=startup-time
 
 $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 {"f2": 1}
-""")
+"""
+        )
 
     def init(self) -> Action:
         create_tables = "\n".join(
             f"> CREATE TABLE t{i} (f1 INTEGER);\n> INSERT INTO t{i} DEFAULT VALUES;"
             for i in range(0, self.n())
         )
-        create_sources = "\n".join(f"""
+        create_sources = "\n".join(
+            f"""
 > DROP CLUSTER IF EXISTS source{i}_cluster CASCADE;
 > CREATE CLUSTER source{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
@@ -2355,18 +2440,21 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-startup-time-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
-""" for i in range(0, self.n()))
+"""
+            for i in range(0, self.n())
+        )
         join = " ".join(
             f"LEFT JOIN source{i}_tbl USING (f2)"
             for i in range(1, (ceil(self.scale())))
         )
 
         create_views = "\n".join(
-            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i}_tbl AS s {join} LIMIT {i+1}"
+            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i}_tbl AS s {join} LIMIT {i + 1}"
             for i in range(0, self.n())
         )
 
-        create_sinks = "\n".join(f"""
+        create_sinks = "\n".join(
+            f"""
 > DROP CLUSTER IF EXISTS sink{i}_cluster;
 > CREATE CLUSTER sink{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 > CREATE SINK sink{i}
@@ -2376,7 +2464,9 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE DEBEZIUM
-""" for i in range(0, self.n()))
+"""
+            for i in range(0, self.n())
+        )
 
         return TdAction(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
@@ -2456,17 +2546,29 @@ class StartupTpch(Scenario):
             )
         ]
 
-        create_views = "\n".join(f"""
+        create_views = "\n".join(
+            f"""
 > CREATE VIEW v_{q}_{i} AS {query}
-""" for q, query in enumerate(queries) for i in range(0, self.n()))
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
 
-        create_indexes = "\n".join(f"""
+        create_indexes = "\n".join(
+            f"""
 > CREATE DEFAULT INDEX ON v_{q}_{i};
-""" for q in range(0, len(queries)) for i in range(0, self.n()))
+"""
+            for q in range(0, len(queries))
+            for i in range(0, self.n())
+        )
 
-        create_materialized_views = "\n".join(f"""
+        create_materialized_views = "\n".join(
+            f"""
 > CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
-""" for q, query in enumerate(queries) for i in range(0, self.n()))
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
 
         return TdAction(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
@@ -2643,7 +2745,8 @@ class SwapSchema(Scenario):
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(dedent("""
+        return Td(
+            dedent("""
                 > SELECT 1;
                   /* A */
                 1
@@ -2653,7 +2756,8 @@ class SwapSchema(Scenario):
                 > SELECT 1;
                   /* B */
                 1
-                """))
+                """)
+        )
 
 
 class DdlTransactionBatch(Coordinator):
@@ -2672,12 +2776,14 @@ class DdlTransactionBatch(Coordinator):
         creates = "\n".join(
             f"> CREATE TABLE ddl_batch_t{i} (x INT);" for i in range(self.n())
         )
-        return [TdAction(f"""
+        return [
+            TdAction(f"""
 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 ALTER SYSTEM SET max_tables = {self.n() + 200};
 
 {creates}
-""")]
+""")
+        ]
 
     def benchmark(self) -> MeasurementSource:
         renames_forward = "\n".join(
@@ -2741,7 +2847,8 @@ class ReplicaExpiration(Scenario):
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(dedent(f"""
+        return Td(
+            dedent(f"""
                 > DELETE FROM events_scale;
 
                 > SELECT COUNT(*) FROM last_30_days
@@ -2759,4 +2866,5 @@ class ReplicaExpiration(Scenario):
                 > SELECT 1;
                   /* B */
                 1
-                """))
+                """)
+        )

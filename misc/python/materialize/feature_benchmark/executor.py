@@ -41,7 +41,7 @@ class Executor:
     def DockerMemMz(self) -> int:
         raise NotImplementedError
 
-    def DockerMemClusterd(self) -> int:
+    def DockerMemClusterd(self, service: str = "clusterd") -> int:
         raise NotImplementedError
 
 
@@ -90,8 +90,8 @@ class Docker(Executor):
     def DockerMemMz(self) -> int:
         return self._composition.mem("materialized")
 
-    def DockerMemClusterd(self) -> int:
-        return self._composition.mem("clusterd")
+    def DockerMemClusterd(self, service: str = "clusterd") -> int:
+        return self._composition.mem(service)
 
 
 class MzCloud(Executor):
