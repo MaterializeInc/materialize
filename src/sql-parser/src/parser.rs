@@ -558,10 +558,30 @@ impl<'a> Parser<'a> {
         mut expr: Expr<Raw>,
     ) -> Result<Expr<Raw>, ParserError> {
         self.checked_recur_mut(|parser| {
+            // Each iteration wraps `expr` in one more node (a binary op, field
+            // access `a.b`, `IS`, etc.), so a long *flat* operator/field-access
+            // chain (`a.f.f.f…`, `a+a+a…`) builds AST depth iteratively — the
+            // per-call recursion guard above only counts as one level for the
+            // whole loop. Bound the chain length at the same limit so the
+            // resulting AST can't grow deep enough to overflow the stack when
+            // it is later displayed, dropped, cloned, or visited recursively.
+            // Regression for the parse_expr_roundtrip field-access-chain
+            // stack overflow (`a.ff.cX.*.G…`).
+            let mut chain = 0usize;
             loop {
                 let next_precedence = parser.get_next_precedence();
                 if precedence >= next_precedence {
                     break;
+                }
+                chain += 1;
+                if chain > RECURSION_LIMIT {
+                    return Err(ParserError::new(
+                        parser.peek_pos(),
+                        format!(
+                            "statement exceeds nested expression limit of {}",
+                            RECURSION_LIMIT
+                        ),
+                    ));
                 }
 
                 expr = parser.parse_infix(expr, next_precedence)?;
