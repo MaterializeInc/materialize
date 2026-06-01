@@ -22,12 +22,10 @@ class RegexpExtractNonNullable(Check):
     """
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > CREATE TABLE regexp_extract_nn_table (f1 STRING);
             > INSERT INTO regexp_extract_nn_table VALUES ('ab');
-            """)
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -49,8 +47,7 @@ class RegexpExtractNonNullable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > SELECT a, b FROM regexp_extract_nn_view1 ORDER BY a;
             a b
             k l
@@ -72,20 +69,17 @@ class RegexpExtractNonNullable(Check):
               WHERE v.name = 'regexp_extract_nn_view2' ORDER BY c.position;
             a false
             b false
-            """)
-        )
+            """))
 
 
 class RegexpExtract(Check):
     """The regex from regexp_extract has its own ProtoAnalyzedRegex"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > CREATE TABLE regexp_extract_table (f1 STRING);
             > INSERT INTO regexp_extract_table VALUES ('abc');
-            """)
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -103,26 +97,22 @@ class RegexpExtract(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > SELECT c1::string FROM regexp_extract_view1;
             (,,,xyz,x,yz)
             (abc,a,bc,,,)
             > SELECT c1::string FROM regexp_extract_view2;
             (,,,xyz,x,yz)
             (abc,a,bc,,,)
-            """)
-        )
+            """))
 
 
 class Regex(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > CREATE TABLE regex_table (f1 STRING, f2 STRING);
             > INSERT INTO regex_table VALUES ('abc', 'abc');
-            """)
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -140,8 +130,7 @@ class Regex(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent("""
+        return Testdrive(dedent("""
             > SELECT * FROM regex_view1;
             true true false false
             true true true true
@@ -151,5 +140,4 @@ class Regex(Check):
             true true false false
             true true true true
             true true true true
-            """)
-        )
+            """))
