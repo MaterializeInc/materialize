@@ -24,8 +24,6 @@ class Clusterd(Service):
         environment_id: str | None = None,
         environment_extra: list[str] = [],
         memory: str | None = None,
-        memory_swap: str | None = None,
-        mem_swappiness: int | None = None,
         cpu: str | None = None,
         options: list[str] = [],
         restart: str = "no",
@@ -94,17 +92,6 @@ class Clusterd(Service):
             if cpu:
                 limits["cpus"] = cpu
             config["deploy"] = {"resources": {"limits": limits}}
-
-        # Swap controls aren't part of compose's `deploy.resources` schema; they
-        # live as top-level compose v2 service keys (`memswap_limit`,
-        # `mem_swappiness`). Setting `memswap_limit > mem_limit` enables the
-        # container to use host swap when RAM pressure builds, which lets the
-        # kernel page out anonymous memory rather than OOM-killing. Useful for
-        # benchmarking "OS swap" as a baseline vs application-managed spill.
-        if memory_swap is not None:
-            config["memswap_limit"] = memory_swap
-        if mem_swappiness is not None:
-            config["mem_swappiness"] = mem_swappiness
 
         config.update(
             {
