@@ -555,24 +555,13 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     internal,
                     pending,
                 },
-            ) => {
-                use mz_controller::clusters::ManagedReplicaAvailabilityZones;
-                // Both shapes record the zones the replica was provisioned
-                // under: a managed cluster's `AVAILABILITY ZONES` pool, or an
-                // unmanaged cluster's single user-pinned AZ as a zero- or
-                // one-element list.
-                let availability_zones = match availability_zones {
-                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.into_iter().collect(),
-                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs.unwrap_or_default(),
-                };
-                ReplicaLocation::Managed {
-                    size,
-                    availability_zones,
-                    internal,
-                    billed_as,
-                    pending,
-                }
-            }
+            ) => ReplicaLocation::Managed {
+                size,
+                availability_zones,
+                internal,
+                billed_as,
+                pending,
+            },
         }
     }
 }

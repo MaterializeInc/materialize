@@ -36,8 +36,7 @@ use mz_catalog::memory::objects::{
     TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
-    UnmanagedReplicaLocation,
+    ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
@@ -2421,13 +2420,8 @@ impl CatalogState {
                         .expect("catalog out of sync")
                         .clone(),
                     availability_zones: match allowed_availability_zones {
-                        Some([]) => ManagedReplicaAvailabilityZones::FromCluster(None),
-                        Some(azs) => {
-                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
-                        }
-                        None => ManagedReplicaAvailabilityZones::FromReplica(
-                            availability_zones.into_iter().next(),
-                        ),
+                        Some(azs) => azs.to_vec(),
+                        None => availability_zones,
                     },
                     size,
                     billed_as,

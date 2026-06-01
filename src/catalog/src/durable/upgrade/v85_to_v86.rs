@@ -36,12 +36,10 @@ crate::json_compatible!(v85::UnmanagedLocation with v86::UnmanagedLocation);
 ///     `burst`, all defaulted to `None`.
 ///   - The managed `ReplicaLocation`'s single `availability_zone` user-pin
 ///     becomes an `availability_zones` list recording the zones the replica was
-///     provisioned under. For a replica of a managed cluster this is the owning
+///     provisioned under: for a replica of a managed cluster the owning
 ///     *cluster*'s current `availability_zones` (the placement pool); for a
-///     replica of an unmanaged cluster it is the prior single pin carried
-///     across as a zero- or one-element list. This matches the
-///     controller→durable `From` impl, which fills the list from the cluster
-///     pool (`FromCluster`) or the single pin (`FromReplica`).
+///     replica of an unmanaged cluster its prior single pin, carried across as
+///     a zero- or one-element list.
 ///
 /// Only the managed `Cluster` variant and managed `ReplicaLocation` changed
 /// shape, so only those records are rewritten. Unmanaged clusters and unmanaged

@@ -18,8 +18,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
-    ReplicaLogging,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
@@ -1277,9 +1276,10 @@ impl Coordinator {
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
 
-                    if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
-                        &location.availability_zones
-                    {
+                    // An unmanaged cluster's replica carries its single
+                    // user-pinned AZ (if any) as the sole entry; every pin must
+                    // fall within the managed cluster's `AVAILABILITY ZONES`.
+                    for az in &location.availability_zones {
                         if !new_availability_zones.contains(az) {
                             coord_bail!(
                                 "unmanaged replica has availability zone {az} which is not \

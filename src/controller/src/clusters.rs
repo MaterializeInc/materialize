@@ -287,18 +287,6 @@ pub struct UnmanagedReplicaLocation {
     pub computectl_addrs: Vec<String>,
 }
 
-/// Information about availability zone constraints for replicas.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ManagedReplicaAvailabilityZones {
-    /// Specified if the `Replica` is from `MANAGED` cluster,
-    /// and specifies if there is an `AVAILABILITY ZONES`
-    /// constraint. Empty lists are represented as `None`.
-    FromCluster(Option<Vec<String>>),
-    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
-    /// and specifies if there is a specific `AVAILABILITY ZONE`.
-    FromReplica(Option<String>),
-}
-
 /// The location of a managed replica.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ManagedReplicaLocation {
@@ -310,21 +298,18 @@ pub struct ManagedReplicaLocation {
     pub internal: bool,
     /// Optional SQL size parameter used for billing.
     pub billed_as: Option<String>,
-    /// The replica's availability zones, if specified.
+    /// The availability zones the replica may be placed in; empty means
+    /// unconstrained.
     ///
-    /// This is either the replica's specific `AVAILABILITY ZONE`,
-    /// or the zones placed here during replica concretization
-    /// from the `MANAGED` cluster config.
+    /// For a replica of a managed cluster this is the cluster's
+    /// `AVAILABILITY ZONES` pool; for a replica of an unmanaged cluster it is
+    /// the single user-pinned `AVAILABILITY ZONE`, as a zero- or one-element
+    /// list.
     ///
-    /// We skip serialization (which is used for some validation
-    /// in tests) as the latter case is a "virtual" piece of information,
-    /// that exists only at runtime.
-    ///
-    /// An empty list of availability zones is concretized as `None`,
-    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
-    /// is an empty list if none are specified
+    /// Not serialized: this is re-derived from the cluster config at
+    /// concretization, not read back from a durable record.
     #[serde(skip)]
-    pub availability_zones: ManagedReplicaAvailabilityZones,
+    pub availability_zones: Vec<String>,
     /// Whether the replica is pending reconfiguration
     pub pending: bool,
 }
@@ -818,10 +803,9 @@ impl Controller {
                     ),
                     ("cluster-name".into(), cluster_name),
                 ]),
-                availability_zones: match location.availability_zones {
-                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
-                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
-                },
+                // An empty list means no AZ constraint; a non-empty one pins
+                // placement to those zones.
+                availability_zones: Some(location.availability_zones).filter(|azs| !azs.is_empty()),
                 // This provides the orchestrator with some label selectors that
                 // are used to constraint the scheduling of replicas, based on
                 // its internal configuration.
