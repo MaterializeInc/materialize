@@ -37,8 +37,26 @@ asdf     asdf     NULL  1
 asdfjkl  asdf     NULL  1
 jkl      NULL     jkl   1
 
-# TODO(brennan): test that the regex columns have the correct nullability, once
-# they actually do (database-issues#612).
+# Regression test for database-issues#612: capture-group columns now have
+# precise nullability instead of always being nullable. A capture group is
+# non-nullable iff it is guaranteed to participate in every match, i.e. it is
+# not inside an alternation or a zero-matching repetition (`*`, `?`, `{0,n}`).
+statement ok
+CREATE VIEW regexp_nullability AS
+SELECT reg.*
+FROM data, regexp_extract('(?P<required>[0-9]+)-(?P<optional>[a-z]+)?-(?:(?P<alt_a>x)|(?P<alt_b>y))', data.input) reg
+
+query ITT
+SELECT c.position, c.name, c.nullable::text
+    FROM mz_columns c
+    JOIN mz_views v ON c.id = v.id
+    WHERE v.name = 'regexp_nullability'
+    ORDER BY c.position
+----
+1  required  false
+2  optional  true
+3  alt_a     true
+4  alt_b     true
 
 query TTT colnames
 SELECT data.*, csv.* FROM data, csv_extract(2, data.input) csv

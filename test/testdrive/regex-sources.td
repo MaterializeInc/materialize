@@ -30,12 +30,12 @@ $ kafka-ingest topic=request-log format=bytes
 > SHOW COLUMNS FROM regex_source_tbl
 name               nullable  type  comment
 ------------------------------------------
-ip                 true      text  ""
-ts                 true      text  ""
-path               true      text  ""
+ip                 false     text  ""
+ts                 false     text  ""
+path               false     text  ""
 search_kw          true      text  ""
 product_detail_id  true      text  ""
-code               true      text  ""
+code               false     text  ""
 
 > SELECT * FROM regex_source_tbl
 ip            ts                      path                                           search_kw           product_detail_id  code
@@ -60,12 +60,12 @@ helper+ins+hennaed
 > SHOW COLUMNS FROM regex_source_named_cols_tbl
 name               nullable  type  comment
 ------------------------------------------
-ip                 true      text  ""
-ts                 true      text  ""
-path               true      text  ""
+ip                 false     text  ""
+ts                 false     text  ""
+path               false     text  ""
 search_kw          true      text  ""
 product_detail_id  true      text  ""
-code               true      text  ""
+code               false     text  ""
 
 # verify metadata column renaming
 > CREATE CLUSTER regex_source_renamed_cols_cluster SIZE '${arg.default-storage-size}';
@@ -79,12 +79,12 @@ code               true      text  ""
 > SHOW COLUMNS FROM regex_source_renamed_cols_tbl
 name               nullable  type  comment
 ------------------------------------------
-ip                 true      text  ""
-ts                 true      text  ""
-path               true      text  ""
+ip                 false     text  ""
+ts                 false     text  ""
+path               false     text  ""
 search_kw          true      text  ""
 product_detail_id  true      text  ""
-code               true      text  ""
+code               false     text  ""
 
 > SELECT * FROM regex_source_named_cols_tbl
 ip            ts                      path                                           search_kw           product_detail_id  code

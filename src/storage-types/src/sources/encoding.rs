@@ -168,23 +168,31 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                     desc.with_column(name, ty.clone())
                 })
                 .finish(),
-            Self::Regex(RegexEncoding { regex }) => regex
-                .capture_names()
-                .enumerate()
-                // The first capture is the entire matched string. This will
-                // often not be useful, so skip it. If people want it they can
-                // just surround their entire regex in an explicit capture
-                // group.
-                .skip(1)
-                .fold(RelationDesc::builder(), |desc, (i, name)| {
-                    let name = match name {
-                        None => format!("column{}", i),
-                        Some(name) => name.to_owned(),
-                    };
-                    let ty = SqlScalarType::String.nullable(true);
-                    desc.with_column(name, ty)
-                })
-                .finish(),
+            Self::Regex(RegexEncoding { regex }) => {
+                let nullability = regex.capture_group_nullability();
+                regex
+                    .capture_names()
+                    .enumerate()
+                    // The first capture is the entire matched string. This will
+                    // often not be useful, so skip it. If people want it they can
+                    // just surround their entire regex in an explicit capture
+                    // group.
+                    .skip(1)
+                    .fold(RelationDesc::builder(), |desc, (i, name)| {
+                        let name = match name {
+                            None => format!("column{}", i),
+                            Some(name) => name.to_owned(),
+                        };
+                        // A capture group is non-nullable only if it is
+                        // guaranteed to participate in every match; otherwise be
+                        // conservative and assume it may be null.
+                        let i = u32::try_from(i).expect("capture group index fits in u32");
+                        let nullable = nullability.get(&i).copied().unwrap_or(true);
+                        let ty = SqlScalarType::String.nullable(nullable);
+                        desc.with_column(name, ty)
+                    })
+                    .finish()
+            }
             Self::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => (1..=*n)
                     .fold(RelationDesc::builder(), |desc, i| {

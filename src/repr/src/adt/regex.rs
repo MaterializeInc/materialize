@@ -11,12 +11,15 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use mz_lowertest::MzReflect;
 use regex::{Error, RegexBuilder};
+use regex_syntax::ast::{Ast, GroupKind, RepetitionKind, RepetitionRange, Visitor, visit};
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -106,6 +109,127 @@ impl Regex {
         // `as_str` returns the raw pattern as provided during construction,
         // and doesn't include any of the flags.
         self.regex.as_str()
+    }
+
+    /// Computes, for each capture group, whether the column it produces can be
+    /// null (i.e., whether the group might fail to participate in a successful
+    /// match of the overall regex).
+    ///
+    /// The returned map is keyed by capture group index. Index 0 (the implicit
+    /// group capturing the entire match) is never included, as it always
+    /// participates in a match.
+    ///
+    /// A capture group is *non-nullable* only when it is guaranteed to
+    /// participate in every successful match. We determine this by walking the
+    /// regex's syntax tree and marking a group as nullable if it appears inside
+    /// any construct that its enclosing expression can match without it, namely:
+    ///
+    ///   * an alternation (`a|b`), where only one branch participates; or
+    ///   * a repetition that may match zero times (`*`, `?`, `{0,n}`).
+    ///
+    /// This is a conservative analysis: a group is only reported as
+    /// non-nullable when we can prove it always participates. If the pattern
+    /// fails to parse for any reason (it shouldn't, since it already compiled),
+    /// we fall back to treating every group as nullable.
+    ///
+    /// Replaces the previous behavior of unconditionally assuming nullability.
+    /// See <https://github.com/MaterializeInc/database-issues/issues/612>.
+    pub fn capture_group_nullability(&self) -> BTreeMap<u32, bool> {
+        let ast = match regex_syntax::ast::parse::Parser::new().parse(self.pattern()) {
+            Ok(ast) => ast,
+            Err(_) => {
+                // The pattern already compiled, so this should be unreachable;
+                // be conservative and report every group as nullable.
+                return self
+                    .regex
+                    .capture_names()
+                    .enumerate()
+                    .skip(1)
+                    // TODO -- we can do better.
+                    .map(|(i, _)| (u32::try_from(i).expect("capture group index fits in u32"), true))
+                    .collect();
+            }
+        };
+        // The visitor is infallible, so this irrefutable binding cannot fail.
+        let Ok(nullable) = visit(&ast, NullabilityVisitor::default());
+        nullable
+    }
+}
+
+/// A [`Visitor`] that determines which capture groups of a regex may be null.
+///
+/// See [`Regex::capture_group_nullability`].
+#[derive(Default)]
+struct NullabilityVisitor {
+    /// The number of nested "optional" constructs (alternations and
+    /// zero-matching repetitions) we are currently inside. A capture group
+    /// encountered while this is positive may be absent from a match.
+    optional_depth: usize,
+    /// Maps each capture group index to whether it is nullable.
+    nullable: BTreeMap<u32, bool>,
+}
+
+impl Visitor for NullabilityVisitor {
+    type Output = BTreeMap<u32, bool>;
+    type Err = Infallible;
+
+    fn finish(self) -> Result<BTreeMap<u32, bool>, Infallible> {
+        Ok(self.nullable)
+    }
+
+    fn visit_pre(&mut self, ast: &Ast) -> Result<(), Infallible> {
+        if let Ast::Group(group) = ast {
+            if let Some(index) = capture_group_index(&group.kind) {
+                // Record nullability based on the optional contexts enclosing
+                // this group. (A group node itself never opens an optional
+                // context, so this depth reflects only its ancestors.)
+                self.nullable.insert(index, self.optional_depth > 0);
+            }
+        }
+        if subexpressions_are_optional(ast) {
+            self.optional_depth += 1;
+        }
+        Ok(())
+    }
+
+    fn visit_post(&mut self, ast: &Ast) -> Result<(), Infallible> {
+        if subexpressions_are_optional(ast) {
+            self.optional_depth -= 1;
+        }
+        Ok(())
+    }
+}
+
+/// Returns the capture group index of `kind`, or `None` if it is not a
+/// capturing group.
+fn capture_group_index(kind: &GroupKind) -> Option<u32> {
+    match kind {
+        GroupKind::CaptureIndex(index) => Some(*index),
+        GroupKind::CaptureName { name, .. } => Some(name.index),
+        GroupKind::NonCapturing(_) => None,
+    }
+}
+
+/// Returns whether the direct subexpressions of `ast` are optional, i.e.,
+/// whether `ast` can match successfully without one of its subexpressions
+/// participating. Any capture group nested below such an `ast` may be null.
+fn subexpressions_are_optional(ast: &Ast) -> bool {
+    match ast {
+        // In an alternation only one branch participates in a match, so groups
+        // in the other branches are absent.
+        Ast::Alternation(_) => true,
+        // A repetition whose lower bound is zero can match nothing at all, in
+        // which case the repeated group does not participate.
+        Ast::Repetition(repetition) => match &repetition.op.kind {
+            RepetitionKind::ZeroOrOne | RepetitionKind::ZeroOrMore => true,
+            RepetitionKind::OneOrMore => false,
+            RepetitionKind::Range(range) => match range {
+                RepetitionRange::Exactly(n) => *n == 0,
+                RepetitionRange::AtLeast(n) => *n == 0,
+                RepetitionRange::Bounded(min, _) => *min == 0,
+            },
+        },
+        _ => false,
     }
 }
 
@@ -378,6 +502,58 @@ mod tests {
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(pattern, roundtrip_result.pattern());
         }
+    }
+
+    #[mz_ore::test]
+    fn regex_capture_group_nullability() {
+        #[track_caller]
+        fn check(pattern: &str, expected: &[(u32, bool)]) {
+            let regex = Regex::new(pattern, false).unwrap();
+            let expected: BTreeMap<u32, bool> = expected.iter().copied().collect();
+            assert_eq!(
+                regex.capture_group_nullability(),
+                expected,
+                "pattern: {pattern}"
+            );
+        }
+
+        // No capture groups.
+        check("abc", &[]);
+        check("a(?:bc)d", &[]);
+
+        // Top-level groups always participate.
+        check("(a)", &[(1, false)]);
+        check("(a)(b)", &[(1, false), (2, false)]);
+        check("x(a)y(b)z", &[(1, false), (2, false)]);
+
+        // Optional repetitions make groups nullable.
+        check("(a)?", &[(1, true)]);
+        check("(a)*", &[(1, true)]);
+        check("(a)+", &[(1, false)]);
+        check("(a){0,3}", &[(1, true)]);
+        check("(a){2,3}", &[(1, false)]);
+        check("(a){2,}", &[(1, false)]);
+        check("(a){0,}", &[(1, true)]);
+
+        // Alternations make all enclosed groups nullable.
+        check("(a)|(b)", &[(1, true), (2, true)]);
+        // But a group wrapping an alternation always participates, while the
+        // inner branches are nullable.
+        check("((a)|(b))", &[(1, false), (2, true), (3, true)]);
+
+        // A mix: the first group always participates; the rest are optional.
+        check("(a)(b)?", &[(1, false), (2, true)]);
+        check("(a)((b)|(c))", &[(1, false), (2, false), (3, true), (4, true)]);
+
+        // Nesting accumulates: a non-optional group inside an optional one is
+        // still nullable.
+        check("((a)(b))?", &[(1, true), (2, true), (3, true)]);
+
+        // Named capture groups.
+        check(
+            "(?P<first>a)(?P<second>b)?",
+            &[(1, false), (2, true)],
+        );
     }
 
     #[mz_ore::test]

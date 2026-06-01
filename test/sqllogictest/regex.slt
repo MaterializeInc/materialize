@@ -30,7 +30,10 @@ asdf asdf NULL
 asdfjkl asdf NULL
 jkl NULL jkl
 
-# TODO - Test that the columns have the correct nullability, once they actually do (database-issues#612)
+# Both capture groups above are inside a top-level alternation, so both remain
+# nullable. Capture-group nullability is now computed precisely (see the
+# `regexp_nullability` test in extract.slt for the non-nullable case);
+# database-issues#612 is resolved.
 
 # Standard regex matching.
 query TTT
