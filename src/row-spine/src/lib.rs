@@ -22,8 +22,8 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowSpine,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
+    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -40,6 +40,7 @@ mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
+    use mz_timely_util::columnar::Column;
     use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 
     use crate::{DatumContainer, OffsetOptimized};
@@ -58,6 +59,13 @@ mod spines {
     pub type RowRowBuilder<T, R> = RcBuilder<
         OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
     >;
+
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
+    /// [`Col2ValPagedBatcher`] for the spillable arrange path.
+    ///
+    /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
+    pub type RowRowColPagedBuilder<T, R> =
+        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, Column<((Row, Row), T, R)>>>;
 
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
@@ -148,7 +156,7 @@ mod container {
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
-    use mz_repr::{Datum, Row, RowPacker, read_datum};
+    use mz_repr::{Datum, Row, RowPacker, RowRef, read_datum};
 
     use super::bytes_container::BytesContainer;
 
@@ -248,6 +256,12 @@ mod container {
         }
     }
 
+    impl PushInto<&RowRef> for DatumContainer {
+        fn push_into(&mut self, item: &RowRef) {
+            self.bytes.push_into(item.data())
+        }
+    }
+
     #[derive(Debug)]
     pub struct DatumSeq<'a> {
         bytes: &'a [u8],
@@ -294,6 +308,12 @@ mod container {
     impl<'a> PartialEq<&Row> for DatumSeq<'a> {
         #[inline]
         fn eq(&self, other: &&Row) -> bool {
+            self.bytes.eq(other.data())
+        }
+    }
+    impl<'a> PartialEq<&RowRef> for DatumSeq<'a> {
+        #[inline]
+        fn eq(&self, other: &&RowRef) -> bool {
             self.bytes.eq(other.data())
         }
     }

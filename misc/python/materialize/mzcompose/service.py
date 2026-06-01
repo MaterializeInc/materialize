@@ -184,6 +184,13 @@ class ServiceConfig(TypedDict, total=False):
     security_opt: list[str] | None
     """Additional security options to apply to the container."""
 
+    memswap_limit: int | str | None
+    """Total memory+swap limit (Docker `memswap_limit`). `-1` disables the swap
+    limit, leaving only the memory limit in effect."""
+
+    mem_swappiness: int | None
+    """Container swap tendency, 0–100 (Docker `mem_swappiness`)."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
