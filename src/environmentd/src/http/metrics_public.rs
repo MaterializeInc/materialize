@@ -272,10 +272,10 @@ fn parse_rules_header(headers: &http::HeaderMap) -> RulesByMetric {
             return BTreeMap::new();
         }
     };
-    match serde_json::from_str::<RulesByMetric>(s) {
+    match mz_http_util::decode_enrich_rules::<RulesByMetric>(s) {
         Ok(rules) => rules,
         Err(e) => {
-            tracing::warn!("failed to parse enrich-rules header: {e}");
+            tracing::warn!("failed to decode enrich-rules header: {e}");
             BTreeMap::new()
         }
     }
@@ -715,11 +715,11 @@ mod tests {
                 output_label: "cluster_name".into(),
             }],
         )]);
-        let json = serde_json::to_string(&rules).unwrap();
+        let encoded = mz_http_util::encode_enrich_rules(&rules).unwrap();
         let mut headers = http::HeaderMap::new();
         headers.insert(
             mz_http_util::MATERIALIZE_ENRICH_RULES_HEADER,
-            HeaderValue::from_str(&json).unwrap(),
+            HeaderValue::from_str(&encoded).unwrap(),
         );
         assert_eq!(parse_rules_header(&headers), rules);
     }
