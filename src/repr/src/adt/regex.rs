@@ -131,48 +131,41 @@ impl Regex {
         if let Ok(ast) = regex_syntax::ast::parse::Parser::new().parse(self.pattern()) {
             // The entire match (index 0) always participates in a match.
             groups.insert(0);
-            collect_non_nullable_capture_groups(&ast, false, &mut groups);
+            collect_non_nullable_capture_groups(&ast, &mut groups);
         }
         groups
     }
 }
 
-/// Walks `ast`, recording into `groups` the index of every capture group that
-/// is guaranteed to participate in a match. `optional` tracks whether `ast` is
-/// nested inside a construct that a match may skip over, in which case any
-/// capture group found within is *not* guaranteed to participate.
-fn collect_non_nullable_capture_groups(
-    ast: &regex_syntax::ast::Ast,
-    optional: bool,
-    groups: &mut BTreeSet<u32>,
-) {
+/// Walks the always-matched portion of `ast`, recording into `groups` the index
+/// of every capture group that is guaranteed to participate in a match.
+///
+/// This only recurses through nodes that a match cannot skip over, so every
+/// capture group it reaches is non-nullable. It stops descending at any node
+/// that introduces an optional context — an optional repetition or an
+/// alternation — since nothing beneath such a node is guaranteed to match.
+fn collect_non_nullable_capture_groups(ast: &regex_syntax::ast::Ast, groups: &mut BTreeSet<u32>) {
     use regex_syntax::ast::Ast;
     match ast {
-        Ast::Repetition(rep) => {
-            let optional = optional || repetition_is_optional(&rep.op.kind);
-            collect_non_nullable_capture_groups(&rep.ast, optional, groups);
-        }
         Ast::Group(group) => {
-            if !optional {
-                if let Some(index) = group.capture_index() {
-                    groups.insert(index);
-                }
+            if let Some(index) = group.capture_index() {
+                groups.insert(index);
             }
-            collect_non_nullable_capture_groups(&group.ast, optional, groups);
+            collect_non_nullable_capture_groups(&group.ast, groups);
         }
-        Ast::Alternation(alternation) => {
-            // Only one branch of an alternation matches, so any capture group
-            // inside a branch might be skipped over by a given match.
-            for ast in &alternation.asts {
-                collect_non_nullable_capture_groups(ast, true, groups);
-            }
+        // A required repetition (e.g. `+` or `{1,n}`) still always matches, so
+        // keep descending; an optional one is handled by the catch-all below.
+        Ast::Repetition(rep) if !repetition_is_optional(&rep.op.kind) => {
+            collect_non_nullable_capture_groups(&rep.ast, groups);
         }
         Ast::Concat(concat) => {
             for ast in &concat.asts {
-                collect_non_nullable_capture_groups(ast, optional, groups);
+                collect_non_nullable_capture_groups(ast, groups);
             }
         }
-        // The remaining AST node kinds cannot contain a capture group.
+        // Everything else — alternations (only one branch matches), optional
+        // repetitions, and leaf nodes — cannot contribute a non-nullable
+        // capture group, so we stop here.
         _ => {}
     }
 }
