@@ -103,6 +103,12 @@ fn format_ident() {
         ("floor", "floor", "\"floor\""),
         // Reserved keyword.
         ("order", "\"order\"", "\"order\""),
+        // Query-body-starting keywords must be quoted as identifiers, or a
+        // parenthesized `(table & x)` re-parses as a `TABLE`-query. Regression
+        // for the parse_expr_roundtrip cargo-fuzz finding.
+        ("table", "\"table\"", "\"table\""),
+        ("values", "\"values\"", "\"values\""),
+        ("show", "\"show\"", "\"show\""),
         // Empty string allowed by Materialize but not PG.
         // TODO(justin): disallow this!
         ("", "\"\"", "\"\""),

@@ -18,6 +18,7 @@ thiserror.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 datadriven.workspace = true
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
+mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [features]
