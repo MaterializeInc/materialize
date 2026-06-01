@@ -237,3 +237,19 @@ fn test_max_statement_batch_size() {
     assert!(err.contains("statement batch size cannot exceed "));
     assert_ok!(parse_statements(&statements));
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_nested_table_factor_recursion_limit() {
+    // Deeply nested parens in table-factor position (`FROM ((((…`) recurse
+    // through parse_table_factor -> parse_table_and_joins; they must hit the
+    // parser's recursion limit and error out rather than overflow the stack or
+    // balloon memory. Regression for the cargo-fuzz parse_display_roundtrip
+    // stack-overflow and parse_expr_roundtrip OOM findings.
+    let nested = format!("SELECT * FROM {}", "(".repeat(500));
+    let err = parse_statements(&nested).expect_err("deeply nested table factor should error");
+    assert!(
+        err.to_string().contains("exceeds nested expression limit"),
+        "unexpected error: {err}"
+    );
+}

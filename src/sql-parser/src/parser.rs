@@ -8283,6 +8283,16 @@ impl<'a> Parser<'a> {
 
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor<Raw>, ParserError> {
+        // Guard the nested table-factor recursion. `FROM ((((…` descends
+        // parse_table_factor -> parse_table_and_joins -> parse_table_factor,
+        // and the inner `parse_query` recursion guard doesn't stop it because
+        // the derived-table `maybe_parse` below swallows its
+        // `RecursionLimitError`. Without this, deeply nested parens overflow
+        // the stack (and the try-both backtracking balloons memory).
+        self.checked_recur_mut(|parser| parser.parse_table_factor_inner())
+    }
+
+    fn parse_table_factor_inner(&mut self) -> Result<TableFactor<Raw>, ParserError> {
         if self.parse_keyword(LATERAL) {
             // LATERAL must always be followed by a subquery or table function.
             if self.consume_token(&Token::LParen) {
