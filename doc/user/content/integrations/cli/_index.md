@@ -6,7 +6,7 @@ menu:
     parent: integrations
     name: "`mz` - Materialize CLI"
     identifier: cli
-    weight: 6
+    weight: 99
 disable_list: true
 ---
 
