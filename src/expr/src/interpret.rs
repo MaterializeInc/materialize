@@ -56,17 +56,24 @@ impl<'a> Values<'a> {
             (Values::Within(a0, a1), Values::Within(b0, b1)) => {
                 Values::Within(a0.min(b0), a1.max(b1))
             }
-            (Values::Nested(mut a), Values::Nested(mut b)) => {
-                a.retain(|datum, values| {
-                    if let Some(other_values) = b.remove(datum) {
-                        *values = values.clone().union(other_values);
+            (Values::Nested(a), Values::Nested(mut b)) => {
+                // `Nested(map)` treats keys missing from `map` as fully unconstrained, so a
+                // key present in only one side of the union must be treated as `anything`
+                // on the other side. Because `x ∪ anything = anything`, such keys drop
+                // out of the merged map (the Nested default is already "anything").
+                let mut merged = BTreeMap::new();
+                for (key, a_spec) in a {
+                    if let Some(b_spec) = b.remove(&key) {
+                        let unioned = a_spec.union(b_spec);
+                        if unioned != ResultSpec::anything() {
+                            merged.insert(key, unioned);
+                        }
                     }
-                    *values != ResultSpec::anything()
-                });
-                if a.is_empty() {
+                }
+                if merged.is_empty() {
                     Values::All
                 } else {
-                    Values::Nested(a)
+                    Values::Nested(merged)
                 }
             }
             _ => Values::All,
@@ -974,6 +981,59 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         ColumnSpec { col_type, range }
     }
+
+    /// Override the default implementations of [Self::mfp_filter] and
+    /// [Self::mfp_plan_filter] so that the fallibility of MFP expressions
+    /// surfaces in the result, even when the expression's result column isn't
+    /// referenced by a predicate or temporal bound.
+    ///
+    /// The runtime MFP evaluator runs every expression once all the preceding
+    /// predicates pass (see [`crate::SafeMfpPlan::evaluate_inner`]), so an
+    /// expression that errors on the actual data will turn the whole row into
+    /// an `Err` — even if no predicate or bound mentions that expression. The
+    /// default `mfp_filter` / `mfp_plan_filter` only AND together the
+    /// predicates and bounds, so the AND result misses the expression's
+    /// `fallible` flag and persist filter pushdown can wrongly discard a part
+    /// that actually produces error rows. See database-issues#9656.
+    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
+        let predicates = mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mut result = self.variadic(&And.into(), predicates);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
+    }
+
+    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
+        let mut results: Vec<_> = plan
+            .mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
+        for bound in &plan.lower_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        for bound in &plan.upper_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        let mut result = self.variadic(&And.into(), results);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
+    }
 }
 
 /// An interpreter that returns whether or not a particular expression is "pushdownable".
@@ -1448,6 +1508,108 @@ mod tests {
         });
     }
 
+    /// Regression test for database-issues#9656.
+    ///
+    /// The interpreter must surface the fallibility of MFP expressions that
+    /// aren't referenced by any predicate or temporal bound. The runtime MFP
+    /// evaluator runs every expression once predicates pass, so an expression
+    /// that errors on the actual data makes the whole row an `Err` — and
+    /// `filter_result` must keep the part to emit that error.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_unreferenced_fallible_expression() {
+        use crate::scalar::func::CastStringToUuid;
+
+        // MFP: one expression that always errors on the input range, and one
+        // predicate that always passes. The expression's result column is
+        // *not* referenced by the predicate, so the default interpreter
+        // implementation would AND together just `True` and miss the
+        // fallibility.
+        let mfp = MapFilterProject {
+            expressions: vec![MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastStringToUuid(CastStringToUuid),
+                expr: Box::new(MirScalarExpr::column(0)),
+            }],
+            predicates: vec![(
+                1,
+                MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+            )],
+            projection: vec![0, 1],
+            input_arity: 1,
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        // "not-a-uuid" is in the stats range and definitely doesn't parse as a UUID.
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
+        );
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(
+            spec.range.may_fail(),
+            "an MFP expression that errors on the stats range must propagate \
+             fallibility, otherwise persist filter pushdown can wrongly discard \
+             a part that produces error rows",
+        );
+    }
+
+    /// Proptest companion to [`test_mfp_unreferenced_fallible_expression`]:
+    /// directly verifies the fallibility claim of [`ColumnSpecs::mfp_filter`]
+    /// against the runtime MFP semantics. For a random expression placed in
+    /// `MapFilterProject::expressions` (i.e. as an unreferenced Map step), if
+    /// evaluating the expression on a row drawn from the stats range produces
+    /// an error at runtime, then the interpreter's summary must report
+    /// `may_fail()`. Without the `expressions.any(|s| s.range.fallible)` patch
+    /// in `mfp_filter`, the AND over an empty predicate list collapses to
+    /// `True` and the runtime error is wrongly ruled out.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_filter_fallibility_equivalence() {
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                specs,
+                rows,
+                expr,
+            } = data;
+
+            let input_arity = relation_type.column_types.len();
+            let mfp = MapFilterProject {
+                expressions: vec![expr.clone()],
+                predicates: vec![],
+                projection: (0..input_arity).collect(),
+                input_arity,
+            };
+
+            let arena = RowArena::new();
+            let mut interpreter = ColumnSpecs::new(&relation_type, &arena);
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+            let summary = interpreter.mfp_filter(&mfp);
+
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                if expr.eval(&datums, &arena).is_err() {
+                    prop_assert!(
+                        summary.range.may_fail(),
+                        "mfp_filter must surface the fallibility of an \
+                         unreferenced MFP expression: row {:?} errored at \
+                         runtime but the interpreter ruled out errors",
+                        row,
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
+        });
+    }
+
     #[mz_ore::test]
     fn test_mfp() {
         // Regression test for https://github.com/MaterializeInc/database-issues/issues/5736
@@ -1609,6 +1771,125 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(0.into())));
         assert!(range_out.may_contain(Datum::Numeric(200.into())));
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
+    }
+
+    #[mz_ore::test]
+    fn test_nested_union_partial_overlap() {
+        // `Nested(map)` constrains a key only when the key is present in `map`; absent
+        // keys mean "anything". So the union of two Nested specs must drop any key
+        // that's missing from one side, because `x ∪ anything = anything`. Only keys
+        // present in *both* sides survive (with their per-key specs unioned).
+        let a = ResultSpec::map_spec(
+            [
+                ("x".into(), ResultSpec::value(Datum::String("a"))),
+                ("y".into(), ResultSpec::value(Datum::String("b"))),
+                ("c".into(), ResultSpec::value(Datum::String("c"))),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let b = ResultSpec::map_spec(
+            [
+                ("x".into(), ResultSpec::value(Datum::String("a2"))),
+                ("y".into(), ResultSpec::value(Datum::String("b2"))),
+                ("z".into(), ResultSpec::value(Datum::String("z"))),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let unioned = a.union(b);
+
+        // Push the unioned spec through `->> <key>`: keys only in one side must
+        // admit NULL (the other side is unconstrained, so the field could be absent
+        // there); shared keys must include both observed values.
+        let arena = RowArena::new();
+        let relation = ReprRelationType::new(vec![ReprScalarType::Jsonb.nullable(false)]);
+
+        // Key only in `a`: the union must admit NULL.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned.clone());
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("c"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            assert!(interpreter.expr(&expr).range.may_contain(Datum::Null));
+        }
+
+        // Key only in `b`: symmetric.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned.clone());
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("z"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            assert!(interpreter.expr(&expr).range.may_contain(Datum::Null));
+        }
+
+        // Key in both: result must include both observed values.
+        {
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(0, unioned);
+            let expr = MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::from("x"), ReprScalarType::String),
+                JsonbGetStringStringify,
+            );
+            let x_range = interpreter.expr(&expr).range;
+            assert!(x_range.may_contain(Datum::String("a")));
+            assert!(x_range.may_contain(Datum::String("a2")));
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported foreign call in numeric decoding
+    fn test_case_over_jsonb_columns() {
+        // Regression test for PER-6: when CASE picks between two JSON columns whose
+        // observed keys are disjoint, filter pushdown must not prune parts where
+        // accessing a key only present in one branch might yield NULL in the other.
+        let arena = RowArena::new();
+
+        // `(CASE WHEN col0 THEN col1 ELSE col2 END) ->> 'y' IS NULL`
+        let expr = MirScalarExpr::If {
+            cond: Box::new(MirScalarExpr::column(0)),
+            then: Box::new(MirScalarExpr::column(1)),
+            els: Box::new(MirScalarExpr::column(2)),
+        }
+        .call_binary(
+            MirScalarExpr::literal_ok(Datum::from("y"), ReprScalarType::String),
+            JsonbGetStringStringify,
+        )
+        .call_unary(UnaryFunc::IsNull(IsNull));
+
+        let relation = ReprRelationType::new(vec![
+            ReprScalarType::Bool.nullable(false),
+            ReprScalarType::Jsonb.nullable(false),
+            ReprScalarType::Jsonb.nullable(false),
+        ]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value_between(Datum::False, Datum::True));
+        interpreter.push_column(
+            1,
+            ResultSpec::map_spec(
+                [("x".into(), ResultSpec::value(Datum::String("a")))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        interpreter.push_column(
+            2,
+            ResultSpec::map_spec(
+                [("y".into(), ResultSpec::value(Datum::String("b")))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // When the CASE selects column 1, "y" is absent and `->> 'y'` yields NULL, so
+        // `IS NULL` is True. The filter must not prune a part that could match.
+        assert!(range_out.may_contain(Datum::True));
     }
 
     #[mz_ore::test]

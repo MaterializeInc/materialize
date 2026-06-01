@@ -232,6 +232,28 @@ impl SshTunnelHandle {
     }
 }
 
+/// Returns true if FIPS mode is enabled via the MZ_FIPS environment variable.
+fn fips_mode_enabled() -> bool {
+    std::env::var("MZ_FIPS").map_or(false, |v| v == "1" || v == "true")
+}
+
+/// Writes a temporary SSH config file that restricts algorithms to FIPS 140-3
+/// approved choices only. Returns the path to the config file.
+fn write_fips_ssh_config(dir: &std::path::Path) -> Result<std::path::PathBuf, anyhow::Error> {
+    let config_path = dir.join("ssh_config");
+    let config_contents = "\
+# FIPS 140-3 compliant SSH configuration.
+# Only NIST-approved algorithms are permitted.
+Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+KexAlgorithms ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+HostKeyAlgorithms ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512
+PubkeyAcceptedAlgorithms ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,ssh-ed25519
+";
+    fs::write(&config_path, config_contents)?;
+    Ok(config_path)
+}
+
 async fn connect(
     config: &SshTunnelConfig,
     timeout_config: SshTimeoutConfig,
@@ -248,6 +270,14 @@ async fn connect(
     // Mostly helpful to ensure the file is not accidentally overwritten.
     tempfile.set_permissions(std::fs::Permissions::from_mode(0o400))?;
 
+    // In FIPS mode, write a restrictive SSH config that only allows
+    // NIST-approved algorithms.
+    let fips_config_path = if fips_mode_enabled() {
+        Some(write_fips_ssh_config(tempdir.path())?)
+    } else {
+        None
+    };
+
     // Try connecting to each host in turn.
     let mut connect_err = None;
     for host in &config.host {
@@ -255,17 +285,21 @@ async fn connect(
         // to lock ourselves into trusting only the first we see. In any case,
         // recording a known host would only last as long as the life of a
         // storage pod, so it doesn't offer any protection.
-        match openssh::SessionBuilder::default()
+        let mut builder = openssh::SessionBuilder::default();
+        builder
             .known_hosts_check(openssh::KnownHosts::Accept)
             .user_known_hosts_file("/dev/null")
             .user(config.user.clone())
             .port(config.port)
             .keyfile(&path)
             .server_alive_interval(timeout_config.keepalives_idle)
-            .connect_timeout(timeout_config.connect_timeout)
-            .connect_mux(host.clone())
-            .await
-        {
+            .connect_timeout(timeout_config.connect_timeout);
+
+        if let Some(ref fips_config) = fips_config_path {
+            builder.config_file(fips_config);
+        }
+
+        match builder.connect_mux(host.clone()).await {
             Ok(session) => {
                 // Delete the private key for safety: since `ssh` still has an open
                 // handle to it, it still has access to the key.

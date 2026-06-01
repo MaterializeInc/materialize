@@ -52,11 +52,9 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Localstack(),
@@ -157,7 +155,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             process_names=["clusterd3", "clusterd4"],
         ),
     ):
-        c.up("zookeeper", "kafka", "schema-registry", "localstack")
+        c.up("kafka", "schema-registry", "localstack")
         c.up("materialized")
 
         # Create a cluster and verify that tests pass.
@@ -1294,7 +1292,7 @@ def workflow_test_upsert(c: Composition) -> None:
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry")
+        c.up("materialized", "kafka", "schema-registry")
 
         c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -1329,7 +1327,6 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "clusterd2",
-            "zookeeper",
             "kafka",
             "schema-registry",
         )
@@ -1420,7 +1417,7 @@ def workflow_sink_failure(c: Composition) -> None:
             workers=4,
         ),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry", "clusterd1")
+        c.up("materialized", "kafka", "schema-registry", "clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
@@ -4840,6 +4837,77 @@ def workflow_test_http_race_condition(
         raise RuntimeError(f"Sessions did not clean up after {cleanup_seconds}s")
 
 
+def workflow_test_cmv_replica_alter_race(c: Composition) -> None:
+    """Regression test for SQL-304.
+
+    Concurrently creating a `REPLICA`-targeted materialized view and
+    `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` used to panic
+    environmentd when the targeted replica was dropped between
+    planning and the catalog transaction.
+    """
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            sanity_restart=False,
+            additional_system_parameter_defaults={
+                "enable_replica_targeted_materialized_views": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+        c.sql(
+            "CREATE CLUSTER race_target "
+            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)"
+        )
+
+        ctes = ", ".join(
+            f"s{i} AS (SELECT generate_series AS x FROM generate_series(1, 50))"
+            for i in range(6)
+        )
+        joins = " ".join(
+            f"JOIN s{i} ON s0.x % {i + 2} = s{i}.x % {i + 2}" for i in range(1, 6)
+        )
+        heavy = (
+            f"WITH {ctes} "
+            f"SELECT s0.x, COUNT(*), "
+            f"SUM(s0.x + s1.x + s2.x + s3.x + s4.x + s5.x) "
+            f"FROM s0 {joins} GROUP BY s0.x"
+        )
+
+        deadline = time.monotonic() + 30
+
+        def mv_worker(idx: int) -> None:
+            i = 0
+            while time.monotonic() < deadline:
+                try:
+                    c.sql(
+                        f"CREATE MATERIALIZED VIEW mv_{idx}_{i} "
+                        f"IN CLUSTER race_target REPLICA r2 AS {heavy}"
+                    )
+                except DatabaseError:
+                    # Concurrent drop of the target replica surfaces as a
+                    # `ChangedPlan` error after the fix. The point of the
+                    # test is that environmentd does not panic.
+                    pass
+                i += 1
+
+        def flipper() -> None:
+            while time.monotonic() < deadline:
+                for rf in (1, 2):
+                    c.sql(f"ALTER CLUSTER race_target SET (REPLICATION FACTOR {rf})")
+
+        threads = [PropagatingThread(target=mv_worker, args=(i,)) for i in range(8)] + [
+            PropagatingThread(target=flipper)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # If environmentd had panicked, this would raise.
+        c.sql("SELECT 1")
+
+
 def workflow_test_read_frontier_advancement(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
@@ -5217,7 +5285,6 @@ def workflow_test_zero_downtime_reconfigure(
         c.up(
             "materialized",
             "clusterd1",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),
@@ -5736,7 +5803,6 @@ def workflow_test_constant_sink(c: Composition) -> None:
     with c.override(Testdrive(no_reset=True)):
         c.up(
             "materialized",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),

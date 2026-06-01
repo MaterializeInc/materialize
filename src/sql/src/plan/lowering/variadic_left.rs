@@ -176,13 +176,24 @@ pub(crate) fn attempt_left_join_magic(
         // then we can fish out values from that input. If it equates values
         // across multiple inputs, we would need to fish out valid tuples and
         // no idea how we would get those w/o doing a join or a cartesian product.
-        let equations = if let Some(list) = decompose_equations(&on) {
-            list
-        } else {
-            tracing::debug!(case = 4, index, "attempt_left_join_magic");
-            inc_metrics("voj_4");
+        let (equations, non_crossing_equations) =
+            if let Some(list) = decompose_left_to_right_equations(&on, oa + ba) {
+                list
+            } else {
+                tracing::debug!(case = 4, index, "attempt_left_join_magic");
+                inc_metrics("voj_4");
+                return Ok(None);
+            };
+
+        if !non_crossing_equations.is_empty() {
+            // TODO(mgree) This case isn't _impossible_, but it's complicated.
+            // We have equations that cross from left to right, but we also have
+            // left-left or right-right equations. Making sure we get exactly the
+            // right results here is hard enough that we don't attempt it.
+            tracing::debug!(case = 8, index, "attempt_left_join_magic");
+            inc_metrics("voj_8");
             return Ok(None);
-        };
+        }
 
         // We now need to see if all left columns exist in some input relation,
         // and that all right columns are actually in the right relation. Idk.
@@ -196,8 +207,9 @@ pub(crate) fn attempt_left_join_magic(
                 inc_metrics("voj_5");
                 return Ok(None);
             }
-            // Only columns not from the outer scope introduce bindings.
-            if left >= oa {
+            // Only columns not from the outer scope introduce bindings (`oa <= left`)
+            // And `left` needs to be a column in the left relation (`left < oa + ba`)
+            if oa <= left && left < oa + ba {
                 if let Some(bound) = bound_input {
                     // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
@@ -394,8 +406,24 @@ use mz_expr::func::variadic::{And, Or};
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.
-fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>> {
-    let mut equations = Vec::new();
+/// In order to only find _useful_ equations, one column must be `< lhs_cutoff` and one must be `>= lhs_cutoff`.
+fn decompose_left_to_right_equations(
+    predicate: &MirScalarExpr,
+    lhs_cutoff: usize,
+) -> Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)> {
+    let mut crossing_equations = Vec::new();
+    let mut non_crossing_equations = Vec::new();
+
+    let mut push_equation = |c1: usize, c2: usize| {
+        let l = usize::min(c1, c2);
+        let r = usize::max(c1, c2);
+
+        if l < lhs_cutoff && lhs_cutoff <= r {
+            crossing_equations.push((l, r))
+        } else {
+            non_crossing_equations.push((l, r))
+        }
+    };
 
     let mut todo = vec![predicate];
     while let Some(expr) = todo.pop() {
@@ -414,11 +442,7 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
                 if let (MirScalarExpr::Column(c1, _name1), MirScalarExpr::Column(c2, _name2)) =
                     (&**expr1, &**expr2)
                 {
-                    if c1 < c2 {
-                        equations.push((*c1, *c2));
-                    } else {
-                        equations.push((*c2, *c1));
-                    }
+                    push_equation(*c1, *c2);
                 } else {
                     return None;
                 }
@@ -429,18 +453,25 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
     }
 
     // Remove duplicates
-    equations.sort();
-    equations.dedup();
+    crossing_equations.sort();
+    crossing_equations.dedup();
+    non_crossing_equations.sort();
+    non_crossing_equations.dedup();
 
     // Ensure that every rhs column c2 appears only once. Otherwise, we have at
     // least two lhs columns c1 and c1' that are rendered equal by the same c2
     // column. The VOJ lowering will then produce a plan that will incorrectly
     // push down a local filter c1 = c1' to the lhs (see database-issues#7892).
-    if equations.iter().duplicates_by(|(_, c)| c).next().is_some() {
+    if crossing_equations
+        .iter()
+        .duplicates_by(|(_, c)| c)
+        .next()
+        .is_some()
+    {
         return None;
     }
 
-    Some(equations)
+    Some((crossing_equations, non_crossing_equations))
 }
 
 /// Turns column equation into idiomatic Rust equation, where nulls equate.

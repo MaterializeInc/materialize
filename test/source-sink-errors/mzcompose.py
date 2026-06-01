@@ -32,7 +32,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import selected_by_name
 
 
@@ -46,11 +45,9 @@ SERVICES = [
     Testdrive(),
     Clusterd(),
     Postgres(),
-    Zookeeper(),
     Kafka(
         name="badkafka",
-        environment=[
-            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+        environment_extra=[
             # Setting the following values to 3 to trigger a failure
             # sets the transaction.state.log.min.isr config
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
@@ -90,7 +87,7 @@ class KafkaTransactionLogGreaterThan1:
                 ],
             ),
         ):
-            c.up("zookeeper", "badkafka", "schema-registry", "materialized")
+            c.up("badkafka", "schema-registry", "materialized")
             self.populate(c)
             self.assert_error(c, "transaction error", "running a single Kafka broker")
 

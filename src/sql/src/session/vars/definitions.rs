@@ -1436,13 +1436,6 @@ pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
-    true,
-);
-
 pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "default_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
@@ -2239,12 +2232,18 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
@@ -2264,6 +2263,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
         }
     }
 }
@@ -2288,7 +2288,6 @@ mod tests {
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
-            enable_consolidate_after_union_negate,
             enable_eager_delta_joins,
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
@@ -2306,6 +2305,7 @@ mod tests {
             enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2318,7 +2318,6 @@ mod tests {
         }
 
         set_var!(enable_eq_classes_withholding_errors);
-        set_var!(enable_consolidate_after_union_negate);
         set_var!(enable_eager_delta_joins);
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
@@ -2336,6 +2335,7 @@ mod tests {
         set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

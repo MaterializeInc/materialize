@@ -1578,6 +1578,24 @@ select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
 query error could not determine polymorphic type because input has type unknown
 SELECT generate_subscripts(NULL, 1)
 
+# Regression test for database-issues#11268: generate_subscripts must respect
+# the array's lower bound. array_fill with a custom lower bound of 5 and length
+# 3 yields subscripts 5, 6, 7.
+query I
+SELECT * FROM generate_subscripts(array_fill(7, ARRAY[3], ARRAY[5]), 1);
+----
+5
+6
+7
+
+# A multi-dimensional array_fill with custom lower bounds.
+query I
+SELECT * FROM generate_subscripts(array_fill(0, ARRAY[2, 3], ARRAY[10, 20]), 2);
+----
+20
+21
+22
+
 # Regression test for database-issues#2939: LATERAL column references in ROWS FROM
 
 query III

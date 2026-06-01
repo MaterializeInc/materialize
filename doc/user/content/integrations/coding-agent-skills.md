@@ -31,6 +31,31 @@ Materialize-specific question such as "How do I create a source from Kafka in
 Materialize?" and confirm it references Materialize documentation in its
 response.
 
+## Reduce permission prompts (Claude Code)
+
+Claude Code prompts before reading files outside your project. Since globally
+installed skills live under `~/.claude/skills/`, if you installed the
+`materialize-docs` skill globally, Claude Code may ask to approve reads each
+time the skill opens a new documentation subdirectory.
+
+To stop these prompts, grant read access to the `materialize-docs` skill in
+`~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["~/.claude/skills/materialize-docs"]
+  }
+}
+```
+
+This grants access to just that one skill's directory. If you have multiple skills installed
+and want to cover them all at once, you can broaden the path to
+`~/.claude/skills`, though scoping to a single skill is the safer default.
+
+Claude Code's `auto` permission mode also removes the prompts, but applies to
+all tools rather than just this directory.
+
 ## What's included
 
 The **materialize-docs** skill bundles reference files across categories including:

@@ -158,6 +158,26 @@ SELECT MIN(f1+f2)-SUM(f1) FROM t1
 ----
 20282409603651670423947251286016.000
 
+# Regression test for database-issues#11265: SUM(float8) of large finite values
+# whose mathematical sum is representable must be exact. These values individually
+# overflow the fixed-point accumulator domain; previously each saturated to
+# i128::MAX/i128::MIN, which sum to -1 and produced a spurious -5.96e-8 instead
+# of 0.
+statement ok
+CREATE TABLE float_boundary (f1 float8)
+
+statement ok
+INSERT INTO float_boundary VALUES (1.1e31), (-1.1e31)
+
+query TTT
+SELECT
+    SUM(f1)::text,
+    (SUM(f1) = 0.0)::text,
+    ((SUM(f1) * 16777216)::bigint)::text
+  FROM float_boundary
+----
+0  true  0
+
 query error invalid input syntax
 SELECT ''::float::text
 

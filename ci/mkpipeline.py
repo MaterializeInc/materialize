@@ -581,11 +581,13 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
     for step in steps(pipeline):
         if "trigger" in step or "wait" in step or "group" in step or "block" in step:
             continue
-        step.setdefault("retry", {}).setdefault("automatic", []).extend(
+        retry = step.setdefault("retry", {})
+        if "automatic" in retry:
+            continue
+        retry.setdefault("automatic", []).extend(
             [
                 {
-                    "exit_status": -1,  # Connection to agent lost
-                    "signal_reason": "none",
+                    "exit_status": -1,  # Agent lost or job timed out during checkout/setup
                     "limit": 2,
                 },
                 {

@@ -38,7 +38,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
@@ -3234,6 +3234,11 @@ struct CopyRowScanner {
     scan_pos: usize,
     last_row_end: Option<usize>,
     end_marker_end: Option<usize>,
+    // Byte offset within `data` at which the in-progress CSV record begins.
+    // Used to verify the end-of-copy marker against the raw input bytes,
+    // distinguishing a literal `\.` line from a quoted CSV value `"\."`
+    // whose decoded form is also `\.`.
+    record_start: usize,
     csv: Option<CsvScanState>,
 }
 
@@ -3242,8 +3247,6 @@ struct CsvScanState {
     reader: csv_core::Reader,
     output: Vec<u8>,
     ends: Vec<usize>,
-    record: Vec<u8>,
-    record_ends: Vec<usize>,
     skip_first_record: bool,
 }
 
@@ -3264,6 +3267,7 @@ impl CopyRowScanner {
             scan_pos: 0,
             last_row_end: None,
             end_marker_end: None,
+            record_start: 0,
             csv,
         }
     }
@@ -3277,17 +3281,11 @@ impl CopyRowScanner {
             let mut input = &data[self.scan_pos..];
             let mut consumed = 0usize;
             while !input.is_empty() {
-                let (result, n_input, n_output, n_ends) =
+                let (result, n_input, _n_output, _n_ends) =
                     csv.reader
                         .read_record(input, &mut csv.output, &mut csv.ends);
                 consumed += n_input;
                 input = &input[n_input..];
-                if !csv.output.is_empty() {
-                    csv.record.extend_from_slice(&csv.output[..n_output]);
-                }
-                if !csv.ends.is_empty() {
-                    csv.record_ends.extend_from_slice(&csv.ends[..n_ends]);
-                }
 
                 match result {
                     ReadRecordResult::InputEmpty => break,
@@ -3309,19 +3307,42 @@ impl CopyRowScanner {
                             let is_marker = if csv.skip_first_record {
                                 csv.skip_first_record = false;
                                 false
-                            } else if csv.record_ends.len() == 1 {
-                                let end = csv.record_ends[0];
-                                end == 2 && csv.record.get(0..end) == Some(b"\\.")
                             } else {
-                                false
+                                // Detect the marker against the raw input
+                                // bytes, not the CSV-decoded record. A quoted
+                                // data row `"\."` decodes to `\.` but must be
+                                // imported as data; only a bare `\.` line
+                                // terminates the COPY.
+                                let raw = &data[self.record_start..row_end];
+                                // csv-core ends a CRLF record after the `\r`,
+                                // leaving the trailing `\n` as the leading byte
+                                // of the next record's span; a CR-only record
+                                // ends in a lone `\r`. So a `\.` marker record's
+                                // raw span can be `\.\n` (LF), `\n\.\r` (CRLF)
+                                // or `\.\r` (CR). Trim CR/LF from both ends
+                                // before comparing — a trailing-only strip would
+                                // miss the CRLF/CR forms. Quoted `"\."` data
+                                // keeps its surrounding quotes after trimming and
+                                // is therefore correctly rejected.
+                                let start = raw
+                                    .iter()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trailing = raw[start..]
+                                    .iter()
+                                    .rev()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trimmed = &raw[start..raw.len() - trailing];
+                                trimmed == b"\\."
                             };
                             if is_marker {
                                 self.end_marker_end = Some(row_end);
+                                self.record_start = row_end;
                                 break;
                             }
                         }
-                        csv.record.clear();
-                        csv.record_ends.clear();
+                        self.record_start = row_end;
                     }
                 }
             }
@@ -3364,12 +3385,27 @@ impl CopyRowScanner {
         self.end_marker_end = self
             .end_marker_end
             .and_then(|end| end.checked_sub(split_pos));
+        // `record_start` is only maintained for the CSV path; the text and
+        // binary paths leave it at 0. For CSV, splits always occur at a
+        // completed-row boundary, so the in-progress record (if any) starts at
+        // the new beginning of the buffer. Assert that invariant so the
+        // `saturating_sub` below doesn't silently paper over a bug that
+        // bisected an in-progress record — but only when CSV is in use, since
+        // otherwise `record_start` is meaninglessly 0.
+        soft_assert_or_log!(
+            self.csv.is_none() || self.record_start >= split_pos,
+            "split bisected an in-progress CSV record: record_start={} < split_pos={}",
+            self.record_start,
+            split_pos,
+        );
+        self.record_start = self.record_start.saturating_sub(split_pos);
     }
 
     fn on_truncate(&mut self, new_len: usize) {
         self.scan_pos = self.scan_pos.min(new_len);
         self.last_row_end = self.last_row_end.filter(|&end| end <= new_len);
         self.end_marker_end = self.end_marker_end.filter(|&end| end <= new_len);
+        self.record_start = self.record_start.min(new_len);
     }
 }
 
@@ -3389,8 +3425,6 @@ impl CsvScanState {
                 .build(),
             output: vec![0; 1],
             ends: vec![0; 1],
-            record: Vec::new(),
-            record_ends: Vec::new(),
             skip_first_record: header,
         }
     }
@@ -3399,6 +3433,78 @@ impl CsvScanState {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_end_marker_line_endings() {
+        // The pgwire COPY row scanner must detect a bare `\.` end-of-copy
+        // marker for every line ending, and must never mistake a quoted
+        // `"\."` data row for it. csv-core ends a CRLF record after the `\r`
+        // (leaving the `\n` as the next record's leading byte), so the raw
+        // record span of a `\.` marker is `\.\n` (LF), `\n\.\r` (CRLF) or
+        // `\.\r` (CR); a trailing-only strip would miss the CRLF/CR forms and
+        // silently import post-marker rows.
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+
+        let marker_end = |data: &[u8]| -> Option<usize> {
+            let mut scanner = CopyRowScanner::new(&params);
+            scanner.scan_new_bytes(data);
+            scanner.end_marker_end()
+        };
+
+        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
+            let join = |lines: &[&str]| -> Vec<u8> {
+                let mut out = Vec::new();
+                for line in lines {
+                    out.extend_from_slice(line.as_bytes());
+                    out.extend_from_slice(eol);
+                }
+                out
+            };
+
+            // Bare `\.` (the marker is the second record, so record_start has
+            // already advanced past the orphaned terminator of `first`).
+            // csv-core reports the record after a single terminator byte, so
+            // the marker boundary sits just past `first<eol>\.` + one byte.
+            let data = join(&["first", "\\.", "after"]);
+            let mut prefix = Vec::new();
+            prefix.extend_from_slice(b"first");
+            prefix.extend_from_slice(eol);
+            prefix.extend_from_slice(b"\\.");
+            assert_eq!(
+                marker_end(&data),
+                Some(prefix.len() + 1),
+                "bare marker, eol={eol:?}"
+            );
+
+            // Quoted "\." is data, not the marker.
+            let data = join(&["before", "\"\\.\"", "after"]);
+            assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_non_csv_split() {
+        // Regression: `record_start` is only maintained for the CSV path; the
+        // text and binary paths leave it at 0. `on_split` must therefore not
+        // assert `record_start >= split_pos` for those formats — that fires on
+        // every split of a large text/binary COPY stream (soft-assertions
+        // panic under test). Mirrors `COPY ... FROM STDIN` (default text
+        // format) splitting at a row boundary once the buffer fills.
+        for params in [
+            CopyFormatParams::Text(CopyTextFormatParams::default()),
+            CopyFormatParams::Binary,
+        ] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = b"1\thello world\t2\tsome text value here\n\
+                         3\thello world\t6\tsome text value here\n";
+            scanner.scan_new_bytes(data);
+            let split_pos = scanner.last_row_end().expect("a complete row");
+            assert!(split_pos > 0, "params={params:?}");
+            // Must not panic via the CSV-only `on_split` soft-assert.
+            scanner.on_split(split_pos);
+            assert_eq!(scanner.record_start, 0, "params={params:?}");
+        }
+    }
 
     #[mz_ore::test]
     fn test_parse_options() {

@@ -43,7 +43,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -95,7 +94,6 @@ REGRESSION_THRESHOLDS = {
 }
 
 SERVICES = [
-    Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
@@ -833,7 +831,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         os.remove(DB_FILE)
 
     service_names = ["materialized", "postgres", "mysql"] + (
-        ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
+        ["redpanda"] if args.redpanda else ["kafka", "schema-registry"]
     )
 
     scenarios_to_run = list(sharded_scenarios)

@@ -39,6 +39,9 @@ pub mod v1alpha1 {
         pub namespace: String,
         /// Whether to use HTTP or HTTPS to communicate with Materialize.
         pub scheme: HttpConnectionScheme,
+        /// External DNS names balancerd serves traffic for
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dns_names: Option<Vec<String>>,
     }
 
     #[derive(

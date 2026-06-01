@@ -551,11 +551,14 @@ either natural language or SQL:
 
 {{< note >}}
 
-By default, queries with joins are disabled. To enable, see
-[`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool).
+By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query),
+which allows arbitrary `SELECT` queries (including joins) on **all** objects for
+which the agent has `SELECT` privileges (not just the discoverable products), is
+disabled. To enable it, set the [`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-tools/#query).
 
 {{< /note >}}
+
 
 ## Related pages
 

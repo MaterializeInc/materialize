@@ -1,6 +1,6 @@
 ---
 source: src/sql-server-util/src/cdc.rs
-revision: 2c7210261d
+revision: c0559e3dbe
 ---
 
 # mz-sql-server-util::cdc

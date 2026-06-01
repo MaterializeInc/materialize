@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/timestamp.rs
-revision: c642b63c77
+revision: c0559e3dbe
 ---
 
 # mz-repr::timestamp

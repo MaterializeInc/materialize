@@ -4189,13 +4189,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
@@ -4224,13 +4218,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
@@ -5093,26 +5081,25 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
     });
 }
 
-/// Tests the MCP agent endpoint with default feature flags
-/// (enable_mcp_agent=true, enable_mcp_agent_query_tool=false).
+/// Tests the MCP agent endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
 fn test_mcp_agent() {
-    let harness = test_util::TestHarness::default()
-        .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
-}
-
-/// Tests the MCP agent endpoint with the query tool enabled.
-#[mz_ore::test]
-fn test_mcp_agent_query_tool() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_agent_query_tool".to_string(),
-            "true".to_string(),
+            "false".to_string(),
         );
+    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
+}
+
+/// Tests the MCP agent endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_agent_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
 }
 
@@ -5547,6 +5534,52 @@ fn test_mcp_agent_with_data_product() {
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
     assert!(body["error"].is_null());
 
+    // Each row carries a `hydration` field (5th cell). For an MV that has
+    // had time to hydrate on a single-replica `quickstart` cluster, expect
+    // `hydrated: true` with 1/1 replicas.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty(), "details should return at least one row");
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(
+            row.len(),
+            5,
+            "each details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {:?}",
+            row,
+        );
+        let hydration = &row[4];
+        assert!(
+            hydration.is_object(),
+            "hydration cell should be a JSON object, got: {hydration}",
+        );
+        assert!(
+            hydration.get("hydrated").is_some_and(|v| v.is_boolean()),
+            "hydration.hydrated should be a bool, got: {hydration}",
+        );
+        let replica_count = hydration
+            .get("replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.replica_count should be an int, got: {hydration}")
+            });
+        let hydrated_replica_count = hydration
+            .get("hydrated_replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.hydrated_replica_count should be an int, got: {hydration}")
+            });
+        assert!(
+            replica_count >= 0 && hydrated_replica_count >= 0,
+            "replica counts must be non-negative, got: {hydration}",
+        );
+        assert!(
+            hydrated_replica_count <= replica_count,
+            "hydrated_replica_count ({hydrated_replica_count}) cannot exceed replica_count ({replica_count}): {hydration}",
+        );
+    }
+
     // get_data_product_details should also resolve the indexed view, proving
     // the filter change is applied consistently to mz_mcp_data_product_details.
     let indexed_view_name = find_product("test_indexed_view").as_array().unwrap()[0]
@@ -5571,6 +5604,16 @@ fn test_mcp_agent_with_data_product() {
         "indexed view should be resolvable via get_data_product_details, got: {body}"
     );
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    // Indexed view should also report a hydration object.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(row.len(), 5, "row should include hydration cell: {row:?}");
+        assert!(row[4].is_object(), "hydration cell should be an object");
+    }
 
     // read_data_product should return the row from the view.
     let (status, body) = mcp_post(
@@ -6004,7 +6047,7 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "agent should work again after re-enabling"
     );
 
-    // Test query tool toggling: initially disabled.
+    // Test query tool toggling: enabled by default.
     let query_call = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -6017,21 +6060,8 @@ fn test_mcp_agent_runtime_flag_toggle() {
     let (status, body) = mcp_post(&agents_url, query_call.clone());
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("query tool is not available"),
-        "query tool should be disabled by default"
-    );
-
-    // Enable query tool at runtime.
-    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
-
-    let (status, body) = mcp_post(&agents_url, query_call.clone());
-    assert_eq!(status, StatusCode::OK);
-    assert!(
         body["error"].is_null(),
-        "query tool should work after enabling"
+        "query tool should be enabled by default"
     );
     let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
@@ -6039,15 +6069,31 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "query should return result with 1"
     );
 
-    // Disable query tool again.
+    // Disable query tool at runtime.
     server.disable_feature_flags(&["enable_mcp_agent_query_tool"]);
-    let (_, body) = mcp_post(&agents_url, query_call.clone());
+
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("query tool is not available"),
-        "query tool should be disabled again"
+        "query tool should be disabled after disabling"
+    );
+
+    // Re-enable query tool.
+    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should work after re-enabling"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1 after re-enabling"
     );
 }
 

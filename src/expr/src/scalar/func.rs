@@ -796,12 +796,24 @@ fn sub_numeric(
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    sqlname = "age",
-    propagates_nulls = true
-)]
+// `age(a, b)` is non-monotone in *both* arguments:
+//
+// * Lex order on `Interval` is `(months, days, micros)`, but the Postgres
+//   `age` algorithm independently subtracts year/month/day/... fields and
+//   then *borrows* across boundaries when a lower field goes negative. With
+//   `b = 2024-02-15` fixed:
+//     a = 2024-03-31  →  age = {1 month, 16 days}
+//     a = 2024-04-01  →  age = {1 month, 15 days}
+//     a = 2024-05-01  →  age = {2 months, 15 days}
+//   As `a` increases past a month boundary, `months` jumps by 1 and `days`
+//   drops, producing a lex-smaller interval than the previous step.
+//
+// * Holding `a` fixed and varying `b`, the result has a V-shape at `a == b`
+//   (sign is flipped when `a < b`):
+//     a = 2024-02-15, b = 2024-02-14  →  age = {0 months, 1 day}
+//     a = 2024-02-15, b = 2024-02-15  →  age = {0 months, 0 days}
+//     a = 2024-02-15, b = 2024-02-16  →  age = {0 months, 1 day}
+#[sqlfunc(sqlname = "age")]
 fn age_timestamp(
     a: CheckedTimestamp<chrono::NaiveDateTime>,
     b: CheckedTimestamp<chrono::NaiveDateTime>,
@@ -809,7 +821,8 @@ fn age_timestamp(
     Ok(a.age(&b)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "age", propagates_nulls = true)]
+// See `age_timestamp` for why this is not monotone in either argument.
+#[sqlfunc(sqlname = "age")]
 fn age_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
@@ -1393,7 +1406,7 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
 fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
-        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
+        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap_or(i32::MAX) - 1,
     };
 
     let index = usize::try_from(index).map_err(|_| err.clone())?;
@@ -1413,7 +1426,7 @@ fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
 fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
-        valid_end: i32::try_from(bytes.len()).unwrap() - 1,
+        valid_end: i32::try_from(bytes.len()).unwrap_or(i32::MAX) - 1,
     };
     let i: &u8 = bytes
         .get(usize::try_from(index).map_err(|_| err.clone())?)
@@ -2037,10 +2050,15 @@ where
         )
     })?;
 
-    let mut tm_delta = tm_diff - tm_diff % stride_ns;
+    let remainder = tm_diff % stride_ns;
+    let mut tm_delta = tm_diff - remainder;
 
-    if sub_stride {
-        tm_delta -= stride_ns;
+    if sub_stride && remainder != 0 {
+        tm_delta = tm_delta.checked_sub(stride_ns).ok_or_else(|| {
+            EvalError::DateBinOutOfRange(
+                "source and origin must not differ more than 2^63 nanoseconds".into(),
+            )
+        })?;
     }
 
     let res = origin
@@ -2719,23 +2737,23 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_lower",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc(is_infix_op = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
+fn array_lower<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
     if i < 1 {
-        return None;
+        return Ok(None);
     }
-    match a.dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Some(1),
-        None => None,
-    }
+    a.dims()
+        .into_iter()
+        .nth(i as usize - 1)
+        .map(|dim| {
+            let (lower, _upper) = dim.dimension_bounds();
+            lower
+                .try_into()
+                .map_err(|_| EvalError::Int32OutOfRange(lower.to_string().into()))
+        })
+        .transpose()
 }
 
 #[sqlfunc(
@@ -2770,13 +2788,7 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_upper",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc(is_infix_op = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -2787,9 +2799,10 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
         .into_iter()
         .nth(i as usize - 1)
         .map(|dim| {
-            dim.length
+            let (_lower, upper) = dim.dimension_bounds();
+            upper
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))
+                .map_err(|_| EvalError::Int32OutOfRange(upper.to_string().into()))
         })
         .transpose()
 }
@@ -3082,6 +3095,53 @@ mod test {
             .unwrap()
             .try_into()
             .unwrap()
+    }
+
+    #[mz_ore::test]
+    fn array_lower_upper_respect_lower_bound() {
+        use mz_repr::adt::array::ArrayDimension;
+        use mz_repr::{Datum, RowArena};
+
+        let arena = RowArena::new();
+
+        // Builds a one-dimensional array with the given lower bound and length,
+        // then returns (array_lower(_, 1), array_upper(_, 1)).
+        let bounds = |lower_bound: isize, length: usize| {
+            let dims = [ArrayDimension {
+                lower_bound,
+                length,
+            }];
+            let elems = vec![Datum::Int32(0); length];
+            let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+            let arr = match datum {
+                Datum::Array(arr) => arr,
+                other => panic!("expected array, got {other:?}"),
+            };
+            (array_lower(arr, 1).unwrap(), array_upper(arr, 1).unwrap())
+        };
+
+        // Default lower bound of 1: array_fill(0, ARRAY[3]).
+        assert_eq!(bounds(1, 3), (Some(1), Some(3)));
+        // Lower bound of 5: array_fill(0, ARRAY[3], ARRAY[5]) => [5:7].
+        assert_eq!(bounds(5, 3), (Some(5), Some(7)));
+        // Negative lower bound: array_fill(0, ARRAY[3], ARRAY[-3]) => [-3:-1].
+        assert_eq!(bounds(-3, 3), (Some(-3), Some(-1)));
+
+        // Out-of-range dimensions return None rather than the bound.
+        let dims = [ArrayDimension {
+            lower_bound: 5,
+            length: 3,
+        }];
+        let elems = vec![Datum::Int32(0); 3];
+        let datum = arena.make_datum(|packer| packer.try_push_array(&dims, elems).unwrap());
+        let arr = match datum {
+            Datum::Array(arr) => arr,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(array_lower(arr, 0).unwrap(), None);
+        assert_eq!(array_upper(arr, 0).unwrap(), None);
+        assert_eq!(array_lower(arr, 2).unwrap(), None);
+        assert_eq!(array_upper(arr, 2).unwrap(), None);
     }
 
     #[mz_ore::test]

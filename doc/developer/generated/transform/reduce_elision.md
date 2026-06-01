@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/reduce_elision.rs
-revision: 52af3ba2a1
+revision: 5d046b3ab6
 ---
 
 # mz-transform::reduce_elision

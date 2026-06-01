@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/role_id.rs
-revision: 4267863081
+revision: c0559e3dbe
 ---
 
 # mz-repr::role_id

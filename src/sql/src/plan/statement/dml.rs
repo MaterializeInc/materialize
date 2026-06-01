@@ -622,7 +622,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
-                enable_consolidate_after_union_negate: Default::default(),
                 enable_reduce_mfp_fusion: Default::default(),
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
@@ -638,6 +637,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_case_literal_transform: Default::default(),
                 enable_simplify_quantified_comparisons: Default::default(),
                 enable_coalesce_case_transform: Default::default(),
+                enable_will_distinct_propagation: Default::default(),
             },
         })
     }

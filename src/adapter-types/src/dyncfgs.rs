@@ -22,7 +22,9 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
 // Slightly awkward with the WITH prefix, but we can't start with a 0..
 pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
-    Duration::from_secs(60 * 60 * 72),
+    // One year, which in practice makes it so we never cut over when not
+    // hydrated. To prevent cutting over unilaterally when there is an issue.
+    Duration::from_hours(365 * 24),
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
 );
 
@@ -181,7 +183,7 @@ pub const ENABLE_MCP_AGENT: Config<bool> = Config::new(
 /// Agents can still use `get_data_products` and `get_data_product_details`.
 pub const ENABLE_MCP_AGENT_QUERY_TOOL: Config<bool> = Config::new(
     "enable_mcp_agent_query_tool",
-    false,
+    true,
     "Whether the MCP agent query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
 );
 

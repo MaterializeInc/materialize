@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/predicate_pushdown.rs
-revision: 09f8729224
+revision: 5d046b3ab6
 ---
 
 # mz-transform::predicate_pushdown

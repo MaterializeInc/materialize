@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/secret.rs
-revision: f0b74c7cc7
+revision: 5d046b3ab6
 ---
 
 # adapter::coord::sequencer::inner::secret

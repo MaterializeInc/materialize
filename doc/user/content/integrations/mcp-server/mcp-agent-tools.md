@@ -13,7 +13,7 @@ menu:
 
 ### `get_data_products`
 
-Discover all available data products. Returns a lightweight list with name,
+Discovers all available data products. Returns a lightweight list with name,
 cluster, and description for each product.
 
 **Parameters:** None.
@@ -38,7 +38,7 @@ cluster, and description for each product.
 
 ### `get_data_product_details`
 
-Get the full details for a specific data product, including its JSON schema
+Returns the full details for a specific data product, including its JSON schema
 with column names, types, and descriptions.
 
 | Parameter | Type | Required | Description |
@@ -65,7 +65,7 @@ with column names, types, and descriptions.
 
 ### `read_data_product`
 
-Read rows from a data product.
+Reads rows from a data product.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -93,23 +93,26 @@ Read rows from a data product.
 
 ### `query`
 
-The `query` tool is **disabled by default** because it lets the
-agent run arbitrary SQL against data products. To enable it, set the
-[`enable_mcp_agent_query_tool`
-configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
-system parameter to `true`.
-
 {{< warning >}}
 {{% include-headless "/headless/mcp-agent-query-tool-warning" %}}
 {{< /warning >}}
 
-Execute a SQL `SELECT` statement against your data products. Useful for
-joining multiple data products together that are hosted on the same cluster.
+Allows the agent to run arbitrary `SELECT` statements (including joins) against
+**any** object for which it has `SELECT` privileges (not just the discoverable
+objects). It is disabled by default.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `cluster` | string | Yes | Exact cluster name from the data product details. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
+
+To enable the tool, set the [`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+system parameter to `true`.
+
+To prevent an agent from querying the system catalog objects (`mz_catalog.*`,
+`mz_internal.*`, `pg_catalog.*`, and `information_schema.*`), see [Restrict
+`query` tool access to user objects only](#restrict-to-user-objects).
 
 **Example response:**
 
@@ -127,4 +130,39 @@ joining multiple data products together that are hosted on the same cluster.
     "isError": false
   }
 }
+```
+
+#### Restricting `query` tool access to user objects only {#restrict-to-user-objects}
+
+When the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query) is
+enabled, a role can, by default, query any object for which it has `SELECT`
+privileges, including system catalog objects (`mz_catalog.*`, `mz_internal.*`,
+`pg_catalog.*`, and `information_schema.*`).
+
+To prevent an agent role from reading system catalog objects, a **superuser**
+can set the `restrict_to_user_objects` parameter to `true` on both the
+functional role and each individual agent role. Setting the parameter on the
+functional role is recommended as a precaution in case the role is ever used
+directly to run queries. Because role configuration in Materialize is not
+inherited, the parameter must be set explicitly on each individual agent role:
+
+```mzsql
+ALTER ROLE mcp_agent SET restrict_to_user_objects = true;
+ALTER ROLE my_agent SET restrict_to_user_objects = true;
+```
+
+This setting takes effect on the next connection. Once active:
+
+- Queries referencing system catalog objects are rejected with a permission
+  error.
+- Data product discovery (`get_data_products`, `get_data_product_details`,
+  `read_data_product`) continues to work normally.
+- The restriction cannot be bypassed by the role itself; only a superuser can
+  change or remove it.
+
+To remove the restriction for an agent, a superuser can reset the parameter (or
+set it to `false`):
+
+```mzsql
+ALTER ROLE my_agent RESET restrict_to_user_objects;
 ```

@@ -18,12 +18,17 @@ pub trait Columns: Sized {
     /// If self is a column, return the column index, otherwise `None`.
     fn as_column(&self) -> Option<usize>;
 
+    /// The support of the given set, i.e., the columns that are actually used.
+    ///
+    /// You can use `BTreeSet::last()` to extract the maximum column.
     fn support(&self) -> BTreeSet<usize> {
         let mut support = BTreeSet::new();
         self.support_into(&mut support);
         support
     }
 
+    /// Adds the support of the given set, i.e., the columns that are actually used,
+    /// to the given set.
     fn support_into(&self, support: &mut BTreeSet<usize>);
 
     /// Rewrites column indices with their value in `permutation`.

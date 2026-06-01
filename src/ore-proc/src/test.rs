@@ -45,7 +45,14 @@ pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_logging_init() -> TokenStream2 {
     let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
-    if crate_name == "mz-ore" {
+    // Only the `mz-ore` *library* target can (and must) reach the logging
+    // helpers via `crate::`. Integration tests live in their own binary crates
+    // within the same package, so `crate` there is the test binary, not the
+    // library; they must go through `::mz_ore` like every other crate.
+    // `CARGO_CRATE_NAME` is `mz_ore` for the library (and its unit tests) but
+    // the test/bench name for separate binaries, so it distinguishes the two.
+    let crate_target = std::env::var("CARGO_CRATE_NAME").unwrap_or_default();
+    if crate_name == "mz-ore" && crate_target == "mz_ore" {
         quote! {
           {
             use crate::test;

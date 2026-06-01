@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources.rs
-revision: 16d611fb45
+revision: 1704d6481e
 ---
 
 # storage-types::sources

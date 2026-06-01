@@ -68,7 +68,6 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
-// Details uses the full view with JSON schema.
 const DETAILS_QUERY_PREFIX: &str =
     "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
 
@@ -84,6 +83,8 @@ enum McpRequestError {
     ToolNotFound(String),
     #[error("Data product not found: {0}")]
     DataProductNotFound(String),
+    #[error("{0}")]
+    ClusterPrivilegeMissing(String),
     #[error("Query validation failed: {0}")]
     QueryValidationFailed(String),
     #[error("Query execution failed: {0}")]
@@ -99,6 +100,7 @@ impl McpRequestError {
             Self::MethodNotFound(_) => error_codes::METHOD_NOT_FOUND,
             Self::ToolNotFound(_) => error_codes::INVALID_PARAMS,
             Self::DataProductNotFound(_) => error_codes::INVALID_PARAMS,
+            Self::ClusterPrivilegeMissing(_) => error_codes::INVALID_PARAMS,
             Self::QueryValidationFailed(_) => error_codes::INVALID_PARAMS,
             Self::QueryExecutionFailed(_) | Self::Internal(_) => error_codes::INTERNAL_ERROR,
         }
@@ -110,6 +112,7 @@ impl McpRequestError {
             Self::MethodNotFound(_) => "MethodNotFound",
             Self::ToolNotFound(_) => "ToolNotFound",
             Self::DataProductNotFound(_) => "DataProductNotFound",
+            Self::ClusterPrivilegeMissing(_) => "ClusterPrivilegeMissing",
             Self::QueryValidationFailed(_) => "ValidationError",
             Self::QueryExecutionFailed(_) => "ExecutionError",
             Self::Internal(_) => "InternalError",
@@ -658,7 +661,14 @@ fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
             "(read from persistent storage). `read_data_product` automatically routes the ",
             "read to the cluster recorded in the data product catalog so indexes are used; ",
             "you only need to set the `cluster` parameter if you intentionally want the ",
-            "read to run on a different cluster (e.g. one with larger or more replicas).",
+            "read to run on a different cluster (e.g. one with larger or more replicas). ",
+            "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
+            "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
+            "partial data: a read against a not-yet-hydrated product blocks until the ",
+            "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
+            "before reading: if it is false and `replica_count` is greater than 0, the ",
+            "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
+            "cluster has no replicas and the read cannot make progress until one is added.",
         ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
@@ -715,7 +725,7 @@ async fn handle_tools_list(
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
                     title: Some("Get Data Product Details".to_string()),
-                    description: "Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.".to_string(),
+                    description: "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.".to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -990,9 +1000,10 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
 /// same read on a named cluster instead — useful for running the read on a
 /// differently-sized or differently-replicated cluster.
 ///
-/// If both the override and the catalog cluster are absent (the catalog
-/// cluster column is unexpectedly null), the query falls back to the
-/// session's default cluster.
+/// Without an override, the role must have `USAGE` on the catalog cluster
+/// — otherwise the call fails with [`McpRequestError::ClusterPrivilegeMissing`]
+/// rather than silently degrading to a slower path that would mask the
+/// missing privilege.
 ///
 /// The name is expected to come from `get_data_products()` /
 /// `get_data_product_details()`. The query runs inside a READ ONLY
@@ -1009,16 +1020,21 @@ async fn read_data_product(
     // Parse and safely quote the name for SQL interpolation.
     let safe_name = safe_data_product_name(name)?;
 
-    // Lookup query: serves as the existence check (we still error
-    // `DataProductNotFound` on an empty result) and at the same time
-    // recovers the catalog cluster for auto-routing. `mz_mcp_data_products`
-    // can hold multiple rows per object_name when a product is indexed on
-    // multiple clusters; `ORDER BY cluster NULLS LAST LIMIT 1` picks one
-    // deterministically. Callers can disambiguate via `cluster_override`.
+    // Existence check + recover the cluster for auto-routing. The view
+    // filters by SELECT on the object but not by cluster privileges, so we
+    // also fetch USAGE on the cluster and prefer a usable one in ORDER BY
+    // (an MV indexed on multiple clusters can appear more than once).
     let lookup_query = format!(
-        "SELECT cluster FROM mz_internal.mz_mcp_data_products \
+        "SELECT \
+             cluster, \
+             cluster IS NULL OR has_cluster_privilege(cluster, 'USAGE') \
+                 AS has_cluster_usage \
+         FROM mz_internal.mz_mcp_data_products \
          WHERE object_name = {} \
-         ORDER BY cluster NULLS LAST \
+         ORDER BY \
+             (cluster IS NOT NULL \
+                 AND has_cluster_privilege(cluster, 'USAGE')) DESC, \
+             cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
     );
@@ -1026,13 +1042,43 @@ async fn read_data_product(
     if lookup_rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
-    let catalog_cluster: Option<&str> = lookup_rows
-        .first()
+    let lookup_row = lookup_rows.first();
+    let catalog_cluster: Option<&str> = lookup_row
         .and_then(|row| row.first())
         .and_then(|v| v.as_str());
+    // Treat anything other than an explicit `true` as a missing privilege,
+    // including the unexpected `NULL` case.
+    let has_cluster_usage: bool = lookup_row
+        .and_then(|row| row.get(1))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // Override beats catalog; catalog beats session default.
-    let target_cluster = cluster_override.or(catalog_cluster);
+    // Override beats everything. Otherwise the read auto-routes to the
+    // catalog cluster, but only if the role has USAGE on it: silently
+    // falling back to the session default would mask a missing privilege
+    // as "slow reads forever", so we fail loud with an actionable error
+    // instead.
+    let target_cluster = match cluster_override {
+        Some(c) => c,
+        None => match catalog_cluster {
+            Some(c) if has_cluster_usage => c,
+            Some(c) => {
+                return Err(McpRequestError::ClusterPrivilegeMissing(format!(
+                    "Data product {name} is hosted on cluster {c:?}, which your role \
+                     does not have USAGE on. Pass `cluster: \"<a-cluster-you-have-USAGE-on>\"` \
+                     to read it from a different cluster (slower, no index), or have USAGE \
+                     granted on {c:?}.",
+                )));
+            }
+            None => {
+                // Defensive: every legitimate row in `mz_mcp_data_products`
+                // has a non-NULL cluster, so this is an internal error.
+                return Err(McpRequestError::Internal(anyhow!(
+                    "data product {name} has no cluster in the catalog"
+                )));
+            }
+        },
+    };
 
     // No row cap is applied here: the response is bounded by the size cap
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
@@ -1048,24 +1094,17 @@ async fn read_data_product(
 /// Builds the SQL the agent runs for `read_data_product`.
 ///
 /// `safe_name` must already be the validated, quoted form produced by
-/// [`safe_data_product_name`]. `target_cluster`, when provided, is escaped
-/// as a SQL string literal and wrapped in `SET CLUSTER` inside a `BEGIN
-/// READ ONLY` transaction so the cluster choice is scoped to this read and
+/// [`safe_data_product_name`]. `target_cluster` is escaped as a SQL
+/// string literal and wrapped in `SET CLUSTER` inside a `BEGIN READ
+/// ONLY` transaction so the cluster choice is scoped to this read and
 /// does not leak into the session.
-///
-/// When `target_cluster` is `None` we emit a single bare `SELECT` instead
-/// of opening a transaction, which avoids three extra round trips on the
-/// hot path of session-default reads.
-fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
-    match target_cluster {
-        Some(cluster) => format!(
-            "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
-            escaped_string_literal(cluster),
-            safe_name,
-            limit,
-        ),
-        None => format!("SELECT * FROM {} LIMIT {}", safe_name, limit),
-    }
+fn build_read_query(safe_name: &str, limit: u32, target_cluster: &str) -> String {
+    format!(
+        "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
+        escaped_string_literal(target_cluster),
+        safe_name,
+        limit,
+    )
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -1833,29 +1872,12 @@ mod tests {
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────
 
-    /// Without a target cluster, the read is a single bare `SELECT` so
-    /// session-default reads avoid the three extra round trips that
-    /// `BEGIN READ ONLY; SET CLUSTER; ...; COMMIT;` would cost.
-    #[mz_ore::test]
-    fn test_build_read_query_no_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 100, None);
-        assert_eq!(sql, "SELECT * FROM \"db\".\"sch\".\"v\" LIMIT 100");
-        assert!(
-            !sql.contains("SET CLUSTER"),
-            "session-default reads should not emit SET CLUSTER: {sql}",
-        );
-        assert!(
-            !sql.contains("BEGIN"),
-            "session-default reads should not open a transaction: {sql}",
-        );
-    }
-
-    /// With a target cluster, the read is wrapped in a `BEGIN READ ONLY`
-    /// transaction so the `SET CLUSTER` scope is bounded to this read and
-    /// does not leak into the rest of the session.
+    /// The read is wrapped in a `BEGIN READ ONLY` transaction so the
+    /// `SET CLUSTER` scope is bounded to this read and does not leak
+    /// into the rest of the session.
     #[mz_ore::test]
     fn test_build_read_query_with_cluster() {
-        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, Some("prod_cluster"));
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 50, "prod_cluster");
         assert!(sql.contains("BEGIN READ ONLY"), "{sql}");
         assert!(sql.contains("SET CLUSTER = 'prod_cluster'"), "{sql}");
         assert!(
@@ -1871,11 +1893,7 @@ mod tests {
     /// adversarial cluster names.
     #[mz_ore::test]
     fn test_build_read_query_escapes_cluster_name() {
-        let sql = build_read_query(
-            "\"db\".\"sch\".\"v\"",
-            10,
-            Some("evil'; DROP TABLE secrets; --"),
-        );
+        let sql = build_read_query("\"db\".\"sch\".\"v\"", 10, "evil'; DROP TABLE secrets; --");
         // The single quote in `evil'` must be doubled inside the literal.
         assert!(
             sql.contains("SET CLUSTER = 'evil''; DROP TABLE secrets; --'"),

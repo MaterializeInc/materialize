@@ -1,10 +1,10 @@
 ---
 source: src/mysql-util/src/desc.rs
-revision: 47a81d6e64
+revision: c0559e3dbe
 ---
 
 # mysql-util::desc
 
 Defines the descriptor types used to represent MySQL table structure within Materialize: `MySqlTableDesc` (schema/name/columns/keys), `MySqlColumnDesc` (name, Materialize column type, optional metadata), `MySqlKeyDesc` (index name, primary flag, column list), `MySqlColumnMetaEnum` (enum variant list), and `MySqlColumnMeta` (enum variants for Enum, Json, Year, Date, Timestamp, and Bit columns).
-All types implement protobuf serialization via `RustType` using generated `Proto*` types, proptest `Arbitrary`, and `determine_compatibility` / `is_compatible` methods that allow additive upstream schema changes (new columns, wider enum sets) without breaking existing sources.
+All types implement protobuf serialization via `RustType` using generated `Proto*` types, proptest `Arbitrary` (available under `test` or the `proptest` feature), and `determine_compatibility` / `is_compatible` methods that allow additive upstream schema changes (new columns, wider enum sets) without breaking existing sources.
 `determine_compatibility` accepts a `binlog_full_metadata` flag: when `false`, columns are matched positionally so `self.columns` must be a compatible leading prefix of `other.columns`; when `true`, each non-ignored column in `self` is located by name in `other`, permitting reordered upstream columns.

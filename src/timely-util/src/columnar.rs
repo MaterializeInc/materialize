@@ -26,8 +26,8 @@ use std::hash::Hash;
 use columnar::Borrow;
 use columnar::bytes::indexed;
 use columnar::common::IterOwn;
+use columnar::{Clear, FromBytes, Index, Len};
 use columnar::{Columnar, Ref};
-use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
@@ -66,6 +66,20 @@ pub enum Column<C: Columnar> {
 }
 
 impl<C: Columnar> Column<C> {
+    /// Empties the column, retaining the `Typed` variant's allocation so the
+    /// caller can refill it.
+    ///
+    /// [`columnar::Clear`] clears the typed container in place without
+    /// releasing its capacity. The serialized variants (`Bytes`/`Align`) own
+    /// no reusable typed buffer, so they are reset to an empty `Typed`.
+    #[inline]
+    pub fn clear(&mut self) {
+        match self {
+            Column::Typed(t) => t.clear(),
+            Column::Bytes(_) | Column::Align(_) => *self = Default::default(),
+        }
+    }
+
     /// Borrows the container as a reference.
     #[inline]
     pub fn borrow(&self) -> <C::Container as Borrow>::Borrowed<'_> {

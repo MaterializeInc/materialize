@@ -1,6 +1,6 @@
 ---
 source: src/sql-server-util/src/config.rs
-revision: 8552b76c17
+revision: c0559e3dbe
 ---
 
 # mz-sql-server-util::config

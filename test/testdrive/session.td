@@ -64,6 +64,8 @@ max_sources                              200                     "The maximum nu
 max_sql_server_connections               1000                    "The maximum number of SQL Server connections in the region, across all schemas (Materialize)."
 max_tables                               200                     "The maximum number of tables in the region, across all schemas (Materialize)."
 network_policy                           default                 "Sets the fallback network policy applied to all users without an explicit policy."
+oidc_group_claim                         groups                  "JWT claim name containing group memberships for role sync."
+oidc_group_role_sync_strict              off                     "When true, reject login if OIDC group-to-role sync fails (fail-closed)."
 optimizer_e2e_latency_warning_threshold  "500 ms"                "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize)."
 mz_version                               <VARIES>                "Shows the Materialize server version (Materialize)."
 scram_iterations                         600000                  "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. Please consider the security risks before reducing this below the default value."
@@ -84,7 +86,6 @@ TimeZone                                 UTC                     "Sets the time 
 transaction_isolation                    "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 unsafe_new_transaction_wall_time         ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
 welcome_message                          on                      "Whether to send a notice with a welcome message after a successful connection (Materialize)."
-enable_consolidate_after_union_negate    on                      "consolidation after Unions that have a Negated input (Materialize)."
 force_source_table_syntax                off                     "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources"
 
 > SET application_name = 'foo'

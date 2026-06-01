@@ -884,6 +884,7 @@ impl crate::AlterCompatible for SourceExportDetails {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
             (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
             _ => Err(AlterError { id }),
         };

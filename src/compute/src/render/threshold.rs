@@ -26,8 +26,8 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
+use mz_row_spine::RowRowBuilder;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<'scope, Ts, T1, Bu2, T2, L>(

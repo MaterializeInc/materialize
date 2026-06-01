@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/explain.rs
-revision: 3af9082af6
+revision: c0559e3dbe
 ---
 
 # mz-repr::explain

@@ -1,6 +1,6 @@
 ---
 source: src/controller/src/clusters.rs
-revision: 0a7c37cd69
+revision: e510e0dbe3
 ---
 
 # controller::clusters
@@ -12,3 +12,4 @@ Defines the key configuration and location types — `ClusterConfig`, `ReplicaCo
 Both `provision_replica` and the internal `create_managed_service` accept an `enable_storage_introspection_logs: bool` parameter; when true, `--enable-storage-introspection-logs` is passed to the `clusterd` service arguments.
 `update_cluster_workload_class` panics if the instance does not exist in either the `StorageController` or `ComputeController`.
 Past-generation replicas are cleaned up in background via `remove_past_generation_replicas_in_background`, and orphaned current-generation replicas are removed during `remove_orphaned_replicas`.
+The `other_replicas_selector` and `replicas_selector` passed to the orchestrator include a `generation` label matching the current deploy generation, so that anti-affinity and topology-spread constraints only consider pods of the same generation; this prevents in-flight old-generation pods from blocking placement of new-generation pods during a rolling upgrade.

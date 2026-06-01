@@ -108,7 +108,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
 #
@@ -143,7 +142,6 @@ def make_aggregation_class() -> type[Aggregation]:
 default_timeout = "1800s"
 
 SERVICES = [
-    Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
@@ -567,7 +565,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
 
     iceberg_scenarios = [s for s in selected_scenarios if "Iceberg" in s.__name__]
     global iceberg_credentials

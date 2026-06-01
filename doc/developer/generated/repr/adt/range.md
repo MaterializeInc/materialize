@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/range.rs
-revision: fe91a762d1
+revision: c0559e3dbe
 ---
 
 # mz-repr::adt::range

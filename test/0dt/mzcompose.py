@@ -41,7 +41,6 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
@@ -52,7 +51,6 @@ SERVICES = [
     MySql(),
     Postgres(),
     SqlServer(),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
@@ -178,7 +176,6 @@ def workflow_read_only(c: Composition) -> None:
     """Verify read-only mode."""
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",
@@ -497,7 +494,6 @@ def workflow_basic(c: Composition) -> None:
     """Verify basic 0dt deployment flow."""
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",
@@ -1032,7 +1028,6 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "mz_old",
@@ -1148,7 +1143,6 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "mz_old",
@@ -1648,7 +1642,6 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     c.down(destroy_volumes=True)
     # Start the required services.
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         Service("testdrive", idle=True),
@@ -2025,7 +2018,6 @@ def setup(c: Composition) -> None:
 def workflow_upsert_sources(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "mz_old",
@@ -2118,7 +2110,6 @@ def workflow_ddl(c: Composition) -> None:
     """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",

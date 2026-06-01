@@ -131,3 +131,13 @@ pub fn issuer_ref_defined(
             .and_then(|spec| spec.issuer_ref.as_ref())
             .is_some()
 }
+
+pub fn resolved_dns_names(
+    defaults: &Option<MaterializeCertSpec>,
+    overrides: &Option<MaterializeCertSpec>,
+) -> Option<Vec<String>> {
+    overrides
+        .as_ref()
+        .and_then(|spec| spec.dns_names.clone())
+        .or_else(|| defaults.as_ref().and_then(|spec| spec.dns_names.clone()))
+}

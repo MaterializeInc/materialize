@@ -89,10 +89,11 @@ yansi = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
-mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
+mz-ore = { path = "../ore", features = ["id_gen", "chrono", "test"] }
 proptest.workspace = true
 scopeguard.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-test.workspace = true
 tracing-subscriber.workspace = true
@@ -145,6 +146,7 @@ assert-no-tracing = ["ctor"]
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
 
 [[test]]
 name = "future"
@@ -166,6 +168,15 @@ harness = false
 name = "bytes"
 harness = false
 required-features = ["bytes", "region", "tracing"]
+
+[[bench]]
+name = "pager"
+harness = false
+required-features = ["pager"]
+
+[[example]]
+name = "pager_merge"
+required-features = ["pager"]
 
 [package.metadata.cargo-udeps.ignore]
 # Only used in doc-tests.

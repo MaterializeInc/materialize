@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections/aws.rs
-revision: 122dfd0789
+revision: c0559e3dbe
 ---
 
 # storage-types::connections::aws

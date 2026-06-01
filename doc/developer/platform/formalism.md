@@ -583,7 +583,7 @@ It likely has a more verbose diagnostic API that describes its state, which shou
     The subscription can be canceled by either endpoint, and the recipient should only downgrade their read capability when they are certain they have all data through the frontier they would downgrade to.
 
     A subscription can be constructed with additional arguments that change how the data is returned to the user.
-    For example, the user may ask to not receive the initial snapshot, rather that receive and then discard it.
+    For example, the user may ask to not receive the initial snapshot, rather than receive and then discard it.
     For example, the user may provide filtering and projection that can be applied before the data are transmitted.
 
 *   `CloneCapability(Capability) -> Capability'`: creates an

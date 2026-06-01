@@ -20,12 +20,13 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
 
+use mz_row_spine::RowValBuilder;
+
 use crate::render::errors::DataflowErrorSer;
-use crate::row_spine::RowValBuilder;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
-pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
+pub use mz_row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 
 pub(crate) mod spines {
     use std::rc::Rc;
@@ -39,7 +40,8 @@ pub(crate) mod spines {
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_timely_util::columnation::ColumnationStack;
 
-    use crate::row_spine::OffsetOptimized;
+    use mz_row_spine::OffsetOptimized;
+
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     /// A spine for generic keys and values.
