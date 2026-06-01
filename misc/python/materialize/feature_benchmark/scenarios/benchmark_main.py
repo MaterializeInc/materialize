@@ -957,6 +957,15 @@ class DifferentialJoinColumnPaged(Dataflow):
     `DifferentialJoinHydrationFile`.
     """
 
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # Requires `enable_column_paged_batcher`, introduced in the merge
+        # batcher rework that lands in 26.28.0. Skips on both sides while
+        # we're still on `26.28.0-dev.0` because `MzVersion` strips the git
+        # hash and can't distinguish dev builds with the dyncfg from dev
+        # builds without it.
+        return version > MzVersion.create(26, 28, 0)
+
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -1002,6 +1011,14 @@ class DifferentialJoinHydration(Dataflow):
     # baseline. File variant's 16 MiB per-worker + 128 MiB shared budget
     # means almost everything spills under that cap.
     SCALE = 8
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # Both leaf variants set `enable_column_paged_batcher` (baseline =
+        # false, file = true), so gate on the dyncfg's introduction in
+        # 26.28.0. Comment in `DifferentialJoinColumnPaged.can_run` explains
+        # why dev versions can't distinguish the dyncfg's presence.
+        return version > MzVersion.create(26, 28, 0)
 
     def init(self) -> list[Action]:
         # `v1` lives on the default cluster, not `join_cluster`, so the

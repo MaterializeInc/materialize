@@ -27,7 +27,7 @@
 
 use std::collections::VecDeque;
 
-use columnar::{Columnar, Len};
+use columnar::{Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, Logger};
 use differential_dataflow::trace::{Batcher, Builder, Description};
@@ -42,36 +42,36 @@ use crate::column_pager::{self, ColumnPager, PagedColumn};
 use crate::columnar::Column;
 use crate::columnar::batcher::{ColumnChunker, empty_chunk, recycle_chunk};
 
-/// Cap on per-batcher recycled-chunk pool. The stash holds
-/// `Column::Typed` entries whose leaf `Vec`s have been `clear`ed but retain
-/// capacity, so each one is roughly one chunk's worth of resident bytes.
-/// These allocations are *not* tracked by [`ColumnPager`]'s `ResidentTicket`
-/// accounting — the budget doesn't see them — so an unbounded pool would let
-/// per-batcher resident overhead drift arbitrarily under sustained churn.
+/// Max recycled empty chunks held in the per-batcher stash. Deliberately
+/// tight: the stash is a hot-buffer cache for the result/keep/ship churn,
+/// not a hoard. Stash entries are cleared `Column::Typed` allocations that
+/// retain capacity but are *not* tracked by [`ColumnPager`]'s
+/// `ResidentTicket` accounting, so each one is a chunk's worth of resident
+/// bytes the pager's budget doesn't see. There's one stash per arrange
+/// batcher per worker, so this multiplies fast.
 ///
-/// The cap is a safety net, not a target. Each `merge_chains` call tends to
-/// recycle ~3 chunks more than it pops on trailing teardown (the final two
-/// heads plus an empty result), so a tight cap fires on every call. When it
-/// fires, the dropped chunk's leaf allocations are freed, and the next use
-/// pays the geometric `Vec` regrowth tax — roughly 2× the chunk's bytes in
-/// memcpy traffic, ~hundreds of µs per chunk. That defeats the recycling
-/// win for workloads that produced the regression this stash was added to
-/// fix.
-///
-/// 16 covers the working set with comfortable headroom: even a heavily-
-/// consolidating merge that nets +10 chunks per call settles well below the
-/// cap, so drops happen only during sustained bursts. Worst-case per-batcher
-/// overhead is ~16 × one chunk's resident capacity (~32 MiB at the row-row
-/// shape's typical leaf sizing). The upstream `differential_dataflow`
-/// `MergeBatcher` stash, which the legacy columnation path runs through, is
-/// itself unbounded — so this isn't a regression in budget visibility versus
-/// what production already accepted.
-const STASH_CAP: usize = 16;
+/// 2 covers steady-state reuse for both code paths: `merge_chains` ships
+/// `result` and immediately pulls a refill; `extract_chain` ships `keep` /
+/// `ship` and pulls a refill for whichever was at capacity. Heads that
+/// drain mid-loop arrive resident from `FetchIter`, so the whole-chunk
+/// passthrough fast path keeps most of them off the merge inner loop
+/// entirely — only a small minority ever flow back through the stash.
+const STASH_CAP: usize = 2;
 
-/// Recycle `chunk` only if the stash isn't already at `STASH_CAP`. See
-/// [`STASH_CAP`] for the cap rationale.
+/// Don't park a buffer larger than this in the free-list. A transiently
+/// oversize merge buffer (post-explosion, past the natural ship threshold)
+/// held resident would compete with the pager's budget; drop it and let a
+/// fresh default regrow. 2 × the natural ship word count (≈ 4 MiB
+/// serialized) keeps normal ship-sized chunks while excluding pathological
+/// ones.
+const MAX_RECYCLE_BYTES: usize = 1 << 22;
+
+/// Recycle `chunk` only if the stash isn't already at [`STASH_CAP`] and the
+/// chunk isn't oversize per [`MAX_RECYCLE_BYTES`]. `length_in_bytes` is
+/// measured before clear, so it reflects the data the chunk was carrying
+/// (a proxy for the capacity we'd park).
 fn recycle_capped<C: Columnar>(chunk: Column<C>, stash: &mut Vec<Column<C>>) {
-    if stash.len() < STASH_CAP {
+    if stash.len() < STASH_CAP && chunk.length_in_bytes() <= MAX_RECYCLE_BYTES {
         recycle_chunk(chunk, stash);
     }
 }
@@ -423,10 +423,13 @@ where
 /// matches the recycling discipline the upstream `differential_dataflow`
 /// merge-batcher carries via `Merger::merge`'s `stash` parameter.
 ///
-/// Whole-chunk passthrough is omitted: peeking endpoints on a paged head
-/// would force materialization with no clean way to undo it. A follow-up can
-/// add it back gated on `PagedColumn::Resident` heads (where peeks are free)
-/// or by carrying first/last keys in the pager's metadata.
+/// Whole-chunk passthrough: heads arrive materialized from [`FetchIter`], so
+/// peeking endpoints is free. When the current head on one side sorts
+/// entirely before the current record on the other side, ship it wholesale
+/// and skip the per-record merge. Gated on `positions[i] == 0` so we hand
+/// the head off intact — partial-tail passthrough would need a 1-input
+/// `merge_from` to copy the tail, which is what the inner loop's gallop
+/// already covers.
 pub fn merge_chains<D, T, R, Sink>(
     list1: FetchIter<'_, D, T, R>,
     list2: FetchIter<'_, D, T, R>,
@@ -456,6 +459,47 @@ pub fn merge_chains<D, T, R, Sink>(
         let upper_r = heads[1].borrow().len();
         if positions[0] >= upper_l || positions[1] >= upper_r {
             break;
+        }
+
+        // Whole-chunk passthrough. Two probes on already-resident heads.
+        let lhs_passthrough = positions[0] == 0 && upper_l > 0 && {
+            let lhs = heads[0].borrow();
+            let rhs = heads[1].borrow();
+            let last_l = (lhs.0.get(upper_l - 1), lhs.1.get(upper_l - 1));
+            let cur_r = (rhs.0.get(positions[1]), rhs.1.get(positions[1]));
+            last_l < cur_r
+        };
+        if lhs_passthrough {
+            if !result.is_empty() {
+                sink(pager.page(&mut result));
+                if let Some(reuse) = stash.pop() {
+                    result = reuse;
+                }
+            }
+            let mut head = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
+            sink(pager.page(&mut head));
+            positions[0] = 0;
+            continue;
+        }
+
+        let rhs_passthrough = positions[1] == 0 && upper_r > 0 && {
+            let lhs = heads[0].borrow();
+            let rhs = heads[1].borrow();
+            let last_r = (rhs.0.get(upper_r - 1), rhs.1.get(upper_r - 1));
+            let cur_l = (lhs.0.get(positions[0]), lhs.1.get(positions[0]));
+            last_r < cur_l
+        };
+        if rhs_passthrough {
+            if !result.is_empty() {
+                sink(pager.page(&mut result));
+                if let Some(reuse) = stash.pop() {
+                    result = reuse;
+                }
+            }
+            let mut head = std::mem::replace(&mut heads[1], list2.next().unwrap_or_default());
+            sink(pager.page(&mut head));
+            positions[1] = 0;
+            continue;
         }
 
         let yielded = result.merge_from(&mut heads, &mut positions);
