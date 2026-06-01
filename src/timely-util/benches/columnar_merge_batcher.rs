@@ -199,10 +199,12 @@ fn bench_merge_batcher(c: &mut Criterion) {
                         },
                         |(q1, q2)| {
                             let mut output: Vec<PagedColumn<Tuple>> = Vec::new();
+                            let mut stash = Vec::new();
                             merge_chains(
                                 FetchIter::new(q1, &pager),
                                 FetchIter::new(q2, &pager),
                                 |p| output.push(p),
+                                &mut stash,
                             );
                             output
                         },
@@ -223,10 +225,12 @@ fn bench_merge_batcher(c: &mut Criterion) {
                     },
                     |(q1, q2)| {
                         let mut output: Vec<PagedColumn<Tuple>> = Vec::new();
+                        let mut stash = Vec::new();
                         merge_chains(
                             FetchIter::new(q1, &pager),
                             FetchIter::new(q2, &pager),
                             |p| output.push(p),
+                            &mut stash,
                         );
                         output
                     },
@@ -246,10 +250,12 @@ fn bench_merge_batcher(c: &mut Criterion) {
                     },
                     |(q1, q2)| {
                         let mut output: Vec<PagedColumn<Tuple>> = Vec::new();
+                        let mut stash = Vec::new();
                         merge_chains(
                             FetchIter::new(q1, &pager),
                             FetchIter::new(q2, &pager),
                             |p| output.push(p),
+                            &mut stash,
                         );
                         output
                     },
