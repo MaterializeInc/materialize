@@ -599,7 +599,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 alias,
                 with_ordinality,
             } => {
-                f.write_node(function);
+                function.fmt_table_call(f);
                 if *with_ordinality {
                     f.write_str(" WITH ORDINALITY");
                 }
@@ -614,7 +614,12 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 with_ordinality,
             } => {
                 f.write_str("ROWS FROM (");
-                f.write_node(&display::comma_separated(functions));
+                for (i, function) in functions.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ");
+                    }
+                    function.fmt_table_call(f);
+                }
                 f.write_str(")");
                 if *with_ordinality {
                     f.write_str(" WITH ORDINALITY");

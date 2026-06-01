@@ -920,10 +920,25 @@ pub struct Function<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, true);
+    }
+}
+
+impl<T: AstInfo> Function<T> {
+    /// Render this call in table-function position (`FROM f(...)`, `ROWS FROM
+    /// (f(...))`), where the `extract(a FROM b)` / `position(a IN b)` special
+    /// forms are *not* valid syntax — only the scalar-expression parser
+    /// dispatches to them. Forces the plain comma form (with the name quoted
+    /// to dodge the special grammar) so the round trip stays stable.
+    pub(crate) fn fmt_table_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, false);
+    }
+
+    fn fmt_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>, allow_special_form: bool) {
         // This block handles printing function calls that have special parsing. In stable mode, the
         // name is quoted and so won't get the special parsing. We only need to print the special
         // formats in non-stable mode.
-        if !f.stable() {
+        if allow_special_form && !f.stable() {
             let special: Option<(&str, &[Option<Keyword>])> =
                 match self.name.to_ast_string_stable().as_str() {
                     r#""extract""# if self.args.len() == Some(2) => {
