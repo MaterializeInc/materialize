@@ -259,3 +259,27 @@ fn test_nested_table_factor_recursion_limit() {
         "unexpected error: {err}"
     );
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_expr_chain_recursion_limit() {
+    // Left-associative operators (`a + a`) and field access on a non-identifier
+    // receiver (`(a).f`) are parsed in a loop, so a long *flat* chain builds AST
+    // depth one node per step. Unbounded, the resulting AST overflows the stack
+    // when it is later displayed/dropped/visited recursively. The chain is
+    // capped at the recursion limit. Regression for the parse_expr_roundtrip
+    // stack overflow (`a.ff.cX.*.G…`). (`a.f.f…` on a bare identifier is a flat
+    // qualified name, not nesting, so it is intentionally unaffected.)
+    for chain in [
+        format!("a{}", " + a".repeat(500)),
+        format!("a{}", " * a".repeat(500)),
+        format!("(a){}", ".f".repeat(500)),
+    ] {
+        let err = parser::parse_expr(&chain).expect_err("deep expression chain should error");
+        assert!(
+            err.to_string().contains("exceeds nested expression limit"),
+            "unexpected error for {:.20}…: {err}",
+            chain
+        );
+    }
+}
