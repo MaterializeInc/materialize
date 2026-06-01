@@ -283,3 +283,43 @@ fn test_expr_chain_recursion_limit() {
         );
     }
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_show_query_body_display_roundtrip() {
+    // A parenthesized SHOW carrying ORDER BY/LIMIT/OFFSET can't be unwrapped
+    // into a top-level `Statement::Show` (which takes no modifiers), so it
+    // survives as a `SelectStatement` whose query body is a bare `SHOW`.
+    // Display must keep the parens, or reparsing the bare `SHOW … ORDER BY …`
+    // fails. Regression for the parse_display_roundtrip fuzz finding.
+    for sql in [
+        "(SHOW foo ORDER BY bar)",
+        "(SHOW foo LIMIT 1)",
+        "(SHOW foo OFFSET 1)",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+/// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
+/// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
+fn assert_display_roundtrips(sql: &str) {
+    let ast = parse_statements(sql)
+        .unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    let displayed = ast.to_ast_string_simple();
+    let reparsed = parse_statements(&displayed)
+        .unwrap_or_else(|e| panic!("display {displayed:?} should reparse: {e}"))
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    assert_eq!(
+        ast.to_ast_string_stable(),
+        reparsed.to_ast_string_stable(),
+        "display round trip drifted for {sql:?} (displayed {displayed:?})"
+    );
+}
