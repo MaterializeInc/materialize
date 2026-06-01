@@ -86,6 +86,16 @@ fn parenthesized_show_with_modifiers_preserved() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn table_function_special_name_preserved() {
+    // `extract`/`position` table functions must not use the scalar-only
+    // `extract(a FROM b)` / `position(a IN b)` special display, which doesn't
+    // reparse in table-function position.
+    assert_lossless("SELECT a FROM extract(b, c)");
+    assert_lossless("SELECT a FROM position(b, c)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn csr_seed_protobuf_message_name_preserved() {
     // A protobuf MESSAGE name containing a single quote must be escaped on
     // display, or it produces an unterminated string literal on reparse.

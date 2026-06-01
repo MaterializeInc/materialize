@@ -323,3 +323,18 @@ fn assert_display_roundtrips(sql: &str) {
         "display round trip drifted for {sql:?} (displayed {displayed:?})"
     );
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_table_function_special_name_display_roundtrip() {
+    // `extract`/`position` carry a special `extract(a FROM b)` / `position(a IN
+    // b)` display that only reparses in scalar-expression position. As table
+    // functions they must fall back to the plain (quoted) comma form.
+    // Regression for the parse_pretty_roundtrip fuzz finding.
+    for sql in [
+        "SELECT a FROM extract(b, c)",
+        "SELECT a FROM position(b, c)",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
