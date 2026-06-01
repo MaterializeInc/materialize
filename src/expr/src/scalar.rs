@@ -1327,7 +1327,6 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
@@ -1356,7 +1355,6 @@ impl VisitChildren<Self> for MirScalarExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use MirScalarExpr::*;
         match self {
@@ -1380,6 +1378,14 @@ impl VisitChildren<Self> for MirScalarExpr {
             }
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&Self> {
+        self.children().collect()
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut Self> {
+        self.children_mut().collect()
     }
 }
 

@@ -357,7 +357,6 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.func.try_visit_children(&mut f)?;
         for expr in self.partition_by.iter() {
@@ -372,7 +371,6 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.func.try_visit_mut_children(&mut f)?;
         for expr in self.partition_by.iter_mut() {
@@ -382,6 +380,30 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
             f(expr)?;
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&HirScalarExpr> {
+        let mut v = self.func.children();
+        for c in self.partition_by.iter() {
+            v.append(&mut c.children())
+        }
+        for c in self.order_by.iter() {
+            v.append(&mut c.children());
+        }
+
+        v
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+        let mut v = self.func.children_mut();
+        for c in self.partition_by.iter_mut() {
+            v.append(&mut c.children_mut())
+        }
+        for c in self.order_by.iter_mut() {
+            v.append(&mut c.children_mut());
+        }
+
+        v
     }
 }
 
@@ -487,7 +509,6 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
     fn try_visit_children<F, E>(&self, f: F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         match self {
             Self::Scalar(_) => Ok(()),
@@ -499,12 +520,27 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
     fn try_visit_mut_children<F, E>(&mut self, f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         match self {
             Self::Scalar(_) => Ok(()),
             Self::Value(expr) => expr.try_visit_mut_children(f),
             Self::Aggregate(expr) => expr.try_visit_mut_children(f),
+        }
+    }
+
+    fn children(&self) -> Vec<&HirScalarExpr> {
+        match self {
+            Self::Scalar(_) => vec![],
+            Self::Value(expr) => expr.children(),
+            Self::Aggregate(expr) => expr.children(),
+        }
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+        match self {
+            Self::Scalar(_) => vec![],
+            Self::Value(expr) => expr.children_mut(),
+            Self::Aggregate(expr) => expr.children_mut(),
         }
     }
 }
@@ -708,7 +744,6 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         f(&self.args)
     }
@@ -716,9 +751,16 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         f(&mut self.args)
+    }
+
+    fn children(&self) -> Vec<&HirScalarExpr> {
+        self.args.children()
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+        self.args.children_mut()
     }
 }
 
@@ -896,7 +938,6 @@ impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         f(&self.aggregate_expr.expr)
     }
@@ -904,9 +945,16 @@ impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         f(&mut self.aggregate_expr.expr)
+    }
+
+    fn children(&self) -> Vec<&HirScalarExpr> {
+        self.aggregate_expr.expr.children()
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+        self.aggregate_expr.expr.children_mut()
     }
 }
 
@@ -2701,7 +2749,6 @@ impl VisitChildren<Self> for HirRelationExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         // subqueries of type HirRelationExpr might be wrapped in
         // Exists or Select variants within HirScalarExpr trees
@@ -2786,7 +2833,6 @@ impl VisitChildren<Self> for HirRelationExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         // subqueries of type HirRelationExpr might be wrapped in
         // Exists or Select variants within HirScalarExpr trees
@@ -2866,6 +2912,180 @@ impl VisitChildren<Self> for HirRelationExpr {
             }
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&Self> {
+        // We have to carefully collect subqueries from any scalars we encounter
+        let mut v: Vec<&HirRelationExpr> = vec![];
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                v.push(&*value);
+                v.push(&*body);
+            }
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
+                v.extend(bindings.iter().map(|(_, _, value, _)| value));
+                v.push(&*body);
+            }
+            Map { input, scalars }
+            | Filter {
+                input,
+                predicates: scalars,
+            } => {
+                v.push(&*input);
+                for scalar in scalars {
+                    v.append(&mut scalar.direct_subqueries());
+                }
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                v.push(&*input);
+                for agg in aggregates {
+                    v.append(&mut agg.expr.direct_subqueries());
+                }
+            }
+            TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit,
+                offset,
+                expected_group_size: _,
+            } => {
+                v.push(&*input);
+                if let Some(limit) = limit {
+                    v.append(&mut limit.direct_subqueries());
+                }
+                v.append(&mut offset.direct_subqueries());
+            }
+            Project { input, outputs: _ }
+            | Distinct { input }
+            | Negate { input }
+            | Threshold { input } => v.push(&*input),
+            CallTable { func: _, exprs } => v.extend(
+                exprs
+                    .iter()
+                    .map(|scalar| scalar.direct_subqueries())
+                    .flatten(),
+            ),
+            Join {
+                left,
+                right,
+                on,
+                kind: _,
+            } => {
+                v.push(&*left);
+                v.push(&*right);
+                v.append(&mut on.direct_subqueries());
+            }
+            Union { base, inputs } => {
+                v.push(&*base);
+                v.extend(inputs.iter());
+            }
+        }
+
+        v
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut Self> {
+        // We have to carefully collect subqueries from any scalars we encounter
+        let mut v = vec![];
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Let {
+                name: _,
+                id: _,
+                value,
+                body,
+            } => {
+                v.push(&mut **value);
+                v.push(&mut **body);
+            }
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
+                v.extend(bindings.iter_mut().map(|(_, _, value, _)| value));
+                v.push(&mut **body);
+            }
+            Map { input, scalars }
+            | Filter {
+                input,
+                predicates: scalars,
+            } => {
+                v.push(&mut **input);
+                for scalar in scalars {
+                    v.append(&mut scalar.direct_subqueries_mut());
+                }
+            }
+            Reduce {
+                input,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => {
+                v.push(&mut **input);
+                for agg in aggregates {
+                    v.append(&mut agg.expr.direct_subqueries_mut());
+                }
+            }
+            TopK {
+                input,
+                group_key: _,
+                order_key: _,
+                limit,
+                offset,
+                expected_group_size: _,
+            } => {
+                v.push(&mut **input);
+                if let Some(limit) = limit {
+                    v.append(&mut limit.direct_subqueries_mut());
+                }
+                v.append(&mut offset.direct_subqueries_mut());
+            }
+            Project { input, outputs: _ }
+            | Distinct { input }
+            | Negate { input }
+            | Threshold { input } => v.push(&mut **input),
+            CallTable { func: _, exprs } => v.extend(
+                exprs
+                    .iter_mut()
+                    .map(|scalar| scalar.direct_subqueries_mut())
+                    .flatten(),
+            ),
+            Join {
+                left,
+                right,
+                on,
+                kind: _,
+            } => {
+                v.push(&mut **left);
+                v.push(&mut **right);
+                v.append(&mut on.direct_subqueries_mut());
+            }
+            Union { base, inputs } => {
+                v.push(&mut **base);
+                v.extend(inputs.iter_mut());
+            }
+        }
+
+        v
     }
 }
 
@@ -3030,7 +3250,6 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirRelationExpr::*;
         match self {
@@ -3109,7 +3328,6 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirRelationExpr::*;
         match self {
@@ -3184,6 +3402,118 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         }
         Ok(())
     }
+
+    fn children(&self) -> Vec<&HirScalarExpr> {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | LetRec {
+                limit: _,
+                bindings: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            }
+            | Distinct { input: _ }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => vec![],
+            Map { input: _, scalars }
+            | CallTable {
+                func: _,
+                exprs: scalars,
+            }
+            | Filter {
+                input: _,
+                predicates: scalars,
+            } => scalars.iter().collect(),
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => vec![on],
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => aggregates.iter().map(|agg| &*agg.expr).collect(),
+            TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit,
+                offset,
+                expected_group_size: _,
+            } => limit.iter().chain(std::iter::once(offset)).collect(),
+        }
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+        use HirRelationExpr::*;
+        match self {
+            Constant { rows: _, typ: _ }
+            | Get { id: _, typ: _ }
+            | Let {
+                name: _,
+                id: _,
+                value: _,
+                body: _,
+            }
+            | LetRec {
+                limit: _,
+                bindings: _,
+                body: _,
+            }
+            | Project {
+                input: _,
+                outputs: _,
+            }
+            | Distinct { input: _ }
+            | Negate { input: _ }
+            | Threshold { input: _ }
+            | Union { base: _, inputs: _ } => vec![],
+            Map { input: _, scalars }
+            | CallTable {
+                func: _,
+                exprs: scalars,
+            }
+            | Filter {
+                input: _,
+                predicates: scalars,
+            } => scalars.iter_mut().collect(),
+            Join {
+                left: _,
+                right: _,
+                on,
+                kind: _,
+            } => vec![on],
+            Reduce {
+                input: _,
+                group_key: _,
+                aggregates,
+                expected_group_size: _,
+            } => aggregates.iter_mut().map(|agg| &mut *agg.expr).collect(),
+            TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit,
+                offset,
+                expected_group_size: _,
+            } => limit.iter_mut().chain(std::iter::once(offset)).collect(),
+        }
+    }
 }
 
 impl HirScalarExpr {
@@ -3237,7 +3567,6 @@ impl HirScalarExpr {
     pub fn try_visit_direct_subqueries<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirRelationExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.try_visit_post(&mut |e| {
             VisitChildren::<HirRelationExpr>::try_visit_children(e, &mut f)
@@ -3248,7 +3577,6 @@ impl HirScalarExpr {
     pub fn try_visit_direct_subqueries_mut<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.try_visit_mut_post(&mut |e| {
             VisitChildren::<HirRelationExpr>::try_visit_mut_children(e, &mut f)
@@ -3929,6 +4257,146 @@ impl HirScalarExpr {
         });
         contains_parameters
     }
+
+    fn direct_subqueries(&self) -> Vec<&HirRelationExpr> {
+        let mut subqueries: Vec<&HirRelationExpr> = vec![];
+
+        let mut worklist = vec![self];
+        while let Some(elt) = worklist.pop() {
+            match elt {
+                HirScalarExpr::Column(_, _)
+                | HirScalarExpr::Parameter(_, _)
+                | HirScalarExpr::Literal(_, _, _)
+                | HirScalarExpr::CallUnmaterializable(_, _) => (),
+                HirScalarExpr::CallUnary {
+                    func: _,
+                    expr,
+                    name: _,
+                } => worklist.push(&*expr),
+                HirScalarExpr::CallBinary {
+                    func: _,
+                    expr1,
+                    expr2,
+                    name: _name,
+                } => {
+                    // Push in reverse so children pop (and are visited) left-to-right.
+                    worklist.push(&*expr2);
+                    worklist.push(&*expr1);
+                }
+                HirScalarExpr::CallVariadic {
+                    func: _,
+                    exprs,
+                    name: _name,
+                } => {
+                    worklist.extend(exprs.iter().rev());
+                }
+                HirScalarExpr::If {
+                    cond,
+                    then,
+                    els,
+                    name: _,
+                } => {
+                    worklist.push(&*els);
+                    worklist.push(&*then);
+                    worklist.push(&*cond);
+                }
+                HirScalarExpr::Exists(hir, _) | HirScalarExpr::Select(hir, _) => {
+                    subqueries.push(&*hir);
+                }
+                HirScalarExpr::Windowing(
+                    WindowExpr {
+                        func,
+                        partition_by,
+                        order_by,
+                    },
+                    _,
+                ) => {
+                    // Push in reverse so children pop (and are visited) left-to-right:
+                    // func args, then partition_by, then order_by.
+                    worklist.extend(order_by.iter().rev());
+                    worklist.extend(partition_by.iter().rev());
+                    match func {
+                        WindowExprType::Scalar(_) => (),
+                        WindowExprType::Value(val) => worklist.push(&*val.args),
+                        WindowExprType::Aggregate(agg) => worklist.push(&*agg.aggregate_expr.expr),
+                    }
+                }
+            }
+        }
+
+        subqueries
+    }
+
+    fn direct_subqueries_mut(&mut self) -> Vec<&mut HirRelationExpr> {
+        let mut subqueries: Vec<&mut HirRelationExpr> = vec![];
+
+        let mut worklist = vec![self];
+        while let Some(elt) = worklist.pop() {
+            match elt {
+                HirScalarExpr::Column(_, _)
+                | HirScalarExpr::Parameter(_, _)
+                | HirScalarExpr::Literal(_, _, _)
+                | HirScalarExpr::CallUnmaterializable(_, _) => (),
+                HirScalarExpr::CallUnary {
+                    func: _,
+                    expr,
+                    name: _,
+                } => worklist.push(&mut **expr),
+                HirScalarExpr::CallBinary {
+                    func: _,
+                    expr1,
+                    expr2,
+                    name: _name,
+                } => {
+                    // Push in reverse so children pop (and are visited) left-to-right.
+                    worklist.push(&mut **expr2);
+                    worklist.push(&mut **expr1);
+                }
+                HirScalarExpr::CallVariadic {
+                    func: _,
+                    exprs,
+                    name: _name,
+                } => {
+                    worklist.extend(exprs.iter_mut().rev());
+                }
+                HirScalarExpr::If {
+                    cond,
+                    then,
+                    els,
+                    name: _,
+                } => {
+                    worklist.push(&mut **els);
+                    worklist.push(&mut **then);
+                    worklist.push(&mut **cond);
+                }
+                HirScalarExpr::Exists(hir, _) | HirScalarExpr::Select(hir, _) => {
+                    subqueries.push(&mut **hir);
+                }
+                HirScalarExpr::Windowing(
+                    WindowExpr {
+                        func,
+                        partition_by,
+                        order_by,
+                    },
+                    _,
+                ) => {
+                    // Push in reverse so children pop (and are visited) left-to-right:
+                    // func args, then partition_by, then order_by.
+                    worklist.extend(order_by.iter_mut().rev());
+                    worklist.extend(partition_by.iter_mut().rev());
+                    match func {
+                        WindowExprType::Scalar(_) => (),
+                        WindowExprType::Value(val) => worklist.push(&mut val.args),
+                        WindowExprType::Aggregate(agg) => {
+                            worklist.push(&mut agg.aggregate_expr.expr)
+                        }
+                    }
+                }
+            }
+        }
+
+        subqueries
+    }
 }
 
 /// Yields the direct scalar children of `self`. Stops at `Exists` / `Select`:
@@ -4004,7 +4472,6 @@ impl VisitChildren<Self> for HirScalarExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirScalarExpr::*;
         match self {
@@ -4038,7 +4505,6 @@ impl VisitChildren<Self> for HirScalarExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirScalarExpr::*;
         match self {
@@ -4067,6 +4533,50 @@ impl VisitChildren<Self> for HirScalarExpr {
             Windowing(expr, _name) => expr.try_visit_mut_children(f)?,
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&Self> {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => vec![],
+            CallUnary { expr, .. } => vec![&*expr],
+            CallBinary { expr1, expr2, .. } => {
+                vec![&*expr1, &*expr2]
+            }
+            CallVariadic { exprs, .. } => exprs.iter().collect(),
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
+                vec![&*cond, &*then, &*els]
+            }
+            Exists(..) | Select(..) => vec![],
+            Windowing(expr, _name) => expr.children(),
+        }
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut Self> {
+        use HirScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => vec![],
+            CallUnary { expr, .. } => vec![&mut **expr],
+            CallBinary { expr1, expr2, .. } => {
+                vec![&mut **expr1, &mut **expr2]
+            }
+            CallVariadic { exprs, .. } => exprs.iter_mut().collect(),
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
+                vec![&mut **cond, &mut **then, &mut **els]
+            }
+            Exists(..) | Select(..) => vec![],
+            Windowing(expr, _name) => expr.children_mut(),
+        }
     }
 }
 
@@ -4114,7 +4624,6 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&HirRelationExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirScalarExpr::*;
         match self {
@@ -4135,7 +4644,6 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         use HirScalarExpr::*;
         match self {
@@ -4151,6 +4659,38 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
             Exists(expr, _name) | Select(expr, _name) => f(expr)?,
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&HirRelationExpr> {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => vec![],
+            Exists(expr, _name) | Select(expr, _name) => vec![&*expr],
+        }
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut HirRelationExpr> {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => vec![],
+            Exists(expr, _name) | Select(expr, _name) => vec![&mut **expr],
+        }
     }
 }
 

@@ -1793,7 +1793,6 @@ impl MirRelationExpr {
     pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.try_visit_mut_post(&mut |expr| expr.try_visit_scalars_mut1(f))
     }
@@ -1922,7 +1921,6 @@ impl MirRelationExpr {
     pub fn try_visit_scalars<F, E>(&self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&MirScalarExpr) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         self.try_visit_post(&mut |expr| expr.try_visit_scalars_1(f))
     }
@@ -2386,7 +2384,6 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         for child in self.children() {
             f(child)?
@@ -2397,12 +2394,19 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
-        E: From<RecursionLimitError>,
     {
         for child in self.children_mut() {
             f(child)?
         }
         Ok(())
+    }
+
+    fn children(&self) -> Vec<&MirRelationExpr> {
+        self.children().collect()
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut MirRelationExpr> {
+        self.children_mut().collect()
     }
 }
 
