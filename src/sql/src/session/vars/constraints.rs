@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 use std::ops::{RangeBounds, RangeFrom, RangeInclusive};
+use std::time::Duration;
 
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::bytes::ByteSize;
@@ -18,6 +19,8 @@ use mz_repr::bytes::ByteSize;
 use super::{Value, Var, VarError};
 
 pub static NUMERIC_NON_NEGATIVE: NumericNonNegNonNan = NumericNonNegNonNan;
+
+pub static NON_ZERO_DURATION: NonZeroDuration = NonZeroDuration;
 
 pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
     NumericInRange(0.0f64..=1.0);
@@ -107,6 +110,25 @@ impl DomainConstraint for NumericNonNegNonNan {
                 name: var.name(),
                 invalid_values: vec![n.to_string()],
                 reason: "only supports non-negative, non-NaN numeric values".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NonZeroDuration;
+
+impl DomainConstraint for NonZeroDuration {
+    type Value = Duration;
+
+    fn check(&self, var: &dyn Var, d: &Duration) -> Result<(), VarError> {
+        if d.is_zero() {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values: vec![format!("{:?}", d)],
+                reason: "only supports durations greater than zero".to_string(),
             })
         } else {
             Ok(())
