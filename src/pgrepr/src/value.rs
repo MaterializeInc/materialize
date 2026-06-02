@@ -725,7 +725,7 @@ impl Value {
             Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
-            Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
+            Type::Uuid => Value::Uuid(strconv::parse_uuid(s)?),
             Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mz_timestamp(s)?),
             Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
@@ -831,7 +831,7 @@ impl Value {
             Type::TimestampTz { .. } => {
                 packer.push(Datum::TimestampTz(strconv::parse_timestamptz(s)?))
             }
-            Type::Uuid => packer.push(Datum::Uuid(Uuid::parse_str(s)?)),
+            Type::Uuid => packer.push(Datum::Uuid(strconv::parse_uuid(s)?)),
             Type::MzTimestamp => packer.push(Datum::MzTimestamp(strconv::parse_mz_timestamp(s)?)),
             Type::Range { element_type } => {
                 let range = strconv::parse_range(s, |elem_text| {
