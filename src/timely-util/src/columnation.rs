@@ -96,6 +96,11 @@ impl<T: Columnation> ColumnationStack<T> {
     ///
     /// The element can be read by indexing.
     pub fn copy(&mut self, item: &T) {
+        // SAFETY: `Region::copy` returns an item whose owned-looking allocations alias into
+        // `self.inner`. We push it into `self.local`, which is a tombstone vector: every code
+        // path that drops or shortens `self.local` (`clear`, `Drop`, `retain_from`) calls
+        // `set_len(0)` first, so Rust's `Drop` glue never runs on these aliasing elements.
+        // The aliased contents remain valid until `self.inner.clear()` is invoked.
         unsafe {
             self.local.push(self.inner.copy(item));
         }
@@ -103,6 +108,10 @@ impl<T: Columnation> ColumnationStack<T> {
 
     /// Empties the collection.
     pub fn clear(&mut self) {
+        // SAFETY: `set_len(0)` is sound because shrinking is always valid; doing it before
+        // `inner.clear()` ensures Rust's `Drop` glue does not run on elements that alias into
+        // the region. `Region::clear` is then safe to call because no live `Region::copy`
+        // results remain in `self.local`.
         unsafe {
             self.local.set_len(0);
             self.inner.clear();
@@ -182,6 +191,9 @@ impl<T: Columnation> ColumnationStack<T> {
 impl<A: Columnation, B: Columnation> ColumnationStack<(A, B)> {
     /// Copies a destructured tuple `(A, B)` into this column stack.
     pub fn copy_destructured(&mut self, t1: &A, t2: &B) {
+        // SAFETY: Same reasoning as `copy`: `Region::copy_destructured` returns aliasing
+        // contents valid for the lifetime of `self.inner`; `self.local`'s `Drop` glue is
+        // skipped via `set_len(0)` in `clear`/`Drop`/`retain_from`.
         unsafe {
             self.local.push(self.inner.copy_destructured(t1, t2));
         }
@@ -191,6 +203,9 @@ impl<A: Columnation, B: Columnation> ColumnationStack<(A, B)> {
 impl<A: Columnation, B: Columnation, C: Columnation> ColumnationStack<(A, B, C)> {
     /// Copies a destructured tuple `(A, B, C)` into this column stack.
     pub fn copy_destructured(&mut self, r0: &A, r1: &B, r2: &C) {
+        // SAFETY: Same reasoning as `copy`: `Region::copy_destructured` returns aliasing
+        // contents valid for the lifetime of `self.inner`; `self.local`'s `Drop` glue is
+        // skipped via `set_len(0)` in `clear`/`Drop`/`retain_from`.
         unsafe {
             self.local.push(self.inner.copy_destructured(r0, r1, r2));
         }
