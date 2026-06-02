@@ -20,8 +20,8 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
-    TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -31,7 +31,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -49,7 +49,7 @@ use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
-use mz_row_spine::{DatumSeq, RowRowColPagedBuilder};
+use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -1073,8 +1073,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     oks
                 };
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
+                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
+                    &name,
+                    oks,
+                    key.clone(),
+                    thinning.clone(),
+                    use_paged_path,
+                );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
@@ -1103,6 +1109,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
+        use_paged_path: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -1154,18 +1161,23 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             }
         });
 
-        let oks = ok_stream
-            .mz_arrange_core::<
+        let exchange =
+            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
+        let oks = if use_paged_path {
+            ok_stream.mz_arrange_core::<
                 _,
                 Col2ValPagedBatcher<_, _, _, _>,
                 RowRowColPagedBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, T, Diff>,
-                ),
-                name
-            );
+            >(exchange, name)
+        } else {
+            ok_stream.mz_arrange_core::<
+                _,
+                Col2ValBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        };
         (
             oks,
             err_stream.as_collection(),

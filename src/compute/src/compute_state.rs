@@ -321,7 +321,7 @@ impl ComputeState {
             use mz_ore::pager::Backend;
             use mz_timely_util::column_pager::apply_tiered_config;
 
-            let enabled = ENABLE_COLUMN_PAGED_BATCHER.get(config);
+            let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
 
             // Budget derivation: fraction × announced memory limit, with a
             // 128 MiB floor so the no-pressure case doesn't page per chunk.

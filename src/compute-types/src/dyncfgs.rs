@@ -23,15 +23,39 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
 );
 
-/// Install the column-pageable merge batcher on each compute worker, so
-/// arrangements that route through it can spill chunks under memory
-/// pressure rather than holding them all resident. Disabled by default;
-/// the budget/backend knobs below tune the behavior when enabled.
+/// Use the column-paged merge batcher code path at arrange sites. When
+/// `true`, arrange operators use `Col2ValPagedBatcher` (in
+/// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
+/// `mz_row_spine`) — the columnar-native batcher that the pager can
+/// spill (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). When `false`
+/// (the default), the same arrange sites use the legacy
+/// `Col2ValBatcher` / `RowRowBuilder` (columnation-merger) path that
+/// shipped before #36627. Read at operator construction time; flips
+/// take effect on dataflows created after the change.
+///
+/// Disabled by default while the new path is stabilizing.
+/// `DifferentialJoinHydration*` feature-benchmark scenarios opt in
+/// explicitly so the spill path is measured.
 pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     "enable_column_paged_batcher",
     false,
-    "Install the column-paged merge batcher on each compute worker so it can spill under memory \
-     pressure.",
+    "Use the columnar-native paged merge batcher at arrange sites. When `false` (default), \
+     arranges fall back to the legacy columnation `Col2ValBatcher` / `RowRowBuilder` path.",
+);
+
+/// Allow the column-paged batcher's pager to actually evict chunks
+/// under memory pressure. Only meaningful when
+/// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`; with the spill flag off
+/// the pager keeps every chunk resident regardless of budget.
+///
+/// Off by default, even when the batcher path itself is on, so the
+/// no-pressure case stays a pure resident operation. Tune the budget /
+/// backend via [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
+pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
+    "enable_column_paged_batcher_spill",
+    false,
+    "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
+     meaningful when `enable_column_paged_batcher = true`.",
 );
 
 /// Total resident-byte budget the column-paged batcher's tiered policy
@@ -47,7 +71,7 @@ pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
 /// doesn't crowd out the spine. Set lower to spill more aggressively
 /// under pressure. The computed budget is floored at 128 MiB so the
 /// no-pressure case doesn't page per chunk. Ignored when
-/// `enable_column_paged_batcher` is `false`.
+/// `enable_column_paged_batcher_spill` is `false`.
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
     0.05,
@@ -457,5 +481,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
 }
