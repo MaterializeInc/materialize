@@ -174,8 +174,68 @@ struct Args {
     enable_storage_introspection_logs: bool,
 }
 
+/// On Linux, PID 1 has special signal semantics: the kernel will not
+/// deliver signals whose disposition is SIG_DFL (the default). Since
+/// distroless containers run the binary directly as PID 1 (no tini),
+/// signals like SIGTERM from Kubernetes pod termination would be silently
+/// ignored without explicit handlers. This function registers a handler
+/// that restores the default disposition and re-raises, producing the
+/// expected termination behavior.
+fn install_termination_signal_handlers() {
+    use nix::sys::signal;
+
+    extern "C" fn handle_signal(signum: i32) {
+        let action = signal::SigAction::new(
+            signal::SigHandler::SigDfl,
+            signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+            signal::SigSet::empty(),
+        );
+        unsafe { signal::sigaction(signum.try_into().unwrap(), &action) }
+            .unwrap_or_else(|_| panic!("failed to uninstall handler for {}", signum));
+        let ret = unsafe { libc::raise(signum) };
+        if ret == -1 {
+            panic!("failed to re-raise signal {}", signum);
+        }
+    }
+
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_signal),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+    for signum in &[
+        signal::SIGHUP,
+        signal::SIGINT,
+        signal::SIGALRM,
+        signal::SIGTERM,
+    ] {
+        unsafe { signal::sigaction(*signum, &action) }
+            .unwrap_or_else(|e| panic!("failed to install handler for {}: {}", signum, e));
+    }
+}
+
 pub fn main() {
+    install_termination_signal_handlers();
+
     mz_ore::panic::install_enhanced_handler();
+
+    // SAFETY: Called before any threads are spawned.
+    // `install_enhanced_handler` above only registers a panic hook; it does
+    // not spawn threads. The hook spawns a thread only if a panic fires,
+    // which cannot happen between here and the first `unsafe` call below.
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+        if std::env::var("CLUSTERD_PROCESS").is_err() {
+            // Extract the ordinal index from the last segment of the
+            // StatefulSet hostname (e.g., "mz5ncn-cluster-s1-replica-s1-gen-1-0"
+            // → "0"). This matches orchestrator-kubernetes which also uses
+            // split('-').next_back() to extract the process ID from pod names.
+            if let Ok(hostname) = std::env::var("HOSTNAME") {
+                if let Some(ordinal) = hostname.rsplit('-').next() {
+                    unsafe { std::env::set_var("CLUSTERD_PROCESS", ordinal) };
+                }
+            }
+        }
+    }
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
