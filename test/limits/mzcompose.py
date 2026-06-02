@@ -2500,8 +2500,25 @@ def workflow_committer_comparison(
         # state from a prior variant can't leak in.
         c.down(destroy_volumes=True)
 
+        # Raise Postgres SSI predicate-lock limits well above defaults. The
+        # default RWConflictPool sizing exhausts under the concurrent cold-start
+        # CaS burst (~100 clusterds) and triggers a retry storm ("not enough
+        # elements in RWConflictPool"). These values test whether the psql
+        # hydration collapse is just default-limit starvation rather than a
+        # fundamental direct-CaS limit.
         store_service = (
-            Cockroach(in_memory=True) if store == "cockroach" else PostgresMetadata()
+            Cockroach(in_memory=True)
+            if store == "cockroach"
+            else PostgresMetadata(
+                extra_command=[
+                    "-c",
+                    "max_pred_locks_per_transaction=1024",
+                    "-c",
+                    "max_pred_locks_per_relation=10000",
+                    "-c",
+                    "max_pred_locks_per_page=512",
+                ]
+            )
         )
         with c.override(
             store_service,
@@ -2524,6 +2541,12 @@ def workflow_committer_comparison(
             run_all(
                 [
                     "ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'",
+                    # Use persist's Postgres-tuned CaS query (SELECT ... FOR
+                    # UPDATE row lock) instead of the CRDB-flavored query, which
+                    # relies on SSI and triggers "pivot" serialization-failure
+                    # (40001) retry storms on Postgres under the cold-start
+                    # burst. No-op on CockroachDB (gated on PostgresMode).
+                    "ALTER SYSTEM SET persist_use_postgres_tuned_queries = true",
                     # Faster table tick => higher per-MV write rate, pushing
                     # steady-state committer load past what direct CaS sustains.
                     f"ALTER SYSTEM SET default_timestamp_interval = '{args.tick_interval}'",
