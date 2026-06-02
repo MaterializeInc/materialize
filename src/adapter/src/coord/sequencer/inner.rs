@@ -2183,6 +2183,15 @@ impl Coordinator {
     ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[
+                        Datum::Null,
+                    ]))));
+                    return;
+                };
+
                 if ctx.session().conn_id().unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we send
                     // back a canceled resposne to the client issuing the query,
@@ -2221,6 +2230,12 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    return Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])));
+                };
+
                 if conn_id.unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we return
                     // a canceled response to the client issuing the query,
