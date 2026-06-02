@@ -19,7 +19,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::{assert_none, halt, soft_panic_or_log};
+use mz_ore::{halt, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -1663,10 +1663,21 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
-                assert_eq!(proto.encoded_size_bytes, 0);
-                assert_eq!(proto.key_lower.len(), 0);
-                assert_none!(proto.key_stats);
-                assert_none!(proto.diffs_sum);
+                // An inline part carries its data in `kind`; the hollow-only
+                // fields must be unset. These are decoded from an untrusted
+                // blob, so validate and return a decode error rather than
+                // asserting (which panicked, even in release, on a
+                // malformed/crafted part). Found by the rollup_proto_roundtrip
+                // cargo-fuzz target.
+                if proto.encoded_size_bytes != 0
+                    || !proto.key_lower.is_empty()
+                    || proto.key_stats.is_some()
+                    || proto.diffs_sum.is_some()
+                {
+                    return Err(TryFromProtoError::InvalidPersistState(
+                        "inline ProtoHollowBatchPart has hollow-part fields set".into(),
+                    ));
+                }
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
@@ -1933,6 +1944,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_none;
+
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
@@ -1948,6 +1961,24 @@ mod tests {
     use crate::tests::new_test_client_cache;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn rollup_inline_batch_part_with_hollow_fields_is_error() {
+        // An inline `ProtoHollowBatchPart` carrying hollow-only fields (here a
+        // non-zero encoded_size_bytes) must decode to an error, not panic — it
+        // used to `assert!`, which fired even in release on a crafted/corrupted
+        // blob. Regression for the rollup_proto_roundtrip cargo-fuzz finding.
+        use mz_proto::ProtoType;
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x3a, 0x12, 0x0a, 0x00, 0x12, 0x0a, 0x22, 0x06, 0x5a, 0x00, 0x10, 0x02, 0x2a, 0x00,
+            0x22, 0x00, 0x22, 0x00, 0x22, 0x00,
+        ];
+        let proto = crate::internal::state::ProtoRollup::decode(bytes)
+            .expect("crash input decodes as a proto");
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        assert_err!(result);
+    }
 
     #[mz_ore::test]
     fn metadata_map() {
