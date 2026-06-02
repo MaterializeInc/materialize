@@ -24,7 +24,11 @@ separately using [role-based access control (RBAC)](/security/self-managed/acces
 {{</ note >}}
 
 {{< note >}}
-**Current limitations:** Self-managed SSO supports OIDC only. SAML, SCIM (automated user provisioning), and IdP group-to-role mapping are not currently supported. 
+**Current limitations:**
+
+- **SAML** authentication is not supported. Materialize supports OIDC only.
+- **SCIM** is not supported. Users are auto-provisioned on first SSO login (see [Auto-provisioning roles](#auto-provisioning-roles)), but removing a user from your IdP does not automatically deprovision their Materialize role.
+- **IdP group-to-role mapping** is not supported. Each user maps 1:1 to a single Materialize role via a JWT claim; privileges and group-based assignment are managed via [RBAC](/security/self-managed/access-control/).
 {{</ note >}}
 
 ## Before you begin
