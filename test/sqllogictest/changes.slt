@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Plan-time tests for the CHANGES(<collection>, <as_of>) table function.
+#
+# The per-update timestamps in the changelog are not deterministic, so the data
+# round-trip is verified in test/testdrive/changes.td. Here we cover the
+# deterministic, plan-time behavior: feature gating and argument validation.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int)
+
+# The feature is gated behind a feature flag.
+query error the CHANGES\(collection, as_of\) table function is not available
+SELECT * FROM CHANGES (t, 0)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_changes_table_function = true
+----
+COMPLETE 0
+
+# CHANGES requires a persist-backed object (table, source, or materialized
+# view). A view is rejected.
+statement ok
+CREATE VIEW v AS SELECT * FROM t
+
+query error CHANGES requires a table, source, or materialized view, but materialize\.public\.v is a view
+SELECT * FROM CHANGES (v, 0)
+
+# A common table expression is rejected.
+query error CHANGES requires a persisted collection, but got a common table expression
+WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c, 0)
+
+# The as_of must be a constant timestamp expression: unmaterializable functions
+# and out-of-range / negative values are rejected.
+query error calling an unmaterializable function in AS OF or UP TO not yet supported
+SELECT * FROM CHANGES (t, now())
+
+query error AS OF or UP TO should be castable to a \(non-null\) mz_timestamp value
+SELECT * FROM CHANGES (t, -1)
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t
