@@ -3098,6 +3098,40 @@ fn test_pg_cancel_backend() {
     );
 }
 
+/// Regression test for SQL-295: `pg_cancel_backend(NULL)` used to panic while
+/// planning the call (`Datum::unwrap_int32 called on Null`). Like in
+/// PostgreSQL, a `NULL` argument must return `NULL` instead.
+#[mz_ore::test]
+fn test_pg_cancel_backend_null() {
+    mz_ore::test::init_logging();
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // A `NULL` argument returns `NULL`, matching PostgreSQL, rather than
+    // panicking. Cover the literal `NULL`, an explicitly-typed `NULL`, a `NULL`
+    // bound parameter, and an expression that evaluates to `NULL`.
+    for query in [
+        "SELECT pg_cancel_backend(NULL)",
+        "SELECT pg_cancel_backend(NULL::int4)",
+    ] {
+        let found_conn: Option<bool> = client.query_one(query, &[]).unwrap().get(0);
+        assert_eq!(found_conn, None, "query: {query}");
+    }
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1 + 42)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
+}
+
 // Test params in interesting places.
 #[mz_ore::test]
 fn test_params() {

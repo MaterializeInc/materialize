@@ -60,8 +60,9 @@ use crate::plan::{PlanError, QueryContext};
 pub enum SideEffectingFunc {
     /// The `pg_cancel_backend` function.
     PgCancelBackend {
-        // The ID of the connection to cancel.
-        connection_id: u32,
+        // The ID of the connection to cancel, or `None` if the argument was
+        // `NULL`, in which case the function returns `NULL`.
+        connection_id: Option<u32>,
     },
 }
 
@@ -287,10 +288,14 @@ const PG_CANCEL_BACKEND: SideEffectingFuncImpl = SideEffectingFuncImpl {
     name: "pg_cancel_backend",
     oid: 2171,
     param_types: &[SqlScalarType::Int32],
-    return_type: SqlScalarType::Bool.nullable(false),
+    // Like in PostgreSQL, the function returns `NULL` when its argument is
+    // `NULL`, so the output column is nullable.
+    return_type: SqlScalarType::Bool.nullable(true),
     plan_fn: |datums| -> SideEffectingFunc {
-        SideEffectingFunc::PgCancelBackend {
-            connection_id: u32::reinterpret_cast(datums[0].unwrap_int32()),
-        }
+        let connection_id = match datums[0] {
+            Datum::Null => None,
+            datum => Some(u32::reinterpret_cast(datum.unwrap_int32())),
+        };
+        SideEffectingFunc::PgCancelBackend { connection_id }
     },
 };

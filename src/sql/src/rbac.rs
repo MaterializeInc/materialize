@@ -1469,9 +1469,15 @@ fn generate_rbac_requirements(
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
-                SideEffectingFunc::PgCancelBackend { connection_id } => active_conns
-                    .expect("active_conns is required for Plan::SideEffectingFunc")(
-                    *connection_id
+                // A `NULL` argument cancels no connection (the function returns
+                // `NULL`), so there is no role membership to require.
+                SideEffectingFunc::PgCancelBackend {
+                    connection_id: None,
+                } => BTreeSet::new(),
+                SideEffectingFunc::PgCancelBackend {
+                    connection_id: Some(connection_id),
+                } => active_conns.expect("active_conns is required for Plan::SideEffectingFunc")(
+                    *connection_id,
                 )
                 .map(|x| [x].into())
                 .unwrap_or_default(),
