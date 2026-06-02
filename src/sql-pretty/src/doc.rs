@@ -1342,6 +1342,7 @@ impl Pretty {
                         | r#""extract""#
                         | r#""greatest""#
                         | r#""least""#
+                        | r#""list""#
                         | r#""map""#
                         | r#""normalize""#
                         | r#""nullif""#
