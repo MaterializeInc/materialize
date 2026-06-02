@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{Eval, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
@@ -287,18 +287,49 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // `CHANGES`: collect any changelog reads in the dataflow so we can mark
         // their source imports (to be read as append-only changelogs in
         // rendering) and pin the dataflow `as_of` to the earliest changelog
-        // start. The peek itself still happens at `timestamp_ctx`'s timestamp,
-        // so history between the changelog start and the peek time is replayed.
-        let mut changelog_ids: Vec<GlobalId> = Vec::new();
-        let mut changelog_as_of: Option<Timestamp> = None;
+        // start. The peek itself still happens at `timestamp_ctx`'s timestamp, so
+        // history between the changelog start and the peek time is replayed.
+        //
+        // Each changelog's lower bound is an `mz_timestamp`-typed scalar that we
+        // resolve here at the query time: a sliding (`mz_now()`-relative) bound
+        // trails the query time by its lag, while a fixed bound ignores it. So a
+        // one-off `SELECT * FROM CHANGES(c AS OF mz_now() - INTERVAL '30m')`
+        // reads the window `[query_time - 30m, query_time]`.
+        let mut changelog_bounds: Vec<(GlobalId, MirScalarExpr)> = Vec::new();
         for build in &df_desc.objects_to_build {
             build.plan.as_inner().visit_pre(|e| {
-                if let MirRelationExpr::Changes { id, as_of, .. } = e {
-                    changelog_ids.push(*id);
-                    changelog_as_of =
-                        Some(changelog_as_of.map_or(*as_of, |existing| existing.min(*as_of)));
+                if let MirRelationExpr::Changes { id, bound, .. } = e {
+                    changelog_bounds.push((*id, bound.clone()));
                 }
             });
+        }
+        let mut changelog_ids: Vec<GlobalId> = Vec::new();
+        let mut changelog_as_of: Option<Timestamp> = None;
+        if !changelog_bounds.is_empty() {
+            let prep = ExprPrepOneShot {
+                logical_time: match timestamp_ctx.timestamp() {
+                    Some(t) => EvalTime::Time(*t),
+                    None => EvalTime::NotAvailable,
+                },
+                session,
+                catalog_state: self.catalog.state(),
+            };
+            let temp_storage = mz_repr::RowArena::new();
+            for (id, mut bound) in changelog_bounds {
+                // Resolve `mz_now()` to the query time, then fold to a constant.
+                prep.prep_scalar_expr(&mut bound)?;
+                let start = match bound.eval(&[], &temp_storage)? {
+                    mz_repr::Datum::MzTimestamp(ts) => ts,
+                    other => {
+                        return Err(OptimizerError::Internal(format!(
+                            "CHANGES bound did not evaluate to an mz_timestamp: {other:?}"
+                        )));
+                    }
+                };
+                changelog_ids.push(id);
+                changelog_as_of =
+                    Some(changelog_as_of.map_or(start, |existing| existing.min(start)));
+            }
         }
         for id in &changelog_ids {
             df_desc.set_source_read_as_changelog(id);

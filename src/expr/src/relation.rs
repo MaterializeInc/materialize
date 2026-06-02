@@ -129,7 +129,7 @@ pub enum MirRelationExpr {
         access_strategy: AccessStrategy,
     },
     /// Read an existing global collection as an append-only changelog (the
-    /// `CHANGES` table function), starting at `as_of`.
+    /// `CHANGES` table function), with lower bound `bound`.
     ///
     /// This is a leaf, like [`MirRelationExpr::Get`], but it is deliberately
     /// opaque to the optimizer: its output schema is the input collection's
@@ -146,10 +146,15 @@ pub enum MirRelationExpr {
         /// The (extended) schema of the changelog: the input columns followed by
         /// `mz_timestamp` and `mz_diff`.
         typ: ReprRelationType,
-        /// The changelog start. The snapshot collapses to this time, and changes
-        /// after it are appended at the time they occurred.
+        /// The changelog lower bound, as an `mz_timestamp`-typed scalar. It is a
+        /// constant for a fixed bound, or an `mz_now()`-relative expression for a
+        /// sliding window. The coordinator evaluates it (resolving `mz_now()` to
+        /// the query time) to pin the dataflow `as_of`; the snapshot collapses to
+        /// that time and changes after it are appended at the time they occurred.
+        /// It is opaque to the optimizer (not visited as a child scalar) and is
+        /// dropped when lowered to a changelog source import.
         #[mzreflect(ignore)]
-        as_of: mz_repr::Timestamp,
+        bound: MirScalarExpr,
     },
     /// Introduce a temporary dataflow.
     ///

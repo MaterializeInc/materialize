@@ -50,13 +50,15 @@ SELECT * FROM CHANGES (t AS OF now())
 query error AS OF or UP TO should be castable to a \(non-null\) mz_timestamp value
 SELECT * FROM CHANGES (t AS OF -1)
 
-# A sliding (mz_now()-relative) bound parses and passes gating, but its dataflow
-# wiring is not yet implemented.
-query error CHANGES with a sliding mz_now\(\)-relative bound not yet supported
-SELECT * FROM CHANGES (t AS OF mz_now())
-
-query error CHANGES with a sliding mz_now\(\)-relative bound not yet supported
-SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+# A sliding (mz_now()-relative) bound is supported in a one-off SELECT: mz_now()
+# resolves to the query time, so the changelog start trails it by the lag. With
+# a zero lag the changelog start is the query time, so the snapshot is the empty
+# table's current contents. (The per-update timestamps are non-deterministic;
+# the sliding data round-trip is covered in test/testdrive/changes.td.)
+query I
+SELECT count(*) FROM CHANGES (t AS OF mz_now())
+----
+0
 
 # A durable maintained object (materialized view, index) requires a sliding
 # bound: a fixed lower bound would hold the input's `since` open indefinitely.

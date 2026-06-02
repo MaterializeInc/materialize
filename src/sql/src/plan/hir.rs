@@ -117,7 +117,7 @@ pub enum HirRelationExpr {
         typ: SqlRelationType,
     },
     /// Read a global collection as an append-only changelog (the `CHANGES`
-    /// table function), starting at `as_of`. Lowers to
+    /// table function), with lower bound `bound`. Lowers to
     /// [`mz_expr::MirRelationExpr::Changes`].
     Changes {
         /// The global collection to read as a changelog.
@@ -125,9 +125,11 @@ pub enum HirRelationExpr {
         /// The extended schema: the input columns plus `mz_timestamp` and
         /// `mz_diff`.
         typ: SqlRelationType,
-        /// The changelog start. The snapshot collapses to this time, and changes
-        /// after it are appended at the time they occurred.
-        as_of: mz_repr::Timestamp,
+        /// The changelog lower bound, as an already-lowered `mz_timestamp`-typed
+        /// scalar: a constant for a fixed bound, or an `mz_now()`-relative
+        /// expression for a sliding window. Evaluated by the coordinator (which
+        /// resolves `mz_now()` to the query time) to pin the dataflow `as_of`.
+        bound: mz_expr::MirScalarExpr,
     },
     /// Mutually recursive CTE
     LetRec {

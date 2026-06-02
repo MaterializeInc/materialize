@@ -165,12 +165,12 @@ impl HirRelationExpr {
                     writeln!(f, "{}Get {}", ctx.indent, humanized_id)?;
                 }
             },
-            Changes { id, as_of, .. } => {
+            Changes { id, bound, .. } => {
                 let humanized_id = ctx
                     .humanizer
                     .humanize_id(*id)
                     .unwrap_or_else(|| id.to_string());
-                writeln!(f, "{}Changes {} as_of={}", ctx.indent, humanized_id, as_of)?;
+                writeln!(f, "{}Changes {} bound={}", ctx.indent, humanized_id, bound)?;
             }
             Project { outputs, input } => {
                 let outputs = Indices(outputs);

@@ -3093,38 +3093,40 @@ fn plan_changes(
     //
     // NOTE: advisory clamping to `since` is not yet differentiated in execution;
     // for now both `AS OF` and `AS OF AT LEAST` pin the bound and surface an
-    // error if it precedes the input's `since`. The fixed/sliding distinction,
-    // however, is load-bearing for the gating below.
-    let bound = match as_of {
+    // error if it precedes the input's `since`.
+    let bound_ast = match as_of {
         AsOf::At(expr) | AsOf::AtLeast(expr) => expr.clone(),
     };
-    let sliding = changes_bound_is_sliding(qcx.scx, bound.clone())?;
+    let bound_hir = plan_changes_bound(qcx.scx, bound_ast.clone())?;
+    let sliding = bound_hir.contains_temporal();
 
-    // A durable maintained object (materialized view, index, ...) lives until it
-    // is dropped, so a fixed lower bound would pin the input's `since` open
-    // indefinitely, with the retained history growing without bound. Such
-    // objects must use a sliding `mz_now()`-relative bound, whose lag keeps the
-    // read hold bounded. (A one-off `SELECT` or `SUBSCRIBE` may use a fixed
-    // bound: its read hold is released when the query or session ends.)
-    if qcx.lifetime.is_maintained() && !sliding {
-        sql_bail!(
-            "CHANGES in a materialized view, index, or other maintained object \
-             requires a sliding bound, e.g. \
-             `AS OF AT LEAST mz_now() - INTERVAL '30 minutes'`; a fixed lower \
-             bound would hold the input's compaction frontier open indefinitely"
-        );
+    // Execution is currently wired up only for one-off `SELECT`s (the peek
+    // path). Gate everything else:
+    //   * A durable maintained object (materialized view, index) with a fixed
+    //     bound would pin the input's `since` open indefinitely, the retained
+    //     history growing without bound — rejected with a targeted message.
+    //   * Any other non-`SELECT` use (a sliding bound in a maintained object,
+    //     SUBSCRIBE, ...) is structurally fine but not yet wired up.
+    if !matches!(qcx.lifetime, QueryLifetime::OneShot) {
+        if qcx.lifetime.is_maintained() && !sliding {
+            sql_bail!(
+                "CHANGES in a materialized view, index, or other maintained object \
+                 requires a sliding bound, e.g. \
+                 `AS OF AT LEAST mz_now() - INTERVAL '30 minutes'`; a fixed lower \
+                 bound would hold the input's compaction frontier open indefinitely"
+            );
+        }
+        bail_unsupported!("CHANGES outside a one-off SELECT");
     }
 
-    // Only the fixed-bound path is wired up today. A sliding bound additionally
-    // requires an output temporal filter (`mz_timestamp >= mz_now() - ...`) and
-    // a lagging read policy on the input, which are not yet implemented.
-    if sliding {
-        bail_unsupported!("CHANGES with a sliding mz_now()-relative bound");
+    // The bound is carried as an already-lowered `mz_timestamp`-typed scalar that
+    // the coordinator evaluates at the query time (resolving `mz_now()`). A fixed
+    // bound is additionally validated here so a non-constant or out-of-range
+    // value is a plan-time error, exactly as in `SELECT ... AS OF`.
+    if !sliding {
+        plan_as_of_or_up_to(qcx.scx, bound_ast)?;
     }
-
-    // The fixed changelog start is a constant timestamp expression, evaluated
-    // once at plan time (the same machinery as a historical `SELECT ... AS OF`).
-    let as_of = plan_as_of_or_up_to(qcx.scx, bound)?;
+    let bound = bound_hir.lower_uncorrelated(qcx.scx.catalog.system_vars())?;
 
     // The changelog exposes the input columns plus the per-update `mz_timestamp`
     // and `mz_diff`, matching SUBSCRIBE's diff output shape.
@@ -3137,7 +3139,7 @@ fn plan_changes(
     let expr = HirRelationExpr::Changes {
         id: global_id,
         typ: changes_desc.typ().clone(),
-        as_of,
+        bound,
     };
     let scope = Scope::from_source(
         Some(Into::<PartialItemName>::into(full_name)),
@@ -3147,14 +3149,15 @@ fn plan_changes(
     Ok((expr, scope))
 }
 
-/// Returns whether a `CHANGES` `AS OF` bound is sliding, i.e. references
-/// `mz_now()` (a window that trails real time), as opposed to a fixed constant
-/// timestamp. Plans the bound the same way [`plan_as_of_or_up_to`] does, but
-/// only inspects it for `mz_now()` rather than folding it to a literal.
-fn changes_bound_is_sliding(
+/// Plans a `CHANGES` `AS OF` bound to an `mz_timestamp`-typed [`HirScalarExpr`],
+/// the same way [`plan_as_of_or_up_to`] does, but without folding it to a
+/// literal. The caller inspects it for `mz_now()` (a sliding, window-trailing
+/// bound) via [`HirScalarExpr::contains_temporal`] and lowers it for the
+/// coordinator to evaluate at the query time.
+fn plan_changes_bound(
     scx: &StatementContext,
     mut bound: Expr<Aug>,
-) -> Result<bool, PlanError> {
+) -> Result<HirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
@@ -3174,7 +3177,7 @@ fn changes_bound_is_sliding(
         CastContext::Assignment,
         &SqlScalarType::MzTimestamp,
     )?;
-    Ok(hir.contains_temporal())
+    Ok(hir)
 }
 
 /// Plans a `ROWS FROM` expression.

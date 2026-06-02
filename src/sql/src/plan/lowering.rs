@@ -332,13 +332,14 @@ impl HirRelationExpr {
                         })
                     }
                 },
-                Changes { id, typ, as_of } => {
+                Changes { id, typ, bound } => {
                     // A changelog read is uncorrelated with `get_outer`, like a
-                    // global `Get`.
+                    // global `Get`. The bound is already a lowered, uncorrelated
+                    // scalar, so it is copied through verbatim.
                     get_outer.product(SR::Changes {
                         id,
                         typ: ReprRelationType::from(&typ),
-                        as_of,
+                        bound,
                     })
                 }
                 Let {

@@ -49,4 +49,12 @@ SELECT mz_now()::text
 2 1
 3 1
 
+# A sliding (mz_now()-relative) bound: mz_now() resolves to the query time, so a
+# zero lag makes the changelog start "now" and the snapshot is the table's
+# current contents ({2, 3} after the insert of 3 and deletion of 1), each as a
+# +1 append.
+> SELECT a, mz_diff FROM CHANGES (t AS OF mz_now()) ORDER BY a
+2 1
+3 1
+
 > DROP TABLE t
