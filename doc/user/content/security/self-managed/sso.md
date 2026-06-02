@@ -23,6 +23,10 @@ SSO handles **authentication** only. Permissions within the database are managed
 separately using [role-based access control (RBAC)](/security/self-managed/access-control/).
 {{</ note >}}
 
+{{< note >}}
+**Current limitations:** Self-managed SSO supports OIDC only. SAML, SCIM (automated user provisioning), and IdP group-to-role mapping are not currently supported. 
+{{</ note >}}
+
 ## Before you begin
 
 Make sure you have:
