@@ -3026,7 +3026,63 @@ fn plan_table_factor(
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
+
+        TableFactor::Changes { name, as_of, alias } => {
+            plan_changes(qcx, name, as_of, alias.as_ref())
+        }
     }
+}
+
+/// Plans the `CHANGES(<name>, <as_of>)` table function: reads the named
+/// collection as an append-only changelog starting at `as_of`.
+fn plan_changes(
+    qcx: &QueryContext,
+    name: &ResolvedItemName,
+    as_of: &Expr<Aug>,
+    alias: Option<&TableAlias>,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
+    qcx.scx
+        .require_feature_flag(&vars::ENABLE_CHANGES_TABLE_FUNCTION)?;
+
+    // CHANGES reinterprets the object's persist shard directly, so the argument
+    // must resolve to a persist-backed object: a table, source, or materialized
+    // view. Anything else (a view, an index, a CTE, ...) is rejected.
+    match name {
+        ResolvedItemName::Item { id, .. } => {
+            let item = qcx.scx.get_item(id);
+            match item.item_type() {
+                CatalogItemType::Table
+                | CatalogItemType::Source
+                | CatalogItemType::MaterializedView => {}
+                other => sql_bail!(
+                    "CHANGES requires a table, source, or materialized view, but {} is a {}",
+                    name.full_name_str(),
+                    other,
+                ),
+            }
+        }
+        ResolvedItemName::Cte { .. } => {
+            sql_bail!("CHANGES requires a persisted collection, but got a common table expression")
+        }
+        ResolvedItemName::Error => {
+            bail_internal!("should have been caught in name resolution")
+        }
+    }
+
+    // The changelog start `as_of` is a constant timestamp expression, evaluated
+    // once at plan time (the same machinery as a historical `SELECT ... AS OF`).
+    let _as_of = plan_as_of_or_up_to(qcx.scx, as_of.clone())?;
+    let _ = alias;
+
+    // The remaining wiring is not yet implemented: carrying the changelog-read
+    // marker (and its `as_of`) through MIR to rendering, the optimizer
+    // typecheck adjustment for the read's extended output type (input columns
+    // plus `mz_timestamp` and `mz_diff`), and the coordinator's read-hold and
+    // dataflow-`as_of` handling. The compute-side reinterpretation
+    // (`pack_changelog_row` in `mz_compute::render`, gated by
+    // `SourceImport::read_as_changelog`) and the parser/AST surface are in
+    // place. See doc/developer/design/20260602_changes_table_function.md.
+    bail_unsupported!("CHANGES table function execution (database-issues#4527)")
 }
 
 /// Plans a `ROWS FROM` expression.

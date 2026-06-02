@@ -335,16 +335,43 @@ pub fn build_compute_dataflow(
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
 
-                    let (oks, errs) = (
-                        ok_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
-                        err_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
-                    );
+                    let mut oks = ok_stream
+                        .as_collection()
+                        .leave_region(region)
+                        .leave_region(scope);
+                    let errs = err_stream
+                        .as_collection()
+                        .leave_region(region)
+                        .leave_region(scope);
+
+                    // `CHANGES`: reinterpret the source read as an append-only
+                    // changelog. We consolidate first so the snapshot collapses
+                    // to `as_of` (with net diffs) before we pack the diff into a
+                    // column; packing first would prevent that collapse, since
+                    // identical extended rows would merge by multiplicity instead
+                    // of netting the snapshot's diffs.
+                    if import.read_as_changelog {
+                        oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            oks,
+                            "ChangelogConsolidate",
+                        )
+                        .inner
+                        .unary(Pipeline, "ChangelogReinterpret", |_cap, _info| {
+                            move |input, output| {
+                                input.for_each(|cap, data| {
+                                    let mut session = output.session(&cap);
+                                    for (row, time, diff) in data.drain(..) {
+                                        session.give((
+                                            pack_changelog_row(&row, time, diff),
+                                            time,
+                                            Diff::ONE,
+                                        ));
+                                    }
+                                });
+                            }
+                        })
+                        .as_collection();
+                    }
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
@@ -1801,6 +1828,24 @@ where
     })
 }
 
+/// Packs a single consolidated changelog update `(row, time, diff)` into the
+/// `CHANGES` output row shape: the input columns followed by the `mz_timestamp`
+/// and `mz_diff` columns.
+///
+/// `time` has already been advanced to `max(time, as_of)` by `persist_source`
+/// (snapshot updates collapse to the dataflow `as_of`), so we record it verbatim
+/// in the `mz_timestamp` column. `diff` is the net change at that time, recorded
+/// in the `mz_diff` column; the caller emits the resulting row with diff `+1`, so
+/// the changelog is append-only and never retracts.
+fn pack_changelog_row(row: &Row, time: mz_repr::Timestamp, diff: Diff) -> Row {
+    let mut packed = Row::default();
+    let mut packer = packed.packer();
+    packer.extend(row.iter());
+    packer.push(Datum::MzTimestamp(time));
+    packer.push(Datum::Int64(diff.into_inner()));
+    packed
+}
+
 /// Extension trait for [`Stream`] to selectively limit progress.
 trait LimitProgress<T: Timestamp> {
     /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
@@ -1987,5 +2032,37 @@ impl Pairer {
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)
+    }
+}
+
+#[cfg(test)]
+mod changelog_tests {
+    use mz_repr::{Datum, Diff, Row, Timestamp};
+
+    use super::pack_changelog_row;
+
+    #[mz_ore::test]
+    fn pack_changelog_row_appends_time_and_diff() {
+        let input = Row::pack_slice(&[Datum::Int32(5), Datum::String("a")]);
+        let packed = pack_changelog_row(&input, Timestamp::from(7u64), Diff::from(3));
+        let expected = Row::pack_slice(&[
+            Datum::Int32(5),
+            Datum::String("a"),
+            Datum::MzTimestamp(Timestamp::from(7u64)),
+            Datum::Int64(3),
+        ]);
+        assert_eq!(packed, expected);
+    }
+
+    #[mz_ore::test]
+    fn pack_changelog_row_handles_retraction_diff() {
+        let input = Row::pack_slice(&[Datum::String("row")]);
+        let packed = pack_changelog_row(&input, Timestamp::from(0u64), Diff::from(-2));
+        let expected = Row::pack_slice(&[
+            Datum::String("row"),
+            Datum::MzTimestamp(Timestamp::from(0u64)),
+            Datum::Int64(-2),
+        ]);
+        assert_eq!(packed, expected);
     }
 }

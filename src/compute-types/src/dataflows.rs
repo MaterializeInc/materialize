@@ -148,7 +148,17 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
+    ///
+    /// `read_as_changelog` requests that the source be read as an append-only
+    /// changelog (the `CHANGES` table function), rather than as its accumulated
+    /// contents.
+    pub fn import_source(
+        &mut self,
+        id: GlobalId,
+        typ: SqlRelationType,
+        monotonic: bool,
+        read_as_changelog: bool,
+    ) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         // Similarly, we require the snapshot by default, though optimization may choose to skip it.
@@ -163,8 +173,22 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 monotonic,
                 with_snapshot: true,
                 upper: Antichain::new(),
+                read_as_changelog,
             },
         );
+    }
+
+    /// Marks the source import for `id` to be read as an append-only changelog
+    /// (the `CHANGES` table function). Returns whether a matching source import
+    /// was found.
+    pub fn set_source_read_as_changelog(&mut self, id: &GlobalId) -> bool {
+        match self.source_imports.get_mut(id) {
+            Some(import) => {
+                import.read_as_changelog = true;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Binds to `id` the relation expression `plan`.
@@ -608,6 +632,12 @@ pub struct SourceImport<S: 'static = ()> {
     pub with_snapshot: bool,
     /// The initial known upper frontier for the source.
     pub upper: Antichain<Timestamp>,
+    /// Whether to read this source as an append-only changelog (the `CHANGES`
+    /// table function). When set, rendering reinterprets each consolidated input
+    /// update `(row, time, diff)` as a forward-only append of the extended row
+    /// (input columns plus `mz_timestamp` and `mz_diff`) at `time`, using the
+    /// dataflow `as_of` as the changelog start. See the `CHANGES` design doc.
+    pub read_as_changelog: bool,
 }
 
 /// An association of a global identifier to an expression.

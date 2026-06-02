@@ -1080,6 +1080,7 @@ mod tests {
                         monotonic: Default::default(),
                         with_snapshot: true,
                         upper: Default::default(),
+                        read_as_changelog: false,
                     },
                 )
             })

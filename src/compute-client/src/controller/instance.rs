@@ -1396,6 +1396,7 @@ impl Instance {
                     monotonic: import.monotonic,
                     with_snapshot: import.with_snapshot,
                     upper: frontiers.write_frontier,
+                    read_as_changelog: import.read_as_changelog,
                 },
             );
         }

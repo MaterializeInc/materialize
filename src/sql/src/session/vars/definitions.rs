@@ -1773,6 +1773,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_changes_table_function,
+        desc: "the CHANGES(collection, as_of) table function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,

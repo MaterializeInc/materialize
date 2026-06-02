@@ -582,6 +582,14 @@ pub enum TableFactor<T: AstInfo> {
         join: Box<TableWithJoins<T>>,
         alias: Option<TableAlias>,
     },
+    /// The `CHANGES(<name>, <as_of>)` table function: reads the named collection
+    /// as an append-only changelog starting at `as_of`, exposing the per-update
+    /// timestamp and diff as the `mz_timestamp` and `mz_diff` columns.
+    Changes {
+        name: T::ItemName,
+        as_of: Expr<T>,
+        alias: Option<TableAlias>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
@@ -643,6 +651,17 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
             TableFactor::NestedJoin { join, alias } => {
                 f.write_str("(");
                 f.write_node(join);
+                f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
+            TableFactor::Changes { name, as_of, alias } => {
+                f.write_str("CHANGES (");
+                f.write_node(name);
+                f.write_str(", ");
+                f.write_node(as_of);
                 f.write_str(")");
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
