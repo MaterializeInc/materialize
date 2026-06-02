@@ -27,4 +27,4 @@ $ kafka-create-topic topic=data
 > ALTER SINK sink SET FROM table; --bumps version
 
 > SELECT create_sql FROM (SHOW CREATE SINK sink);
-"CREATE SINK materialize.public.sink\nIN CLUSTER quickstart\nFROM materialize.public.table\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-show-create-sink-${testdrive.seed}')\nFORMAT JSON\nENVELOPE DEBEZIUM;"
+"CREATE SINK materialize.public.sink\nIN CLUSTER ${arg.single-replica-cluster}\nFROM materialize.public.table\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-show-create-sink-${testdrive.seed}')\nFORMAT JSON\nENVELOPE DEBEZIUM;"
