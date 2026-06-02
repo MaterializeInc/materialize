@@ -291,11 +291,12 @@ impl Value for Duration {
     {
         let s = extract_single_value(input)?;
         let s = s.trim();
-        // Take all numeric values from [0..]
-        let split_pos = s
-            .chars()
-            .position(|p| !char::is_numeric(p))
-            .unwrap_or_else(|| s.chars().count());
+        // Find where the leading run of ASCII digits ends. `str::find` returns a
+        // byte index, so it is safe to slice with directly. We restrict to ASCII
+        // digits (rather than `char::is_numeric`) because that is exactly what
+        // `u64::parse` accepts; matching broader Unicode numerics such as '²'
+        // would yield a byte offset that can land mid-character and panic.
+        let split_pos = s.find(|p: char| !p.is_ascii_digit()).unwrap_or(s.len());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
         let d = s[..split_pos]
@@ -1240,6 +1241,13 @@ mod tests {
         errs("x");
         errs("s");
         errs("18446744073709551615 min");
+        // Unicode numerics such as '²' (U+00B2) are multi-byte and must not be
+        // treated as parseable digits: their char index differs from their byte
+        // offset, so slicing on them would land mid-character and panic.
+        errs("²");
+        errs("1²ms");
+        errs("½");
+        errs("１ms");
     }
 
     #[mz_ore::test]
