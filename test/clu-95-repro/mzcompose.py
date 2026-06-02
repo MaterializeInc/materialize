@@ -391,7 +391,14 @@ def _wait_until_queryable(c: Composition, service: str, timeout: int = 120) -> b
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    workflow_zdt_soak(c, parser)
+    """Run all repro workflows in sequence, each as its own test case."""
+    parser.parse_args()
+
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_zdt_soak(c: Composition, parser: WorkflowArgumentParser) -> None:
