@@ -1913,8 +1913,17 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     }
 
     fn from_proto(proto: ProtoU64Description) -> Result<Self, TryFromProtoError> {
+        let lower: Antichain<T> = proto.lower.into_rust_if_some("lower")?;
+        // `Description::new` asserts a non-empty lower frontier. `lower` is
+        // decoded from an untrusted blob, so validate it here and return a
+        // decode error rather than panicking on a crafted/corrupted batch.
+        if lower.elements().is_empty() {
+            return Err(TryFromProtoError::InvalidPersistState(
+                "ProtoU64Description has an empty lower frontier".into(),
+            ));
+        }
         Ok(Description::new(
-            proto.lower.into_rust_if_some("lower")?,
+            lower,
             proto.upper.into_rust_if_some("upper")?,
             proto.since.into_rust_if_some("since")?,
         ))
@@ -1973,6 +1982,24 @@ mod tests {
         let bytes: &[u8] = &[
             0x3a, 0x12, 0x0a, 0x00, 0x12, 0x0a, 0x22, 0x06, 0x5a, 0x00, 0x10, 0x02, 0x2a, 0x00,
             0x22, 0x00, 0x22, 0x00, 0x22, 0x00,
+        ];
+        let proto = crate::internal::state::ProtoRollup::decode(bytes)
+            .expect("crash input decodes as a proto");
+        let result: Result<Rollup<u64>, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    fn rollup_batch_with_empty_lower_frontier_is_error() {
+        // A `ProtoU64Description` with an empty lower frontier must decode to an
+        // error: `Description::new` asserts a non-empty lower, so a crafted batch
+        // used to panic. Regression for the rollup_proto_roundtrip cargo-fuzz
+        // finding.
+        use mz_proto::ProtoType;
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x3a, 0x12, 0x0a, 0x00, 0x12, 0x0a, 0x0a, 0x06, 0x0a, 0x00, 0x12, 0x00, 0x1a, 0x00,
+            0x12, 0x00, 0x32, 0x00, 0x22, 0x00,
         ];
         let proto = crate::internal::state::ProtoRollup::decode(bytes)
             .expect("crash input decodes as a proto");
