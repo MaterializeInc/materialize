@@ -284,6 +284,30 @@ error: cannot mix column definitions and column names
 CREATE TABLE t (c, d int4) FROM SOURCE foo (REFERENCE bar)
                          ^
 
+# Regression: constraints-only (no columns) used to panic in AstDisplay.
+parse-statement
+CREATE TABLE t (PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE bar)
+----
+CREATE TABLE t (PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE = bar)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [Unique { name: None, columns: [Ident("c")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: None, envelope: None })
+
+# Columns + constraints together: ensure exactly one comma separates them.
+parse-statement
+CREATE TABLE t (c int4, d int4, PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE bar)
+----
+CREATE TABLE t (c int4, d int4, PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE = bar)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: Defined([ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }]), constraints: [Unique { name: None, columns: [Ident("c")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: None, envelope: None })
+
+# Named columns + constraints together.
+parse-statement
+CREATE TABLE t (c, d, PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE bar)
+----
+CREATE TABLE t (c, d, PRIMARY KEY (c)) FROM SOURCE foo (REFERENCE = bar)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: Named([Ident("c"), Ident("d")]), constraints: [Unique { name: None, columns: [Ident("c")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: None, envelope: None })
+
 parse-statement
 CREATE TABLE t FROM SOURCE foo
 ----
