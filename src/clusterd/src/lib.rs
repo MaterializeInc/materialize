@@ -81,12 +81,6 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
-    /// The FQDN of this process, for GRPC request validation.
-    ///
-    /// Not providing this value or setting it to the empty string disables host validation for
-    /// GRPC requests.
-    #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
-    grpc_host: Option<String>,
 
     // === Timely cluster options. ===
     /// Configuration for the storage Timely cluster.
@@ -435,7 +429,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
-    let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
     let mut storage_timely_config = args.storage_timely_config;
@@ -480,7 +473,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
             Duration::MAX,
             storage_client_builder,
             grpc_server_metrics.for_server("storage"),
@@ -512,7 +504,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
             Duration::MAX,
             compute_client_builder,
             grpc_server_metrics.for_server("compute"),
