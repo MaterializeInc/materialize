@@ -86,23 +86,11 @@ RUN AWS_LC_REF="$([ "$AWS_LC_FIPS" = "1" ] && echo "$AWS_LC_FIPS_VERSION" || ech
 WORKDIR /build/openssh
 RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/openssh-portable.git . \
     && autoreconf \
-    # Inject -DBN_FLG_CONSTTIME=0 via CPPFLAGS at configure time rather than
-    # as `make CFLAGS=...`. OpenSSH's Makefile.in uses a plain `CFLAGS=@CFLAGS@`
-    # assignment (no override, no CFLAGS_EXTRA in this version), so a
-    # command-line `make CFLAGS=...` REPLACES configure's flags — silently
-    # dropping the hardening/optimization flags (-O2, -fstack-protector-strong,
-    # -fPIE, -ftrapv, ...) and producing an unhardened binary. CPPFLAGS merges
-    # with those flags instead.
-    #
-    # AWS-LC does not define the legacy OpenSSL BN_FLG_CONSTTIME flag. Setting
-    # it to 0 satisfies #ifdef checks in OpenSSH source code. This is safe:
-    # AWS-LC handles constant-time bignum operations internally and does not
-    # rely on this flag.
-    #
-    # --disable-pkcs11 avoids link errors from ssh-pkcs11.c calling
-    # RSA_meth_dup/EC_KEY_METHOD_get_sign which AWS-LC does not provide.
+    # OpenSSH >= 10 stubs BN_set_flags() for AWS-LC, so no -DBN_FLG_CONSTTIME
+    # shim is needed. Use a plain configure + make: a `make CFLAGS=...` override
+    # would clobber configure's hardening flags. --disable-pkcs11 avoids link
+    # errors from ssh-pkcs11.c referencing RSA/EC APIs that AWS-LC omits.
     && ./configure \
-        CPPFLAGS="-DBN_FLG_CONSTTIME=0" \
         --with-ssl-dir=/opt/aws-lc \
         --with-zlib \
         --with-ldflags=-static \
