@@ -76,7 +76,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    AsOf, Assignment, AstInfo, ChangesRelation, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
@@ -87,7 +87,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::ident;
 
-use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
+use crate::catalog::{CatalogCollectionItem, CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec, TableFuncImpl};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
@@ -3027,18 +3027,20 @@ fn plan_table_factor(
             Ok((expr, scope))
         }
 
-        TableFactor::Changes { name, as_of, alias } => {
-            plan_changes(qcx, name, as_of, alias.as_ref())
-        }
+        TableFactor::Changes {
+            relation,
+            as_of,
+            alias,
+        } => plan_changes(qcx, relation, as_of, alias.as_ref()),
     }
 }
 
-/// Plans the `CHANGES(<name> AS OF [AT LEAST] <bound>)` table function: reads
-/// the named collection as an append-only changelog whose lower bound is the
-/// `AS OF` clause.
+/// Plans the `CHANGES(<relation> AS OF [AT LEAST] <bound>)` table function:
+/// reads the given collection as an append-only changelog whose lower bound is
+/// the `AS OF` clause.
 fn plan_changes(
     qcx: &QueryContext,
-    name: &ResolvedItemName,
+    relation: &ChangesRelation<Aug>,
     as_of: &AsOf<Aug>,
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
@@ -3046,40 +3048,9 @@ fn plan_changes(
         .require_feature_flag(&vars::ENABLE_CHANGES_TABLE_FUNCTION)?;
 
     // CHANGES reinterprets the object's persist shard directly, so the argument
-    // must resolve to a persist-backed object: a table, source, or materialized
-    // view. Anything else (a view, an index, a CTE, ...) is rejected.
-    let (id, full_name, version) = match name {
-        ResolvedItemName::Item {
-            id,
-            full_name,
-            version,
-            ..
-        } => (*id, full_name.clone(), *version),
-        ResolvedItemName::Cte { .. } => {
-            sql_bail!("CHANGES requires a persisted collection, but got a common table expression")
-        }
-        ResolvedItemName::Error => {
-            bail_internal!("should have been caught in name resolution")
-        }
-    };
-
-    let item = qcx.scx.get_item(&id).at_version(version);
-    match item.item_type() {
-        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::MaterializedView => {}
-        other => sql_bail!(
-            "CHANGES requires a table, source, or materialized view, but {} is a {}",
-            full_name,
-            other,
-        ),
-    }
-    let desc = item
-        .relation_desc()
-        .ok_or_else(|| PlanError::InvalidDependency {
-            name: full_name.to_string(),
-            item_type: item.item_type().to_string(),
-        })?
-        .into_owned();
-    let global_id = item.global_id();
+    // must resolve to a single persist-backed object: a table, source, or
+    // materialized view.
+    let (global_id, full_name, desc) = plan_changes_input(qcx, relation)?;
 
     // The `AS OF` clause is the changelog's lower bound. It varies along two
     // independent axes:
@@ -3147,6 +3118,91 @@ fn plan_changes(
     );
     let scope = plan_table_alias(scope, alias)?;
     Ok((expr, scope))
+}
+
+/// Resolves a [`ChangesRelation`] to the single persist-backed collection it
+/// reads, returning its global id, full name, and relation description. A named
+/// collection is resolved directly; a subquery is planned and must reduce to a
+/// bare read of a table, source, or materialized view (the initial scope —
+/// arbitrary queries are deferred, since their changelog is not a simple shard
+/// read).
+fn plan_changes_input(
+    qcx: &QueryContext,
+    relation: &ChangesRelation<Aug>,
+) -> Result<(mz_repr::GlobalId, FullItemName, RelationDesc), PlanError> {
+    let (item, full_name): (Box<dyn CatalogCollectionItem>, FullItemName) = match relation {
+        ChangesRelation::Name(name) => {
+            let (id, full_name, version) = match name {
+                ResolvedItemName::Item {
+                    id,
+                    full_name,
+                    version,
+                    ..
+                } => (*id, full_name.clone(), *version),
+                ResolvedItemName::Cte { .. } => sql_bail!(
+                    "CHANGES requires a persisted collection, but got a common table expression"
+                ),
+                ResolvedItemName::Error => {
+                    bail_internal!("should have been caught in name resolution")
+                }
+            };
+            (qcx.scx.get_item(&id).at_version(version), full_name)
+        }
+        ChangesRelation::Query(query) => {
+            // Plan the subquery and require it to reduce to a bare read of a
+            // single global collection; anything that filters or transforms is
+            // the (not-yet-supported) arbitrary-expression case.
+            let mut inner_qcx = (*qcx).clone();
+            let (expr, _scope) = plan_nested_query(&mut inner_qcx, query)?;
+            let Some(global_id) = changes_reduce_to_get(&expr) else {
+                bail_unsupported!(
+                    "CHANGES over an arbitrary query (its argument must resolve to a single \
+                     table, source, or materialized view)"
+                );
+            };
+            let item = qcx.scx.catalog.get_item_by_global_id(&global_id);
+            let full_name = qcx.scx.catalog.resolve_full_name(item.name());
+            (item, full_name)
+        }
+    };
+
+    match item.item_type() {
+        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::MaterializedView => {}
+        other => sql_bail!(
+            "CHANGES requires a table, source, or materialized view, but {} is a {}",
+            full_name,
+            other,
+        ),
+    }
+    let desc = item
+        .relation_desc()
+        .ok_or_else(|| PlanError::InvalidDependency {
+            name: full_name.to_string(),
+            item_type: item.item_type().to_string(),
+        })?
+        .into_owned();
+    Ok((item.global_id(), full_name, desc))
+}
+
+/// Reduces a planned `CHANGES` subquery to the global collection it reads, if it
+/// is a bare read of one. Peels a leading identity projection and an empty map
+/// (the shapes `SELECT * FROM <obj>` produces) and matches a global `Get`.
+fn changes_reduce_to_get(expr: &HirRelationExpr) -> Option<mz_repr::GlobalId> {
+    match expr {
+        HirRelationExpr::Get {
+            id: mz_expr::Id::Global(id),
+            ..
+        } => Some(*id),
+        HirRelationExpr::Project { input, outputs }
+            if outputs.iter().copied().eq(0..input.arity()) =>
+        {
+            changes_reduce_to_get(input)
+        }
+        HirRelationExpr::Map { input, scalars } if scalars.is_empty() => {
+            changes_reduce_to_get(input)
+        }
+        _ => None,
+    }
 }
 
 /// Plans a `CHANGES` `AS OF` bound to an `mz_timestamp`-typed [`HirScalarExpr`],

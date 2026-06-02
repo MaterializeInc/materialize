@@ -41,6 +41,25 @@ SELECT * FROM CHANGES (v AS OF 0)
 query error CHANGES requires a persisted collection, but got a common table expression
 WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c AS OF 0)
 
+# The relation may be a parenthesized subquery (mirroring SUBSCRIBE), as long as
+# it reduces to a bare read of a persist-backed object. Unlike the name form
+# (which rejects a view), a subquery transparently reads through a view to its
+# underlying persist collection: `(SELECT * FROM v)` inlines to a read of `t`.
+query I
+SELECT count(*) FROM CHANGES ((SELECT * FROM t) AS OF mz_now())
+----
+0
+
+query I
+SELECT count(*) FROM CHANGES ((SELECT * FROM v) AS OF mz_now())
+----
+0
+
+# A subquery that filters or transforms (i.e. is not a bare read) is the
+# not-yet-supported arbitrary-expression case.
+query error CHANGES over an arbitrary query
+SELECT * FROM CHANGES ((SELECT * FROM t WHERE a > 0) AS OF 0)
+
 # A fixed bound must be a constant timestamp expression: a non-temporal
 # unmaterializable function (e.g. now()) and out-of-range / negative values are
 # rejected.

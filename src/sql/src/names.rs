@@ -2226,8 +2226,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 join: Box::new(self.fold_table_with_joins(*join)),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
             },
-            Changes { name, as_of, alias } => Changes {
-                name: self.fold_item_name(name),
+            Changes {
+                relation,
+                as_of,
+                alias,
+            } => Changes {
+                relation: self.fold_changes_relation(relation),
                 as_of: self.fold_as_of(as_of),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
             },

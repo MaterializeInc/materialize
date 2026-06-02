@@ -2094,6 +2094,16 @@ SELECT * FROM CHANGES (mz_internal.foo AS OF AT LEAST 100) AS c
 SELECT * FROM CHANGES (mz_internal.foo AS OF AT LEAST 100) AS c
 
 parse-statement roundtrip
+SELECT * FROM CHANGES ((SELECT * FROM t) AS OF 5)
+----
+SELECT * FROM CHANGES ((SELECT * FROM t) AS OF 5)
+
+parse-statement roundtrip
+SELECT * FROM CHANGES ((SELECT a FROM t WHERE a > 0) AS OF AT LEAST mz_now() - INTERVAL '5' MINUTE) AS c
+----
+SELECT * FROM CHANGES ((SELECT a FROM t WHERE a > 0) AS OF AT LEAST mz_now() - INTERVAL '5' MINUTE) AS c
+
+parse-statement roundtrip
 SELECT count(*) FROM CHANGES (t AS OF mz_now() - INTERVAL '30' MINUTE) WHERE mz_diff > 0
 ----
 SELECT count(*) FROM CHANGES (t AS OF mz_now() - INTERVAL '30' MINUTE) WHERE mz_diff > 0

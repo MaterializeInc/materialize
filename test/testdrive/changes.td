@@ -57,4 +57,12 @@ SELECT mz_now()::text
 2 1
 3 1
 
+# The relation may be a parenthesized subquery that reduces to a bare read of
+# the collection (mirroring SUBSCRIBE); it behaves exactly like naming it.
+> SELECT a, mz_diff FROM CHANGES ((SELECT * FROM t) AS OF ${as-of}) ORDER BY a, mz_diff
+1 -1
+1 1
+2 1
+3 1
+
 > DROP TABLE t

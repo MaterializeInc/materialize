@@ -8234,15 +8234,22 @@ impl<'a> Parser<'a> {
 
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor<Raw>, ParserError> {
-        // `CHANGES (<name> AS OF [AT LEAST] <bound>)`: read a collection as an
-        // append-only changelog. The `AS OF` clause is required and mirrors
-        // SUBSCRIBE's `<rel> AS OF <bound>` surface. `CHANGES` is a non-reserved
-        // keyword, so we only treat it specially when it is immediately followed
-        // by `(`; otherwise it parses as an ordinary name.
+        // `CHANGES (<relation> AS OF [AT LEAST] <bound>)`: read a collection as an
+        // append-only changelog. The relation is a name or a parenthesized
+        // subquery (mirroring SUBSCRIBE), and the `AS OF` clause is required.
+        // `CHANGES` is a non-reserved keyword, so we only treat it specially when
+        // it is immediately followed by `(`; otherwise it parses as an ordinary
+        // name.
         if self.peek_keyword(CHANGES) && self.peek_nth_token(1) == Some(Token::LParen) {
             self.expect_keyword(CHANGES)?;
             self.expect_token(&Token::LParen)?;
-            let name = self.parse_raw_name()?;
+            let relation = if self.consume_token(&Token::LParen) {
+                let query = self.parse_query()?;
+                self.expect_token(&Token::RParen)?;
+                ChangesRelation::Query(Box::new(query))
+            } else {
+                ChangesRelation::Name(self.parse_raw_name()?)
+            };
             let as_of = match self.parse_optional_as_of()? {
                 Some(as_of) => as_of,
                 None => {
@@ -8255,7 +8262,11 @@ impl<'a> Parser<'a> {
             };
             self.expect_token(&Token::RParen)?;
             let alias = self.parse_optional_table_alias()?;
-            return Ok(TableFactor::Changes { name, as_of, alias });
+            return Ok(TableFactor::Changes {
+                relation,
+                as_of,
+                alias,
+            });
         }
         if self.parse_keyword(LATERAL) {
             // LATERAL must always be followed by a subquery or table function.
