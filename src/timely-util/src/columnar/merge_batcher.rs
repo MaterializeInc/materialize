@@ -306,6 +306,15 @@ where
         );
         let seal = B::seal(&mut readied, description);
         self.lower = upper;
+
+        // Drop the recycle stash now that this round's hot work is done.
+        // The next merge after the next `push_container` will re-pay one
+        // chunk's worth of leaf-`Vec` grow tax, but that's a few hundred µs
+        // amortized over a seal cycle, well worth handing the leaf bytes
+        // back to the allocator so they're not held resident across what
+        // may be a quiet stretch.
+        self.stash.clear();
+
         seal
     }
 
