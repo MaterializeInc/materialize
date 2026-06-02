@@ -326,7 +326,7 @@ where
     Opt: FnOnce() -> Result<To, E>,
     E: From<TransformError> + MaybeShouldPanic,
 {
-    match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(optimization)) {
+    match mz_ore::panic::catch_unwind_with_details(AssertUnwindSafe(optimization)) {
         Ok(Err(e)) if e.should_panic().is_some() => {
             // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
             // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
@@ -335,11 +335,26 @@ where
         }
         Ok(result) => result.map_err(|e| e),
         Err(panic) => {
-            // A panic during optimization is always a bug; log an error so we learn about it.
-            // TODO(teskje): collect and log a backtrace from the panic site
-            tracing::error!("caught a panic during query optimization: {panic}");
+            // A panic during optimization is always a bug; log an error, including the panic
+            // location and a backtrace from the panic site, so we learn about it.
+            let location = panic.location.as_deref().unwrap_or("<unknown location>");
+            let backtrace = panic
+                .backtrace
+                .as_deref()
+                .unwrap_or("<backtrace unavailable>");
+            tracing::error!(
+                "caught a panic during query optimization: {} (at {})\n{}",
+                panic.message,
+                location,
+                backtrace,
+            );
 
-            let msg = format!("unexpected panic during query optimization: {panic}");
+            // Surface at least the panic location in the user-facing error, so that internal
+            // errors are actionable without having to grep the logs for the backtrace.
+            let msg = format!(
+                "unexpected panic during query optimization: {} (at {})",
+                panic.message, location,
+            );
             Err(TransformError::Internal(msg).into())
         }
     }

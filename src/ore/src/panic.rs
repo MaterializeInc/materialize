@@ -19,6 +19,7 @@ use std::any::Any;
 use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Write as _};
 use std::os::fd::FromRawFd;
@@ -39,6 +40,50 @@ use crate::iter::IteratorExt;
 thread_local! {
     /// Keeps track of how many `catch_unwind` calls we are inside.
     static CATCHING_UNWIND: RefCell<usize> = const { RefCell::new(0) };
+
+    /// Keeps track of how many [`catch_unwind_with_details`] calls we are inside.
+    ///
+    /// When non-zero, the enhanced panic handler records details (the panic
+    /// location and a backtrace) about caught panics into [`CAUGHT_PANIC_DETAILS`]
+    /// before letting the unwind proceed.
+    static CAPTURE_PANIC_DETAILS: RefCell<usize> = const { RefCell::new(0) };
+
+    /// Details about the most recently caught panic, recorded by the enhanced
+    /// panic handler when [`CAPTURE_PANIC_DETAILS`] is non-zero. Consumed by
+    /// [`catch_unwind_with_details`].
+    static CAUGHT_PANIC_DETAILS: RefCell<Option<PanicDetails>> = const { RefCell::new(None) };
+}
+
+/// Details about a caught panic, captured at the panic site by the enhanced
+/// panic handler. See [`catch_unwind_with_details`].
+#[derive(Clone, Debug, Default)]
+pub struct PanicDetails {
+    /// The source code location at which the panic occurred, if known.
+    pub location: Option<String>,
+    /// A backtrace captured at the panic site, if one was captured.
+    pub backtrace: Option<String>,
+}
+
+/// A panic recovered by [`catch_unwind_with_details`], bundling the panic
+/// message with the location and backtrace captured at the panic site.
+#[derive(Clone, Debug)]
+pub struct CaughtPanic {
+    /// The panic message.
+    pub message: Cow<'static, str>,
+    /// The source code location at which the panic occurred, if known.
+    pub location: Option<String>,
+    /// A backtrace captured at the panic site, if one was captured.
+    pub backtrace: Option<String>,
+}
+
+impl fmt::Display for CaughtPanic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)?;
+        if let Some(location) = &self.location {
+            write!(f, ", at {location}")?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "async")]
@@ -93,6 +138,24 @@ pub fn install_enhanced_handler() {
         #[cfg(not(feature = "async"))]
         let catching_unwind_async = false;
         if catching_unwind != 0 || catching_unwind_async {
+            // We're letting the unwind proceed without printing or reporting the
+            // panic. The location and backtrace would normally be lost here,
+            // because `catch_unwind` only recovers the panic payload (the
+            // message). If a caller has opted in via `catch_unwind_with_details`,
+            // stash those details now so they can be attached to the resulting
+            // error. We only pay the cost of capturing a backtrace when a panic
+            // actually occurs, which is the exceptional case.
+            let capture_details = CAPTURE_PANIC_DETAILS.with(|v| *v.borrow()) != 0;
+            if capture_details {
+                let location = panic_info.location().map(|loc| loc.to_string());
+                let backtrace = Backtrace::force_capture().to_string();
+                CAUGHT_PANIC_DETAILS.with(|details| {
+                    *details.borrow_mut() = Some(PanicDetails {
+                        location,
+                        backtrace: Some(backtrace),
+                    });
+                });
+            }
             return;
         }
 
@@ -245,5 +308,50 @@ where
                 None => Err(Cow::Borrowed("Box<Any>")),
             },
         },
+    }
+}
+
+/// Like [`catch_unwind_str`], but on panic also recovers the panic's source
+/// location and a backtrace captured at the panic site, bundled together in a
+/// [`CaughtPanic`].
+///
+/// The standard catch-unwind machinery only recovers the panic payload (the
+/// message); the location and backtrace are otherwise only available inside the
+/// panic handler, which runs before the stack is unwound. This function opts in
+/// to having the enhanced panic handler (see [`install_enhanced_handler`]) stash
+/// those details so they can be attached to the returned error.
+///
+/// Capturing a backtrace is relatively expensive, but the cost is only paid when
+/// a panic actually occurs, so this is suitable for enriching internal errors
+/// with extra context. If [`install_enhanced_handler`] has not been installed,
+/// the `location` and `backtrace` fields will be absent, but the `message` is
+/// still recovered.
+pub fn catch_unwind_with_details<F, R>(f: F) -> Result<R, CaughtPanic>
+where
+    F: FnOnce() -> R + UnwindSafe,
+{
+    CAPTURE_PANIC_DETAILS.with(|v| *v.borrow_mut() += 1);
+    let res = catch_unwind(f);
+    CAPTURE_PANIC_DETAILS.with(|v| *v.borrow_mut() -= 1);
+
+    match res {
+        Ok(res) => Ok(res),
+        Err(opaque) => {
+            let message = match opaque.downcast_ref::<&'static str>() {
+                Some(s) => Cow::Borrowed(*s),
+                None => match opaque.downcast_ref::<String>() {
+                    Some(s) => Cow::Owned(s.to_owned()),
+                    None => Cow::Borrowed("Box<Any>"),
+                },
+            };
+            let details = CAUGHT_PANIC_DETAILS
+                .with(|details| details.borrow_mut().take())
+                .unwrap_or_default();
+            Err(CaughtPanic {
+                message,
+                location: details.location,
+                backtrace: details.backtrace,
+            })
+        }
     }
 }
