@@ -409,7 +409,8 @@ fn eval_error_code(err: &EvalError) -> SqlState {
             | InvalidRangeError::InvalidRangeBoundFlags
             | InvalidRangeError::NullRangeBoundFlags
             | InvalidRangeError::DiscontiguousUnion
-            | InvalidRangeError::DiscontiguousDifference => SqlState::DATA_EXCEPTION,
+            | InvalidRangeError::DiscontiguousDifference
+            | InvalidRangeError::InvalidRangeData => SqlState::DATA_EXCEPTION,
         },
 
         // Cardinality violations from scalar subqueries.
