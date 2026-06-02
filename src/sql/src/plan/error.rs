@@ -246,6 +246,9 @@ pub enum PlanError {
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
+    DuplicateKeyColumnInSubscribeEnvelope {
+        column_name: String,
+    },
     InvalidPartitionByEnvelopeDebezium {
         column_name: String,
     },
@@ -451,6 +454,9 @@ impl PlanError {
             }
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 Some("All keys must be columns on the underlying relation.".into())
+            }
+            Self::DuplicateKeyColumnInSubscribeEnvelope { .. } => {
+                Some("Each KEY column must be listed at most once.".into())
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
@@ -749,6 +755,13 @@ impl fmt::Display for PlanError {
             }
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
+            }
+            Self::DuplicateKeyColumnInSubscribeEnvelope { column_name } => {
+                write!(
+                    f,
+                    "column {} appears more than once in SUBSCRIBE ENVELOPE KEY clause",
+                    column_name.quoted(),
+                )
             }
             Self::InvalidPartitionByEnvelopeDebezium { column_name } => {
                 write!(
