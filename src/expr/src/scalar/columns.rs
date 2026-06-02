@@ -12,11 +12,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub trait Columns: Sized {
+    /// Construct a column reference expression.
+    fn column(c: usize) -> Self;
+
     /// True when the outermost structure is a column.
     fn is_column(&self) -> bool;
 
     /// If self is a column, return the column index, otherwise `None`.
     fn as_column(&self) -> Option<usize>;
+
+    /// If self is a column, return a mutable reference to the column index.
+    fn as_column_mut(&mut self) -> Option<&mut usize>;
 
     /// The support of the given set, i.e., the columns that are actually used.
     ///

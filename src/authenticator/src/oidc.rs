@@ -249,6 +249,14 @@ impl OidcClaims {
 
     /// Extracts group names from the specified JWT claim for group-to-role sync.
     ///
+    /// `claim_path` may be a bare claim name (e.g. `"groups"`) or a
+    /// dot-separated path into nested JSON objects (e.g.
+    /// `"customClaims.groups"`). Keys that contain a literal `.` are not
+    /// reachable; this is a known limitation matching CockroachDB's
+    /// `group_claim` semantics. Empty path segments (leading/trailing/double
+    /// dots, or an empty path) yield `None` and emit a `warn!`-level log so
+    /// misconfiguration is visible.
+    ///
     /// Returns `None` if the claim is absent (skip sync, preserve current state),
     /// `Some(vec![])` if the claim is present but empty (revoke all sync-granted
     /// roles), or `Some(vec![...])` with deduplicated, sorted group names
@@ -257,8 +265,8 @@ impl OidcClaims {
     ///
     /// Accepts arrays of strings, single strings, or mixed arrays (non-string
     /// elements are filtered out). Other JSON types are treated as absent.
-    pub fn groups(&self, claim_name: &str) -> Option<Vec<String>> {
-        let value = self.unknown_claims.get(claim_name)?;
+    pub fn groups(&self, claim_path: &str) -> Option<Vec<String>> {
+        let value = self.resolve_claim_path(claim_path)?;
 
         let raw_groups: Vec<String> = match value {
             serde_json::Value::Array(arr) => arr
@@ -274,7 +282,7 @@ impl OidcClaims {
             }
             _ => {
                 warn!(
-                    claim_name,
+                    claim_path,
                     "OIDC group claim has unexpected type; skipping group sync"
                 );
                 return None;
@@ -289,6 +297,47 @@ impl OidcClaims {
             .collect();
 
         Some(groups)
+    }
+
+    /// Walks a dot-separated claim path into nested JSON objects. Returns
+    /// `None` if the path is empty, any segment is empty, an intermediate
+    /// segment is missing, or an intermediate segment resolves to a
+    /// non-object value.
+    fn resolve_claim_path(&self, claim_path: &str) -> Option<&serde_json::Value> {
+        let mut segments = claim_path.split('.');
+        let first = segments
+            .next()
+            .expect("str::split always yields at least one segment");
+        if first.is_empty() {
+            warn!(
+                claim_path,
+                "OIDC group claim path has an empty segment; skipping group sync"
+            );
+            return None;
+        }
+        let mut current = self.unknown_claims.get(first)?;
+        for segment in segments {
+            if segment.is_empty() {
+                warn!(
+                    claim_path,
+                    "OIDC group claim path has an empty segment; skipping group sync"
+                );
+                return None;
+            }
+            let obj = match current {
+                serde_json::Value::Object(map) => map,
+                _ => {
+                    warn!(
+                        claim_path,
+                        segment,
+                        "OIDC group claim intermediate segment is not an object; skipping group sync"
+                    );
+                    return None;
+                }
+            };
+            current = obj.get(segment)?;
+        }
+        Some(current)
     }
 }
 
@@ -975,5 +1024,95 @@ mod tests {
                 "zebra".to_string(),
             ])
         );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_array() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"groups":["analytics","platform_eng"]}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("customClaims.groups"),
+            Some(vec!["analytics".to_string(), "platform_eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_single_string() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"groups":"analytics"}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("customClaims.groups"),
+            Some(vec!["analytics".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_deeply_nested() {
+        let json =
+            r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","a":{"b":{"c":["eng"]}}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("a.b.c"), Some(vec!["eng".to_string()]));
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_missing_intermediate() {
+        // The top-level key exists but the nested key doesn't.
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"other":["eng"]}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims.groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_missing_root() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app"}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims.groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_first_segment_not_object() {
+        // `customClaims` is an array, can't be descended into.
+        let json =
+            r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":["nope"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims.groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_nested_path_terminal_not_array_or_string() {
+        // The terminal value is a number, treated as absent (matches the
+        // flat-path behavior for unexpected types).
+        let json =
+            r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"groups":42}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims.groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_path_leading_dot() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["eng"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups(".groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_path_trailing_dot() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"groups":["eng"]}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims.groups."), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_path_double_dot() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","customClaims":{"groups":["eng"]}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("customClaims..groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_path_empty() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["eng"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups(""), None);
     }
 }

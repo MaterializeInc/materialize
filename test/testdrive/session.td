@@ -64,7 +64,7 @@ max_sources                              200                     "The maximum nu
 max_sql_server_connections               1000                    "The maximum number of SQL Server connections in the region, across all schemas (Materialize)."
 max_tables                               200                     "The maximum number of tables in the region, across all schemas (Materialize)."
 network_policy                           default                 "Sets the fallback network policy applied to all users without an explicit policy."
-oidc_group_claim                         groups                  "JWT claim name containing group memberships for role sync."
+oidc_group_claim                         groups                  "JWT claim path containing group memberships for role sync. Supports dot-separated paths into nested objects (e.g. customClaims.groups)."
 oidc_group_role_sync_strict              off                     "When true, reject login if OIDC group-to-role sync fails (fail-closed)."
 optimizer_e2e_latency_warning_threshold  "500 ms"                "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize)."
 mz_version                               <VARIES>                "Shows the Materialize server version (Materialize)."

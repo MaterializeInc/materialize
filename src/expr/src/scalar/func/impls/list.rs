@@ -14,10 +14,9 @@ use mz_lowertest::MzReflect;
 use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::Eval;
 use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::{Eval, EvalError, MirScalarExpr};
 
 #[derive(
     Ord,

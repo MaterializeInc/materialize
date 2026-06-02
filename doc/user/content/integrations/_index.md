@@ -16,17 +16,30 @@ menu:
     weight: 70
 ---
 
+
+## Agent skills and MCP servers
+
+### Agent skills
+
+Materialize provides the following open-source [agent
+skills](https://github.com/MaterializeInc/agent-skills) to help developers build
+with Materialize.
+
+{{% include-headless "/headless/agent-skills-table" %}}
+
+### MCP servers
+
+Materialize providesthe following built-in Model Context Protocol (MCP) servers
+that AI agents can use.
+
+{{% include-headless "/headless/mcp-servers-table" %}}
+
+## SQL clients/client libraries
+
 Materialize is **wire-compatible** with PostgreSQL and can integrate with many
 SQL clients and other tools that support PostgreSQL. To help you connect to
 Materialize using various clients and tools, the following references are
 available:
-
-## Materialize Tools
-
-- [mz - Materialize CLI](/integrations/cli/)
-- [mz-debug (Debug tool)](/integrations/mz-debug/)
-
-## SQL clients/client libraries
 
 - [SQL clients](/integrations/sql-clients/)
 - [Client Libraries](/integrations/client-libraries/)
@@ -46,11 +59,12 @@ See also the following integration guides for BI tools:
 - [Connect to Materialize via HTTP](/integrations/http-api/)
 - [Connect to Materialize via WebSocket](/integrations/websocket-api/)
 
-## AI agents
-
-- [MCP Server for Developers](/integrations/mcp-server/mcp-developer/) — built-in endpoint for AI-powered troubleshooting via system catalog
-- [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper
 
 - [Foreign data wrapper](/integrations/fdw/)
+
+## Materialize Tools
+
+- [mz - Materialize CLI](/integrations/cli/)
+- [mz-debug (Debug tool)](/integrations/mz-debug/)
