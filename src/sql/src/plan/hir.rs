@@ -130,6 +130,8 @@ pub enum HirRelationExpr {
         /// expression for a sliding window. Evaluated by the coordinator (which
         /// resolves `mz_now()` to the query time) to pin the dataflow `as_of`.
         bound: mz_expr::MirScalarExpr,
+        /// Whether the bound is strict (`AS OF`) or advisory (`AS OF AT LEAST`).
+        strict: bool,
     },
     /// Mutually recursive CTE
     LetRec {

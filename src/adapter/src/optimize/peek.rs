@@ -146,6 +146,9 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
     timestamp_ctx: TimestampContext,
+    /// The read frontier (`since`) of the query's inputs, used to clamp an
+    /// advisory `CHANGES` bound up to the earliest available history.
+    since: Antichain<Timestamp>,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -207,6 +210,7 @@ impl LocalMirPlan<Unresolved> {
     pub fn resolve(
         self,
         timestamp_ctx: TimestampContext,
+        since: Antichain<Timestamp>,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
@@ -216,6 +220,7 @@ impl LocalMirPlan<Unresolved> {
             df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
+                since,
                 session,
                 stats,
             },
@@ -236,6 +241,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             context:
                 Resolved {
                     timestamp_ctx,
+                    since,
                     stats,
                     session,
                 },
@@ -295,11 +301,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // trails the query time by its lag, while a fixed bound ignores it. So a
         // one-off `SELECT * FROM CHANGES(c AS OF mz_now() - INTERVAL '30m')`
         // reads the window `[query_time - 30m, query_time]`.
-        let mut changelog_bounds: Vec<(GlobalId, MirScalarExpr)> = Vec::new();
+        let mut changelog_bounds: Vec<(GlobalId, MirScalarExpr, bool)> = Vec::new();
         for build in &df_desc.objects_to_build {
             build.plan.as_inner().visit_pre(|e| {
-                if let MirRelationExpr::Changes { id, bound, .. } = e {
-                    changelog_bounds.push((*id, bound.clone()));
+                if let MirRelationExpr::Changes {
+                    id, bound, strict, ..
+                } = e
+                {
+                    changelog_bounds.push((*id, bound.clone(), *strict));
                 }
             });
         }
@@ -315,7 +324,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 catalog_state: self.catalog.state(),
             };
             let temp_storage = mz_repr::RowArena::new();
-            for (id, mut bound) in changelog_bounds {
+            // The dataflow `as_of` cannot precede the inputs' read frontier
+            // (`since`); the existing peek read holds pin it there for the query.
+            let since = since.as_option().copied();
+            for (id, mut bound, strict) in changelog_bounds {
                 // Resolve `mz_now()` to the query time, then fold to a constant.
                 prep.prep_scalar_expr(&mut bound)?;
                 let start = match bound.eval(&[], &temp_storage)? {
@@ -325,6 +337,15 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                             "CHANGES bound did not evaluate to an mz_timestamp: {other:?}"
                         )));
                     }
+                };
+                // An advisory (`AS OF AT LEAST`) bound ages in: clamp it up to
+                // `since`, so the changelog starts at the earliest available
+                // history rather than erroring. A strict (`AS OF`) bound is
+                // pinned as written; if it precedes `since`, dataflow creation
+                // errors downstream, surfacing the unavailable history.
+                let start = match since {
+                    Some(since) if !strict => start.max(since),
+                    _ => start,
                 };
                 changelog_ids.push(id);
                 changelog_as_of =

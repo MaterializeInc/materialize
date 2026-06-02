@@ -120,8 +120,11 @@ impl PlanInsights {
                         // HIR ⇒ MIR lowering and MIR optimization (local)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                         // Attach resolved context required to continue the pipeline.
+                        // Plan insights don't execute, so no `CHANGES` bound is
+                        // ever clamped; pass the minimal `since` (no clamp).
                         let local_mir_plan = local_mir_plan.resolve(
                             timestamp_context,
+                            timely::progress::Antichain::from_elem(mz_repr::Timestamp::from(0u64)),
                             &*session,
                             Box::new(EmptyStatisticsOracle {}),
                         );

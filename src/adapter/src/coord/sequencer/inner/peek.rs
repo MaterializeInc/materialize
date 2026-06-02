@@ -507,6 +507,9 @@ impl Coordinator {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
+        // The inputs' read frontier, used to clamp an advisory `CHANGES` bound up
+        // to the earliest available history.
+        let since = determination.since.clone();
         let stats = self
             .statistics_oracle(session, &source_ids, &timestamp_context.antichain(), true)
             .await
@@ -540,7 +543,13 @@ impl Coordinator {
                         let raw_expr = plan.source.clone();
 
                         optimizer
-                            .optimize(raw_expr, timestamp_context.clone(), &session, stats)
+                            .optimize(
+                                raw_expr,
+                                timestamp_context.clone(),
+                                since.clone(),
+                                &session,
+                                stats,
+                            )
                             .map_err(AdapterError::from)
                     };
 

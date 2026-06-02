@@ -79,6 +79,15 @@ SELECT count(*) FROM CHANGES (t AS OF mz_now())
 ----
 0
 
+# An advisory bound (AS OF AT LEAST) ages in: a bound below the input's `since`
+# is clamped up to `since` rather than erroring, so an all-history request on a
+# (compacted) collection still succeeds, starting from the earliest available
+# history. On the empty table the snapshot is empty.
+query I
+SELECT count(*) FROM CHANGES (t AS OF AT LEAST 0)
+----
+0
+
 # A durable maintained object (materialized view, index) requires a sliding
 # bound: a fixed lower bound would hold the input's `since` open indefinitely.
 statement error CHANGES in a materialized view, index, or other maintained object requires a sliding bound

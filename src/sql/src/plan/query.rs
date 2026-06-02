@@ -3063,10 +3063,12 @@ fn plan_changes(
     // the fixed/sliding distinction is whether the bound references `mz_now()`.
     //
     // NOTE: advisory clamping to `since` is not yet differentiated in execution;
-    // for now both `AS OF` and `AS OF AT LEAST` pin the bound and surface an
-    // error if it precedes the input's `since`.
-    let bound_ast = match as_of {
-        AsOf::At(expr) | AsOf::AtLeast(expr) => expr.clone(),
+    // A strict bound (`AS OF`) is pinned exactly; an advisory bound
+    // (`AS OF AT LEAST`) ages in, clamping up to the input's `since` rather than
+    // erroring when it precedes it.
+    let (bound_ast, strict) = match as_of {
+        AsOf::At(expr) => (expr.clone(), true),
+        AsOf::AtLeast(expr) => (expr.clone(), false),
     };
     let bound_hir = plan_changes_bound(qcx.scx, bound_ast.clone())?;
     let sliding = bound_hir.contains_temporal();
@@ -3111,6 +3113,7 @@ fn plan_changes(
         id: global_id,
         typ: changes_desc.typ().clone(),
         bound,
+        strict,
     };
     let scope = Scope::from_source(
         Some(Into::<PartialItemName>::into(full_name)),

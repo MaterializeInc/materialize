@@ -824,6 +824,8 @@ impl PeekClient {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
+        // The inputs' read frontier, used to clamp an advisory `CHANGES` bound.
+        let since = determination.since.clone();
         let session_meta = session.meta();
         let now = catalog.config().now.clone();
         let target_cluster_name = target_cluster_name.clone();
@@ -943,6 +945,7 @@ impl PeekClient {
                                 // Attach resolved context required to continue the pipeline.
                                 let local_mir_plan = local_mir_plan.resolve(
                                     timestamp_context.clone(),
+                                    since.clone(),
                                     &session_meta,
                                     stats,
                                 );

@@ -155,6 +155,11 @@ pub enum MirRelationExpr {
         /// dropped when lowered to a changelog source import.
         #[mzreflect(ignore)]
         bound: MirScalarExpr,
+        /// Whether the bound is strict (`AS OF`) or advisory (`AS OF AT LEAST`).
+        /// A strict bound is pinned exactly (reading below the input's `since`
+        /// is an error); an advisory bound ages in, clamping up to `since`.
+        #[mzreflect(ignore)]
+        strict: bool,
     },
     /// Introduce a temporary dataflow.
     ///

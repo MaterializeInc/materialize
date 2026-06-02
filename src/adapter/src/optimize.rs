@@ -75,6 +75,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, GlobalId};
+use timely::progress::Antichain;
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::{HirRelationExpr, PlanError};
 use mz_sql::session::metadata::SessionMetadata;
@@ -178,13 +179,16 @@ impl PeekOptimizer {
         &mut self,
         raw_expr: HirRelationExpr,
         timestamp_ctx: TimestampContext,
+        since: Antichain<mz_repr::Timestamp>,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> Result<PeekGlobalLirPlan, OptimizerError> {
         match self {
             PeekOptimizer::Select(optimizer) => {
                 let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
-                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                    // `since` clamps an advisory `CHANGES` bound up to the
+                    // earliest available history; see `LocalMirPlan::resolve`.
+                    local_mir_plan.resolve(timestamp_ctx, since, session, stats)
                 })?;
                 Ok(PeekGlobalLirPlan::Select(plan))
             }
