@@ -4287,11 +4287,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_raw_ident_str(&mut self) -> Result<String, ParserError> {
-        match self.next_token() {
-            Some(Token::Ident(id)) => Ok(id.into_inner()),
-            Some(Token::Number(n)) => Ok(n),
-            _ => parser_err!(self, self.peek_prev_pos(), "expected id"),
+        let id = match self.next_token() {
+            Some(Token::Ident(id)) => id.into_inner(),
+            Some(Token::Number(n)) => n,
+            _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+        };
+        // A resolved name renders as `[id]`; an empty id (e.g. `[""]`) would
+        // display as `[]` and fail to reparse. Reject it.
+        if id.is_empty() {
+            return parser_err!(self, self.peek_prev_pos(), "expected id");
         }
+        Ok(id)
     }
 
     fn parse_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
