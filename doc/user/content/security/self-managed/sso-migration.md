@@ -31,10 +31,9 @@ naturally matches.
 If no JWT claim maps to an existing role name, you will need to recreate the
 role.
 
-## Step 2. Configure OIDC
+## Step 2. Configure Single sign-on (SSO)
 
-Follow the steps in [Single sign-on (SSO)](/security/self-managed/sso/) to
-configure your identity provider and enable OIDC authentication.
+Follow the steps in [Single sign-on (SSO)](/security/self-managed/sso/).
 
 ## Step 3. Verify the migration
 
