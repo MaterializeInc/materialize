@@ -5632,7 +5632,9 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "serde",
+ "serde_json",
  "static_assertions",
+ "tracing",
 ]
 
 [[package]]
