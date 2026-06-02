@@ -450,21 +450,43 @@ pub async fn handle_metrics_custom(
             };
 
             // TODO: support metric types beyond gauge (counter, histogram).
-            let gauge_vec = metrics_by_name
-                .entry(metric.name.clone())
-                .or_insert_with(|| {
-                    let label_names: Vec<String> = desc
-                        .columns
-                        .iter()
-                        .filter(|col| col.name != metric.value_column)
-                        .map(|col| col.name.clone())
-                        .collect();
-                    metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
+            let gauge_vec = if let Some(gauge_vec) = metrics_by_name.get(&metric.name) {
+                gauge_vec
+            } else {
+                let label_names: Vec<String> = desc
+                    .columns
+                    .iter()
+                    .filter(|col| col.name != metric.value_column)
+                    .map(|col| col.name.clone())
+                    .collect();
+                // Defense in depth: `plan_create_metric` rejects metric names,
+                // label names, and HELP text that Prometheus would refuse. But
+                // a metric's relation can change shape after the metric is
+                // created (e.g. `ALTER TABLE ... ADD COLUMN "2xx"`), turning a
+                // column into an invalid label name. Plain `register` *panics*
+                // on rejection, so use the fallible `try_register` and skip the
+                // offending metric rather than aborting the whole scrape.
+                let registered = metrics_registry.try_register::<GenericGaugeVec<AtomicF64>>(
+                    MakeCollectorOpts {
                         opts: Opts::new(metric.name.clone(), metric.help.clone())
                             .variable_labels(label_names),
                         buckets: None,
-                    })
-                });
+                        rules: Vec::new(),
+                    },
+                );
+                match registered {
+                    Ok(gauge_vec) => metrics_by_name
+                        .entry(metric.name.clone())
+                        .or_insert(gauge_vec),
+                    Err(err) => {
+                        warn!(
+                            "skipping metric {}: would produce an invalid Prometheus metric: {}",
+                            metric.name, err
+                        );
+                        continue;
+                    }
+                }
+            };
 
             for row in rows {
                 let label_values: Vec<&str> = desc
