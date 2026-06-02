@@ -49,10 +49,18 @@ You can use `-v` for printing each query before it is run, e.g. to figure out wh
 Run testdrive files with:
 
 ```
-bin/mzcompose --find testdrive run default -- FILENAME.td
+bin/mzcompose --optimized --find testdrive run default -- FILENAME.td
 ```
 
 `FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
+Global `mzcompose` flags like `--optimized`/`--dev` must go before the `run`
+subcommand (they are top-level flags, not `run` flags).
+
+If `CI=1` is set in your shell (agent runtimes such as Junie export
+it by default for unattended-mode hygiene), `mzcompose` will refuse to build
+images locally and exit with `Expected builds to be available, the build
+probably failed, so not proceeding`. Either `unset CI` or set
+`CI_ALLOW_LOCAL_BUILD=1` before invoking `bin/mzcompose`.
 
 Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
 same `.td` file against multiple Materialize versions. When a change alters
