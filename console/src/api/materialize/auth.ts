@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { NOT_SUPPORTED_MESSAGE } from "~/config/AppConfig";
+import storageAvailable from "~/utils/storageAvailable";
 
 import { apiClient, type SelfManagedApiClient } from "../apiClient";
 
@@ -30,8 +31,10 @@ const getApiClient = () => {
 
 export const LOGIN_PATH = "/account/login";
 
-// Search-param on LOGIN_PATH carrying a sanitized auth-error message.
-export const LOGIN_ERROR_PARAM = "error";
+// sessionStorage key used to hand a one-shot auth-error message to the login
+// page after a callback/logout redirect. The Login component reads and
+// removes the entry on mount, so the error never persists across refresh.
+export const LOGIN_ERROR_STORAGE_KEY = "mz-login-error";
 
 // Login API for to self-managed in password auth mode.
 // Throws if the API isn't supported for the deployment/auth mode.
@@ -89,10 +92,10 @@ export async function logoutAndRedirect(logoutParams: {
   error?: string;
 }) {
   logout(logoutParams);
-  const url = logoutParams.error
-    ? `${LOGIN_PATH}?${new URLSearchParams({ [LOGIN_ERROR_PARAM]: logoutParams.error }).toString()}`
-    : LOGIN_PATH;
-  window.location.href = url;
+  if (logoutParams.error && storageAvailable("sessionStorage")) {
+    window.sessionStorage.setItem(LOGIN_ERROR_STORAGE_KEY, logoutParams.error);
+  }
+  window.location.href = LOGIN_PATH;
 }
 
 export async function logoutAndRedirectOrThrow() {

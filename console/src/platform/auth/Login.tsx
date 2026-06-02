@@ -23,9 +23,9 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
-import { LOGIN_ERROR_PARAM, loginOrThrow } from "~/api/materialize/auth";
+import { LOGIN_ERROR_STORAGE_KEY, loginOrThrow } from "~/api/materialize/auth";
 import Alert from "~/components/Alert";
 import { LabeledInput } from "~/components/formComponentsV2";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
@@ -34,6 +34,7 @@ import { AuthContentContainer, AuthLayout } from "~/layouts/AuthLayout";
 import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
 import { MaterializeTheme } from "~/theme";
+import storageAvailable from "~/utils/storageAvailable";
 
 type LoginFormState = {
   username: string;
@@ -197,10 +198,14 @@ const SsoLoginLink = () => {
 };
 
 export const Login = () => {
-  const [searchParams] = useSearchParams();
   const { data: auth, error: oidcInitializationError } = useOidcManagerQuery();
 
-  const oidcError = searchParams.get(LOGIN_ERROR_PARAM);
+  const [oidcError] = useState<string | null>(() => {
+    if (!storageAvailable("sessionStorage")) return null;
+    const msg = window.sessionStorage.getItem(LOGIN_ERROR_STORAGE_KEY);
+    if (msg) window.sessionStorage.removeItem(LOGIN_ERROR_STORAGE_KEY);
+    return msg;
+  });
 
   return (
     <AuthLayout>

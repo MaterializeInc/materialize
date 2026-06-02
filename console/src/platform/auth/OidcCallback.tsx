@@ -10,9 +10,10 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
 
-import { LOGIN_ERROR_PARAM, LOGIN_PATH } from "~/api/materialize/auth";
+import { LOGIN_ERROR_STORAGE_KEY, LOGIN_PATH } from "~/api/materialize/auth";
 import LoadingScreen from "~/components/LoadingScreen";
 import { useAuth } from "~/external-library-wrappers/oidc";
+import storageAvailable from "~/utils/storageAvailable";
 
 // Forwards IdP callback errors to the login page so all sign-in errors
 // render in one place.
@@ -25,8 +26,10 @@ export const OidcCallback = () => {
   }
   if (auth.error) {
     const message = auth.error.message?.trim() || "Sign-in failed";
-    const params = new URLSearchParams({ [LOGIN_ERROR_PARAM]: message });
-    return <Navigate to={`${LOGIN_PATH}?${params.toString()}`} replace />;
+    if (storageAvailable("sessionStorage")) {
+      window.sessionStorage.setItem(LOGIN_ERROR_STORAGE_KEY, message);
+    }
+    return <Navigate to={LOGIN_PATH} replace />;
   }
   return <LoadingScreen />;
 };
