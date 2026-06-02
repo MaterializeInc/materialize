@@ -358,6 +358,23 @@ fn test_quoted_special_grammar_function_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_extract_generic_call_display_roundtrip() {
+    // `extract` renders via the special `extract(field FROM src)` form only
+    // when the field is a string literal (what EXTRACT's grammar produces). A
+    // generic `"extract"(ident/number, x)` call must round-trip through the
+    // plain (quoted) form instead. Regression for the parse_expr_roundtrip
+    // finding (`"extract"(a, b)` drifted to `extract(a FROM b)`).
+    for sql in [
+        "SELECT \"extract\"(a, b)",
+        "SELECT \"extract\"(1, b)",
+        "SELECT extract('yr' FROM b)",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_as_keyword_as_identifier_display_roundtrip() {
     // A bare `as` at the start of a SELECT item is consumed as the `AS OF`
     // timestamp keyword, so an `as` identifier / function name must stay quoted
