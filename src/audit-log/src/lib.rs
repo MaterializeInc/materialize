@@ -586,6 +586,11 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
     Schedule,
     System,
+    /// The cluster controller dropped the replica because the cluster's
+    /// configuration no longer calls for it. NOTE: a replication-factor
+    /// decrease drop reads `retired` even though the config change itself was
+    /// user-initiated.
+    Retired,
 }
 
 /// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing

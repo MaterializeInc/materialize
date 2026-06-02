@@ -578,6 +578,12 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
                     reason: ev::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {}),
                 }
             }
+            CreateOrDropClusterReplicaReasonV1::Retired => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Retired(Empty {}),
+                }
+            }
         }
     }
 
@@ -594,6 +600,9 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
             crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::System(
                 Empty {},
             ) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Retired(
+                Empty {},
+            ) => Ok(CreateOrDropClusterReplicaReasonV1::Retired),
         }
     }
 }

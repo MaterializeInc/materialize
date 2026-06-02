@@ -41,6 +41,7 @@ mz-catalog = { path = "../catalog" }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
+mz-cluster-controller = { path = "../cluster-controller" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }

@@ -667,6 +667,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_developer",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
+    "enable_cluster_controller",
+    "cluster_controller_tick_interval",
 ]
 
 

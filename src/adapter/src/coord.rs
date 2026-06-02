@@ -172,7 +172,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -211,6 +211,7 @@ use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
+pub(crate) mod cluster_controller;
 pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
@@ -418,6 +419,11 @@ pub enum Message {
     /// A cluster will be On if and only if there is at least one On decision for it.
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
     SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
+
+    /// One pull/apply call from the cluster controller task, to be answered from
+    /// the catalog and live controller signals on this loop. See
+    /// [`cluster_controller`].
+    ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 
 impl Message {
@@ -513,6 +519,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::CheckSchedulingPolicies => "check_scheduling_policies",
             Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -1848,6 +1855,10 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
+    /// Kicks the cluster controller task to reconcile immediately instead of
+    /// waiting out its tick interval. Notified after catalog transactions that
+    /// change durable cluster state.
+    cluster_controller_kick: Arc<Notify>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -3553,6 +3564,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_cluster_controller_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4701,6 +4713,7 @@ pub fn serve(
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
+                    cluster_controller_kick: Arc::new(Notify::new()),
                     strict_serializable_reads_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),

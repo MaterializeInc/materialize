@@ -317,6 +317,10 @@ pub enum ReplicaCreateDropReason {
     /// The automated cluster scheduling initiated the replica create or drop, e.g., a
     /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
     ClusterScheduling(Vec<SchedulingDecision>),
+    /// The cluster controller dropped the replica because the cluster's configuration no longer
+    /// calls for it — the uniform reason on every controller-emitted drop (e.g. a
+    /// replication-factor decrease).
+    Retired,
 }
 
 impl ReplicaCreateDropReason {
@@ -332,6 +336,7 @@ impl ReplicaCreateDropReason {
                 CreateOrDropClusterReplicaReasonV1::Schedule,
                 Some(scheduling_decisions),
             ),
+            ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         };
         (
             reason,
@@ -3084,6 +3089,20 @@ mod tests {
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test]
+    fn test_replica_create_drop_reason_into_audit_log() {
+        use mz_audit_log::CreateOrDropClusterReplicaReasonV1;
+
+        use crate::catalog::ReplicaCreateDropReason;
+
+        // `Retired` is the uniform word for every controller drop, with no
+        // `scheduling_policies` blob: a drop happens exactly when no strategy
+        // desires the replica, so there is no decision to record.
+        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
+        assert!(scheduling_policies.is_none());
+    }
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {

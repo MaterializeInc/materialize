@@ -309,7 +309,7 @@ v86 with new fields defaulted and managed replicas' AZ lists backfilled; no beha
 
 ## PR 2 — Controller scaffolding + baseline strategy + coordinator wiring
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review
 
 **Goal.** Stand up the controller end-to-end with **only the implicit baseline strategy**, so
 the loop runs but is a no-op for steady-state clusters. Establish the task boundary, the
@@ -341,13 +341,13 @@ on in a test, the controller reconciles a steady managed cluster to a no-op and 
 rejected and recovered on the next tick.
 
 **Checklist.**
-- [ ] Resolve decisions 1, 2, 6.
-- [ ] Create `mz-cluster-controller` crate (workspace + license files); the `ClusterControllerCtx` trait, pure strategy trait, `Decision`, reconcile kernel.
-- [ ] Implement baseline strategy.
-- [ ] Adapter driver: implement `ClusterControllerCtx` on the Coordinator; drive the controller (decision 1); CaA-guarded apply.
-- [ ] Add `enable_cluster_controller` + `cluster_controller_tick_interval` dyncfgs (registered).
-- [ ] Boundary tests (fake ctx: no-op + CaA-reject) + gate-on integration no-op test.
-- [ ] `cargo fmt`/`check` clean; update tracker.
+- [x] Resolve decisions 1, 2, 6. (1 — separate task; the `CoordCtx` marshals each batched pull/apply to the coordinator over `internal_cmd_tx` + oneshot. 2 — each `UpdateClusterState` carries an `ExpectedClusterState`; the apply path re-reads each cluster and rejects the whole batch on mismatch. 6 — `mz-cluster-controller` / "cluster controller".)
+- [x] Create `mz-cluster-controller` crate (workspace + default-members; no new third-party deps so `deny.toml`/`about.toml` unchanged); the `ClusterControllerCtx` trait, pure `Strategy` trait, `Decision`, reconcile kernel (multiset union = max-per-shape, match-by-shape diff, attribution).
+- [x] Implement baseline strategy (`replication_factor` replicas at the realized shape).
+- [x] Adapter driver `coord/cluster_controller.rs`: implement `ClusterControllerCtx` on the Coordinator (`observe_cluster_state` read; `apply_cluster_decisions` builds `Op::UpdateClusterConfig` + `Op::CreateClusterReplica` + `Op::DropObjects`); drive the controller as a separate task; CaA-guarded apply.
+- [x] Add `enable_cluster_controller` (off) + `cluster_controller_tick_interval` dyncfgs (registered in `all_dyncfgs`).
+- [x] Boundary tests against a fake ctx (steady no-op, under/over-provision, wrong-shape, union max-not-sum, distinct-shape attribution, CaA-reject + recover) + gate-on slt no-op test (`test/sqllogictest/cluster_controller.slt`, authored for CI).
+- [x] `cargo fmt`/`check`/`clippy` clean on `mz-cluster-controller`/`mz-adapter`/`mz-adapter-types`; controller unit tests pass; update tracker.
 
 ---
 
@@ -593,6 +593,46 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-02_ — **PR 2 implemented** (controller scaffolding + baseline strategy + coordinator
+  wiring, all dark). New pure crate `mz-cluster-controller` (deps: `mz-controller-types`,
+  `mz-compute-types`, `mz-repr`, `mz-ore`, `async-trait`; no adapter/catalog dep, no new
+  third-party license). It defines the **`ClusterControllerCtx`** seam (batched pulls:
+  `managed_cluster_ids`, `cluster_states` with latched `now`, `collections_hydrated_on_replicas`
+  stubbed for PR 3; one CaA-guarded `apply`), the pure **`Strategy`** trait
+  (`update_state`/`desired_replicas`), the **`BaselineStrategy`** (desires `replication_factor`
+  replicas at the realized shape), and the **reconcile kernel**: phase 1 unions every strategy's
+  `update_state` into one `UpdateClusterState` per cluster and applies under CaA (rejected clusters
+  are skipped this tick); phase 2 re-reads, unions `desired_replicas` (multiset union = max per
+  shape, not sum), matches by `ReplicaShape` against actual, and emits creates (fresh names that
+  avoid in-use `rNN`) / drops with strategy attribution (phase 2 reuses the phase-1 read when no
+  state was written). **Compare-and-append:** every decision — the `UpdateClusterState` writes and
+  the create/drop batch alike — carries the `ExpectedClusterState` it was diffed against
+  (`ClusterState::expected()`); the apply path re-reads each cluster's durable config + records and
+  rejects the whole batch on any mismatch, so a stale create/drop can never reshape the replica set
+  against a config a concurrent `ALTER` established (recomputed next tick). Decision 1 = **separate
+  task**: the adapter driver `coord/cluster_controller.rs` runs the controller on its own
+  `mz_ore::task::spawn`, and its `CoordCtx` marshals each ctx call to the coordinator loop via
+  `Message::ClusterControllerRequest(..)` + oneshot; on a held guard it builds
+  `Op::UpdateClusterConfig` (cut-over/record-write from the `StateWrite` deltas),
+  `Op::CreateClusterReplica` (reusing `concretize_replica_location`), and `Op::DropObjects`,
+  transacted via `catalog_transact`. Added dyncfgs `enable_cluster_controller` (default **false**)
+  and `cluster_controller_tick_interval` (5s), both re-read each tick — a gate flip needs no restart
+  and the cadence is a live operational knob; with the gate off, reads return no clusters and
+  applies reject, keeping the controller fully inert and all legacy paths unchanged. Create/drop
+  audit currently uses `ReplicaCreateDropReason::Manual` as an interim tag — PR 3 introduces the
+  controller-specific, attribution-carrying reason (the controller is dark, so the tag is immaterial
+  until then). The frontier/read-ts ctx reads land with their first consumer (PR 3/5), not as
+  speculative stubs (their shape depends on that consumer and would pull an unused frontier dep into
+  the pure crate). Tests: 9 boundary/kernel tests against a fake ctx (steady no-op,
+  under/over-provision, wrong-shape drop+create, union max-not-sum, distinct-shape attribution, CaA
+  reject-and-recover against a state a concurrent `ALTER` changed, and a direct phase-2 create/drop
+  guard test) all pass; an slt (`cluster_controller.slt`, gate forced on) drives the interval to
+  5ms, waits across hundreds of ticks, and asserts a steady managed cluster's replica ids+names are
+  unchanged — not satisfiable by gate-off behaviour that never runs the loop; authored for CI, not
+  run locally. Cheap checks: `cargo fmt` + `cargo check`/`cargo clippy` clean on
+  `mz-cluster-controller`/`mz-adapter`/`mz-adapter-types`; `bin/lint-cargo` clean; `Cargo.lock`
+  gained only the new-crate entry (no version bumps). Did **not** run the full optimized build, the
+  slt suite, or generate `doc/developer/generated/` crate docs (regen deferred, as in PR 1).
 - _2026-06-01_ — **PR 1 AZ modeling reworked (in-memory cleanup; commit 2 of 2).** Removed the
   in-memory `ManagedReplicaAvailabilityZones` enum, replacing the `ManagedReplicaLocation`
   availability-zone field with a bare `Vec<String>` (empty = unconstrained). With the durable field
