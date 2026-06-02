@@ -212,6 +212,11 @@ impl Coordinator {
                     .boxed_local()
                     .await;
             }
+            Message::ClusterControllerRequest(request) => {
+                self.handle_cluster_controller_request(request)
+                    .boxed_local()
+                    .await;
+            }
             Message::DeferredStatementReady => {
                 self.handle_deferred_statement().boxed_local().await;
             }

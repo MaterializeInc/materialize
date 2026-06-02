@@ -249,10 +249,32 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
+/// Master gate for the cluster controller. When on, the controller owns the
+/// managed-cluster replica set and the legacy paths (the graceful 3-stage
+/// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
+/// have two writers, so this is a clean switch, not a per-strategy toggle.
+pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
+    "enable_cluster_controller",
+    false,
+    "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
+);
+
+/// Cadence of the cluster controller's reconcile tick.
+///
+/// Replaces `cluster_check_scheduling_policies_interval` once the controller is
+/// the sole owner; while the controller is dark both intervals exist.
+pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
+    "cluster_controller_tick_interval",
+    Duration::from_secs(5),
+    "How often the cluster controller runs a reconcile tick.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_CLUSTER_CONTROLLER)
+        .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)

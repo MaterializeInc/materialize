@@ -211,6 +211,7 @@ use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
+pub(crate) mod cluster_controller;
 pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
@@ -418,6 +419,11 @@ pub enum Message {
     /// A cluster will be On if and only if there is at least one On decision for it.
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
     SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
+
+    /// One pull/apply call from the cluster controller task, to be answered from
+    /// the catalog and live controller signals on this loop. See
+    /// [`cluster_controller`].
+    ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 
 impl Message {
@@ -513,6 +519,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::CheckSchedulingPolicies => "check_scheduling_policies",
             Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -3553,6 +3560,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_cluster_controller_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.

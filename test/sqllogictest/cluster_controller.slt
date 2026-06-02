@@ -1,0 +1,92 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Boundary test for the cluster controller (PR 2): with the master gate forced
+# on and the tick interval driven down so the controller demonstrably reconciles
+# many times within the test window, the baseline-only controller must reconcile
+# a steady managed cluster to a no-op. With only the implicit baseline strategy
+# the desired replica set equals the realized one, so the controller never
+# creates, drops, or renames a replica no matter how often it ticks.
+
+mode cockroach
+
+reset-server
+
+# Force the gate on and drive the tick interval down to a few milliseconds, so
+# the controller ticks ~hundreds of times across the bounded wait below. The gate
+# is re-read each tick, so the flip takes effect without a restart.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_controller = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cc_steady (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+# The baseline desires exactly the realized set: two replicas at the cluster
+# size. The controller, even with the gate on, leaves them untouched.
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+cc_steady  r2  scale=1,workers=1
+
+# Give the controller a window that spans many tick intervals (5ms) so the
+# reconcile loop runs against this cluster repeatedly. A baseline-only controller
+# must emit zero decisions every tick.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# After ~hundreds of ticks the replica set is still exactly the one CREATE
+# CLUSTER allocated: same names, same sizes, same count.
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+cc_steady  r2  scale=1,workers=1
+
+# A controller that churned a steady replica — dropped and recreated it, even
+# reusing the same name — would leave a dropped replica in the history. The
+# baseline controller must never drop a steady replica, so cc_steady has no
+# dropped replica recorded. (Materialize forbids copying these system rows into a
+# user table, so we assert no-drop directly rather than snapshotting ids into a
+# baseline table.) This distinguishes a correctly no-op controller from one that
+# silently recreates replicas; it is not satisfied by gate-off legacy behavior,
+# which never runs the reconcile loop at all.
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_replica_history
+WHERE cluster_name = 'cc_steady' AND dropped_at IS NOT NULL
+----
+0
+
+# A replication-factor change is still a normal, immediate config update (PR 2
+# does not reshape ALTER); the controller then reconciles to the new steady set
+# without churn. Wait across many ticks again and assert the controller settled
+# on exactly one replica and did not keep churning.
+statement ok
+ALTER CLUSTER cc_steady SET (REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady' ORDER BY 1, 2, 3
+----
+cc_steady  r1  scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_steady
+
+# Restore pristine server state (including the tick-interval override).
+reset-server

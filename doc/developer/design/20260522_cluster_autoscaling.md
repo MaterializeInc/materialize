@@ -55,7 +55,7 @@ Beneath both capabilities is a shared architectural problem: today, cluster sche
 
 ### Summary
 
-We introduce a **cluster controller** as a dedicated task inside `environmentd`. It is the single decision-maker for the replica set of every cluster. It operates as a reconciler: it reads desired cluster state from the durable catalog, observes the actual replica set and live status signals, computes a desired replica set per cluster by combining a set of **strategies**, and emits catalog-change commands to the Coordinator via a message channel. The Coordinator remains the sole writer of catalog state.
+We introduce a **cluster controller** as a dedicated task inside `environmentd`. It is the single decision-maker for the replica set of every user managed cluster (system and builtin clusters keep their bootstrap-owned replicas). It operates as a reconciler: it reads desired cluster state from the durable catalog, observes the actual replica set and live status signals, computes a desired replica set per cluster by combining a set of **strategies**, and emits catalog-change commands to the Coordinator via a message channel. The Coordinator remains the sole writer of catalog state.
 
 ALTER CLUSTER operations are reshaped so that the user's intent is written durably and immediately to the catalog — as an in-flight target record, leaving the cluster's realized config in place until the controller cuts over; the controller then reconciles from that intent. Graceful reconfiguration becomes a strategy within the controller framework, as does hydration burst. The existing `ON REFRESH` scheduling is lifted into the framework.
 
