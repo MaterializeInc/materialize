@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::keywords::{AS, Keyword};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -296,7 +296,14 @@ impl Ident {
             && chars.all(|ch| matches!(ch, 'a'..='z' | '0'..='9' | '_'))
             && !self
                 .as_keyword()
-                .map(|kw| kw.is_sometimes_reserved() || kw.begins_query_body())
+                .map(|kw| {
+                    kw.is_sometimes_reserved()
+                        || kw.begins_query_body()
+                        // `AS` at the start of a SELECT item is consumed as the
+                        // `AS OF` timestamp keyword (an empty projection), so a
+                        // bare `as` identifier/function name fails to reparse.
+                        || kw == AS
+                })
                 .unwrap_or(false)
     }
 
