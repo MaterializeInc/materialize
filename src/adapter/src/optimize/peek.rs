@@ -284,8 +284,35 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             );
         }
 
+        // `CHANGES`: collect any changelog reads in the dataflow so we can mark
+        // their source imports (to be read as append-only changelogs in
+        // rendering) and pin the dataflow `as_of` to the earliest changelog
+        // start. The peek itself still happens at `timestamp_ctx`'s timestamp,
+        // so history between the changelog start and the peek time is replayed.
+        let mut changelog_ids: Vec<GlobalId> = Vec::new();
+        let mut changelog_as_of: Option<Timestamp> = None;
+        for build in &df_desc.objects_to_build {
+            build.plan.as_inner().visit_pre(|e| {
+                if let MirRelationExpr::Changes { id, as_of, .. } = e {
+                    changelog_ids.push(*id);
+                    changelog_as_of =
+                        Some(changelog_as_of.map_or(*as_of, |existing| existing.min(*as_of)));
+                }
+            });
+        }
+        for id in &changelog_ids {
+            df_desc.set_source_read_as_changelog(id);
+        }
+
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
+
+        // A changelog read must take its snapshot at the changelog start rather
+        // than at the peek timestamp. The dataflow's implied read hold pins the
+        // input's `since` at this `as_of` for the duration of the query.
+        if let Some(changelog_as_of) = changelog_as_of {
+            df_desc.set_as_of(Antichain::from_elem(changelog_as_of));
+        }
 
         // Get the single timestamp representing the `as_of` time.
         let as_of = df_desc
