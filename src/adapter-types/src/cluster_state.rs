@@ -77,6 +77,21 @@ pub struct ExpectedClusterState {
 pub struct ReconfigurationRecord {
     pub target: ReconfigurationTarget,
     pub deadline: Timestamp,
+    /// What to do once the deadline passes with the target not yet hydrated.
+    pub on_timeout: OnTimeout,
+}
+
+/// The action a graceful reconfiguration applies once its `deadline` passes with
+/// the target replicas not yet hydrated. Success always takes precedence: a
+/// hydrated target cuts over regardless of this. A plain-data mirror of
+/// `mz_sql::plan::OnTimeoutAction`, free of a dependency on the SQL layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnTimeout {
+    /// Cut over to the (not-yet-hydrated) target anyway and clear the record.
+    Commit,
+    /// Drop the target replica set, reverting to the pre-reconfiguration shape,
+    /// and clear the record without advancing the realized config.
+    Rollback,
 }
 
 /// The full config shape a reconfiguration is moving the cluster to. Distinct
@@ -88,6 +103,17 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
+}
+
+impl ReconfigurationTarget {
+    /// The per-replica shape of the target: everything but `replication_factor`.
+    pub fn shape(&self) -> ReplicaShape {
+        ReplicaShape {
+            size: self.size.clone(),
+            availability_zones: self.availability_zones.clone(),
+            logging: self.logging.clone(),
+        }
+    }
 }
 
 /// An active hydration-burst record, mirrored from durable state.

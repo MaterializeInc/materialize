@@ -686,6 +686,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "webhook_max_request_size_bytes",
     "enable_cluster_controller",
     "cluster_controller_tick_interval",
+    "enable_background_alter_cluster",
+    "default_cluster_reconfiguration_timeout",
 ]
 
 
