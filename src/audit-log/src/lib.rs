@@ -586,6 +586,10 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
     Schedule,
     System,
+    /// The cluster controller's graceful-reconfiguration strategy created the
+    /// replica while converging a cluster onto an in-flight `reconfiguration`
+    /// target (a background `ALTER CLUSTER`).
+    Reconfiguration,
     /// The cluster controller dropped the replica because the cluster's
     /// configuration no longer calls for it. NOTE: a replication-factor
     /// decrease drop reads `retired` even though the config change itself was

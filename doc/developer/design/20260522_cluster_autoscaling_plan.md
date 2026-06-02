@@ -157,7 +157,7 @@ user `ALTER` that lands mid-tick rejects the stale batch and the controller reco
 | `enable_cluster_controller` | bool | false | PR 2 | Master gate: controller owns the replica set; legacy paths bypassed. |
 | `cluster_controller_tick_interval` | Duration | (≈ today's scheduling interval) | PR 2 | Reconcile cadence (replaces `cluster_check_scheduling_policies_interval`). |
 | `enable_background_alter_cluster` | bool | false | PR 3 | When true `ALTER` returns immediately; when false the session wait-shim blocks (foreground UX) over the same durable mechanism. |
-| `default_cluster_reconfiguration_timeout` | Duration | (system default) | PR 3 | Deadline written when an `ALTER` omits `WITH (TIMEOUT = ...)`. |
+| `default_cluster_reconfiguration_timeout` | Duration | (system default) | PR 3 | Deadline written when an `ALTER` omits `WITH (WAIT ...)`. |
 | `enable_auto_scaling_strategy` | bool | false | PR 6 | Gates `AUTO SCALING STRATEGY` SQL acceptance. |
 | `enable_hydration_burst` | bool | true (at GA) | PR 6 | Break-glass: set false to disable the burst strategy env-wide without touching graceful/on-refresh. |
 
@@ -280,7 +280,7 @@ new fields yet → no behaviour change.
 **Scope (in).**
 - New durable + in-memory + proto types and their conversions:
   - `AutoScalingStrategy { on_hydration: Option<OnHydration { hydration_size: String, linger_duration: Option<Duration> }> }` — extensible (a struct/list so future strategies slot in). User-configured *policy*.
-  - `ReconfigurationState { target: ReconfigurationTarget, deadline: mz_repr::Timestamp }`, where `ReconfigurationTarget { size, replication_factor, availability_zones, logging }` (decision 4).
+  - `ReconfigurationState { target: ReconfigurationTarget, deadline: mz_repr::Timestamp, on_timeout: OnTimeoutAction }`, where `ReconfigurationTarget { size, replication_factor, availability_zones, logging }` (decision 4) and `on_timeout` is the `COMMIT`/`ROLLBACK` action applied if the deadline passes un-hydrated (default `ROLLBACK`). *(The `on_timeout` field was added after PR 1's initial commit, in the PR 3 design refinement; it lands as a `fixup!` against PR 1's catalog commit — v86 is unshipped, so the proto is revised in place — per the fixup-commit convention.)*
   - `BurstState { burst_size: String, linger_duration: Duration, steady_hydrated_at: Option<mz_repr::Timestamp> }`.
   - Add the three as `Option<...>` fields on `ClusterVariantManaged` (decision 3), `None` by default.
 - **Provisioned AZ list on managed replicas:** collapse durable `ReplicaLocation::Managed`'s single `availability_zone` user-pin into an `availability_zones: Vec<String>` recording the zones the replica was provisioned under — a managed cluster's `AVAILABILITY ZONES` pool, or an unmanaged replica's pin as a zero-/one-element list. Backfill existing managed replicas from their cluster's current `availability_zones` and unmanaged-cluster replicas from their pin. (Needed so the controller can tell realized- from target-shape replicas by config shape, including AZ divergence.) The in-memory `ManagedReplicaAvailabilityZones` enum is kept here and removed in a follow-up commit — it can only become a bare `Vec` once this durable field stores the list unconditionally.
@@ -353,7 +353,9 @@ rejected and recovered on the next tick.
 
 ## PR 3 — Graceful reconfiguration strategy + `ALTER` reshape + wait-shim
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review — implementation + review landed (commits `8022d9a`, `d7d0254`); the
+2026-06-02 design refinement (durable, controller-honored `ON TIMEOUT`, default `ROLLBACK`) is now
+implemented (the three reopened checklist items below are done).
 
 **Goal.** Move graceful (zero-downtime) reconfiguration into the controller as a strategy,
 driven by the durable `reconfiguration` record, with hydration-aware cut-over and timeout —
@@ -364,9 +366,9 @@ all dark behind the master gate; legacy 3-stage machine still runs when the gate
 - `GracefulReconfigurationStrategy` (pure):
   - Engaged when `reconfiguration` record is present.
   - `desired_replicas`: `target.replication_factor` replicas at `target` shape (size + logging + AZ list).
-  - `update_state`: target replicas present **and** hydrated → cut over (`cluster.size := target.{size,...}`, clear record). Reads `deadline`: `now > deadline` and not yet hydrated → record timeout, **retain record as tombstone**, stop contributing (parked). Hydrated **and** past deadline → cut over (success precedence).
+  - `update_state`: target replicas present **and** hydrated → cut over (`cluster.size := target.{size,...}`, clear record); success precedence holds even past the deadline. Otherwise once `now > deadline` and not yet hydrated, apply the record's `on_timeout`: **`ROLLBACK`** (default) → drop the whole target set, **retain record as tombstone**, stop contributing (parked); **`COMMIT`** → advance `cluster.size` to the target and clear the record anyway. Emit an audit event recording the action.
   - Diff on size + logging + **AZ list** (now diffable thanks to PR 1) + count.
-- **`ALTER CLUSTER` reshape (gated):** when the master gate is on and the change is a config-shape change (size/logging/AZ), write the `reconfiguration` record (target + deadline) in one txn and return; leave realized config. Once a record is present, further `ALTER`s **fold into it** (overwrite target + deadline). Non-shape changes (rf-only, workload_class) with no record in flight update realized config directly (as today). `WITH (TIMEOUT = ...)` → `deadline = txn_ts + timeout`; omitted → `default_cluster_reconfiguration_timeout`. **Keep the legacy 3-stage path for gate-off** (don't delete yet — PR 7).
+- **`ALTER CLUSTER` reshape (gated):** when the master gate is on and the change is a config-shape change (size/logging/AZ), write the `reconfiguration` record (target + deadline + on_timeout) in one txn and return; leave realized config. Once a record is present, further `ALTER`s **fold into it** (overwrite target + deadline + on_timeout). Non-shape changes (rf-only, workload_class) with no record in flight update realized config directly (as today). Deadline + on-timeout come from the **existing** `WITH (WAIT ...)` surface (kept verbatim — no new token): `WAIT UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT|ROLLBACK)` → `deadline = txn_ts + timeout`, `on_timeout` as given; `WAIT FOR '<dur>'` ≡ `UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT)`; omitting `WAIT` → `default_cluster_reconfiguration_timeout` + default `ROLLBACK`. **Flip the planner's implicit `ON TIMEOUT` default `COMMIT`→`ROLLBACK` globally** (`OnTimeoutAction::default()`), which also changes the legacy foreground default — the safe, no-surprise-downtime default. **Keep the legacy 3-stage path for gate-off** (don't delete yet — PR 7).
 - **Wait-shim:** `enable_background_alter_cluster` off (or foreground UX during rollout) → the session polls the durable `reconfiguration` record (cleared = done; `now > deadline` = timed out) up to its own wait. On → `ALTER` returns immediately. (Polls the record directly so this PR doesn't depend on PR 4's view. Session disconnect no longer aborts the reconfiguration.)
 - **Audit:** `ReplicaCreateDropReason::GracefulReconfiguration` → new `CreateOrDropClusterReplicaReasonV1::Reconfiguration`, carried on the controller's create/drop events.
 
@@ -385,13 +387,29 @@ gate forced on, a background `ALTER` returns immediately, the controller converg
 timeouts park as tombstones, and the flow survives restart.
 
 **Checklist.**
-- [ ] Implement the hydration/frontier methods of `ClusterControllerCtx` (pulled on demand).
-- [ ] Implement `GracefulReconfigurationStrategy` (pure); targeted kernel tests for the tricky cases.
-- [ ] Reshape `ALTER CLUSTER` (gated): write/fold `reconfiguration` record; keep legacy path for gate-off; timeout/deadline resolution + dyncfg default.
-- [ ] Wait-shim polling the record; `enable_background_alter_cluster` dyncfg.
-- [ ] Audit reason variant (`Reconfiguration`) on create/drop.
-- [ ] Integration + platform-check tests (authored; run in CI).
-- [ ] `cargo fmt`/`check` clean; update tracker.
+- [x] Implement the hydration method of `ClusterControllerCtx` (pulled on demand). Reshaped the speculative PR-2 stub `collections_hydrated_on_replicas(cluster, replicas, collections) -> bool` into `hydrated_replicas(cluster, replicas) -> BTreeSet<ReplicaId>` (per-replica "all current collections hydrated"), backed by `collections_hydrated_for_replicas`/`collections_hydrated_on_replicas` with an empty exclude set. (Frontier/read-ts reads still land with their first consumer, PR 5.)
+- [x] Implement `GracefulReconfigurationStrategy` (pure); targeted kernel tests for the tricky cases (timeout-vs-hydrated precedence, partial-hydration, AZ-only shape change, full overlap→cut-over, ALTER-back no-churn).
+- [x] Reshape `ALTER CLUSTER` (gated): write/fold `reconfiguration` record; keep legacy path for gate-off; timeout/deadline resolution + dyncfg default.
+- [x] Wait-shim polling the record; `enable_background_alter_cluster` dyncfg.
+- [x] Audit reason variant (`Reconfiguration`) on create (graceful-desired); old-set drops at cut-over are `Manual` (none-desired), with richer drop-lifecycle attribution deferred to PR 4.
+- [x] Integration test authored (`cluster_controller.slt`, gate + background forced on); platform-check **deferred** (see Progress Log).
+- [x] `cargo fmt`/`check`/`clippy` clean; update tracker.
+
+Reopened by the 2026-06-02 design refinement (the durable `on_timeout` knob):
+- [x] Add `on_timeout: OnTimeoutAction` to durable `ReconfigurationState` — landed as a `fixup!` against PR 1's catalog commit (v86 unshipped → proto revised in place: `ReconfigurationState` field + mirrored `OnTimeoutAction` proto enum + `RustType` conversion; durable/memory mirrors threaded; `OnTimeoutAction` gained serde/ordering derives, shared by both layers like `ClusterSchedule`; v86 encoding snapshot regenerated). Per the fixup-commit convention.
+- [x] Honor `on_timeout` in `GracefulReconfigurationStrategy::update_state` (`ROLLBACK` = drop target set + tombstone; `COMMIT` = cut over un-hydrated and clear); kernel tests for `COMMIT`-on-timeout vs `ROLLBACK`-on-timeout (and an overlap-before-deadline parity case). Audit: the action is recorded through the existing reason-carrying create/drop + cut-over ops; the dedicated deadline-carrying *timeout-fired* lifecycle event stays with PR 4's reconfiguration audit lifecycle (see Deferred).
+- [x] Flipped planner `OnTimeoutAction::default()` `COMMIT`→`ROLLBACK` (global; also changes the legacy foreground default, which reads the same `default()`); threaded `on_timeout` from the `WITH (WAIT ...)` plan into the written record (a fold overwrites it with the latest `ALTER`'s); `WAIT FOR` desugars to `ON TIMEOUT COMMIT`; no `WAIT` → default `ROLLBACK`. Extended `cluster_controller.slt` (gate + background on) to assert the omitted-`ON TIMEOUT` default and both explicit actions drive a record under the gate (authored for CI).
+
+**Deferred (with reasons).**
+- **No new `WITH (TIMEOUT = ...)` token (settled — *not* deferred).** Earlier the implementation deferred a new top-level token to PR 6; per the 2026-06-02 design refinement we keep the existing `WITH (WAIT ...)` surface **permanently** as the only spelling — it already expresses both the deadline (`TIMEOUT`) and the on-timeout action (`ON TIMEOUT`), so a second token would only fragment it. The timeout value already flows from the `WAIT` plumbing; no parser work remains. See the design doc's *Per-`ALTER` timeout* section.
+- **Restart-survival platform-check.** The controller is dark by default; a platform-check would have to `ALTER SYSTEM SET enable_cluster_controller = true` env-wide, which would change behavior for **every other check** in the shared suite (the controller would own all replica sets) while the feature is dark. Survival across restart is guaranteed by construction (the `reconfiguration` record is durable catalog state) and is exercised by the controller tests + the slt; a dedicated restart test belongs with the rollout enablement, not the dark suite.
+- **Dedicated *timeout-fired* audit event (with the active deadline).** The on-timeout action is already attributable through the existing reason-carrying ops (a `COMMIT` cut-over via `Op::UpdateClusterConfig`; a `ROLLBACK` drop via `Op::DropObjects`, none-desired). A distinct cluster-level *timeout-fired* event recording the action and the active deadline is part of PR 4's reconfiguration audit *lifecycle* (started / finalized / cancelled / timeout-fired), which owns the audit-event surface; adding it here would duplicate that work and split the event family across two PRs.
+- **Deterministic ROLLBACK-vs-COMMIT-at-timeout slt.** A timeout-park requires a target that does **not** hydrate before its deadline, but an empty slt cluster hydrates promptly (success precedence then cuts over regardless of the action). The action's behavior *at* a timeout is asserted deterministically in the controller kernel tests (`graceful_commit_on_timeout_cuts_over_unhydrated`, `graceful_timeout_parks_and_drops_target`), where hydration does not race the deadline; the slt asserts only that the three spellings (omitted/`ROLLBACK`/`COMMIT`, plus `WAIT FOR`) are accepted under the gate and drive a record.
+
+> **Superseded:** the implementation's "`ON TIMEOUT COMMIT` collapsed into the tombstone-revert model"
+> deferral no longer holds — `on_timeout` is now an honored durable knob (the three reopened
+> checklist items above), with the default flipped to `ROLLBACK`. `COMMIT` is no longer silently
+> treated as `ROLLBACK`.
 
 ---
 
@@ -593,6 +611,158 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-02_ — **PR 3 review follow-up (on-timeout knob; fixup commit, same branch)** — addresses
+  the adversarial review of the durable, controller-honored `ON TIMEOUT` work. **Doc correctness
+  (major):** rewrote the stale `**Timeout action.**` paragraph on `reshape_alter_cluster_managed`,
+  which still claimed `COMMIT` was "collapsed into the tombstone-revert model". It now states the
+  current contract — the record carries `on_timeout` (default `ROLLBACK`) and the controller applies
+  it at the deadline only if the target has not hydrated (`ROLLBACK` drops the target set + retains the
+  tombstone, `COMMIT` cuts the realized config over to the un-hydrated target and clears the record;
+  success always takes precedence). **Seam coverage (minor):** added two `FakeCtx`-driven controller
+  tests that force `now` past the deadline with an un-hydrated target and drive `reconcile` end-to-end:
+  `graceful_rollback_at_timeout_drops_target_through_seam` (the in-flight target replica is dropped via
+  `apply`, the realized set reverts, the record is retained as a tombstone, second tick is a no-op) and
+  `graceful_commit_at_timeout_cuts_over_through_seam` (phase 1 advances `size` to the target and clears
+  the record, phase 2 drops the old replica, second tick converges). 21 controller tests total, all
+  pass. **Fold note (nit):** sharpened the `reshape_alter_cluster_managed` comment to state explicitly
+  that — unlike the target, which folds per-dimension — the deadline and `on_timeout` are resolved
+  fresh and replaced wholesale by the latest `ALTER`'s `WAIT` clause. **Cheap checks:** `cargo
+  fmt --check` + `cargo check`/`clippy` clean on `mz-cluster-controller` and `mz-adapter`; `Cargo.lock`
+  unchanged. No scope change; stays dark behind the master gate.
+- _2026-06-02_ — **PR 3 completed: durable, controller-honored `ON TIMEOUT` (default `ROLLBACK`)**
+  — the three reopened checklist items, in two commits on `cluster-autoscaling`. **(1) PR-1
+  `fixup!` commit** (against the v85→v86 catalog commit): `on_timeout: OnTimeoutAction` added to
+  the durable `ReconfigurationState`. v86 is unshipped, so the proto is revised in place —
+  `ReconfigurationState` gains the field and a mirrored `OnTimeoutAction` proto enum
+  (`objects.rs` + the `objects_v86.rs` snapshot, both hashes updated in `objects_hashes.json`),
+  with the `RustType` conversion alongside the other autoscaling types in catalog-protos
+  `serialization.rs`. The durable serialization, the in-memory mirror and its `From` conversions,
+  and the adapter↔controller record conversions all thread the field; `mz_sql::plan::OnTimeoutAction`
+  gained `Copy`/serde/ordering derives so both the durable and memory layers can reference it without
+  conversion, like `ClusterSchedule`. The v86 encoding snapshot (`objects_v86.txt`) was regenerated
+  (decoding the old snapshot into the new struct fails on the missing field — expected for an
+  unshipped version). The implicit default stays `COMMIT` in this commit (behavior-preserving). **(2)
+  PR-3 commit:** `GracefulReconfigurationStrategy::update_state` now honors `on_timeout` — past the
+  deadline un-hydrated, `Rollback` parks (drops the target set, tombstones the record; the existing
+  behavior) and `Commit` cuts over the un-hydrated target and clears the record; `desired_replicas`
+  keeps the target desired under `Commit` (it becomes the realized set at cut-over) and drops it under
+  `Rollback`. Success precedence is unchanged (a hydrated target cuts over regardless of the action).
+  The controller carries its own `OnTimeout` enum (no `mz_sql` dep in the pure crate); the adapter
+  driver maps `OnTimeoutAction`↔`OnTimeout`. The planner's `OnTimeoutAction::default()` flipped
+  `COMMIT`→`ROLLBACK` globally (also the legacy foreground default, which reads the same `default()` —
+  no test relied on the implicit default, all `WAIT UNTIL READY` tests pass `ON TIMEOUT` explicitly).
+  The reshape threads the action from the `WITH (WAIT ...)` plan into the record (`WAIT FOR` →
+  `COMMIT`; no `WAIT` → default `ROLLBACK`; a fold overwrites it with the latest `ALTER`'s).
+  **Tests:** two new graceful kernel tests (`graceful_commit_on_timeout_cuts_over_unhydrated`,
+  `graceful_rollback_on_timeout_before_deadline_still_overlaps`; 19 controller tests total, all pass)
+  plus the existing `graceful_timeout_parks_and_drops_target` as the `ROLLBACK`-at-timeout case;
+  `cluster_controller.slt` extended with an `ON TIMEOUT` section (omitted default + both explicit
+  actions + `WAIT FOR`, authored for CI). **Cheap checks:** `cargo fmt` + `cargo check`/`clippy` clean
+  on `mz-cluster-controller`/`mz-adapter`/`mz-sql`/`mz-catalog`/`mz-catalog-protos`; `bin/lint-cargo`
+  clean; `Cargo.lock` unchanged; the catalog `durable::` suite (163 passed) and the adapter cluster
+  fold unit tests pass. Did **not** run the slt suite or the full optimized build. **Deferred (see the
+  PR-3 section):** the dedicated deadline-carrying *timeout-fired* audit event (PR 4's reconfiguration
+  audit lifecycle owns the event family); the action is already attributable through the existing
+  reason-carrying ops. A deterministic ROLLBACK-vs-COMMIT-*at-timeout* slt is not feasible (an empty
+  slt cluster hydrates before any deadline) — that behavior is covered by the kernel tests.
+  **Fixup note:** the `on_timeout` durable field is a `fixup!` against the PR-1 catalog commit and
+  should be squashed into it when PR 1 is finalized.
+
+- _2026-06-02_ — **PR 3 design refinement (docs only): keep the existing `WITH (WAIT ...)` syntax;
+  `ON TIMEOUT` becomes a durable, controller-honored knob defaulting to `ROLLBACK`.** Settled the two
+  timeout-related PR-3 review items in the design rather than carrying them as deferrals.
+  (1) **No new token:** we do *not* add a top-level `WITH (TIMEOUT = ...)`; the existing
+  `WITH (WAIT FOR '<dur>')` / `WITH (WAIT UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT|ROLLBACK))`
+  surface is the permanent spelling, with `WAIT FOR` defined as sugar for
+  `UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT)` (it loses only the now-meaningless "wait the full
+  duration even when ready early" property). (2) **Honor `on_timeout`:** instead of always reverting,
+  the controller now applies the action — added as a durable field on `ReconfigurationState`, written
+  by the reshape from the `WITH (WAIT ...)` plan, and applied in `update_state` (`ROLLBACK` = drop the
+  whole target set + tombstone; `COMMIT` = cut over un-hydrated and clear), with an audit event for the
+  action taken. Success precedence is unchanged. (3) **Default flip:** the implicit `ON TIMEOUT` default
+  goes `COMMIT`→`ROLLBACK` **globally** (planner `OnTimeoutAction::default()`) — a deliberate
+  safe-default change that also affects the **legacy foreground path** (chosen so the same syntax never
+  means different things across the gate, and so a timeout never silently induces downtime by cutting
+  over to an unhydrated target). Design doc updated (*Per-`ALTER` timeout*, *Stuck reconfiguration*,
+  *Notable user-facing changes*, success criteria, dyncfgs). PR 3 reopened to 🚧; remaining code work
+  (durable field as a PR-1 `fixup!`, strategy honoring + audit, the default flip + `on_timeout`
+  threading) is tracked in the PR 3 checklist. **No code in this entry — docs only.**
+
+- _2026-06-02_ — **PR 3 review follow-up** (fixup commit, same branch; addresses the adversarial
+  review). **Fold correctness:** a fold of an `ALTER` issued while a `reconfiguration` is in flight
+  no longer reverts dimensions the `ALTER` did not mention. `reshape_alter_cluster_managed` now
+  overlays the new `ALTER` onto the **in-flight target** — a dimension left `Unchanged` keeps the
+  in-flight target's value rather than the realized (pre-reconfiguration) value `new_config` carried —
+  via the new pure helper `fold_reconfiguration_target` (unit-tested: no-record passthrough, rf-only
+  keeps the in-flight shape, all-set overwrite, all-unchanged ALTER-back). Previously an rf-only or
+  workload_class-only `ALTER` mid-flight silently discarded the in-flight size/AZ/logging. **Wait-shim
+  vs. success-precedence:** the foreground shim no longer reports a spurious timeout on a
+  reconfiguration the controller is about to (or just did) complete. Past the deadline with the record
+  still present it grants **one grace re-poll** (`past_deadline_grace_used`) before erroring, so the
+  controller's success-precedence cut-over (hydrated-past-deadline still cuts over) can clear the
+  record first; the strategy's tombstone is stable, so a record still present after the grace re-poll
+  is a genuine timeout. **`ON TIMEOUT COMMIT`:** documented as intentionally collapsed into the
+  tombstone-revert (`ROLLBACK`) model on `reshape_alter_cluster_managed` and the Deferred list —
+  committing a not-fully-hydrated target would break the HA guarantee the overlap exists for. **slt:**
+  the second graceful `ALTER` is now a genuine reshape to a third size (was an identical no-op that
+  early-returned before the reshape branch, proving nothing about record-clearing). **Hydration probe:**
+  documented why `Coordinator::hydrated_replicas` must probe per-replica (the compute/storage APIs
+  collapse a replica list to a single "hydrated on any" bool, so a batched call would lose the
+  per-replica granularity the cut-over needs); phase-2 already reuses the phase-1 hydration when phase
+  1 wrote nothing. Dropped a redundant `.clone()` on the `Copy` `cluster_alter_check_ready_interval()`.
+  Cheap checks re-run: `cargo fmt --check` + `cargo check`/`clippy` clean on `mz-cluster-controller`
+  and `mz-adapter`; new fold unit tests + the 17 controller tests pass.
+- _2026-06-02_ — **PR 3 implemented** (graceful reconfiguration strategy + `ALTER` reshape +
+  wait-shim, all dark behind the master gate). **Strategy:** new pure `GracefulReconfigurationStrategy`
+  in `mz-cluster-controller` — engaged whenever the durable `reconfiguration` record is present;
+  `desired_replicas` contributes `target.replication_factor` replicas at the target shape (size +
+  logging + AZ list, all diffable thanks to PR 1) on top of the baseline's realized set (the
+  hydrate-overlap), and stops contributing them on timeout (`now > deadline` && target not fully
+  hydrated → park, the controller drops the in-flight target set, the record is retained as a
+  tombstone); `update_state` cuts over (`cluster.{size,rf,az,logging} := target`, clears the record)
+  once the target replicas are **all** present and hydrated — success takes precedence over the
+  deadline. Registered in `ClusterController::new()` alongside the baseline. **Hydration seam:** the
+  PR-2 stub `collections_hydrated_on_replicas(cluster, replicas, collections) -> bool` (whose
+  `collections` include-list the underlying controller APIs cannot express) was reshaped into
+  `hydrated_replicas(cluster, replicas) -> BTreeSet<ReplicaId>` — "of these replicas, which have all
+  current non-transient collections on the cluster hydrated". The controller pulls it
+  **on demand**: `enrich_hydration` probes a cluster's replicas only while a `reconfiguration` is in
+  flight (steady clusters are never probed), and threads the result into the new live-signal field
+  `ClusterState::hydrated_replicas` (excluded from the CaA `expected` witness — it is a signal, not
+  durable state). The adapter driver backs it per-replica against
+  `ComputeController::collections_hydrated_for_replicas` + `StorageController::collections_hydrated_on_replicas`
+  with an empty exclude set (a replica counts as hydrated iff both report it). **`ALTER` reshape:**
+  when `enable_cluster_controller` is on and a managed→managed `ALTER` touches a replica's config
+  shape (SIZE / logging / AVAILABILITY ZONES) — or any `ALTER` while a record is already in flight —
+  it is routed to `reshape_alter_cluster_managed`, which writes/folds the `reconfiguration` record
+  (full target shape + deadline) onto the **realized** config in one txn (only `workload_class`, which
+  needs no overlap, is applied immediately) and leaves the realized shape in place; the legacy
+  3-stage machine still runs for gate-off and for non-shape changes (rf-only, workload_class) with no
+  record in flight. Deadline = `now + timeout`, timeout from the existing `WITH (WAIT ...)` strategy
+  or the new `default_cluster_reconfiguration_timeout` dyncfg. **Wait-shim:** new
+  `ClusterStage::AwaitReconfiguration` polls the durable record at `cluster_alter_check_ready_interval`
+  — cleared = done, past-deadline tombstone = `AlterClusterTimeout`; with the new
+  `enable_background_alter_cluster` dyncfg on, `ALTER` returns immediately instead. Session disconnect
+  no longer aborts the reconfiguration (the record is durable; the controller carries on). **Audit:**
+  new `ReplicaCreateDropReason::GracefulReconfiguration` → `CreateOrDropClusterReplicaReasonV1::Reconfiguration`
+  (rust enum + `objects.rs`/`objects_v86.rs` proto enum revised in place since v86 is unshipped, hashes
+  updated, `RustType` conversion threaded); the controller maps graceful-desired creates to it via
+  per-decision strategy attribution. Added dyncfgs `enable_background_alter_cluster` (false) and
+  `default_cluster_reconfiguration_timeout` (24h), registered in `all_dyncfgs`. **Tests:** 8 new
+  graceful kernel/flow tests (17 total in `mz-cluster-controller`, all pass) covering in-flight desire,
+  cut-over on full hydration, partial-hydration no-cutover, timeout-vs-hydrated precedence, timeout
+  park+drop, AZ-only shape change, full overlap→cut-over→old-set-drop with attribution, and ALTER-back
+  no-churn; the fake ctx now drives hydration. Extended `cluster_controller.slt` (gate + background
+  forced on) to assert a background `ALTER SIZE` cuts the realized `mz_clusters.size` over and settles
+  the replica set — authored for CI, not run locally. **Cheap checks:** `cargo fmt` + `cargo
+  check`/`clippy` clean on `mz-cluster-controller`/`mz-adapter`/`mz-adapter-types`/`mz-catalog-protos`/
+  `mz-audit-log`/`mz-catalog`; `bin/lint-cargo` clean; `mz-catalog-protos` snapshot + `mz-catalog`
+  `durable::` suite (163 passed) green; `Cargo.lock` unchanged (no new deps). Did **not** run the slt
+  suite, platform-checks, or the full optimized build. **Deferred (see PR-3 section):** the bare
+  `WITH (TIMEOUT = ...)` parser token (timeout sourced from the existing `WAIT` plumbing instead) and
+  the restart-survival platform-check (would flip the master gate env-wide in the shared dark suite).
+  Old-set drops at cut-over carry `Manual` (none-desired); richer reconfiguration drop-lifecycle audit
+  attribution lands in PR 4.
 - _2026-06-02_ — **PR 2 implemented** (controller scaffolding + baseline strategy + coordinator
   wiring, all dark). New pure crate `mz-cluster-controller` (deps: `mz-controller-types`,
   `mz-compute-types`, `mz-repr`, `mz-ore`, `async-trait`; no adapter/catalog dep, no new

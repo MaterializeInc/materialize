@@ -578,6 +578,12 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
                     reason: ev::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {}),
                 }
             }
+            CreateOrDropClusterReplicaReasonV1::Reconfiguration => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Reconfiguration(Empty {}),
+                }
+            }
             CreateOrDropClusterReplicaReasonV1::Retired => {
                 use crate::objects::audit_log_event_v1 as ev;
                 ev::CreateOrDropClusterReplicaReasonV1 {
@@ -590,19 +596,15 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
     fn from_proto(
         proto: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
     ) -> Result<Self, TryFromProtoError> {
+        use crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason as Reason;
         match proto.reason {
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Manual(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Schedule(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::System(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::System),
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Retired(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::Retired),
+            Reason::Manual(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
+            Reason::Schedule(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
+            Reason::System(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+            Reason::Reconfiguration(Empty {}) => {
+                Ok(CreateOrDropClusterReplicaReasonV1::Reconfiguration)
+            }
+            Reason::Retired(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Retired),
         }
     }
 }

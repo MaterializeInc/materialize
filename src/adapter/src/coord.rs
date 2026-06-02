@@ -826,6 +826,10 @@ pub enum ClusterStage {
     Alter(AlterCluster),
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
+    /// The foreground wait-shim over a controller-driven background
+    /// reconfiguration: poll the durable `reconfiguration` record until it clears
+    /// (success) or its deadline passes (timeout).
+    AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
 #[derive(Debug)]
@@ -850,6 +854,15 @@ pub struct AlterClusterFinalize {
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
     workload_class: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterAwaitReconfiguration {
+    validity: PlanValidity,
+    cluster_id: ClusterId,
+    /// Whether the shim has already granted the one post-deadline grace
+    /// re-poll; see `await_reconfiguration_stage`.
+    past_deadline_grace_used: bool,
 }
 
 #[derive(Debug)]
