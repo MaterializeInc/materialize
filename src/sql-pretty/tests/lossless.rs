@@ -86,6 +86,17 @@ fn parenthesized_show_with_modifiers_preserved() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn as_keyword_as_identifier_preserved() {
+    // A bare `as` at the start of a SELECT item is consumed as the `AS OF`
+    // timestamp keyword, so an `as` identifier / function name must stay quoted
+    // to round-trip. Regression for the parse_display_roundtrip /
+    // parse_pretty_roundtrip `"as"(…)` finding.
+    assert_lossless("SELECT \"as\"");
+    assert_lossless("SELECT \"as\"(1)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn quoted_special_grammar_function_name_preserved() {
     // A special-grammar keyword (`list`/`array`/`map`/…) quoted as a function
     // name must stay quoted, or the bare name dispatches to its special grammar
