@@ -338,3 +338,20 @@ fn test_table_function_special_name_display_roundtrip() {
         assert_display_roundtrips(sql);
     }
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_quoted_special_grammar_function_name_display_roundtrip() {
+    // A special-grammar keyword (`list`/`array`/`map`/…) quoted as a function
+    // name parses to a plain `Function`, so display must keep it quoted or the
+    // bare name dispatches to the keyword's special grammar on reparse
+    // (`list(x)` -> a LIST expr). Regression for the parse_display_roundtrip
+    // `"list"(c4)` finding.
+    for sql in [
+        "SELECT \"list\"(c4)",
+        "SELECT \"array\"(c2)",
+        "SELECT \"true\", \"array\"(c2), \"array\"(c2), \"list\"(c4) s",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}

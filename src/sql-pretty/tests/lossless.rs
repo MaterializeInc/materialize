@@ -86,6 +86,17 @@ fn parenthesized_show_with_modifiers_preserved() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn quoted_special_grammar_function_name_preserved() {
+    // A special-grammar keyword (`list`/`array`/`map`/…) quoted as a function
+    // name must stay quoted, or the bare name dispatches to its special grammar
+    // on reparse (`list(x)` -> a LIST expr). Regression for the
+    // parse_display_roundtrip / parse_pretty_roundtrip `"list"(…)` findings.
+    assert_lossless("SELECT \"list\"(c4)");
+    assert_lossless("SELECT \"true\", \"array\"(c2), \"array\"(c2), \"list\"(c4) s");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn table_function_special_name_preserved() {
     // `extract`/`position` table functions must not use the scalar-only
     // `extract(a FROM b)` / `position(a IN b)` special display, which doesn't
