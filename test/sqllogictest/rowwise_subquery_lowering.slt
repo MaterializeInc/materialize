@@ -18,6 +18,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rowwise_subquery_lowering TO true;
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (id int, arr int[])
 

@@ -1998,25 +1998,37 @@ Explained Query:
   Finish order_by=[#1{count} desc nulls_first, #0{count_messageid} desc nulls_first] output=[#0, #1]
     With
       cte l0 =
+        CrossJoin type=differential // { arity: 17 }
+          implementation
+            %0:person[×] » %1:message[×]
+          ArrangeBy keys=[[]] // { arity: 11 }
+            ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
+          ArrangeBy keys=[[]] // { arity: 6 }
+            Project (#0{creationdate}, #1{messageid}, #3{rootpostlanguage}, #4{content}, #8{length}, #9{creatorpersonid}) // { arity: 6 }
+              ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+      cte l1 =
         Project (#0{creationdate}..=#11{messageid}) // { arity: 12 }
-          Filter #13 // { arity: 14 }
-            FlatMap eval_relation(#12{rootpostlanguage}) // { arity: 14 }
-              Project (#0{creationdate}..=#10{email}, #12{messageid}, #14{rootpostlanguage}) // { arity: 13 }
-                Filter (#19{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#15{content}) IS NOT NULL // { arity: 24 }
-                  Join on=(#1{id} = #20{creatorpersonid}) type=differential // { arity: 24 }
-                    implementation
-                      %1:message[#9{creatorpersonid}]KAiif » %0:person[#1{id}]KAiif
-                    ArrangeBy keys=[[#1{id}]] // { arity: 11 }
-                      ReadIndex on=person person_id=[differential join] // { arity: 11 }
-                    ArrangeBy keys=[[#9{creatorpersonid}]] // { arity: 13 }
-                      ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
+          Join on=(#12{rootpostlanguage} = #13{rootpostlanguage}) type=differential // { arity: 14 }
+            implementation
+              %1[#0]UKA » %0:l0[#12]Kiif
+            ArrangeBy keys=[[#12{rootpostlanguage}]] // { arity: 13 }
+              Project (#0{creationdate}..=#10{email}, #12{messageid}, #13{rootpostlanguage}) // { arity: 13 }
+                Filter (#15{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#14{content}) IS NOT NULL AND (#1{id} = #16{creatorpersonid}) // { arity: 17 }
+                  Get l0 // { arity: 17 }
+            ArrangeBy keys=[[#0{rootpostlanguage}]] // { arity: 1 }
+              Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
+                Project (#0{rootpostlanguage}) // { arity: 1 }
+                  Filter (#0{rootpostlanguage} = #1{right_col0_0}) // { arity: 2 }
+                    FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
+                      Project (#13{rootpostlanguage}) // { arity: 1 }
+                        Get l0 // { arity: 17 }
     Return // { arity: 2 }
       Reduce group_by=[#0{count_messageid}] aggregates=[count(*)] // { arity: 2 }
         Project (#1{count_messageid}) // { arity: 1 }
           Reduce group_by=[#0{id}] aggregates=[count(#1{messageid})] // { arity: 2 }
             Union // { arity: 2 }
               Project (#1{id}, #11{messageid}) // { arity: 2 }
-                Get l0 // { arity: 12 }
+                Get l1 // { arity: 12 }
               Project (#1{id}, #22) // { arity: 2 }
                 Map (null) // { arity: 23 }
                   Join on=(#0{creationdate} = #11{creationdate} AND #1{id} = #12{id} AND #2{firstname} = #13{firstname} AND #3{lastname} = #14{lastname} AND #4{gender} = #15{gender} AND #5{birthday} = #16{birthday} AND #6{locationip} = #17{locationip} AND #7{browserused} = #18{browserused} AND #8{locationcityid} = #19{locationcityid} AND #9{speaks} = #20{speaks} AND #10{email} = #21{email}) type=differential // { arity: 22 }
@@ -2027,15 +2039,15 @@ Explained Query:
                         Negate // { arity: 11 }
                           Distinct project=[#0{creationdate}..=#10{email}] // { arity: 11 }
                             Project (#0{creationdate}..=#10{email}) // { arity: 11 }
-                              Get l0 // { arity: 12 }
+                              Get l1 // { arity: 12 }
                         Distinct project=[#0{creationdate}..=#10{email}] // { arity: 11 }
                           ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
                     ArrangeBy keys=[[#0{creationdate}..=#10{email}]] // { arity: 11 }
                       ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
 
 Used Indexes:
-  - materialize.public.person_id (*** full scan ***, differential join)
-  - materialize.public.message_creatorpersonid (differential join)
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
 
 Target cluster: quickstart
 

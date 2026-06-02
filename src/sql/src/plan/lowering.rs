@@ -141,6 +141,9 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     pub enable_cast_elimination: bool,
     pub enable_simplify_quantified_comparisons: bool,
+    /// Enable lowering of row-local correlated subqueries to a stateless
+    /// `FlatMap` over a `TableFunc::EvalRelation`.
+    pub enable_rowwise_subquery_lowering: bool,
 }
 
 impl Default for Config {
@@ -150,6 +153,7 @@ impl Default for Config {
             enable_variadic_left_join_lowering: false,
             enable_cast_elimination: false,
             enable_simplify_quantified_comparisons: false,
+            enable_rowwise_subquery_lowering: false,
         }
     }
 }
@@ -161,6 +165,7 @@ impl From<&SystemVars> for Config {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_rowwise_subquery_lowering: vars.enable_rowwise_subquery_lowering(),
         }
     }
 }
@@ -1938,7 +1943,10 @@ where
     // The empty-key case is excluded: an uncorrelated subquery is better served
     // by the keyed path's "compute once" handling below than by recomputing it
     // for every outer row.
-    if !key.is_empty() && is_rowwise_candidate(&inner) {
+    if context.config.enable_rowwise_subquery_lowering
+        && !key.is_empty()
+        && is_rowwise_candidate(&inner)
+    {
         let mut placeholder_id = mz_expr::LocalId::new(id_gen.allocate_id());
         let outer_typ = outer.typ();
         let input_type = ReprRelationType::new(

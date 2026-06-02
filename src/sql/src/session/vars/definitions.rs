@@ -2239,6 +2239,14 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    // Disposition: added 2026-06-02, default off; trial for a month. Disable or
+    // remove if no positive response by 2026-07-02.
+    {
+        name: enable_rowwise_subquery_lowering,
+        desc: "Lower row-local correlated subqueries to a stateless FlatMap over a TableFunc::EvalRelation instead of a keyed Reduce joined back to the outer relation.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2264,6 +2272,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
+            enable_rowwise_subquery_lowering: vars.enable_rowwise_subquery_lowering(),
         }
     }
 }
@@ -2306,6 +2315,7 @@ mod tests {
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
+            enable_rowwise_subquery_lowering,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2336,6 +2346,7 @@ mod tests {
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
+        set_var!(enable_rowwise_subquery_lowering);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

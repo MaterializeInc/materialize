@@ -4876,6 +4876,7 @@ pub fn unplan_create_cluster(
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
+                enable_rowwise_subquery_lowering: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
