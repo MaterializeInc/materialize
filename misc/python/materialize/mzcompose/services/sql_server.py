@@ -49,16 +49,27 @@ class SqlServer(Service):
                 # healthy while msdb is still recovering, causing error
                 # 904 ("cannot be autostarted during server shutdown or
                 # startup").
-                "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q \"SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)\"",
+                "test": (
+                    "SQLCMD=/opt/mssql-tools18/bin/sqlcmd; "
+                    '[ -x "$$SQLCMD" ] || SQLCMD=/opt/mssql-tools/bin/sqlcmd; '
+                    f"\"$$SQLCMD\" -C -S localhost -U sa -P '{sa_password}' "
+                    "-Q \"SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)\""
+                ),
                 # Recovering can take a while
                 "start_period": "300s",
             },
         }
 
-        if version is None and sa_password == self.DEFAULT_SA_PASSWORD:
+        if version is not None:
+            config["image"] = f"mcr.microsoft.com/mssql/server:{version}"
+        elif sa_password == self.DEFAULT_SA_PASSWORD:
             config["mzbuild"] = "mssql-server"
         else:
-            config["image"] = f"mcr.microsoft.com/mssql/server:{version}"
+            raise ValueError(
+                "SqlServer with a non-default sa_password requires an "
+                "explicit `version` (the seeded mzbuild image can only be "
+                "used with the default password)."
+            )
 
         super().__init__(name=name, config=config)
         self.sa_password = sa_password
