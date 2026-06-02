@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Data round-trip for the CHANGES(<collection>, <as_of>) table function.
+# Data round-trip for the CHANGES(<collection> AS OF <bound>) table function.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_changes_table_function = true
@@ -33,18 +33,18 @@ SELECT mz_now()::text
 # `mz_diff` columns. The changelog is append-only: every change is materialized
 # as an insert (output diff +1), so the deletion of 1 shows up as a row with
 # mz_diff = -1 rather than as a retraction.
-> SELECT a, mz_diff FROM CHANGES (t, ${as-of}) ORDER BY a, mz_diff
+> SELECT a, mz_diff FROM CHANGES (t AS OF ${as-of}) ORDER BY a, mz_diff
 1 -1
 1 1
 2 1
 3 1
 
 # The changelog has one row per change: two snapshot rows plus two appends.
-> SELECT count(*) FROM CHANGES (t, ${as-of})
+> SELECT count(*) FROM CHANGES (t AS OF ${as-of})
 4
 
 # CHANGES composes with ordinary SQL: aggregate the net change per key.
-> SELECT a, sum(mz_diff) FROM CHANGES (t, ${as-of}) GROUP BY a ORDER BY a
+> SELECT a, sum(mz_diff) FROM CHANGES (t AS OF ${as-of}) GROUP BY a ORDER BY a
 1 0
 2 1
 3 1

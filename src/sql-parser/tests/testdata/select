@@ -2084,16 +2084,35 @@ SELECT "true", "false", "null", "array", list, map, "case", "cast", coalesce, gr
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("true")]), alias: None }, Expr { expr: Identifier([Ident("false")]), alias: None }, Expr { expr: Identifier([Ident("null")]), alias: None }, Expr { expr: Identifier([Ident("array")]), alias: None }, Expr { expr: Identifier([Ident("list")]), alias: None }, Expr { expr: Identifier([Ident("map")]), alias: None }, Expr { expr: Identifier([Ident("case")]), alias: None }, Expr { expr: Identifier([Ident("cast")]), alias: None }, Expr { expr: Identifier([Ident("coalesce")]), alias: None }, Expr { expr: Identifier([Ident("greatest")]), alias: None }, Expr { expr: Identifier([Ident("least")]), alias: None }, Expr { expr: Identifier([Ident("nullif")]), alias: None }, Expr { expr: Identifier([Ident("exists")]), alias: None }, Expr { expr: Identifier([Ident("extract")]), alias: None }, Expr { expr: Identifier([Ident("not")]), alias: None }, Expr { expr: Identifier([Ident("row")]), alias: None }, Expr { expr: Identifier([Ident("trim")]), alias: None }, Expr { expr: Identifier([Ident("position")]), alias: None }, Expr { expr: Identifier([Ident("substring")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("iffy_colnames")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement roundtrip
-SELECT * FROM CHANGES (t, 5)
+SELECT * FROM CHANGES (t AS OF 5)
 ----
-SELECT * FROM CHANGES (t, 5)
+SELECT * FROM CHANGES (t AS OF 5)
 
 parse-statement roundtrip
-SELECT * FROM CHANGES (mz_internal.foo, 100) AS c
+SELECT * FROM CHANGES (mz_internal.foo AS OF AT LEAST 100) AS c
 ----
-SELECT * FROM CHANGES (mz_internal.foo, 100) AS c
+SELECT * FROM CHANGES (mz_internal.foo AS OF AT LEAST 100) AS c
 
 parse-statement roundtrip
-SELECT count(*) FROM CHANGES (t, 5) WHERE mz_diff > 0
+SELECT count(*) FROM CHANGES (t AS OF mz_now() - INTERVAL '30' MINUTE) WHERE mz_diff > 0
 ----
-SELECT count(*) FROM CHANGES (t, 5) WHERE mz_diff > 0
+SELECT count(*) FROM CHANGES (t AS OF mz_now() - INTERVAL '30' MINUTE) WHERE mz_diff > 0
+
+parse-statement roundtrip
+SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1' HOUR)
+----
+SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1' HOUR)
+
+parse-statement
+SELECT * FROM CHANGES (t, 5)
+----
+error: Expected AS OF or AS OF AT LEAST after the CHANGES collection, found comma
+SELECT * FROM CHANGES (t, 5)
+                        ^
+
+parse-statement
+SELECT * FROM CHANGES (t)
+----
+error: Expected AS OF or AS OF AT LEAST after the CHANGES collection, found right parenthesis
+SELECT * FROM CHANGES (t)
+                        ^

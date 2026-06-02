@@ -3033,12 +3033,13 @@ fn plan_table_factor(
     }
 }
 
-/// Plans the `CHANGES(<name>, <as_of>)` table function: reads the named
-/// collection as an append-only changelog starting at `as_of`.
+/// Plans the `CHANGES(<name> AS OF [AT LEAST] <bound>)` table function: reads
+/// the named collection as an append-only changelog whose lower bound is the
+/// `AS OF` clause.
 fn plan_changes(
     qcx: &QueryContext,
     name: &ResolvedItemName,
-    as_of: &Expr<Aug>,
+    as_of: &AsOf<Aug>,
     alias: Option<&TableAlias>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     qcx.scx
@@ -3080,9 +3081,50 @@ fn plan_changes(
         .into_owned();
     let global_id = item.global_id();
 
-    // The changelog start `as_of` is a constant timestamp expression, evaluated
+    // The `AS OF` clause is the changelog's lower bound. It varies along two
+    // independent axes:
+    //   * strict (`AS OF`) vs. advisory (`AS OF AT LEAST`): whether an
+    //     unavailable history is an error or is clamped up to the input's
+    //     `since` (aging in).
+    //   * fixed (a constant timestamp) vs. sliding (`mz_now()`-relative): a
+    //     static changelog start vs. a window that trails real time.
+    // The strict/advisory distinction is carried by `AsOf::At`/`AsOf::AtLeast`;
+    // the fixed/sliding distinction is whether the bound references `mz_now()`.
+    //
+    // NOTE: advisory clamping to `since` is not yet differentiated in execution;
+    // for now both `AS OF` and `AS OF AT LEAST` pin the bound and surface an
+    // error if it precedes the input's `since`. The fixed/sliding distinction,
+    // however, is load-bearing for the gating below.
+    let bound = match as_of {
+        AsOf::At(expr) | AsOf::AtLeast(expr) => expr.clone(),
+    };
+    let sliding = changes_bound_is_sliding(qcx.scx, bound.clone())?;
+
+    // A durable maintained object (materialized view, index, ...) lives until it
+    // is dropped, so a fixed lower bound would pin the input's `since` open
+    // indefinitely, with the retained history growing without bound. Such
+    // objects must use a sliding `mz_now()`-relative bound, whose lag keeps the
+    // read hold bounded. (A one-off `SELECT` or `SUBSCRIBE` may use a fixed
+    // bound: its read hold is released when the query or session ends.)
+    if qcx.lifetime.is_maintained() && !sliding {
+        sql_bail!(
+            "CHANGES in a materialized view, index, or other maintained object \
+             requires a sliding bound, e.g. \
+             `AS OF AT LEAST mz_now() - INTERVAL '30 minutes'`; a fixed lower \
+             bound would hold the input's compaction frontier open indefinitely"
+        );
+    }
+
+    // Only the fixed-bound path is wired up today. A sliding bound additionally
+    // requires an output temporal filter (`mz_timestamp >= mz_now() - ...`) and
+    // a lagging read policy on the input, which are not yet implemented.
+    if sliding {
+        bail_unsupported!("CHANGES with a sliding mz_now()-relative bound");
+    }
+
+    // The fixed changelog start is a constant timestamp expression, evaluated
     // once at plan time (the same machinery as a historical `SELECT ... AS OF`).
-    let as_of = plan_as_of_or_up_to(qcx.scx, as_of.clone())?;
+    let as_of = plan_as_of_or_up_to(qcx.scx, bound)?;
 
     // The changelog exposes the input columns plus the per-update `mz_timestamp`
     // and `mz_diff`, matching SUBSCRIBE's diff output shape.
@@ -3103,6 +3145,36 @@ fn plan_changes(
     );
     let scope = plan_table_alias(scope, alias)?;
     Ok((expr, scope))
+}
+
+/// Returns whether a `CHANGES` `AS OF` bound is sliding, i.e. references
+/// `mz_now()` (a window that trails real time), as opposed to a fixed constant
+/// timestamp. Plans the bound the same way [`plan_as_of_or_up_to`] does, but
+/// only inspects it for `mz_now()` rather than folding it to a literal.
+fn changes_bound_is_sliding(
+    scx: &StatementContext,
+    mut bound: Expr<Aug>,
+) -> Result<bool, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    transform_ast::transform(scx, &mut bound)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CHANGES AS OF",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let hir = plan_expr(ecx, &bound)?.cast_to(
+        ecx,
+        CastContext::Assignment,
+        &SqlScalarType::MzTimestamp,
+    )?;
+    Ok(hir.contains_temporal())
 }
 
 /// Plans a `ROWS FROM` expression.

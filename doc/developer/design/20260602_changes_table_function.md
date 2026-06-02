@@ -88,11 +88,45 @@ For a bounded sliding window this is cheap; for an all-time stream it is the exp
 
 The issue surfaced two viable surfaces:
 
-* A table function `CHANGES(collection, as_of)` (this document's primary spelling).
+* A table function `CHANGES(collection AS OF [AT LEAST] <bound>)` (this document's primary spelling).
 * Nestable `SUBSCRIBE`, e.g. `SELECT ... FROM (SUBSCRIBE coll AS OF '...')` and `CREATE MATERIALIZED VIEW v AS SUBSCRIBE coll AS OF '...'`.
 
 These are surface variants over the same engine work; the table-function spelling reads more naturally inside `FROM` and composes with normal relational syntax.
-Note the streaming-SQL committee's caution that `AS OF` has a formal SQL:2011 time-travel meaning distinct from a changelog; we should pick a parameter keyword that does not collide (`FROM <time>` or an explicit `START AT`), even if the underlying mechanism is the read hold of a historical read.
+The lower bound is spelled as an `AS OF` clause immediately after the collection — mirroring `SUBSCRIBE coll AS OF <bound>` — rather than as a second comma-separated argument, since `CHANGES` is a bespoke `TableFactor` (not a catalog function) and the `AS OF` surface reinforces "`CHANGES` is nestable `SUBSCRIBE`".
+
+We deliberately reuse `AS OF` despite the streaming-SQL committee's caution that it collides with SQL:2011's value-time-travel `AS OF`: Materialize's `AS OF` already means "read hold at a logical time" (in `SELECT`/`SUBSCRIBE`), which is *exactly* `CHANGES`'s lower bound, and Materialize does not implement SQL:2011's `AS OF` at all, so there is nothing to collide with. Inventing `START AT`/`FROM <time>` would be less consistent than reusing the spelling users already know. This resolves the "parameter keyword" open question.
+
+### The lower bound: two orthogonal axes
+
+The `AS OF` clause varies along two independent axes, which compose into a 2×2:
+
+* **strict (`AS OF`) vs. advisory (`AS OF AT LEAST`)** — whether an unavailable history is an *error* or is *clamped up* to the input's current `since` (aging in). This reuses the existing `AsOf::At` / `AsOf::AtLeast` grammar.
+* **fixed (constant) vs. sliding (`mz_now()`-relative)** — a static changelog start vs. a window that trails real time. Detected by whether the bound references `mz_now()`.
+
+The shape of the bound transparently signals the output model: a **constant** bound is a fixed, append-only changelog from a point (no retraction); an **`mz_now()`-relative** bound is a sliding window whose trailing edge retracts via the existing temporal-filter machinery, which is what makes aggregation over it bounded and correct.
+
+```sql
+CHANGES(coll AS OF AT LEAST mz_now() - INTERVAL '30 minutes')  -- sliding, ages in (the easy default)
+CHANGES(coll AS OF mz_now() - INTERVAL '30 minutes')           -- sliding, strict lag
+CHANGES(coll AS OF '2026-06-02 12:00:00')                      -- fixed, strict
+CHANGES(coll AS OF AT LEAST 0)                                 -- fixed, from earliest retained
+```
+
+### Where it is allowed (pruned by the read-hold constraint)
+
+A lower bound does two jobs: it is the snapshot/read-hold point *and* (when `mz_now()`-relative) the window predicate. A read hold can only stop `since` from *advancing*; it can never recover already-compacted history, so look-back is only possible if the input already retained that much — `CHANGES` cannot manufacture history.
+
+The binding operability constraint is that a **fixed** bound on a **durable** object holds the input's `since` open indefinitely (retained window `= upper - bound`, growing without bound). Only a **sliding** bound keeps the hold bounded (it trails `upper` by a fixed lag). This prunes the matrix by lifetime:
+
+| context | fixed bound | sliding (`mz_now()`-relative) bound |
+|---|---|---|
+| one-off `SELECT` | allowed — hold released at query end | allowed — resolves against the query time |
+| `SUBSCRIBE` | allowed — hold released on disconnect | allowed |
+| durable: materialized view / index | **rejected** — unbounded, orphanable hold | allowed — bounded lagging hold |
+
+The discriminator is *"does the hold outlive a user-bounded session?"*: a `SELECT` releases its hold when the query ends and a `SUBSCRIBE` when the client disconnects, so a fixed bound is tolerable there (a long historical read). A materialized view or index holds until `DROP` with no session to end it, so a fixed bound is unbounded *and* orphanable — rejected at plan time. This generalizes the rule that there is no `CREATE MATERIALIZED VIEW ... AS OF <constant>`. (A plain `CREATE VIEW` is inert; the conservative implementation rejects a fixed-bound `CHANGES` at any maintained lifetime, including `View`.)
+
+For the maintained, sliding case, the consumer installs a *standing* lagging read hold on its inputs for its lifetime — like an index/MV holding its dependencies — which must be surfaced in the catalog so its cost on the input is explicit and attributable. Look-back and cross-run repeatability remain opt-in via the input's own retention policy (a deliberate, user-owned cost), since `CHANGES` will not retroactively extend input retention.
 
 ## Minimal Viable Prototype
 
@@ -115,10 +149,15 @@ Restricting the prototype to inputs that resolve directly to persist collections
 * **`DELTA` / coalesced output format.** The committee discussed a minimal-delta format that collapses intermediate diffs. Useful, but orthogonal to the core mechanism and deferred.
 * **Hard-disallow continuous (view/index) use entirely.** Safe, but forecloses the most-requested case (a maintained rolling-window view). We instead gate it: materialized views with a bounded window, no indexes initially.
 
+## Resolved questions
+
+* **Parameter keyword.** Resolved: spell the bound as an `AS OF [AT LEAST] <bound>` clause (see Syntax). We consciously reuse `AS OF` — it already means "read hold at a logical time" in Materialize, and there is no SQL:2011 `AS OF` to collide with.
+* **Upgrade recomputation (for the supported scope).** Restricting durable `CHANGES` to a *sliding* bound (fixed bounds are rejected on maintained objects) bounds the restart cost: starting over only re-reads the window, never an all-time stream. One-off `SELECT`/`SUBSCRIBE` compute once and never persist a stream, so there is nothing to recompute across versions. The remaining all-time/unbounded hazard is steered away from rather than solved.
+
 ## Open questions
 
-* **Upgrade recomputation.** On a version upgrade that changes how changes are computed, do we permanently hold the `since` of all inputs so we can recompute, or do we rely on the advisory `as_of` to restart from the current `since` and accept a discontinuity? The answer differs for bounded windows (restart is cheap) versus all-time streams (restart is lossy or expensive). This is the single biggest unresolved correctness/operability question.
 * **Dataflow timestamp selection.** `SELECT COUNT(*) FROM CHANGES(...)` could oblige a one-off query to watch the count climb from zero to current as history replays, depending on whether we pick the dataflow `as_of` from `since` or `upper`. Do we need `CREATE MATERIALIZED VIEW ... AS OF <time>` / a chosen evaluation time so a one-shot read returns a settled answer rather than a moving one?
-* **Compaction-hold accounting.** How do we surface and attribute the read hold a `CHANGES` instance imposes, so that an uncompacted input's cost is visible and not silently borne by unrelated readers? Mitigations floated: smarter persist, a "double collection" (uncompacted feeder plus compacted serving copy), and pure expectation management.
-* **Parameter keyword.** Settle on the `as_of` spelling that avoids the SQL:2011 `AS OF` time-travel collision while staying intuitive.
+* **Compaction-hold accounting.** How do we surface and attribute the read hold a `CHANGES` instance imposes, so that an uncompacted input's cost is visible and not silently borne by unrelated readers? For the maintained sliding case the standing lagging hold must appear in the catalog. Mitigations floated: smarter persist, a "double collection" (uncompacted feeder plus compacted serving copy), and pure expectation management.
+* **Advisory clamping execution.** The `AS OF` vs `AS OF AT LEAST` distinction is parsed and carried, but advisory clamping of a bound up to the input's `since` (aging in) is not yet differentiated in execution: both forms currently pin the bound and error if it precedes `since`. Wiring the clamp is a coordinator follow-up.
+* **Sliding-bound execution.** A sliding (`mz_now()`-relative) bound needs an output temporal filter plus a lagging read policy on the input. The grammar and gating accept it; the dataflow wiring is not yet implemented (currently `bail_unsupported`).
 * **Metadata columns.** Do we expose only `mz_timestamp` / `mz_diff`, or also committee-style `$Action` / `$IsUpdate`? `$IsUpdate` is not computable in all cases, so it likely stays out of the first cut.

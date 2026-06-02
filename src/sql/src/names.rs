@@ -2228,7 +2228,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             },
             Changes { name, as_of, alias } => Changes {
                 name: self.fold_item_name(name),
-                as_of: self.fold_expr(as_of),
+                as_of: self.fold_as_of(as_of),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
             },
         }

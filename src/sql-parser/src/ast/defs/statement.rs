@@ -5217,7 +5217,7 @@ impl AstDisplay for AlterSystemResetAllStatement {
 }
 impl_display!(AlterSystemResetAllStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AsOf<T: AstInfo> {
     At(Expr<T>),
     AtLeast(Expr<T>),

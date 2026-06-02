@@ -1774,7 +1774,7 @@ feature_flags!(
     },
     {
         name: enable_changes_table_function,
-        desc: "the CHANGES(collection, as_of) table function",
+        desc: "the CHANGES table function",
         default: false,
         enable_for_item_parsing: true,
     },

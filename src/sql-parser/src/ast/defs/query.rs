@@ -23,7 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
-use crate::ast::{AstInfo, Expr, Function, Ident, ShowStatement, WithOptionValue};
+use crate::ast::{AsOf, AstInfo, Expr, Function, Ident, ShowStatement, WithOptionValue};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -582,12 +582,18 @@ pub enum TableFactor<T: AstInfo> {
         join: Box<TableWithJoins<T>>,
         alias: Option<TableAlias>,
     },
-    /// The `CHANGES(<name>, <as_of>)` table function: reads the named collection
-    /// as an append-only changelog starting at `as_of`, exposing the per-update
-    /// timestamp and diff as the `mz_timestamp` and `mz_diff` columns.
+    /// The `CHANGES(<name> AS OF [AT LEAST] <bound>)` table function: reads the
+    /// named collection as an append-only changelog whose lower bound is given
+    /// by the `AS OF` clause, exposing the per-update timestamp and diff as the
+    /// `mz_timestamp` and `mz_diff` columns.
+    ///
+    /// `AS OF` is a strict lower bound (error if the history is unavailable);
+    /// `AS OF AT LEAST` is advisory (age in from the input's `since`). A fixed
+    /// `<bound>` is a static changelog start; an `mz_now()`-relative `<bound>`
+    /// is a sliding window that trails real time.
     Changes {
         name: T::ItemName,
-        as_of: Expr<T>,
+        as_of: AsOf<T>,
         alias: Option<TableAlias>,
     },
 }
@@ -660,7 +666,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
             TableFactor::Changes { name, as_of, alias } => {
                 f.write_str("CHANGES (");
                 f.write_node(name);
-                f.write_str(", ");
+                f.write_str(" ");
                 f.write_node(as_of);
                 f.write_str(")");
                 if let Some(alias) = alias {

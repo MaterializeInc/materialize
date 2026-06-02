@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Plan-time tests for the CHANGES(<collection>, <as_of>) table function.
+# Plan-time tests for the CHANGES(<collection> AS OF [AT LEAST] <bound>) table
+# function.
 #
 # The per-update timestamps in the changelog are not deterministic, so the data
 # round-trip is verified in test/testdrive/changes.td. Here we cover the
-# deterministic, plan-time behavior: feature gating and argument validation.
+# deterministic, plan-time behavior: feature gating, argument validation, and
+# the lower-bound gating (durable objects require a sliding bound).
 
 mode cockroach
 
@@ -19,8 +21,8 @@ statement ok
 CREATE TABLE t (a int)
 
 # The feature is gated behind a feature flag.
-query error the CHANGES\(collection, as_of\) table function is not available
-SELECT * FROM CHANGES (t, 0)
+query error the CHANGES table function is not available
+SELECT * FROM CHANGES (t AS OF 0)
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_changes_table_function = true
@@ -33,19 +35,39 @@ statement ok
 CREATE VIEW v AS SELECT * FROM t
 
 query error CHANGES requires a table, source, or materialized view, but materialize\.public\.v is a view
-SELECT * FROM CHANGES (v, 0)
+SELECT * FROM CHANGES (v AS OF 0)
 
 # A common table expression is rejected.
 query error CHANGES requires a persisted collection, but got a common table expression
-WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c, 0)
+WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c AS OF 0)
 
-# The as_of must be a constant timestamp expression: unmaterializable functions
-# and out-of-range / negative values are rejected.
+# A fixed bound must be a constant timestamp expression: a non-temporal
+# unmaterializable function (e.g. now()) and out-of-range / negative values are
+# rejected.
 query error calling an unmaterializable function in AS OF or UP TO not yet supported
-SELECT * FROM CHANGES (t, now())
+SELECT * FROM CHANGES (t AS OF now())
 
 query error AS OF or UP TO should be castable to a \(non-null\) mz_timestamp value
-SELECT * FROM CHANGES (t, -1)
+SELECT * FROM CHANGES (t AS OF -1)
+
+# A sliding (mz_now()-relative) bound parses and passes gating, but its dataflow
+# wiring is not yet implemented.
+query error CHANGES with a sliding mz_now\(\)-relative bound not yet supported
+SELECT * FROM CHANGES (t AS OF mz_now())
+
+query error CHANGES with a sliding mz_now\(\)-relative bound not yet supported
+SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+# A durable maintained object (materialized view, index) requires a sliding
+# bound: a fixed lower bound would hold the input's `since` open indefinitely.
+statement error CHANGES in a materialized view, index, or other maintained object requires a sliding bound
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM CHANGES (t AS OF 0)
+
+# The conservative implementation also rejects a fixed bound when defining a
+# plain view (a maintained lifetime), since it is only useful once indexed or
+# materialized.
+statement error CHANGES in a materialized view, index, or other maintained object requires a sliding bound
+CREATE VIEW changes_view AS SELECT * FROM CHANGES (t AS OF 0)
 
 statement ok
 DROP VIEW v

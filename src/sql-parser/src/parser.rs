@@ -8234,16 +8234,25 @@ impl<'a> Parser<'a> {
 
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor<Raw>, ParserError> {
-        // `CHANGES (<name>, <as_of>)`: read a collection as an append-only
-        // changelog. `CHANGES` is a non-reserved keyword, so we only treat it
-        // specially when it is immediately followed by `(`; otherwise it parses
-        // as an ordinary name.
+        // `CHANGES (<name> AS OF [AT LEAST] <bound>)`: read a collection as an
+        // append-only changelog. The `AS OF` clause is required and mirrors
+        // SUBSCRIBE's `<rel> AS OF <bound>` surface. `CHANGES` is a non-reserved
+        // keyword, so we only treat it specially when it is immediately followed
+        // by `(`; otherwise it parses as an ordinary name.
         if self.peek_keyword(CHANGES) && self.peek_nth_token(1) == Some(Token::LParen) {
             self.expect_keyword(CHANGES)?;
             self.expect_token(&Token::LParen)?;
             let name = self.parse_raw_name()?;
-            self.expect_token(&Token::Comma)?;
-            let as_of = self.parse_expr()?;
+            let as_of = match self.parse_optional_as_of()? {
+                Some(as_of) => as_of,
+                None => {
+                    return self.expected(
+                        self.peek_pos(),
+                        "AS OF or AS OF AT LEAST after the CHANGES collection",
+                        self.peek_token(),
+                    );
+                }
+            };
             self.expect_token(&Token::RParen)?;
             let alias = self.parse_optional_table_alias()?;
             return Ok(TableFactor::Changes { name, as_of, alias });
