@@ -66,3 +66,36 @@ SELECT mz_now()::text
 3 1
 
 > DROP TABLE t
+
+# CHANGES over a materialized view (a non-table persist-backed input). The
+# changelog reads the MV's own shard; changes to the underlying table flow
+# through to the MV's changelog.
+> CREATE TABLE base (a int)
+
+> INSERT INTO base VALUES (1), (2)
+
+> CREATE MATERIALIZED VIEW mv AS SELECT a, a * 10 AS b FROM base
+
+# Wait for the MV to reflect the base contents, then capture a changelog start
+# at which the MV holds {(1, 10), (2, 20)}.
+> SELECT a, b FROM mv ORDER BY a
+1 10
+2 20
+
+$ set-from-sql var=mv-as-of
+SELECT mz_now()::text
+
+> INSERT INTO base VALUES (3)
+
+# The MV changelog is the {(1, 10), (2, 20)} snapshot collapsed to `as_of` plus
+# the (3, 30) row appended once the insert propagates. The net change per key
+# (sum of mz_diff) is the MV's current contents; testdrive retries until the MV
+# catches up.
+> SELECT a, b, sum(mz_diff) FROM CHANGES (mv AS OF ${mv-as-of}) GROUP BY a, b ORDER BY a
+1 10 1
+2 20 1
+3 30 1
+
+> DROP MATERIALIZED VIEW mv
+
+> DROP TABLE base
