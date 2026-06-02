@@ -131,6 +131,48 @@ where
     }
 }
 
+/// Count-aware signed-integer sum. Accumulates `Σ value·diff` in `i128`, which
+/// matches the width of the dataflow's `Accum::SimpleNumber` accumulator (see
+/// `build_accumulable` and `finalize_accum` in `mz_compute::render::reduce`);
+/// `narrow` then reproduces that variant's `finalize_accum` arm. Unlike
+/// `expand_counts`, this consumes the multiplicity directly, so it is linear in
+/// the number of distinct values and correct for negative diffs (retractions),
+/// which `expand_counts` would silently drop.
+///
+/// Returns `Datum::Null` when no non-null value was accumulated, matching
+/// `finalize_accum`'s null handling: its `is_zero` check on `SimpleNumber`
+/// requires both a zero running sum and a zero non-null count.
+fn sum_signed_int_counted<'a, I, N>(datums: I, narrow: N) -> Datum<'a>
+where
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
+    N: FnOnce(i128) -> Datum<'a>,
+{
+    let mut accum: i128 = 0;
+    let mut non_nulls = Diff::ZERO;
+    for (datum, diff) in datums {
+        if datum.is_null() {
+            continue;
+        }
+        let value = match datum {
+            Datum::Int16(i) => i128::from(i),
+            Datum::Int32(i) => i128::from(i),
+            Datum::Int64(i) => i128::from(i),
+            other => panic!("unexpected non-integer datum in signed sum: {other:?}"),
+        };
+        // The dataflow accumulates `value * diff` in an `Overflowing<i128>`; we
+        // mirror that. Genuine i128 overflow would require summands far beyond
+        // any realistic input, so wrapping matches the dataflow's production
+        // behavior.
+        accum = accum.wrapping_add(value.wrapping_mul(i128::from(diff.into_inner())));
+        non_nulls += diff;
+    }
+    if accum == 0 && non_nulls.is_zero() {
+        Datum::Null
+    } else {
+        narrow(accum)
+    }
+}
+
 fn sum_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -2039,14 +2081,30 @@ impl AggregateFunc {
     where
         I: IntoIterator<Item = (Datum<'a>, Diff)>,
     {
-        // `count` is accumulable and handles diffs directly.
-        if let AggregateFunc::Count = self {
-            return count(datums);
-        }
-        if self.ignores_multiplicity() {
-            self.eval_datums(datums.into_iter().map(|(datum, _diff)| datum), temp_storage)
-        } else {
-            self.eval_datums(expand_counts(datums), temp_storage)
+        // Accumulable aggregates consume multiplicity directly rather than
+        // expanding each `(datum, diff)` into `diff` copies. The cases handled
+        // here mirror the dataflow's accumulable reduction (`build_accumulable`
+        // in `mz_compute::render::reduce`) so that constant folding produces the
+        // same result the dataflow would. Signed integer sums are folded here;
+        // unsigned sums are not, because their negative-accumulation case is a
+        // query error in the dataflow that this `Datum`-returning path cannot
+        // signal. Floats and numerics use bespoke fixed-point/wide-decimal
+        // accumulators in the dataflow that `expand_counts` does not reproduce.
+        match self {
+            AggregateFunc::Count => count(datums),
+            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => {
+                // `finalize_accum` narrows these to `i64` with wrapping.
+                sum_signed_int_counted(datums, |accum| {
+                    #[allow(clippy::as_conversions)]
+                    let narrowed = accum as i64;
+                    Datum::Int64(narrowed)
+                })
+            }
+            AggregateFunc::SumInt64 => sum_signed_int_counted(datums, Datum::from),
+            _ if self.ignores_multiplicity() => {
+                self.eval_datums(datums.into_iter().map(|(datum, _diff)| datum), temp_storage)
+            }
+            _ => self.eval_datums(expand_counts(datums), temp_storage),
         }
     }
 
