@@ -5475,6 +5475,33 @@ pub fn plan_create_metric(
         );
     }
 
+    // The metric's name, HELP text, and label names are handed verbatim to
+    // Prometheus at scrape time, where `MetricsRegistry::register` *panics* if
+    // any of them is rejected (an invalid identifier, or empty HELP). Validate
+    // here, at CREATE time, where we can return a clean error instead of
+    // aborting `environmentd` on the next scrape. The label names are the
+    // relation's columns other than the value column (mirroring the scrape
+    // path in `mz-environmentd`). We construct a real `prometheus::Desc` rather
+    // than re-deriving the rules so this can never drift from what `register`
+    // accepts.
+    let label_names: Vec<String> = view_desc
+        .iter()
+        .map(|(col_name, _ty)| col_name.as_str().to_string())
+        .filter(|col_name| col_name.as_str() != value_column.as_str())
+        .collect();
+    if let Err(err) = prometheus::core::Desc::new(
+        name.item.clone(),
+        help.clone(),
+        label_names,
+        Default::default(),
+    ) {
+        sql_bail!(
+            "CREATE METRIC {} would produce an invalid Prometheus metric: {}",
+            name.item.quoted(),
+            err
+        );
+    }
+
     let create_sql = normalize::create_statement(scx, Statement::CreateMetric(stmt.clone()))?;
 
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -7900,6 +7927,38 @@ pub fn plan_alter_table_add_column(
         }
     }
 
+    // A METRIC's `VALUES FROM` relation contributes every non-value column as a
+    // Prometheus label, so a column added to a table that feeds a metric becomes
+    // a new label at scrape time. A metric depends on its relation directly
+    // (`used_by`), and a freshly added column can never be the metric's
+    // (pre-existing) value column — so it is always a label. Reject names
+    // Prometheus would refuse here, matching CREATE METRIC validation, rather
+    // than silently dropping the metric from its scrape output. (Indirect
+    // dependents, e.g. a view over the table, keep their fixed projection and
+    // are unaffected.)
+    let feeds_metric = scx
+        .catalog
+        .get_item(&relation_id)
+        .used_by()
+        .iter()
+        .any(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Metric);
+    if feeds_metric {
+        if let Err(err) = prometheus::core::Desc::new(
+            "metric".to_string(),
+            "help".to_string(),
+            vec![column_name.as_str().to_string()],
+            Default::default(),
+        ) {
+            sql_bail!(
+                "cannot add column {} to {}: it feeds a METRIC and the name is not a valid \
+                 Prometheus label: {}",
+                column_name.as_str().quoted(),
+                item_name.item.quoted(),
+                err
+            );
+        }
+    }
+
     let scalar_type = scalar_type_from_sql(scx, &data_type)?;
     // TODO(alter_table): Support non-nullable columns with default values.
     let column_type = scalar_type.nullable(true);
@@ -7953,6 +8012,14 @@ pub fn plan_alter_materialized_view_apply_replacement(
             replacement_name: scx.catalog.minimal_qualification(replacement.name()),
         });
     }
+
+    // NOTE: A dependent METRIC's labels and value column come from this MV's
+    // columns, so a shape change here could break it. That can't happen today:
+    // `CREATE REPLACEMENT MATERIALIZED VIEW` requires the replacement's schema
+    // to match the target's exactly (see `create_materialized_view.rs`, "we
+    // don't support schema evolution"). If MV schema evolution is ever added,
+    // revalidate dependent metrics here the way `plan_alter_table_add_column`
+    // does for new columns.
 
     Ok(Plan::AlterMaterializedViewApplyReplacement(
         AlterMaterializedViewApplyReplacementPlan {

@@ -163,6 +163,69 @@ AS (
   VALUE COLUMN 'count'
 )
 
+# --- Prometheus identifier validation ---
+#
+# The metric name, label names (the relation's non-value columns), and HELP
+# text are handed verbatim to Prometheus at scrape time, where an invalid
+# value would panic `MetricsRegistry::register`. CREATE METRIC must reject
+# them up front instead.
+
+# A metric name that is not a valid Prometheus identifier (contains a hyphen).
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public."http-requests"
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  VALUES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# A label name that is not a valid Prometheus identifier (starts with a digit).
+statement ok
+CREATE VIEW responses_by_class AS
+SELECT 1 AS count, 'ok' AS "2xx"
+
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public.responses
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  VALUES FROM materialize.public.responses_by_class,
+  VALUE COLUMN 'count'
+)
+
+# Empty HELP text is rejected (Prometheus requires a non-empty help string).
+statement error would produce an invalid Prometheus metric
+CREATE METRIC materialize.public.empty_help
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP '',
+  VALUES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+# A metric name with a colon is a valid Prometheus identifier, so it is
+# accepted (colons are reserved for recording rules by convention, but the
+# data model permits them).
+statement ok
+CREATE METRIC materialize.public."leads:total"
+IN API materialize.public.metrics_a
+AS (
+  TYPE 'gauge',
+  HELP 'x',
+  VALUES FROM materialize.public.leads_by_status,
+  VALUE COLUMN 'count'
+)
+
+statement ok
+DROP METRIC materialize.public."leads:total"
+
+statement ok
+DROP VIEW responses_by_class
+
 # --- Catalog views ---
 
 # mz_apis lists every API the user can see; the row should include the
@@ -250,6 +313,22 @@ AS (TYPE 'gauge', HELP 't', VALUES FROM materialize.public.t, VALUE COLUMN 'coun
 
 statement error cannot drop table "t": still depended upon by metric "from_table"
 DROP TABLE materialize.public.t
+
+# A column added to a table that feeds a metric becomes a Prometheus label, so
+# ALTER TABLE ADD COLUMN revalidates the new name the same way CREATE METRIC
+# does — otherwise the metric would silently drop out of its scrape output.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column=on
+----
+COMPLETE 0
+
+# A label name starting with a digit is not a valid Prometheus identifier.
+statement error cannot add column "2xx" to "t": it feeds a METRIC and the name is not a valid Prometheus label
+ALTER TABLE materialize.public.t ADD COLUMN "2xx" int
+
+# A valid identifier is accepted.
+statement ok
+ALTER TABLE materialize.public.t ADD COLUMN status int
 
 statement ok
 DROP TABLE materialize.public.t CASCADE
