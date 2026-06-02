@@ -2781,17 +2781,23 @@ impl RowPacker<'_> {
         let mut dataz = &self.row.data[datum_check..];
         while !dataz.is_empty() {
             let d = unsafe { read_datum(&mut dataz) };
-            assert!(d != Datum::Null, "cannot push Datum::Null into range");
+            // These checks only fail when decoding untrusted/corrupted bytes;
+            // valid callers always push consistent, non-null bounds. Return an
+            // error rather than asserting so a crafted proto doesn't panic.
+            if d == Datum::Null {
+                self.row.data.truncate(start);
+                return Err(InvalidRangeError::InvalidRangeData.into());
+            }
 
             match seen {
                 None => seen = Some(d),
                 Some(seen) => {
                     let seen_kind = DatumKind::from(seen);
                     let d_kind = DatumKind::from(d);
-                    assert!(
-                        seen_kind == d_kind,
-                        "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}"
-                    );
+                    if seen_kind != d_kind {
+                        self.row.data.truncate(start);
+                        return Err(InvalidRangeError::InvalidRangeData.into());
+                    }
 
                     if seen > d {
                         self.row.data.truncate(start);
@@ -2802,10 +2808,10 @@ impl RowPacker<'_> {
             actual_datums += 1;
         }
 
-        assert!(
-            actual_datums == expected_datums,
-            "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}"
-        );
+        if actual_datums != expected_datums {
+            self.row.data.truncate(start);
+            return Err(InvalidRangeError::InvalidRangeData.into());
+        }
 
         Ok(())
     }
@@ -3699,8 +3705,23 @@ mod tests {
             r
         }
 
+        // A finite bound whose closure pushes zero values violates the
+        // `push_range_with` caller contract and still panics. This is
+        // unreachable when decoding a `ProtoRow`: each decoded bound pushes
+        // exactly one datum (or fails), so only an in-process caller can hit it.
         for panicking_case in [
             vec![vec![Datum::Int32(1)], vec![]],
+            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
+        ] {
+            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
+            assert_err!(result);
+        }
+
+        // Inconsistent bound counts, mismatched datum kinds, and Null bounds are
+        // all reachable from a crafted/corrupted `ProtoRow`, so they return an
+        // error instead of panicking.
+        for error_case in [
             vec![
                 vec![Datum::Int32(1), Datum::Int32(2)],
                 vec![Datum::Int32(3)],
@@ -3709,14 +3730,14 @@ mod tests {
                 vec![Datum::Int32(1)],
                 vec![Datum::Int32(2), Datum::Int32(3)],
             ],
-            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
             vec![vec![Datum::Int32(1)], vec![Datum::UInt16(2)]],
             vec![vec![Datum::Null], vec![Datum::Int32(2)]],
             vec![vec![Datum::Int32(1)], vec![Datum::Null]],
         ] {
-            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
-            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
-            assert_err!(result);
+            assert_eq!(
+                test_range_errors_inner(error_case),
+                Err(InvalidRangeError::InvalidRangeData)
+            );
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);

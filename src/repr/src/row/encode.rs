@@ -2268,6 +2268,25 @@ mod tests {
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, SqlScalarType};
 
+    #[mz_ore::test]
+    fn proto_row_invalid_range_is_error() {
+        // A ProtoRow with a range whose bounds have inconsistent datum kinds
+        // (or a null/extra bound) must decode to an error, not panic — the range
+        // packer used to `assert!` these invariants. Regression for the
+        // row_proto_roundtrip cargo-fuzz finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xa2, 0x01,
+            0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x20, 0xfa, 0x01, 0x1d, 0x1d, 0x9f, 0x00,
+            0x00, 0x00, 0xaa, 0x01, 0x00, 0x0a, 0x13, 0xf8, 0x01, 0x08, 0xaa, 0x0a, 0x03, 0xba,
+            0x01, 0x00, 0x22, 0x03, 0xba, 0x01, 0x00, 0x12, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03,
+            0xaa, 0x01, 0x00,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
     #[track_caller]
     fn roundtrip_datum<'a>(
         ty: SqlColumnType,
