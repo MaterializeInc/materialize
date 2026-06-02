@@ -69,4 +69,108 @@ cc_steady r2 scale=1,workers=1
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_steady'
 cc_steady r1 scale=1,workers=1
 
+# The controller retired the surplus replica, so the drop is audited `retired`
+# even though the replication-factor change was user-initiated.
+> SELECT event_type, details->>'reason' FROM mz_catalog.mz_audit_events WHERE event_type = 'drop' AND object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_steady'
+drop retired
+
 > DROP CLUSTER cc_steady
+
+# ----- Graceful background reconfiguration (PR 3) -----
+#
+# With the master gate on and background ALTER enabled, a config-shape ALTER (SIZE
+# change) writes a durable reconfiguration record and returns immediately; the
+# controller creates the target replica, and once it hydrates (an empty cluster
+# hydrates promptly) cuts the realized size over to the target and drops the old
+# replica.
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_background_alter_cluster = true
+
+> CREATE CLUSTER cc_graceful (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Background ALTER returns immediately; the readbacks retry until cut-over.
+> ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=2')
+
+> SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+scale=1,workers=2
+
+# The cluster settled back to exactly REPLICATION FACTOR replicas at the new size,
+# under a fresh name (r1 -> r2): a reshape never renames back.
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful'
+cc_graceful r2 scale=1,workers=2
+
+# The record was cleared after cut-over, so a fresh config-shape ALTER writes a new
+# record and reshapes again (r2 -> r3) rather than folding onto a stale one. (An
+# identical no-op ALTER would early-return before the reshape branch.)
+> ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=1')
+
+> SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+scale=1,workers=1
+
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful'
+cc_graceful r3 scale=1,workers=1
+
+# Replica lifecycle attribution, in order: the CREATE CLUSTER replica is `manual`,
+# each reconfiguration's target replica is `reconfiguration`, and every controller
+# drop (the old set retired at cut-over) is `retired`. testdrive sorts result rows
+# (discarding ORDER BY), so we prepend a row_number() over the audit id, a
+# deterministic ordinal that sorts the rows back into chronological order.
+> SELECT row_number() OVER (ORDER BY id), event_type, details->>'reason' FROM mz_catalog.mz_audit_events WHERE object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_graceful'
+1 create manual
+2 create reconfiguration
+3 drop retired
+4 create reconfiguration
+5 drop retired
+
+> DROP CLUSTER cc_graceful
+
+# A logging (INTROSPECTION) change is also a config-shape change: the controller
+# reshapes it in the background and advances the realized config at cut-over.
+# INTROSPECTION INTERVAL = 0 round-trips to NULL (Option::None for the interval).
+> CREATE CLUSTER cc_logging (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1, INTROSPECTION INTERVAL = '5s')
+
+> SELECT introspection_interval::text FROM mz_clusters WHERE name = 'cc_logging'
+00:00:05
+
+> ALTER CLUSTER cc_logging SET (INTROSPECTION INTERVAL = 0)
+
+> SELECT introspection_interval IS NULL FROM mz_clusters WHERE name = 'cc_logging'
+true
+
+> DROP CLUSTER cc_logging
+
+# ----- Per-ALTER timeout / ON TIMEOUT (PR 3) -----
+#
+# The deadline and the on-timeout action come from the WITH (WAIT ...) surface and
+# are written into the durable record, so the controller enforces them. These
+# cases use a promptly-hydrating (empty) cluster, so success precedence cuts over
+# before any deadline matters; they assert the three spellings are accepted under
+# the gate and drive the record to a successful cut-over. ROLLBACK-vs-COMMIT
+# behavior *at* a timeout (a target that never hydrates) is asserted
+# deterministically in the controller's kernel unit tests.
+
+> CREATE CLUSTER cc_timeout (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Omitting WITH (WAIT ...): default deadline and default ON TIMEOUT (now ROLLBACK).
+# The target hydrates, so it cuts over regardless.
+> ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2')
+> SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+scale=1,workers=2
+
+# Explicit ON TIMEOUT ROLLBACK with a generous deadline: success precedence cuts over.
+> ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'ROLLBACK'))
+> SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+scale=1,workers=4
+
+# Explicit ON TIMEOUT COMMIT, and WAIT FOR (which desugars to ON TIMEOUT COMMIT):
+# both accepted under the gate and drive a cut-over.
+> ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'COMMIT'))
+> SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+scale=1,workers=2
+
+> ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=1') WITH (WAIT FOR '60s')
+> SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+scale=1,workers=1
+
+> DROP CLUSTER cc_timeout

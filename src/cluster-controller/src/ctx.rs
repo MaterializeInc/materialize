@@ -22,6 +22,8 @@
 //! controller drives what is fetched. Read methods are batched so a separate-task
 //! deployment can bound its round-trips to the Coordinator.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -32,7 +34,7 @@ use mz_repr::Timestamp;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
+    AvailabilityZones, BurstRecord, ExpectedClusterState, OnTimeout, ReconfigurationRecord,
     ReconfigurationTarget, ReplicaShape,
 };
 
@@ -66,6 +68,13 @@ pub struct ClusterState {
     pub burst: Option<BurstRecord>,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
+    /// The replicas observed this tick to have *all* current collections on the
+    /// cluster hydrated. A **live signal**, not durable state, so it is excluded
+    /// from [`ClusterState::expected`] (the compare-and-append witness).
+    ///
+    /// Populated only for clusters where a strategy needs it (pulled on demand);
+    /// empty for steady clusters the controller never probes.
+    pub hydrated_replicas: BTreeSet<ReplicaId>,
 }
 
 impl ClusterState {
@@ -200,6 +209,30 @@ pub trait ClusterControllerCtx: Send {
 
     /// The ids of all managed clusters the controller owns this tick.
     async fn managed_cluster_ids(&mut self) -> Vec<ClusterId>;
+
+    /// Of `replicas` on `cluster`, which have *all* current (non-transient)
+    /// collections on the cluster hydrated. The returned set is a subset of
+    /// `replicas`.
+    ///
+    /// Pulled on demand: a tick asks only about the replicas it examines (the
+    /// graceful strategy probes a cluster's replicas only while a
+    /// `reconfiguration` is in flight). The baseline-only controller never calls
+    /// this; the first hydration-dependent strategy (graceful reconfiguration)
+    /// does.
+    ///
+    /// This is the first of the live-signal reads the seam will grow. The
+    /// remaining ones, collection write frontiers and a read timestamp, which
+    /// the refresh strategy needs to decide whether a cluster is inside a refresh
+    /// window, are deliberately *not* declared here. Their signatures are
+    /// dictated by that consumer (e.g. an `Antichain<Timestamp>` frontier type),
+    /// and declaring them speculatively would both fix the wrong shape and pull
+    /// an otherwise-unused frontier dependency into this pure crate. They land
+    /// with their first consumer, backed the same pull-on-demand way as this one.
+    async fn hydrated_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

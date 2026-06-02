@@ -44,7 +44,9 @@ use crate::ctx::{
     ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
     StateWrite,
 };
-use crate::strategy::{BaselineStrategy, DesiredReplica, Strategy};
+use crate::strategy::{
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+};
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
 /// reconcile tick against a [`ClusterControllerCtx`].
@@ -59,11 +61,15 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with only the implicit baseline strategy. This reconciles a
-    /// steady-state managed cluster to no decisions.
+    /// A controller with the implicit baseline and the graceful-reconfiguration
+    /// strategy. The baseline holds the steady set. Graceful engages only while a
+    /// `reconfiguration` record is in flight.
     pub fn new() -> Self {
         Self {
-            strategies: vec![Box::new(BaselineStrategy)],
+            strategies: vec![
+                Box::new(BaselineStrategy),
+                Box::new(GracefulReconfigurationStrategy),
+            ],
         }
     }
 
@@ -97,7 +103,8 @@ impl ClusterController {
         // still rely on the compare-and-append, not the merge, for `ALTER`
         // safety, which is why the merged write carries the cluster's `expected`.
         // See `merge_state_writes` for the join and its conflict handling.
-        let states = ctx.cluster_states(&cluster_ids).await;
+        let mut states = ctx.cluster_states(&cluster_ids).await;
+        self.enrich_hydration(ctx, &mut states).await;
         let now = ctx.now();
         // Set when we issue any phase-1 apply, applied or rejected. Either way
         // the durable state may have moved (our write, or the concurrent `ALTER`
@@ -127,12 +134,14 @@ impl ClusterController {
 
         // Phase 2: desired_replicas. The barrier exists so that a cut-over a
         // phase-1 write performed is visible before we diff the replica set
-        // against the realized config. We re-read only if phase 1 wrote. The
-        // first read is otherwise still current. A stale diff is harmless: every
-        // create/drop carries its `expected` and is guard-rejected if the durable
-        // state has since diverged.
+        // against the realized config. We re-read (and re-enrich) only if phase 1
+        // wrote. The first read is otherwise still current. A stale diff is
+        // harmless: every create/drop carries its `expected` and is guard-rejected
+        // if the durable state has since diverged.
         let states = if phase_1_wrote {
-            ctx.cluster_states(&cluster_ids).await
+            let mut states = ctx.cluster_states(&cluster_ids).await;
+            self.enrich_hydration(ctx, &mut states).await;
+            states
         } else {
             states
         };
@@ -225,6 +234,31 @@ impl ClusterController {
         }
 
         merged
+    }
+
+    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal,
+    /// pulling it through the ctx only where a strategy needs it.
+    ///
+    /// Hydration is only consulted by the graceful strategy, and only while a
+    /// `reconfiguration` is in flight, so we probe a cluster's replicas exactly
+    /// then. A steady cluster is never probed, keeping the seam pay-for-what-you-
+    /// use. The pull is per-cluster (the controller asks only about that cluster's
+    /// replicas).
+    async fn enrich_hydration(
+        &self,
+        ctx: &mut dyn ClusterControllerCtx,
+        states: &mut [ClusterState],
+    ) {
+        for state in states.iter_mut() {
+            if state.reconfiguration.is_none() {
+                continue;
+            }
+            let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
+            if replica_ids.is_empty() {
+                continue;
+            }
+            state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+        }
     }
 
     /// Diff the unioned desired set against the actual replicas of one cluster
