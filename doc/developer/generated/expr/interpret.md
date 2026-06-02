@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/interpret.rs
-revision: 2c327694a0
+revision: 40e5dd1af8
 ---
 
 # mz-expr::interpret

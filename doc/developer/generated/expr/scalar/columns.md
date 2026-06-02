@@ -1,13 +1,13 @@
 ---
 source: src/expr/src/scalar/columns.rs
-revision: 0b82784bb8
+revision: 40e5dd1af8
 ---
 
 # mz-expr::scalar::columns
 
 Defines the `Columns` trait, a generic interface for scalar expressions that reference row columns.
 
-Implementors must provide `is_column`, `as_column`, `support_into`, and `visit_columns`. The remaining methods have default implementations built on those primitives:
+Implementors must provide `column` (constructor from a column index), `is_column`, `as_column`, `as_column_mut`, `support_into`, and `visit_columns`. The remaining methods have default implementations built on those primitives:
 
 - `support` — collects all referenced column indices into a `BTreeSet<usize>`. Callers can use `BTreeSet::last()` to extract the maximum referenced column.
 - `support_into` — like `support`, but accumulates into a caller-supplied set to avoid allocation when building combined support across multiple expressions.
