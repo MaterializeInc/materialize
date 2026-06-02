@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/protocol.rs
-revision: ba76c5e17e
+revision: e7b9820bf3
 ---
 
 # pgwire::protocol
