@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
-use mz_expr::RowSetFinishing;
+use mz_expr::{ColumnOrder, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -1723,6 +1723,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeUpsert {
                 order_by_keys: order_by,
             }
@@ -1748,6 +1749,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeDebezium);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeDebezium {
                 order_by_keys: order_by,
             }
@@ -1799,6 +1801,23 @@ pub fn plan_subscribe(
         emit_progress: progress.unwrap_or(false),
         output,
     }))
+}
+
+/// Ensures each `ColumnOrder` in `order_by` references a distinct column,
+/// returning `DuplicateKeyColumnInSubscribeEnvelope` on the first repeat.
+fn check_distinct_key_columns(
+    order_by: &[ColumnOrder],
+    output_columns: &[(usize, &mz_repr::ColumnName)],
+) -> Result<(), PlanError> {
+    let mut seen = BTreeSet::new();
+    for co in order_by {
+        if !seen.insert(co.column) {
+            return Err(PlanError::DuplicateKeyColumnInSubscribeEnvelope {
+                column_name: output_columns[co.column].1.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn describe_copy_from_table(
