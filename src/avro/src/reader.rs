@@ -267,7 +267,13 @@ impl<R: AvroRead> Reader<R> {
         assert!(self.is_empty(), "Expected self to be empty!");
         match util::read_long(&mut self.inner) {
             Ok(block_len) => {
-                self.messages_remaining = block_len as usize;
+                // The object count is read straight from the wire; cap it like
+                // every other wire-read length (and reject negatives, which wrap
+                // to a huge `usize`). Otherwise a crafted block with a huge count
+                // and a zero-byte schema (e.g. `null`) makes the reader spin
+                // decoding billions of empty values. Found by the reader_decode
+                // cargo-fuzz target.
+                self.messages_remaining = util::safe_len(block_len as usize)?;
                 let block_bytes = util::safe_len(util::read_long(&mut self.inner)? as usize)?;
                 self.fill_buf(block_bytes)?;
                 let mut marker = [0u8; 16];
@@ -937,6 +943,29 @@ mod tests {
     use crate::types::{Record, ToAvro};
 
     use super::*;
+
+    #[mz_ore::test]
+    fn reader_rejects_huge_block_object_count() {
+        // A crafted object-container block with a huge object count and a
+        // zero-byte (`null`) schema must be rejected, not spin decoding billions
+        // of empty values. Regression for the reader_decode cargo-fuzz timeout.
+        let bytes: &[u8] = &[
+            0x4f, 0x62, 0x6a, 0x01, 0x04, 0x16, 0x61, 0x76, 0x72, 0x6f, 0x2e, 0x73, 0x63, 0x68,
+            0x65, 0x6d, 0x61, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22,
+            0x6e, 0x75, 0x6c, 0x6c, 0x22, 0x20, 0x00, 0x00, 0x00, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0xbf, 0x00, 0x26,
+            0x35, 0x33, 0x39, 0x33, 0x34, 0x38, 0x33, 0xcd, 0x45, 0x38, 0x56, 0xb1, 0x00, 0x00,
+            0x64, 0x64, 0x7a, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+        ];
+        let reader = Reader::new(bytes).expect("OCF header parses");
+        // Iteration must terminate with an error (the oversized count is
+        // rejected), not hang.
+        assert!(
+            reader.into_iter().any(|item| item.is_err()),
+            "expected a decode error from the oversized block count"
+        );
+    }
 
     static SCHEMA: &str = r#"
             {
