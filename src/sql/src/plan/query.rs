@@ -3082,12 +3082,7 @@ fn plan_changes(
     //     SUBSCRIBE, ...) is structurally fine but not yet wired up.
     if !matches!(qcx.lifetime, QueryLifetime::OneShot) {
         if qcx.lifetime.is_maintained() && !sliding {
-            sql_bail!(
-                "CHANGES in a materialized view, index, or other maintained object \
-                 requires a sliding bound, e.g. \
-                 `AS OF AT LEAST mz_now() - INTERVAL '30 minutes'`; a fixed lower \
-                 bound would hold the input's compaction frontier open indefinitely"
-            );
+            return Err(PlanError::ChangesRequiresSlidingBound);
         }
         bail_unsupported!("CHANGES outside a one-off SELECT");
     }

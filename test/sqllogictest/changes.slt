@@ -90,13 +90,13 @@ SELECT count(*) FROM CHANGES (t AS OF AT LEAST 0)
 
 # A durable maintained object (materialized view, index) requires a sliding
 # bound: a fixed lower bound would hold the input's `since` open indefinitely.
-statement error CHANGES in a materialized view, index, or other maintained object requires a sliding bound
+statement error CHANGES in a materialized view or index requires a sliding bound
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM CHANGES (t AS OF 0)
 
 # The conservative implementation also rejects a fixed bound when defining a
 # plain view (a maintained lifetime), since it is only useful once indexed or
 # materialized.
-statement error CHANGES in a materialized view, index, or other maintained object requires a sliding bound
+statement error CHANGES in a materialized view or index requires a sliding bound
 CREATE VIEW changes_view AS SELECT * FROM CHANGES (t AS OF 0)
 
 statement ok

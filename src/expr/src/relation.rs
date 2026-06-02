@@ -4162,6 +4162,31 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    fn changes_eq_agrees_with_cmp() {
+        // Regression test: `MirRelationExpr::eq` (via `MreDiff`) and `Ord::cmp`
+        // must agree for the `Changes` variant. A missing `MreDiff` arm made
+        // `eq` report two identical `Changes` nodes as unequal while `cmp` said
+        // equal, tripping the consistency soft-assert (and panicking the
+        // optimizer's fixpoint, which compares an expression to its prior form).
+        let changes = MirRelationExpr::Changes {
+            id: GlobalId::User(1),
+            typ: mz_repr::ReprRelationType::new(vec![
+                mz_repr::ReprScalarType::MzTimestamp.nullable(false),
+            ]),
+            bound: MirScalarExpr::literal_ok(
+                mz_repr::Datum::MzTimestamp(mz_repr::Timestamp::from(0u64)),
+                mz_repr::ReprScalarType::MzTimestamp,
+            ),
+            strict: true,
+        };
+        let other = changes.clone();
+        // `eq` soft-asserts internally that it agrees with `cmp`; this would
+        // panic if the `MreDiff` arm were missing.
+        assert!(changes == other);
+        assert_eq!(changes.cmp(&other), Ordering::Equal);
+    }
+
+    #[mz_ore::test]
     fn test_row_set_finishing_as_text() {
         let finishing = RowSetFinishing {
             order_by: vec![ColumnOrder {
@@ -4502,6 +4527,25 @@ mod structured_diff {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Changes {
+                            id: id1,
+                            typ: typ1,
+                            bound: bound1,
+                            strict: strict1,
+                        },
+                        MirRelationExpr::Changes {
+                            id: id2,
+                            typ: typ2,
+                            bound: bound2,
+                            strict: strict2,
+                        },
+                    ) => {
+                        // A leaf, like `Get`: no child relations to recurse into.
+                        if id1 != id2 || typ1 != typ2 || bound1 != bound2 || strict1 != strict2 {
+                            return Some((expr1, expr2));
                         }
                     }
                     _ => {
