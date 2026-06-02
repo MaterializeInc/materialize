@@ -1,0 +1,63 @@
+# Binary encoding is not implemented for list, map, and aclitem types. COPY ...
+# TO STDOUT WITH (FORMAT binary) must return a clean error rather than panicking
+# (SQL-323). This is Materialize-specific behavior: list/map don't exist in
+# PostgreSQL, and our aclitem error message/SQLSTATE differs from PostgreSQL's
+# "no binary output function available for type aclitem" (42883), so this lives
+# in pgtest-mz rather than pgtest.
+
+send
+Query {"query": "COPY (SELECT LIST[1, 2, 3]) TO STDOUT WITH (FORMAT binary)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of list types is not implemented"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (SELECT '{a=>b}'::map[text=>text]) TO STDOUT WITH (FORMAT binary)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of map types is not implemented"}]}
+ReadyForQuery {"status":"I"}
+
+# aclitem also has no binary encoding.
+send
+Query {"query": "COPY (SELECT makeaclitem(1, 2, 'CREATE', false)) TO STDOUT WITH (FORMAT binary)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of aclitem types does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+# Container types are checked recursively: a record containing a list is also
+# rejected, naming the offending leaf type.
+send
+Query {"query": "COPY (SELECT ROW(1, LIST[1, 2])) TO STDOUT WITH (FORMAT binary)"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of list types is not implemented"}]}
+ReadyForQuery {"status":"I"}
+
+# The text format still works for these types.
+send
+Query {"query": "COPY (SELECT LIST[1, 2, 3]) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "{1,2,3}\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}

@@ -434,7 +434,7 @@ impl Value {
     /// format](Format::Binary).
     pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) -> Result<(), io::Error> {
         // NOTE: If implementing binary encoding for a previously unsupported `Value` type,
-        // please update the `can_encode_binary` method below.
+        // please update the `binary_encoding_error` method below.
         let is_null = match self {
             Value::Array { dims, elements } => {
                 let ndims = pg_len("number of array dimensions", dims.len())?;
@@ -586,49 +586,61 @@ impl Value {
     }
 
     /// Static helper method to pre-validate that a given Datum corresponding to
-    /// the provided `SqlScalarType` can be converted into a `Value` and then encoded
-    /// as binary using `encode_binary` without an error.
-    pub fn can_encode_binary(typ: &SqlScalarType) -> bool {
+    /// the provided `SqlScalarType` can be converted into a `Value` and then
+    /// encoded as binary using `encode_binary` without an error.
+    ///
+    /// Returns `Ok(())` if the type (including all of its nested element/field
+    /// types) supports binary encoding, or `Err(reason)` describing the first
+    /// unsupported type encountered. Container types are checked recursively, so
+    /// e.g. a record or array that contains a `list` is rejected.
+    pub fn binary_encoding_error(typ: &SqlScalarType) -> Result<(), &'static str> {
         match typ {
-            SqlScalarType::Bool => true,
-            SqlScalarType::Int16 => true,
-            SqlScalarType::Int32 => true,
-            SqlScalarType::Int64 => true,
-            SqlScalarType::PgLegacyChar => true,
-            SqlScalarType::UInt16 => true,
-            SqlScalarType::Oid => true,
-            SqlScalarType::RegClass => true,
-            SqlScalarType::RegProc => true,
-            SqlScalarType::RegType => true,
-            SqlScalarType::UInt32 => true,
-            SqlScalarType::UInt64 => true,
-            SqlScalarType::Float32 => true,
-            SqlScalarType::Float64 => true,
-            SqlScalarType::Numeric { .. } => true,
-            SqlScalarType::MzTimestamp => true,
-            SqlScalarType::MzAclItem => true,
-            SqlScalarType::AclItem => false, // "aclitem has no binary encoding"
-            SqlScalarType::Date => true,
-            SqlScalarType::Time => true,
-            SqlScalarType::Timestamp { .. } => true,
-            SqlScalarType::TimestampTz { .. } => true,
-            SqlScalarType::Interval => true,
-            SqlScalarType::Bytes => true,
-            SqlScalarType::String => true,
-            SqlScalarType::VarChar { .. } => true,
-            SqlScalarType::Char { .. } => true,
-            SqlScalarType::PgLegacyName => true,
-            SqlScalarType::Jsonb => true,
-            SqlScalarType::Uuid => true,
-            SqlScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
-            SqlScalarType::Int2Vector => true,
-            SqlScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
-            SqlScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
+            SqlScalarType::Bool => Ok(()),
+            SqlScalarType::Int16 => Ok(()),
+            SqlScalarType::Int32 => Ok(()),
+            SqlScalarType::Int64 => Ok(()),
+            SqlScalarType::PgLegacyChar => Ok(()),
+            SqlScalarType::UInt16 => Ok(()),
+            SqlScalarType::Oid => Ok(()),
+            SqlScalarType::RegClass => Ok(()),
+            SqlScalarType::RegProc => Ok(()),
+            SqlScalarType::RegType => Ok(()),
+            SqlScalarType::UInt32 => Ok(()),
+            SqlScalarType::UInt64 => Ok(()),
+            SqlScalarType::Float32 => Ok(()),
+            SqlScalarType::Float64 => Ok(()),
+            SqlScalarType::Numeric { .. } => Ok(()),
+            SqlScalarType::MzTimestamp => Ok(()),
+            SqlScalarType::MzAclItem => Ok(()),
+            SqlScalarType::AclItem => Err("binary encoding of aclitem types does not exist"),
+            SqlScalarType::Date => Ok(()),
+            SqlScalarType::Time => Ok(()),
+            SqlScalarType::Timestamp { .. } => Ok(()),
+            SqlScalarType::TimestampTz { .. } => Ok(()),
+            SqlScalarType::Interval => Ok(()),
+            SqlScalarType::Bytes => Ok(()),
+            SqlScalarType::String => Ok(()),
+            SqlScalarType::VarChar { .. } => Ok(()),
+            SqlScalarType::Char { .. } => Ok(()),
+            SqlScalarType::PgLegacyName => Ok(()),
+            SqlScalarType::Jsonb => Ok(()),
+            SqlScalarType::Uuid => Ok(()),
+            SqlScalarType::Array(elem_type) => Self::binary_encoding_error(elem_type),
+            SqlScalarType::Int2Vector => Ok(()),
+            SqlScalarType::List { .. } => Err("binary encoding of list types is not implemented"),
+            SqlScalarType::Map { .. } => Err("binary encoding of map types is not implemented"),
             SqlScalarType::Record { fields, .. } => fields
                 .iter()
-                .all(|(_, ty)| Self::can_encode_binary(&ty.scalar_type)),
-            SqlScalarType::Range { element_type } => Self::can_encode_binary(element_type),
+                .try_for_each(|(_, ty)| Self::binary_encoding_error(&ty.scalar_type)),
+            SqlScalarType::Range { element_type } => Self::binary_encoding_error(element_type),
         }
+    }
+
+    /// Returns whether a value of the given `SqlScalarType` can be encoded using
+    /// the binary format. See [`Value::binary_encoding_error`] for details,
+    /// including the (recursive) handling of container types.
+    pub fn can_encode_binary(typ: &SqlScalarType) -> bool {
+        Self::binary_encoding_error(typ).is_ok()
     }
 
     /// Deserializes a value of type `ty` from `raw` using the specified
