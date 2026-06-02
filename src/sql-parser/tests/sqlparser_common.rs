@@ -358,6 +358,17 @@ fn test_quoted_special_grammar_function_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_resolved_cluster_name_empty_id_rejected() {
+    // A resolved cluster name renders as `[id]`; an empty id (`[""]`) would
+    // display as `[]` and fail to reparse, so it must be rejected at parse time.
+    // A non-empty resolved id still round-trips. Regression for the
+    // parse_display_roundtrip finding `SHOW SINKS IN CLUSTER[""]`.
+    assert!(parse_statements("SHOW SINKS IN CLUSTER[\"\"]").is_err());
+    assert_display_roundtrips("SHOW SINKS IN CLUSTER[u1]");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_extract_generic_call_display_roundtrip() {
     // `extract` renders via the special `extract(field FROM src)` form only
     // when the field is a string literal (what EXTRACT's grammar produces). A
