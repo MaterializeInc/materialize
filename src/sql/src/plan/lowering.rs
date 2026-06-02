@@ -1939,7 +1939,7 @@ where
     // by the keyed path's "compute once" handling below than by recomputing it
     // for every outer row.
     if !key.is_empty() && is_rowwise_candidate(&inner) {
-        let placeholder_id = mz_expr::LocalId::new(id_gen.allocate_id());
+        let mut placeholder_id = mz_expr::LocalId::new(id_gen.allocate_id());
         let outer_typ = outer.typ();
         let input_type = ReprRelationType::new(
             key.iter()
@@ -1962,8 +1962,13 @@ where
         // ahead of the subquery's own output; drop that echo so the table
         // function emits only the subquery columns.
         let trial_arity = trial.arity();
-        let body = trial.project((key.len()..trial_arity).collect());
+        let mut body = trial.project((key.len()..trial_arity).collect());
         if is_rowwise_closed(&body, placeholder_id) {
+            // Renumber the housed relation's local ids to a canonical sequence so
+            // that two structurally-equivalent subqueries produce byte-identical
+            // `EvalRelation`s, which lets the later `RelationCSE` pass share their
+            // `FlatMap`s instead of building one arrangement + join input per copy.
+            canonicalize_rowwise_ids(&mut body, &mut placeholder_id);
             let output_type = SqlRelationType::from_repr(&body.typ());
             let func = mz_expr::TableFunc::EvalRelation {
                 relation: Box::new(body),
@@ -2046,6 +2051,41 @@ fn is_rowwise_candidate(inner: &HirRelationExpr) -> bool {
         _ => ok = false,
     });
     ok
+}
+
+/// Canonically renumbers the local ids of a row-wise-closed `body` (and updates
+/// `input_id`, the placeholder) to a dense sequence in pre-order first-visit
+/// order.
+///
+/// The ids in a `TableFunc::EvalRelation`'s housed relation are bound and
+/// resolved entirely within `eval_relation_with_input`'s own environment (see
+/// `is_rowwise_closed` for the shape guarantee: only the placeholder and inner
+/// `Let`s — no global `Get`, no `LetRec`), so their concrete values don't affect
+/// evaluation. Normalizing them makes two structurally-equivalent housed
+/// relations compare equal, which lets the later `RelationCSE` pass share their
+/// `FlatMap`s rather than materialize one arrangement and one join input per copy.
+fn canonicalize_rowwise_ids(body: &mut MirRelationExpr, input_id: &mut mz_expr::LocalId) {
+    use mz_expr::{Id, LocalId};
+    let mut remap: BTreeMap<LocalId, LocalId> = BTreeMap::new();
+    let mut next = 0u64;
+    let next_id = |remap: &mut BTreeMap<LocalId, LocalId>, next: &mut u64, old: LocalId| {
+        *remap.entry(old).or_insert_with(|| {
+            let id = LocalId::new(*next);
+            *next += 1;
+            id
+        })
+    };
+    // Assign the placeholder first so it occupies a fixed canonical slot.
+    *input_id = next_id(&mut remap, &mut next, *input_id);
+    // Pre-order, so each `Let` binding is renumbered before the `Get`s beneath it.
+    body.visit_mut_pre(&mut |e: &mut MirRelationExpr| match e {
+        MirRelationExpr::Let { id, .. } => *id = next_id(&mut remap, &mut next, *id),
+        MirRelationExpr::Get {
+            id: Id::Local(id), ..
+        } => *id = next_id(&mut remap, &mut next, *id),
+        _ => {}
+    })
+    .expect("housed relation already traversed by is_rowwise_closed within the recursion limit");
 }
 
 /// Authoritative check that `body` (a decorrelated subquery rooted at the
