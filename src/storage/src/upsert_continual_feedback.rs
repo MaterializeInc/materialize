@@ -1308,4 +1308,176 @@ mod test {
             handle.join().expect("threads completed successfully");
         }
     }
+
+    /// v1 counterpart of v2's `lagging_replacement_below_upper_strands_data`,
+    /// under the IDENTICAL setup: the external writer has advanced the feedback
+    /// `persist_upper` to T = 10 with no operator output, and the lagging
+    /// replacement then produces source data at ts BELOW that upper (5 and 7).
+    ///
+    /// v1's drain classifies any `ts` in the past of `persist_upper` as not
+    /// relevant (`relevant = persist_upper.less_equal(ts)`) and DROPS it — the
+    /// downstream persist_sink would filter it anyway since the shard upper is
+    /// already further ahead. So v1 strands nothing and its output frontier
+    /// advances cleanly past persist_upper (here to the input upper, 11),
+    /// unlike v2, which without its drop-fix pins below.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn lagging_replacement_below_upper_is_dropped() {
+        let mz_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+        let (tx, rx) = mpsc::channel::<std::thread::JoinHandle<()>>();
+
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let (frontier, capture) = timely::execute_directly(move |worker| {
+            let tx = tx.clone();
+            let (mut input, mut persist, probe, capture) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+                        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+                        let rocksdb_instance_metrics =
+                            Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let rocksdb_init_fn = move || async move {
+                            let merge_operator = Some((
+                                "upsert_state_snapshot_merge_v1".to_string(),
+                                |a: &[u8],
+                                 b: ValueIterator<
+                                    BincodeOpts,
+                                    StateValue<(MzTimestamp, Subtime), u64>,
+                                >| {
+                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
+                                        a.into(),
+                                        b,
+                                    )
+                                },
+                            ));
+                            let rocksdb_cleanup_tries = 5;
+                            let tuning = RocksDBConfig::new(Default::default(), None);
+                            let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
+                                rocksdb_dir.path(),
+                                mz_rocksdb::InstanceOptions::new(
+                                    Env::mem_env().unwrap(),
+                                    rocksdb_cleanup_tries,
+                                    merge_operator,
+                                    upsert_bincode_opts(),
+                                ),
+                                tuning,
+                                rocksdb_shared_metrics,
+                                rocksdb_instance_metrics,
+                            )
+                            .unwrap();
+
+                            let handle = rocksdb_inst.take_core_loop_handle().expect("join handle");
+                            tx.send(handle).expect("sent joinhandle");
+                            crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            rocksdb_init_fn,
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
+                    })
+                });
+
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
+            let value0 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value1 = Row::pack_slice(&[Datum::Int64(1), Datum::Int64(2)]);
+
+            // External writer has advanced the feedback persist_upper to T = 10
+            // WITHOUT the operator emitting anything itself.
+            persist.advance_to(mz_ts(10));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            // Lagging replacement produces source data at ts BELOW the current
+            // persist_upper (5 and 7 while persist_upper = 10).
+            input.send(((key0, Some(Ok(value0)), 1), mz_ts(5), Diff::ONE));
+            input.send(((key1, Some(Ok(value1)), 2), mz_ts(7), Diff::ONE));
+            input.advance_to(mz_ts(11));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            (probe.with_frontier(|f| f.to_vec()), capture)
+        });
+
+        let mut emitted: Vec<_> = capture
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, c)| c)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut emitted);
+
+        // v1 drops the below-upper data and lets its output frontier advance
+        // freely (here to the input upper, 11): nothing is stranded, and the
+        // frontier is never pinned below the shard upper (10).
+        assert!(emitted.is_empty(), "v1 emitted {emitted:?}");
+        assert_eq!(
+            frontier,
+            vec![mz_ts(11)],
+            "v1 output frontier should advance to the input upper, not pin below \
+             persist_upper as v2 does"
+        );
+        assert!(
+            frontier[0] >= mz_ts(10),
+            "v1 output frontier {frontier:?} should reach at least persist_upper (10)"
+        );
+
+        while let Ok(handle) = rx.recv() {
+            handle.join().expect("threads completed successfully");
+        }
+    }
 }

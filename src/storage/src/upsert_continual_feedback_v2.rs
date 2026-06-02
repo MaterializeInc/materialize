@@ -48,6 +48,10 @@
 //!      cursor, emit a retraction if present, and emit the new value.
 //!    - **Ineligible** (between persist and input frontiers): persist hasn't
 //!      caught up yet. Push back into the batcher for the next iteration.
+//!    - **Already persisted** (below the persist frontier): some writer has
+//!      already advanced the shard past this time, so it is dropped. See
+//!      [`drain_sealed_input`] for why re-stashing it would strand the data
+//!      and pin the output frontier below the shard upper.
 //!
 //! 4. **Capability management.** Downgrade the output capability to the
 //!    minimum time of any remaining buffered data (in the batcher or pushed
@@ -59,7 +63,9 @@
 //! For a total-order timestamp with `input_upper = {i}` and
 //! `persist_upper = {p}`, an entry at time `ts` is eligible when
 //! `ts == p < i` — the source has finalized it and persist is exactly at
-//! that time, so the trace cursor returns the correct prior state.
+//! that time, so the trace cursor returns the correct prior state. An entry
+//! with `p < ts` is ineligible (persist hasn't caught up), and one with
+//! `ts < p` is already persisted and dropped.
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -592,9 +598,11 @@ struct DrainStats {
     output_count: u64,
 }
 
-/// Process sealed chunks from the batcher. Entries at the persist frontier are
-/// eligible for processing (cursor lookup + output); all others are returned
-/// in `ineligible` for re-stashing.
+/// Process sealed chunks from the batcher, classifying each entry by its
+/// timestamp relative to `persist_upper`: entries at the frontier are eligible
+/// for processing now (cursor lookup + output), entries above it are returned
+/// in `ineligible` for re-stashing, and entries below it are already persisted
+/// and dropped (see the body for why).
 ///
 /// The sealed chunks are already sorted and consolidated by the MergeBatcher,
 /// so the trace cursor walks forward through keys in order — seeks amortize.
@@ -612,15 +620,34 @@ where
     T: columnation::Columnation,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
-    // Separate eligible (at persist frontier) from ineligible.
+    // Classify each entry by its timestamp relative to `persist_upper`:
+    //
+    //   * `ts == persist_upper`: eligible for processing now.
+    //   * `ts >  persist_upper`: not yet processable; re-stashed (ineligible)
+    //     until the feedback frontier catches up to it.
+    //   * `ts <  persist_upper`: already persisted by some writer and not
+    //     relevant anymore. We DROP it. The downstream persist_sink would
+    //     filter such updates out anyway since the shard upper is further
+    //     ahead, and our state is already up-to-date to `persist_upper` so we
+    //     could not emit correct retractions for it. Re-stashing it would
+    //     strand the data forever (`persist_upper` only advances, so
+    //     `ts == persist_upper` can never again hold) and pin the operator's
+    //     output frontier below the shard upper. This mirrors v1's
+    //     `relevant = persist_upper.less_equal(ts)`.
     let mut eligible = Vec::new();
     for chunk in sealed {
         for entry in chunk {
             let (_, ref ts, _) = entry;
-            if !persist_upper.less_than(ts) && persist_upper.less_equal(ts) {
-                eligible.push(entry);
-            } else {
+            if !persist_upper.less_equal(ts) {
+                // ts < persist_upper: drop.
+                continue;
+            }
+            if persist_upper.less_than(ts) {
+                // ts > persist_upper: re-stash for later.
                 ineligible.push(entry);
+            } else {
+                // ts == persist_upper: process now.
+                eligible.push(entry);
             }
         }
     }
@@ -1093,5 +1120,131 @@ mod test {
         let expected: Vec<(Result<Row, DataflowError>, _, _)> =
             vec![(Ok(val), new_ts(0), Diff::ONE)];
         assert_eq!(actual, expected);
+    }
+
+    /// Operator-level repro of the 0dt read-only-handoff stranding bug.
+    ///
+    /// Models a lagging replacement generation: the external (old) writer has
+    /// already advanced the shard — and therefore the feedback `persist_upper`
+    /// — to `T = 10`, while the operator itself has emitted nothing. The
+    /// lagging replacement now produces source data at timestamps BELOW that
+    /// upper (`ts = 5, 7`), i.e. data the external writer has already persisted.
+    ///
+    /// `drain_sealed_input` DROPS such already-persisted data (it satisfies
+    /// neither `ts == persist_upper` nor `ts > persist_upper`), mirroring v1's
+    /// `relevant = persist_upper.less_equal(ts)`. Were it instead re-stashed,
+    /// the data would be stranded forever — `persist_upper` only advances, so
+    /// `ts == persist_upper` could never again hold — and `min_ineligible_ts`
+    /// would pin the operator's output capability at `ts = 5`, BELOW the shard
+    /// upper, where it would stay for good. Dropping it lets the frontier
+    /// advance freely.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn lagging_replacement_below_upper_strands_data() {
+        let (frontier, emitted) = run_below_upper_scenario_v2();
+
+        // The below-upper data is discarded (no output) and the output frontier
+        // is not pinned below the shard upper (10); it advances to the input
+        // upper (11), matching v1's behavior.
+        assert!(
+            emitted.is_empty(),
+            "below-upper data should be dropped, not emitted; got {emitted:?}"
+        );
+        assert_eq!(
+            frontier,
+            vec![new_ts(11)],
+            "v2 output frontier should advance to the input upper, not pin below \
+             persist_upper"
+        );
+        assert!(
+            frontier[0] >= new_ts(10),
+            "v2 output frontier {frontier:?} should reach at least persist_upper (10)"
+        );
+    }
+
+    /// Shared driver for the lagging-replacement scenario against v2. Returns
+    /// `(output_frontier, consolidated_emitted_updates)`.
+    fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, Ts, Diff)>) {
+        use timely::dataflow::operators::Probe;
+
+        let (frontier, capture) = timely::execute_directly(move |worker| {
+            let (mut input, mut persist, probe, capture) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<Ts, _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let source_id = GlobalId::User(0);
+
+                        let reg = MetricsRegistry::new();
+                        let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                        let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+
+                        let reg2 = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&reg2);
+
+                        let reg3 = MetricsRegistry::new();
+                        let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &stats_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+                        let source_config = SourceExportCreationConfig {
+                            id: source_id,
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                        );
+                        std::mem::forget(button);
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
+                    })
+                });
+
+            // The external writer has advanced the shard (feedback persist_upper)
+            // to T = 10 WITHOUT the operator emitting anything itself.
+            persist.advance_to(new_ts(10));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            // The lagging replacement produces source data at ts BELOW the
+            // current persist_upper (5 and 7 while persist_upper = 10).
+            input.send(((key(0), Some(Ok(row(0, 1))), 1), new_ts(5), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 2))), 2), new_ts(7), Diff::ONE));
+            input.advance_to(new_ts(11));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            (probe.with_frontier(|f| f.to_vec()), capture)
+        });
+
+        let mut emitted: Vec<_> = capture
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, c)| c)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut emitted);
+        (frontier, emitted)
     }
 }
