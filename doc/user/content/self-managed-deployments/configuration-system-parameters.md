@@ -88,9 +88,6 @@ kubectl apply -f materialize.yaml
 
 ## Updating ConfigMap System Parameters
 
-Unlike changes to the Materialize custom resource, updating the parameters in
-your ConfigMap does **not** require a rollout.
-
 To update system parameters defined in your ConfigMap, you can either:
 
 - Use `kubectl edit configmap` to edit the ConfigMap and apply the changes:
@@ -104,6 +101,9 @@ To update system parameters defined in your ConfigMap, you can either:
   ```shell
   kubectl apply -f system-params-configmap.yaml
   ```
+
+Unlike changes to the Materialize custom resource, updating the parameters in
+your ConfigMap does **not** require a rollout.
 
 ### ConfigMap sync behavior
 

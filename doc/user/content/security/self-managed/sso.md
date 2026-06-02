@@ -199,11 +199,12 @@ following fields:
 |----------|---------------| ------------
 | Materialize CR | `spec.authenticatorKind` | Set to `Oidc` to enable OIDC authentication.
 | Kubernetes Secret | `external_login_password_mz_system` | Specify the password for the `mz_system` user. Add `external_login_password_mz_system` to the Kubernetes Secret referenced in the Materialize CR's `spec.backendSecretName` field. The `mz_system` user **always** authenticates with a password. This user is required by the Materialize Operator for upgrades and serves as an emergency administrative account.
+| ConfigMap | `mz-system-params` | Create an empty system parameter ConfigMap and reference it from the Materialize CR's `spec.systemParameterConfigmapName` field. You will populate it with your OIDC parameters in [Step 3](#step-3-configure-oidc-system-parameters).
 
 The following example Kubernetes manifest includes configuration for OIDC
 authentication:
 
-```yaml {hl_lines="6-15 26 36 38"}
+```yaml {hl_lines="6-15 26 36-38"}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -279,7 +280,7 @@ Materialize, including tokens issued for other applications. **Always set
 
 In [Step 2](#step-2-enable-oidc-authentication), you already created an empty
 `mz-system-params` ConfigMap. Now, populate that ConfigMap with your
-OIDC parameters by editing its `data`. At this point, your manifest should look like:
+OIDC parameters. At this point, your manifest should look like:
 
 ```yaml {hl_lines="9-13"}
 apiVersion: v1
@@ -305,7 +306,8 @@ authentication claim references `email`, `console_oidc_scopes` includes the
 `email` scope to ensure that claim is present in the token.
 {{</ note >}}
 
-Apply the updated ConfigMap to your Kubernetes cluster. For more
+Apply the updated ConfigMap to your Kubernetes cluster. The changes could take
+up to a minute to take effect. For more
 on configuring system parameters via a ConfigMap, see [System parameters
 configuration](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
 
