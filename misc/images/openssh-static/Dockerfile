@@ -25,9 +25,28 @@
 
 FROM ubuntu:noble-20260210.1 AS builder
 
+# Non-FIPS builds use a regular AWS-LC release tag.
 ARG AWS_LC_VERSION=v1.54.0
+# FIPS builds MUST use a tag from a FIPS branch, not a regular release tag.
+# Passing -DFIPS=1 against an arbitrary release produces a "FIPS-style" module
+# (self-tests + integrity check) that is NOT the NIST-validated module, so it
+# provides no actual FIPS 140-3 compliance.
+#
+#   AWS-LC-FIPS-2.0.x  -> NIST cert #4816 (static), but does NOT include EdDSA.
+#   AWS-LC-FIPS-3.x    -> adds EdDSA/Ed25519 to the module boundary.
+#
+# We pin the 3.x line because Materialize's SSH connection keys are Ed25519
+# (see mz-ssh-util keys.rs), so Ed25519 must be inside the validated boundary.
+# NOTE: AWS-LC-FIPS 3.x is currently "in process" with NIST CMVP (the static
+# module is in Comment Resolution), not yet certified. This image is therefore
+# NOT production-FIPS-ready until that certificate is awarded. Track status:
+#   https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list
+#
+# Ed25519 also only executes inside the module with OpenSSH >= 10.0, which
+# routes ed25519 through libcrypto instead of OpenSSH's bundled implementation.
 ARG AWS_LC_FIPS=0
-ARG OPENSSH_VERSION=V_9_9_P2
+ARG AWS_LC_FIPS_VERSION=AWS-LC-FIPS-3.3.0
+ARG OPENSSH_VERSION=V_10_3_P1
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
@@ -47,7 +66,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 # Build AWS-LC as a static library.
 # When AWS_LC_FIPS=1, enables FIPS mode (requires Go for the delocator).
 WORKDIR /build/aws-lc
-RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc.git . \
+RUN AWS_LC_REF="$([ "$AWS_LC_FIPS" = "1" ] && echo "$AWS_LC_FIPS_VERSION" || echo "$AWS_LC_VERSION")" \
+    && git clone --depth 1 --branch "$AWS_LC_REF" https://github.com/aws/aws-lc.git . \
     && cmake -GNinja -B build \
         $([ "$AWS_LC_FIPS" = "1" ] && echo "-DFIPS=1") \
         -DBUILD_SHARED_LIBS=0 \
@@ -63,6 +83,10 @@ RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc
 WORKDIR /build/openssh
 RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/openssh-portable.git . \
     && autoreconf \
+    # OpenSSH >= 10 stubs BN_set_flags() for AWS-LC, so no -DBN_FLG_CONSTTIME
+    # shim is needed. Use a plain configure + make: a `make CFLAGS=...` override
+    # would clobber configure's hardening flags. --disable-pkcs11 avoids link
+    # errors from ssh-pkcs11.c referencing RSA/EC APIs that AWS-LC omits.
     && ./configure \
         --with-ssl-dir=/opt/aws-lc \
         --with-zlib \
@@ -70,14 +94,11 @@ RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/o
         --without-pam \
         --without-libedit \
         --disable-pkcs11 \
-    # AWS-LC does not define the legacy OpenSSL BN_FLG_CONSTTIME flag.
-    # Setting it to 0 satisfies #ifdef checks in OpenSSH source code.
-    # This is safe: AWS-LC handles constant-time bignum operations
-    # internally and does not rely on this flag.
-    # --disable-pkcs11 avoids link errors from ssh-pkcs11.c calling
-    # RSA_meth_dup/EC_KEY_METHOD_get_sign which AWS-LC does not provide.
-    && make -j"$(nproc)" ssh CFLAGS="-DBN_FLG_CONSTTIME=0" \
-    && strip ssh
+    && make -j"$(nproc)" ssh \
+    # Stripping removes the symbols the FIPS integrity self-test needs to locate
+    # the module boundary, so a stripped FIPS binary fails its power-on
+    # self-test at the first crypto operation. Only strip non-FIPS builds.
+    && if [ "$AWS_LC_FIPS" != "1" ]; then strip ssh; fi
 
 # Verify the binary is not dynamically linked and is functional.
 RUN ! ldd ssh 2>/dev/null \

@@ -241,13 +241,20 @@ fn fips_mode_enabled() -> bool {
 /// approved choices only. Returns the path to the config file.
 fn write_fips_ssh_config(dir: &std::path::Path) -> Result<std::path::PathBuf, anyhow::Error> {
     let config_path = dir.join("ssh_config");
+    // EdDSA/Ed25519 is FIPS-approved under FIPS 186-5 and is in the AWS-LC-FIPS
+    // 3.x module boundary, so ssh-ed25519 is permitted for both the bastion host
+    // key (HostKeyAlgorithms) and our own client key (PubkeyAcceptedAlgorithms).
+    // Materialize's SSH connection keys are Ed25519 (see keys.rs), so omitting
+    // ssh-ed25519 from PubkeyAcceptedAlgorithms would break authentication; both
+    // lists must include it for parity. Requires the openssh-static binary built
+    // against AWS-LC-FIPS 3.x with OpenSSH >= 10.0 (ed25519 via libcrypto).
     let config_contents = "\
 # FIPS 140-3 compliant SSH configuration.
 # Only NIST-approved algorithms are permitted.
 Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
 KexAlgorithms ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
 MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
-HostKeyAlgorithms ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512
+HostKeyAlgorithms ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,ssh-ed25519
 PubkeyAcceptedAlgorithms ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-256,rsa-sha2-512,ssh-ed25519
 ";
     fs::write(&config_path, config_contents)?;
