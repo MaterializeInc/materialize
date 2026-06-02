@@ -9,13 +9,15 @@
 
 # Build a statically-linked OpenSSH `ssh` client binary using AWS-LC
 # as the crypto backend. AWS-LC is a faster, smaller alternative to
-# OpenSSL that also supports FIPS 140-3 validation when needed.
+# OpenSSL. The static binary (~3-6MB) is the prerequisite for migrating
+# environmentd/clusterd to distroless containers, which lack /usr/bin/ssh.
 #
 # OpenSSH natively supports AWS-LC as a crypto backend (no patches needed).
 # See: https://github.com/openssh/openssh-portable/blob/master/INSTALL
 #
-# To enable FIPS mode, build with: --build-arg AWS_LC_FIPS=1
-# (requires Go for the FIPS delocator)
+# FIPS support is built separately; see the SEC-236 FIPS draft (it requires a
+# FIPS-branch AWS-LC tag and OpenSSH >= 10.0, and is gated on AWS-LC-FIPS 3.x
+# completing NIST CMVP validation).
 #
 # Usage:
 #   docker build -t openssh-static .
@@ -26,8 +28,9 @@
 FROM ubuntu:noble-20260210.1 AS builder
 
 ARG AWS_LC_VERSION=v1.54.0
-ARG AWS_LC_FIPS=0
-ARG OPENSSH_VERSION=V_9_9_P2
+# OpenSSH >= 10.0 is required: it natively stubs BN_set_flags() for AWS-LC,
+# avoiding any need to hand-define the removed BN_FLG_CONSTTIME flag.
+ARG OPENSSH_VERSION=V_10_3_P1
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
@@ -45,11 +48,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 
 # Build AWS-LC as a static library.
-# When AWS_LC_FIPS=1, enables FIPS mode (requires Go for the delocator).
 WORKDIR /build/aws-lc
 RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc.git . \
     && cmake -GNinja -B build \
-        $([ "$AWS_LC_FIPS" = "1" ] && echo "-DFIPS=1") \
         -DBUILD_SHARED_LIBS=0 \
         -DBUILD_TESTING=OFF \
         -DBUILD_TOOL=OFF \
@@ -63,6 +64,10 @@ RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc
 WORKDIR /build/openssh
 RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/openssh-portable.git . \
     && autoreconf \
+    # OpenSSH >= 10 stubs BN_set_flags() for AWS-LC, so no -DBN_FLG_CONSTTIME
+    # shim is needed. Use a plain configure + make: a `make CFLAGS=...` override
+    # would clobber configure's hardening flags. --disable-pkcs11 avoids link
+    # errors from ssh-pkcs11.c referencing RSA/EC APIs that AWS-LC omits.
     && ./configure \
         --with-ssl-dir=/opt/aws-lc \
         --with-zlib \
@@ -70,13 +75,7 @@ RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/o
         --without-pam \
         --without-libedit \
         --disable-pkcs11 \
-    # AWS-LC does not define the legacy OpenSSL BN_FLG_CONSTTIME flag.
-    # Setting it to 0 satisfies #ifdef checks in OpenSSH source code.
-    # This is safe: AWS-LC handles constant-time bignum operations
-    # internally and does not rely on this flag.
-    # --disable-pkcs11 avoids link errors from ssh-pkcs11.c calling
-    # RSA_meth_dup/EC_KEY_METHOD_get_sign which AWS-LC does not provide.
-    && make -j"$(nproc)" ssh CFLAGS="-DBN_FLG_CONSTTIME=0" \
+    && make -j"$(nproc)" ssh \
     && strip ssh
 
 # Verify the binary is not dynamically linked and is functional.
