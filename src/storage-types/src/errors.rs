@@ -824,7 +824,8 @@ mod columnation {
                                 | e @ InvalidRangeError::InvalidRangeBoundFlags
                                 | e @ InvalidRangeError::DiscontiguousUnion
                                 | e @ InvalidRangeError::DiscontiguousDifference
-                                | e @ InvalidRangeError::NullRangeBoundFlags => e.clone(),
+                                | e @ InvalidRangeError::NullRangeBoundFlags
+                                | e @ InvalidRangeError::InvalidRangeData => e.clone(),
                                 InvalidRangeError::CanonicalizationOverflow(string) => {
                                     InvalidRangeError::CanonicalizationOverflow(
                                         self.string_region.copy(string),
