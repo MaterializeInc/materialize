@@ -149,8 +149,7 @@ const PasswordLoginForm = () => {
   );
 };
 
-const SsoLoginLink = () => {
-  const { colors } = useTheme<MaterializeTheme>();
+const SsoSignInButton = () => {
   const [error, setError] = useState<string | null>(null);
   const auth = useAuth();
 
@@ -178,27 +177,38 @@ const SsoLoginLink = () => {
   }
 
   return (
-    <VStack spacing="2" alignItems="center">
+    <VStack spacing="4" alignItems="stretch">
       {oidcDisplayError && (
         <Alert variant="error" minWidth="100%" message={oidcDisplayError} />
       )}
-      <Link
-        color={colors.accent.brightPurple}
-        fontSize="sm"
-        onClick={handleSsoLogin}
-        cursor="pointer"
-        textDecoration="none"
-        _hover={{ textDecoration: "underline" }}
-      >
-        Use single sign-on
-      </Link>
+      <Button variant="primary" size="lg" width="100%" onClick={handleSsoLogin}>
+        Sign in with SSO
+      </Button>
     </VStack>
+  );
+};
+
+const PasswordFormToggle = ({ onClick }: { onClick: () => void }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Link
+      alignSelf="center"
+      color={colors.accent.brightPurple}
+      fontSize="sm"
+      onClick={onClick}
+      cursor="pointer"
+      textDecoration="none"
+      _hover={{ textDecoration: "underline" }}
+    >
+      Sign in with SQL username and password
+    </Link>
   );
 };
 
 export const Login = () => {
   const [searchParams] = useSearchParams();
   const { data: auth, error: oidcInitializationError } = useOidcManagerQuery();
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
 
   const oidcError = searchParams.get(LOGIN_ERROR_PARAM);
 
@@ -220,8 +230,18 @@ export const Login = () => {
               mb="4"
             />
           )}
-          <PasswordLoginForm />
-          {!!auth && <SsoLoginLink />}
+          {auth ? (
+            <VStack alignItems="stretch" spacing="4">
+              <SsoSignInButton />
+              {showPasswordForm ? (
+                <PasswordLoginForm />
+              ) : (
+                <PasswordFormToggle onClick={() => setShowPasswordForm(true)} />
+              )}
+            </VStack>
+          ) : (
+            <PasswordLoginForm />
+          )}
         </VStack>
       </AuthContentContainer>
     </AuthLayout>
