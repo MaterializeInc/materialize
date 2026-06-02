@@ -58,7 +58,9 @@ use std::collections::BTreeSet;
 use crate::ctx::{
     ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
 };
-use crate::strategy::{BaselineStrategy, DesiredReplica, Strategy};
+use crate::strategy::{
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+};
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
 /// reconcile tick against a [`ClusterControllerCtx`].
@@ -73,12 +75,16 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with only the implicit baseline strategy. This reconciles a
-    /// steady-state managed cluster to no decisions; later PRs add the policy
+    /// A controller with the implicit baseline and the graceful-reconfiguration
+    /// strategy. The baseline holds the steady set; graceful engages only while a
+    /// `reconfiguration` record is in flight. Later PRs add the remaining policy
     /// strategies.
     pub fn new() -> Self {
         Self {
-            strategies: vec![Box::new(BaselineStrategy)],
+            strategies: vec![
+                Box::new(BaselineStrategy),
+                Box::new(GracefulReconfigurationStrategy),
+            ],
         }
     }
 
@@ -92,7 +98,8 @@ impl ClusterController {
 
         // Phase 1: update_state. Collect every strategy's durable writes and
         // apply them under their compare-and-append guards.
-        let states = ctx.cluster_states(&cluster_ids).await;
+        let mut states = ctx.cluster_states(&cluster_ids).await;
+        self.enrich_hydration(ctx, &mut states).await;
         let now = ctx.now();
         let mut state_decisions = Vec::new();
         for state in &states {
@@ -125,12 +132,15 @@ impl ClusterController {
         // Phase 2: desired_replicas. The barrier exists so that a cut-over a
         // phase-1 write performed is visible before we diff the replica set
         // against the realized config. When phase 1 wrote nothing the first read
-        // is still the current view, so we reuse it; otherwise we re-read to pick
-        // up the applied writes. A stale diff is harmless either way: every
-        // create/drop carries its `expected` and is rejected by the apply guard
-        // if the durable state has since diverged.
+        // (including its hydration enrichment) is still the current view, so we
+        // reuse it wholesale and re-probe nothing; otherwise we re-read and
+        // re-enrich to pick up the applied writes. A stale diff is harmless either
+        // way: every create/drop carries its `expected` and is rejected by the
+        // apply guard if the durable state has since diverged.
         let states = if phase_1_wrote {
-            ctx.cluster_states(&cluster_ids).await
+            let mut states = ctx.cluster_states(&cluster_ids).await;
+            self.enrich_hydration(ctx, &mut states).await;
+            states
         } else {
             states
         };
@@ -148,6 +158,31 @@ impl ClusterController {
             // replica and is reconciled away next tick. We do not retry within
             // the tick.
             let _ = ctx.apply(replica_decisions).await;
+        }
+    }
+
+    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal,
+    /// pulling it through the ctx only where a strategy needs it.
+    ///
+    /// Hydration is only consulted by the graceful strategy, and only while a
+    /// `reconfiguration` is in flight, so we probe a cluster's replicas exactly
+    /// then — a steady cluster is never probed, keeping the seam pay-for-what-you-
+    /// use. The pull is per-cluster (the controller asks only about that cluster's
+    /// replicas).
+    async fn enrich_hydration(
+        &self,
+        ctx: &mut dyn ClusterControllerCtx,
+        states: &mut [ClusterState],
+    ) {
+        for state in states.iter_mut() {
+            if state.reconfiguration.is_none() {
+                continue;
+            }
+            let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
+            if replica_ids.is_empty() {
+                continue;
+            }
+            state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
         }
     }
 

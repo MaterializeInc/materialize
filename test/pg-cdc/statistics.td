@@ -16,6 +16,9 @@ $ set-sql-timeout duration=60s
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
+# The controller reconciles a replica-set change asynchronously; drive the tick
+# down so the replica-drop wait below converges quickly.
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
@@ -133,6 +136,17 @@ SELECT
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+# The controller reconciles RF asynchronously and would otherwise coalesce this
+# 1->0->1 cycle into a no-op (the original replica never restarts). Wait for the
+# drop to actually land so the RF=1 below brings up a genuinely new replica with no
+# snapshot stats. The old replica's stats persist in mz_source_statistics after it
+# is dropped, so the "old replica" assertions below still hold.
+> SELECT count(*)
+  FROM mz_clusters c
+  JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id
+  WHERE c.name = 'stats_cluster'
+0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('four');

@@ -317,6 +317,10 @@ pub enum ReplicaCreateDropReason {
     /// The automated cluster scheduling initiated the replica create or drop, e.g., a
     /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
     ClusterScheduling(Vec<SchedulingDecision>),
+    /// The cluster controller's graceful-reconfiguration strategy created or dropped the replica
+    /// while converging a cluster onto an in-flight `reconfiguration` target (a background
+    /// `ALTER CLUSTER`).
+    GracefulReconfiguration,
 }
 
 impl ReplicaCreateDropReason {
@@ -332,6 +336,9 @@ impl ReplicaCreateDropReason {
                 CreateOrDropClusterReplicaReasonV1::Schedule,
                 Some(scheduling_decisions),
             ),
+            ReplicaCreateDropReason::GracefulReconfiguration => {
+                (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
         };
         (
             reason,

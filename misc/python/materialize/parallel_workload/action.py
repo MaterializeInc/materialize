@@ -1835,6 +1835,8 @@ class FlipFlagsAction(Action):
             "console_oidc_scopes",
             "enable_cluster_controller",
             "cluster_controller_tick_interval",
+            "enable_background_alter_cluster",
+            "default_cluster_reconfiguration_timeout",
         ]
 
     def run(self, exe: Executor) -> bool:

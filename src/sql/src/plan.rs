@@ -2097,7 +2097,12 @@ pub enum OnTimeoutAction {
 
 impl Default for OnTimeoutAction {
     fn default() -> Self {
-        Self::Commit
+        // The safe, conservative default: a reconfiguration that times out
+        // un-hydrated reverts to its pre-reconfiguration shape rather than cutting
+        // over to a not-yet-hydrated target (which could induce downtime). Applied
+        // uniformly — the controller and the legacy foreground wait path both read
+        // this default when an `ALTER` omits `ON TIMEOUT`.
+        Self::Rollback
     }
 }
 

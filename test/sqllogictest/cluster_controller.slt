@@ -31,6 +31,14 @@ ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 ----
 COMPLETE 0
 
+# The graceful-reconfiguration cases below use the WITH (WAIT ...) surface, whose
+# planner acceptance is still gated on this flag even when the controller owns the
+# reconfiguration.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
+----
+COMPLETE 0
+
 statement ok
 CREATE CLUSTER cc_steady (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
 
@@ -87,6 +95,135 @@ cc_steady  r1  scale=1,workers=1
 
 statement ok
 DROP CLUSTER cc_steady
+
+# ----- Graceful background reconfiguration (PR 3) -----
+#
+# With the master gate on and background ALTER enabled, a config-shape ALTER
+# (SIZE change) writes a durable reconfiguration record and returns immediately;
+# the controller creates the target replicas, and once they hydrate (an empty
+# cluster hydrates promptly) cuts the realized size over to the target and drops
+# the old replicas.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_background_alter_cluster = true
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cc_graceful (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Background ALTER returns immediately (no session-side wait).
+statement ok
+ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=2')
+
+# Give the controller time to spin up the target replica, hydrate it, cut over,
+# and drop the old replica.
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+# The realized config has cut over to the target size, and the cluster settled
+# back to exactly REPLICATION FACTOR replicas at the new size.
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+----
+scale=1,workers=2
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful' ORDER BY 1, 2, 3
+----
+cc_graceful  r2  scale=1,workers=2
+
+# The in-flight reconfiguration record was cleared after cut-over, so a fresh
+# config-shape ALTER (to a third size) writes a new record and reshapes again
+# rather than folding onto a stale one. This genuinely exercises the
+# record-write/converge/cut-over path a second time (an identical no-op ALTER
+# would early-return before ever reaching the reshape branch and prove nothing).
+statement ok
+ALTER CLUSTER cc_graceful SET (SIZE 'scale=1,workers=1')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_graceful'
+----
+scale=1,workers=1
+
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_graceful' ORDER BY 1, 2, 3
+----
+cc_graceful  r3  scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_graceful
+
+# ----- Per-ALTER timeout / ON TIMEOUT (PR 3) -----
+#
+# The deadline and the on-timeout action come from the existing WITH (WAIT ...)
+# surface and are written into the durable reconfiguration record, so the
+# controller (not the session) enforces them. These cases use a promptly-hydrating
+# (empty) cluster, so success precedence cuts over before any deadline matters;
+# they assert the three spellings are accepted under the gate and drive the record
+# to a successful cut-over. The ROLLBACK-vs-COMMIT behavior *at* a timeout (a
+# target that never hydrates) is asserted deterministically in the controller's
+# kernel unit tests, where hydration does not race the deadline.
+
+statement ok
+CREATE CLUSTER cc_timeout (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+# Omitting WITH (WAIT ...) entirely: the record takes the default deadline and
+# the default ON TIMEOUT action, which is now ROLLBACK. The target hydrates, so it
+# cuts over regardless.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=2
+
+# Explicit ON TIMEOUT ROLLBACK with a generous deadline: success precedence still
+# cuts over.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'ROLLBACK'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=4
+
+# Explicit ON TIMEOUT COMMIT (and WAIT FOR, which desugars to ON TIMEOUT COMMIT):
+# both accepted under the gate and drive a cut-over.
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=2
+
+statement ok
+ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=1') WITH (WAIT FOR '60s')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
+----
+scale=1,workers=1
+
+statement ok
+DROP CLUSTER cc_timeout
 
 # Restore pristine server state (including the tick-interval override).
 reset-server

@@ -1445,6 +1445,7 @@ pub mod audit_log_event_v1 {
         Manual(Empty),
         Schedule(Empty),
         System(Empty),
+        Reconfiguration(Empty),
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

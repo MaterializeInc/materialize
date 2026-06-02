@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 
 /// The config shape of a replica: the dimensions a reconfiguration changes and
 /// that the reconcile kernel matches desired slots against actual replicas by.
@@ -71,6 +71,22 @@ pub struct ObservedReplica {
 pub struct ReconfigurationRecord {
     pub target: ReconfigurationTarget,
     pub deadline: Timestamp,
+    /// What to do once the deadline passes with the target not yet hydrated.
+    pub on_timeout: OnTimeout,
+}
+
+/// The action a graceful reconfiguration applies once its `deadline` passes with
+/// the target replicas not yet hydrated. Success always takes precedence: a
+/// hydrated target cuts over regardless of this. The controller's own mirror of
+/// the durable `mz_sql::plan::OnTimeoutAction`, kept here so the pure crate need
+/// not depend on the SQL layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnTimeout {
+    /// Cut over to the (not-yet-hydrated) target anyway and clear the record.
+    Commit,
+    /// Drop the target replica set, reverting to the pre-reconfiguration shape,
+    /// and retain the record as a tombstone.
+    Rollback,
 }
 
 /// The full config shape a reconfiguration is moving the cluster to. Distinct
@@ -82,6 +98,17 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
+}
+
+impl ReconfigurationTarget {
+    /// The per-replica shape of the target: everything but `replication_factor`.
+    pub fn shape(&self) -> ReplicaShape {
+        ReplicaShape {
+            size: self.size.clone(),
+            availability_zones: self.availability_zones.clone(),
+            logging: self.logging.clone(),
+        }
+    }
 }
 
 /// An active hydration-burst record, mirrored from durable state. Opaque to the
@@ -113,6 +140,13 @@ pub struct ClusterState {
     pub burst: Option<BurstRecord>,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
+    /// The replicas observed this tick to have *all* current collections on the
+    /// cluster hydrated. A **live signal**, not durable state, so it is excluded
+    /// from [`ClusterState::expected`] (the compare-and-append witness).
+    ///
+    /// Populated only for clusters where a strategy needs it (pulled on demand);
+    /// empty for steady clusters the controller never probes.
+    pub hydrated_replicas: BTreeSet<ReplicaId>,
 }
 
 impl ClusterState {
@@ -255,11 +289,15 @@ pub trait ClusterControllerCtx: Send {
     /// The ids of all managed clusters the controller owns this tick.
     async fn managed_cluster_ids(&mut self) -> Vec<ClusterId>;
 
-    /// Whether `collections` are hydrated on *all* of `replicas` of `cluster`.
+    /// Of `replicas` on `cluster`, which have *all* current (non-transient)
+    /// collections on the cluster hydrated. The returned set is a subset of
+    /// `replicas`.
     ///
-    /// Pulled on demand: a tick asks only about the replicas it examines. The
-    /// baseline-only controller never calls this; the first hydration-dependent
-    /// strategy (graceful reconfiguration) does.
+    /// Pulled on demand: a tick asks only about the replicas it examines (the
+    /// graceful strategy probes a cluster's replicas only while a
+    /// `reconfiguration` is in flight). The baseline-only controller never calls
+    /// this; the first hydration-dependent strategy (graceful reconfiguration)
+    /// does.
     ///
     /// This is the first of the live-signal reads the seam will grow. The
     /// remaining ones — collection write frontiers and a read timestamp, which
@@ -269,12 +307,11 @@ pub trait ClusterControllerCtx: Send {
     /// and declaring them speculatively would both fix the wrong shape and pull
     /// an otherwise-unused frontier dependency into this pure crate. They land
     /// with their first consumer, backed the same pull-on-demand way as this one.
-    async fn collections_hydrated_on_replicas(
+    async fn hydrated_replicas(
         &mut self,
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
-        collections: &[GlobalId],
-    ) -> bool;
+    ) -> BTreeSet<ReplicaId>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;
