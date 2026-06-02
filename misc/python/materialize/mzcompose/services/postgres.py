@@ -42,6 +42,7 @@ class Postgres(Service):
         max_replication_slots: int = 100,
         setup_materialize: bool = False,
         restart: str = "no",
+        cpu: str | None = None,
     ) -> None:
         command: list[str] = [
             "postgres",
@@ -83,11 +84,21 @@ class Postgres(Service):
                 "volumes": volumes,
             }
         )
+        # Restricting CPU is used to slow Postgres so each consensus operation
+        # holds its connection longer, draining the persist consensus connection
+        # pool at lower scale (see the limits `pool-exhaustion` workflow).
+        if cpu:
+            config["deploy"] = {"resources": {"limits": {"cpus": cpu}}}
         super().__init__(name=name, config=config)
 
 
 class PostgresMetadata(Postgres):
-    def __init__(self, restart: str = "no") -> None:
+    def __init__(
+        self,
+        restart: str = "no",
+        extra_command: list[str] = [],
+        cpu: str | None = None,
+    ) -> None:
         super().__init__(
             name="postgres-metadata",
             setup_materialize=True,
@@ -101,7 +112,8 @@ class PostgresMetadata(Postgres):
             # RWConflictPool", triggering a retry storm. Raise the limits well
             # above defaults. These GUCs only matter for the SSI consensus path,
             # which is why they live on PostgresMetadata, not the base Postgres
-            # used for CDC/source instances.
+            # used for CDC/source instances. Any caller-supplied extra_command
+            # is appended (a later -c wins, so callers can still override).
             extra_command=[
                 "-c",
                 "max_pred_locks_per_transaction=1024",
@@ -109,7 +121,9 @@ class PostgresMetadata(Postgres):
                 "max_pred_locks_per_relation=10000",
                 "-c",
                 "max_pred_locks_per_page=512",
-            ],
+            ]
+            + extra_command,
+            cpu=cpu,
         )
 
     @staticmethod

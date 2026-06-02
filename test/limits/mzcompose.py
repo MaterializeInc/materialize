@@ -1901,6 +1901,7 @@ def make_materialized(
     external_persist_committer: bool = True,
     use_committer: bool = True,
     memory: str = "8G",
+    extra_system_params: dict[str, str] | None = None,
 ) -> Materialized:
     """Construct the limits `Materialized` service.
 
@@ -1917,11 +1918,17 @@ def make_materialized(
     consensus (set as a startup default because the flag needs a restart to
     take effect). `memory` is the container limit; the default 8G matches the
     `main` scenarios' calibration, but the comparison workflow raises it so the
-    committer variants don't OOM at high MV counts.
+    committer variants don't OOM at high MV counts. `extra_system_params` merges
+    additional startup `ALTER SYSTEM` defaults (used by the pool-exhaustion
+    workflow to shrink `persist_consensus_connection_pool_max_size`/`_max_wait`,
+    which require a restart to take effect).
     """
-    extra_system_params = (
-        None if use_committer else {"persist_consensus_use_committer": "false"}
-    )
+    params: dict[str, str] = {}
+    if not use_committer:
+        params["persist_consensus_use_committer"] = "false"
+    if extra_system_params:
+        params.update(extra_system_params)
+    extra_system_params = params or None
     return Materialized(
         memory=memory,
         additional_system_parameter_defaults=extra_system_params,
@@ -2660,6 +2667,290 @@ def workflow_committer_comparison(
             f"{r['variant']:20} {r['n_objects']:>6} {str(r['hydrate_ok']):>6} "
             f"{r['batch_hydrate_wall_s']:>7} {r['hydration_ms_max']:>8} "
             f"{r['hydration_ms_p95']:>8} {r['lag_ms_max']:>8} {r['lag_ms_p95']:>8}"
+        )
+
+
+# Persist log signatures of the consensus connection-pool exhaustion incident
+# (Notion prod, 2026-05). The causal chain: consensus ops block on a saturated
+# connection pool ("waiting for a slot"), so reader-lease heartbeats can't
+# complete ("heartbeat call took" / "between heartbeats" growing into minutes),
+# leases expire ("expired due to inactivity" / "Force expiring"), processes
+# halt ("lost lease"), and dataflows fall over ("reconciliation failed").
+POOL_EXHAUSTION_SIGNATURES = {
+    "slot_wait": "waiting for a slot to become available",
+    "heartbeat_took": "heartbeat call took",
+    "between_heartbeats": "between heartbeats",
+    "lease_expired": "expired due to inactivity",
+    "force_expiring": "Force expiring",
+    "lost_lease": "lost lease",
+    "reconciliation_failed": "reconciliation failed",
+    "halting": "halting process",
+}
+
+
+def _count_signatures(logs: str) -> dict[str, int]:
+    """Count occurrences of each pool-exhaustion log signature."""
+    return {k: logs.count(sub) for k, sub in POOL_EXHAUSTION_SIGNATURES.items()}
+
+
+def workflow_pool_exhaustion(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Reproduce the persist consensus connection-pool exhaustion incident.
+
+    This is NOT the hydration/throughput benchmark (see
+    `committer-comparison`). It reproduces the production failure where each
+    clusterd's consensus connection pool to Postgres saturates: consensus ops
+    (`fetch_state::scan`, `downgrade_since`) block waiting for a free pool slot
+    and time out, which stalls reader-lease heartbeats until leases expire and
+    dataflows halt.
+
+    The key lever is `persist_consensus_connection_pool_max_size` (default 50
+    per process): shrinking it lets a modest clusters x MVs workload exhaust the
+    pool. The default variant matches production (committer off, postgres
+    backend, clusterds talk to Postgres directly). Flip `--committer on` to test
+    the hypothesis that routing consensus through the in-envd committer removes
+    the per-clusterd pool pressure.
+
+    Instead of measuring hydration time, the workflow ramps the workload, holds
+    it under load, and scrapes the materialized container logs (where the
+    in-container clusterds log) for the incident's signatures, reporting per
+    pool size and cluster count.
+    """
+    parser.add_argument(
+        "--sizes",
+        default="25,50,100",
+        help="comma-separated cluster counts to sweep (ascending)",
+    )
+    parser.add_argument("--mvs-per-cluster", type=int, default=16)
+    parser.add_argument(
+        "--pool-sizes",
+        default="4,16,50",
+        help="comma-separated persist_consensus_connection_pool_max_size values "
+        "to sweep; 50 is the production default, lower forces exhaustion",
+    )
+    parser.add_argument(
+        "--pool-max-wait",
+        default="60s",
+        help="persist_consensus_connection_pool_max_wait; the slot-wait timeout "
+        "fires after this (production default 60s)",
+    )
+    parser.add_argument(
+        "--committer",
+        choices=["on", "off"],
+        default="off",
+        help="off (default) matches production: clusterds compare_and_append "
+        "directly to Postgres, each with its own connection pool. on routes "
+        "consensus through the in-envd committer (the fix hypothesis)",
+    )
+    parser.add_argument(
+        "--load-seconds",
+        type=float,
+        default=120.0,
+        help="time to hold the workload under load at each size so consensus "
+        "pool pressure can build and leases can expire",
+    )
+    parser.add_argument(
+        "--postgres-cpu",
+        default="1",
+        help="CPU limit for the postgres-metadata container; restricting it "
+        "slows each consensus op so connections stay checked out longer, "
+        "draining the pool at lower scale (empty string = unrestricted)",
+    )
+    parser.add_argument(
+        "--tick-interval",
+        default="100ms",
+        help="default_timestamp_interval; lower = higher per-MV consensus rate, "
+        "more pressure on the connection pool",
+    )
+    parser.add_argument("--hydration-timeout", type=int, default=300)
+    parser.add_argument("--memory", default="32G")
+    parser.add_argument(
+        "--output",
+        default="pool_exhaustion.csv",
+        help="CSV output path (relative to repo root)",
+    )
+    args = parser.parse_args()
+
+    sizes = sorted(int(s) for s in args.sizes.split(","))
+    pool_sizes = [int(p) for p in args.pool_sizes.split(",")]
+    mvs = args.mvs_per_cluster
+    max_objects = max(sizes) * mvs
+    committer = args.committer == "on"
+
+    fieldnames = [
+        "pool_max_size",
+        "committer",
+        "n_clusters",
+        "n_objects",
+        "hydrate_ok",
+        "overloaded",
+        "load_wall_s",
+        *POOL_EXHAUSTION_SIGNATURES.keys(),
+    ]
+    results: list[dict] = []
+
+    def run_all(stmts: list[str]) -> None:
+        with c.sql_cursor(port=6877, user="mz_system") as cur:
+            for s in stmts:
+                cur.execute(s.encode())
+
+    def fetch(sql: str) -> list:
+        with c.sql_cursor(port=6877, user="mz_system") as cur:
+            cur.execute(sql.encode())
+            return cur.fetchall()
+
+    for pool_size in pool_sizes:
+        print(
+            f"--- pool_max_size={pool_size} committer={args.committer} "
+            f"(max_wait={args.pool_max_wait}, tick={args.tick_interval})"
+        )
+        # Clean slate per pool size: the pool size and max_wait need a restart
+        # to take effect, so they are startup defaults and the env is rebuilt.
+        c.down(destroy_volumes=True)
+
+        store_service = PostgresMetadata(
+            extra_command=[
+                "-c",
+                "max_pred_locks_per_transaction=1024",
+                "-c",
+                "max_pred_locks_per_relation=10000",
+                "-c",
+                "max_pred_locks_per_page=512",
+            ],
+            cpu=args.postgres_cpu or None,
+        )
+        with c.override(
+            store_service,
+            make_materialized(
+                metadata_store="postgres-metadata",
+                external_persist_committer=committer,
+                use_committer=committer,
+                memory=args.memory,
+                extra_system_params={
+                    "persist_consensus_connection_pool_max_size": str(pool_size),
+                    "persist_consensus_connection_pool_max_wait": args.pool_max_wait,
+                },
+            ),
+            fail_on_new_service=False,
+        ):
+            c.up("materialized")
+            run_all(
+                [
+                    f"ALTER SYSTEM SET default_timestamp_interval = '{args.tick_interval}'",
+                    f"ALTER SYSTEM SET max_clusters = {max(sizes) * 10}",
+                    f"ALTER SYSTEM SET max_materialized_views = {max_objects * 10}",
+                    f"ALTER SYSTEM SET max_objects_per_schema = {max_objects * 10}",
+                    "CREATE TABLE t (f1 INTEGER)",
+                    "INSERT INTO t VALUES (1)",
+                ]
+            )
+
+            created = 0
+            prev = {k: 0 for k in POOL_EXHAUSTION_SIGNATURES}
+
+            def record(
+                n: int, n_objects: int, hydrate_ok: bool, overloaded: bool, t0: float
+            ) -> dict[str, int]:
+                """Scrape the materialized container logs (the in-container
+                clusterds log here) and append a per-size row of signature
+                deltas. Returns the new delta for printing."""
+                logs = c.invoke("logs", "materialized", capture=True).stdout
+                counts = _count_signatures(logs)
+                delta = {k: counts[k] - prev[k] for k in counts}
+                prev.update(counts)
+                results.append(
+                    {
+                        "pool_max_size": pool_size,
+                        "committer": committer,
+                        "n_clusters": n,
+                        "n_objects": n_objects,
+                        "hydrate_ok": hydrate_ok,
+                        "overloaded": overloaded,
+                        "load_wall_s": round(time.time() - t0, 1),
+                        **delta,
+                    }
+                )
+                print(
+                    f"    n={n} objects={n_objects} hydrate_ok={hydrate_ok} "
+                    f"overloaded={overloaded} slot_wait={delta['slot_wait']} "
+                    f"lease_expired={delta['lease_expired']} "
+                    f"force_expiring={delta['force_expiring']} "
+                    f"reconciliation_failed={delta['reconciliation_failed']} "
+                    f"halting={delta['halting']}"
+                )
+                return delta
+
+            for n in sizes:
+                t_load = time.time()
+                n_objects = n * mvs
+                burst: list[str] = []
+                for i in range(created + 1, n + 1):
+                    burst.append(f"CREATE CLUSTER c{i} SIZE = 'scale=1,workers=1'")
+                    for j in range(1, mvs + 1):
+                        burst.append(
+                            f"CREATE MATERIALIZED VIEW mv{i}_{j} IN CLUSTER c{i} "
+                            f"AS SELECT f1 + {j} AS f1 FROM t"
+                        )
+                # A severe enough overload fences/halts envd, so the DDL burst or
+                # the hydration/load probes lose their connection. That crash IS
+                # the terminal repro state, so on a connection error we scrape the
+                # logs one last time, record the overload, and stop this variant
+                # rather than letting the exception abort the whole workflow.
+                try:
+                    run_all(burst)
+                    created = n
+
+                    # Wait for hydration (best effort) so the steady-state
+                    # consensus traffic — downgrade_since from active readers plus
+                    # state scans — is what drains the pool, then hold under load.
+                    deadline = time.time() + args.hydration_timeout
+                    hydrated = 0
+                    while time.time() < deadline:
+                        rows = fetch("""
+                            SELECT count(*) FILTER (WHERE hs.hydrated)
+                            FROM mz_internal.mz_compute_hydration_statuses hs
+                            JOIN mz_materialized_views mv ON mv.id = hs.object_id
+                            WHERE mv.name LIKE 'mv%'
+                            """)
+                        hydrated = int(rows[0][0])
+                        if hydrated >= n_objects:
+                            break
+                        time.sleep(1.0)
+                    hydrate_ok = hydrated >= n_objects
+
+                    # Hold under load so pool pressure builds, leases can expire.
+                    time.sleep(args.load_seconds)
+                    record(n, n_objects, hydrate_ok, False, t_load)
+                except Exception as e:
+                    print(
+                        f"    n={n} objects={n_objects} envd connection lost "
+                        f"(overload): {type(e).__name__}: {e}"
+                    )
+                    try:
+                        record(n, n_objects, False, True, t_load)
+                    except Exception as scrape_err:
+                        print(f"    log scrape after overload failed: {scrape_err}")
+                    break
+
+    with open(args.output, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"\nWrote {len(results)} rows to {args.output}\n")
+
+    header = (
+        f"{'pool':>5} {'cmtr':>5} {'n_obj':>6} {'hyd':>4} {'ovld':>5} "
+        f"{'slot_wait':>10} {'lease_exp':>10} {'force_exp':>10} "
+        f"{'recon_fail':>11} {'halt':>5}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in results:
+        print(
+            f"{r['pool_max_size']:>5} {str(r['committer']):>5} "
+            f"{r['n_objects']:>6} {str(r['hydrate_ok'])[0]:>4} "
+            f"{str(r['overloaded'])[0]:>5} {r['slot_wait']:>10} "
+            f"{r['lease_expired']:>10} {r['force_expiring']:>10} "
+            f"{r['reconciliation_failed']:>11} {r['halting']:>5}"
         )
 
 
