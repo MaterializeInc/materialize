@@ -30,6 +30,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
+use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
@@ -207,7 +208,11 @@ where
                 }
             };
 
-            let auth_response = frontegg.authenticate(&user, &password).await;
+            let group_claim =
+                OIDC_GROUP_CLAIM.get(adapter_client.get_system_vars().await.dyncfgs());
+            let auth_response = frontegg
+                .authenticate(&user, &password, Some(&group_claim))
+                .await;
             match auth_response {
                 // Create a session based on the auth session.
                 //
@@ -216,6 +221,7 @@ where
                 // different casing than the user supplied via the pgwire
                 // username fN
                 Ok((mut auth_session, authenticated)) => {
+                    let groups = auth_session.groups();
                     let session = adapter_client.new_session(
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
@@ -225,7 +231,7 @@ where
                             external_metadata_rx: Some(auth_session.external_metadata_rx()),
                             helm_chart_version,
                             authenticator_kind,
-                            groups: None,
+                            groups,
                         },
                         authenticated,
                     );

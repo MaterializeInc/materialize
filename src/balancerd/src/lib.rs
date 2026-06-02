@@ -1399,7 +1399,10 @@ impl Resolver {
                             _ => anyhow::bail!("expected Password message"),
                         };
 
-                        let auth_response = auth.authenticate(user, &password).await;
+                        // balancerd only needs the validated tenant_id to route
+                        // the connection; group extraction happens in
+                        // environmentd, so skip it here.
+                        let auth_response = auth.authenticate(user, &password, None).await;
                         let auth_session = match auth_response {
                             Ok((auth_session, _)) => auth_session,
                             Err(e) => {
