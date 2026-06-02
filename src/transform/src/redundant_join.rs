@@ -98,6 +98,8 @@ impl RedundantJoin {
     ) -> Result<Vec<ProvInfo>, crate::TransformError> {
         let mut result = self.checked_recur(|_| {
             match relation {
+                // Opaque leaf; a changelog read provides no join provenance.
+                MirRelationExpr::Changes { .. } => Ok(Vec::new()),
                 MirRelationExpr::Let { id, value, body } => {
                     // Recursively determine provenance of the value.
                     let value_prov = self.action(value, ctx)?;

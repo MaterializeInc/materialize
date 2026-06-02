@@ -3047,42 +3047,62 @@ fn plan_changes(
     // CHANGES reinterprets the object's persist shard directly, so the argument
     // must resolve to a persist-backed object: a table, source, or materialized
     // view. Anything else (a view, an index, a CTE, ...) is rejected.
-    match name {
-        ResolvedItemName::Item { id, .. } => {
-            let item = qcx.scx.get_item(id);
-            match item.item_type() {
-                CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::MaterializedView => {}
-                other => sql_bail!(
-                    "CHANGES requires a table, source, or materialized view, but {} is a {}",
-                    name.full_name_str(),
-                    other,
-                ),
-            }
-        }
+    let (id, full_name, version) = match name {
+        ResolvedItemName::Item {
+            id,
+            full_name,
+            version,
+            ..
+        } => (*id, full_name.clone(), *version),
         ResolvedItemName::Cte { .. } => {
             sql_bail!("CHANGES requires a persisted collection, but got a common table expression")
         }
         ResolvedItemName::Error => {
             bail_internal!("should have been caught in name resolution")
         }
+    };
+
+    let item = qcx.scx.get_item(&id).at_version(version);
+    match item.item_type() {
+        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::MaterializedView => {}
+        other => sql_bail!(
+            "CHANGES requires a table, source, or materialized view, but {} is a {}",
+            full_name,
+            other,
+        ),
     }
+    let desc = item
+        .relation_desc()
+        .ok_or_else(|| PlanError::InvalidDependency {
+            name: full_name.to_string(),
+            item_type: item.item_type().to_string(),
+        })?
+        .into_owned();
+    let global_id = item.global_id();
 
     // The changelog start `as_of` is a constant timestamp expression, evaluated
     // once at plan time (the same machinery as a historical `SELECT ... AS OF`).
-    let _as_of = plan_as_of_or_up_to(qcx.scx, as_of.clone())?;
-    let _ = alias;
+    let as_of = plan_as_of_or_up_to(qcx.scx, as_of.clone())?;
 
-    // The remaining wiring is not yet implemented: carrying the changelog-read
-    // marker (and its `as_of`) through MIR to rendering, the optimizer
-    // typecheck adjustment for the read's extended output type (input columns
-    // plus `mz_timestamp` and `mz_diff`), and the coordinator's read-hold and
-    // dataflow-`as_of` handling. The compute-side reinterpretation
-    // (`pack_changelog_row` in `mz_compute::render`, gated by
-    // `SourceImport::read_as_changelog`) and the parser/AST surface are in
-    // place. See doc/developer/design/20260602_changes_table_function.md.
-    bail_unsupported!("CHANGES table function execution (database-issues#4527)")
+    // The changelog exposes the input columns plus the per-update `mz_timestamp`
+    // and `mz_diff`, matching SUBSCRIBE's diff output shape.
+    let changes_desc = RelationDesc::builder()
+        .with_columns(desc.iter().map(|(name, ty)| (name.clone(), ty.clone())))
+        .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(false))
+        .with_column("mz_diff", SqlScalarType::Int64.nullable(false))
+        .finish();
+
+    let expr = HirRelationExpr::Changes {
+        id: global_id,
+        typ: changes_desc.typ().clone(),
+        as_of,
+    };
+    let scope = Scope::from_source(
+        Some(Into::<PartialItemName>::into(full_name)),
+        changes_desc.iter_names().cloned(),
+    );
+    let scope = plan_table_alias(scope, alias)?;
+    Ok((expr, scope))
 }
 
 /// Plans a `ROWS FROM` expression.

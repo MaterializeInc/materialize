@@ -321,6 +321,46 @@ impl Context {
                     has_future_updates,
                 }
             }
+            MirRelationExpr::Changes { id, .. } => {
+                // A changelog read lowers to a `Get` of the source import for
+                // `id`. The reinterpretation (append `mz_timestamp`/`mz_diff`,
+                // emit at `max(time, as_of)` with diff `+1`) happens in rendering
+                // because the import is flagged `read_as_changelog`; the `as_of`
+                // is applied to the dataflow as a whole by the coordinator. The
+                // reinterpreted source is a raw collection (no arrangement), so
+                // there are no input arrangements to surface or constrain; we
+                // simply absorb any leftover MFP into the `Get` stage.
+                let id = Id::Global(*id);
+                let mfp = mfp.take();
+                let in_keys = AvailableCollections::new_raw();
+                let plan = if mfp.is_identity() {
+                    GetPlan::PassArrangements
+                } else {
+                    GetPlan::Collection(mfp)
+                };
+                let out_keys = if let GetPlan::PassArrangements = plan {
+                    in_keys.clone()
+                } else {
+                    AvailableCollections::new_raw()
+                };
+                let has_future_updates = match &plan {
+                    GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
+                        mfp.has_temporal_predicates()
+                    }
+                    GetPlan::PassArrangements => false,
+                };
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Get {
+                    id,
+                    keys: in_keys,
+                    plan,
+                };
+                LoweredExpr {
+                    plan: node.as_plan(lir_id),
+                    keys: out_keys,
+                    has_future_updates,
+                }
+            }
             MirRelationExpr::Let { id, value, body } => {
                 // It would be unfortunate to have a non-trivial `mfp` here, as we hope
                 // that they would be pushed down. I am not sure if we should take the

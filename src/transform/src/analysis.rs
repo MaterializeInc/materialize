@@ -1051,6 +1051,10 @@ mod column_names {
                     // Fallback to an anonymous schema for constants.
                     ColumnNames::anonymous(0..typ.arity()).collect()
                 }
+                Changes { typ, .. } => {
+                    // Anonymous schema for the (extended) changelog columns.
+                    ColumnNames::anonymous(0..typ.arity()).collect()
+                }
                 Get {
                     id: Id::Global(id),
                     typ,
@@ -1878,6 +1882,7 @@ mod cardinality {
                 Constant { rows, .. } => {
                     CardinalityEstimate::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))
                 }
+                Changes { .. } => CardinalityEstimate::Unknown,
                 Get { id, .. } => match id {
                     Id::Local(id) => depends
                         .bindings()

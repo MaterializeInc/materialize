@@ -59,6 +59,10 @@ impl Analysis for Monotonic {
     ) -> Self::Value {
         use Id::*;
         match expr {
+            // A changelog is append-only, but we conservatively report it as
+            // non-monotonic; the changelog source import is not registered as a
+            // monotonic id.
+            MirRelationExpr::Changes { .. } => false,
             MirRelationExpr::Get { id: Global(id), .. } => self.global_monotonic_ids.contains(id),
             MirRelationExpr::Get { id: Local(id), .. } => {
                 let index = *depends

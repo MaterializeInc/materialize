@@ -52,6 +52,7 @@ impl CoalesceCase {
         match relation {
             MirRelationExpr::Constant { .. } |
             MirRelationExpr::Get { .. } |
+            MirRelationExpr::Changes { .. } |
             MirRelationExpr::Let { .. } |
             MirRelationExpr::LetRec { .. } |
             MirRelationExpr::Project { .. } |

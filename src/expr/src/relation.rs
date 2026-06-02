@@ -128,6 +128,29 @@ pub enum MirRelationExpr {
         #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
     },
+    /// Read an existing global collection as an append-only changelog (the
+    /// `CHANGES` table function), starting at `as_of`.
+    ///
+    /// This is a leaf, like [`MirRelationExpr::Get`], but it is deliberately
+    /// opaque to the optimizer: its output schema is the input collection's
+    /// columns plus `mz_timestamp` and `mz_diff` (so it does not match the
+    /// catalog type of `id`), and each input update `(row, time, diff)` is
+    /// reinterpreted as a forward-only append `((row, time, diff), max(time,
+    /// as_of), 1)`. It is lowered straight to a changelog source import.
+    ///
+    /// The runtime memory footprint of this operator is zero.
+    Changes {
+        /// The identifier of the global collection to read as a changelog.
+        #[mzreflect(ignore)]
+        id: GlobalId,
+        /// The (extended) schema of the changelog: the input columns followed by
+        /// `mz_timestamp` and `mz_diff`.
+        typ: ReprRelationType,
+        /// The changelog start. The snapshot collapses to this time, and changes
+        /// after it are appended at the time they occurred.
+        #[mzreflect(ignore)]
+        as_of: mz_repr::Timestamp,
+    },
     /// Introduce a temporary dataflow.
     ///
     /// The runtime memory footprint of this operator is zero.
@@ -455,6 +478,7 @@ impl MirRelationExpr {
                 col_types
             }
             Get { typ, .. } => typ.column_types.clone(),
+            Changes { typ, .. } => typ.column_types.clone(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -606,7 +630,9 @@ impl MirRelationExpr {
                         .collect()
                 }
             }
-            Constant { rows: Err(_), typ } | Get { typ, .. } => typ.keys.clone(),
+            Constant { rows: Err(_), typ } | Get { typ, .. } | Changes { typ, .. } => {
+                typ.keys.clone()
+            }
             Threshold { .. } | ArrangeBy { .. } => input_keys.next().unwrap().clone(),
             Let { .. } => {
                 // skip over the unique keys for value
@@ -1028,6 +1054,7 @@ impl MirRelationExpr {
         match self {
             Constant { rows: _, typ } => typ.arity(),
             Get { typ, .. } => typ.arity(),
+            Changes { typ, .. } => typ.arity(),
             Let { .. } => {
                 input_arities.next();
                 input_arities.next().unwrap()
@@ -1775,6 +1802,7 @@ impl MirRelationExpr {
             }
             Constant { .. }
             | Get { .. }
+            | Changes { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
@@ -1904,6 +1932,7 @@ impl MirRelationExpr {
             }
             Constant { .. }
             | Get { .. }
+            | Changes { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
@@ -2231,11 +2260,16 @@ impl CollectionPlan for MirRelationExpr {
     /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
-        if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
-        } = self
-        {
-            out.insert(*id);
+        match self {
+            MirRelationExpr::Get {
+                id: Id::Global(id), ..
+            } => {
+                out.insert(*id);
+            }
+            MirRelationExpr::Changes { id, .. } => {
+                out.insert(*id);
+            }
+            _ => {}
         }
         self.visit_children(|expr| expr.depends_on_into(out))
     }
@@ -2251,7 +2285,7 @@ impl MirRelationExpr {
 
         use MirRelationExpr::*;
         match self {
-            Constant { .. } | Get { .. } => (),
+            Constant { .. } | Get { .. } | Changes { .. } => (),
             Let { value, body, .. } => {
                 first = Some(&**value);
                 second = Some(&**body);
@@ -2296,7 +2330,7 @@ impl MirRelationExpr {
 
         use MirRelationExpr::*;
         match self {
-            Constant { .. } | Get { .. } => (),
+            Constant { .. } | Get { .. } | Changes { .. } => (),
             Let { value, body, .. } => {
                 first = Some(&mut **value);
                 second = Some(&mut **body);

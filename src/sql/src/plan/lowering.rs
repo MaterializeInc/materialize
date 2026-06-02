@@ -332,6 +332,15 @@ impl HirRelationExpr {
                         })
                     }
                 },
+                Changes { id, typ, as_of } => {
+                    // A changelog read is uncorrelated with `get_outer`, like a
+                    // global `Get`.
+                    get_outer.product(SR::Changes {
+                        id,
+                        typ: ReprRelationType::from(&typ),
+                        as_of,
+                    })
+                }
                 Let {
                     name: _,
                     id,
