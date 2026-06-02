@@ -941,7 +941,14 @@ impl<T: AstInfo> Function<T> {
         if allow_special_form && !f.stable() {
             let special: Option<(&str, &[Option<Keyword>])> =
                 match self.name.to_ast_string_stable().as_str() {
-                    r#""extract""# if self.args.len() == Some(2) => {
+                    // `extract(field FROM source)` parses `field` into a string
+                    // literal, so the special form only round-trips when arg0 is
+                    // a string. A generic `"extract"(a, b)` with a non-string
+                    // first arg must use the plain (quoted) call form.
+                    r#""extract""#
+                        if self.args.len() == Some(2)
+                            && matches!(self.args.first(), Some(Expr::Value(Value::String(_)))) =>
+                    {
                         Some(("extract", &[None, Some(FROM)]))
                     }
                     r#""position""# if self.args.len() == Some(2) => {
@@ -1028,6 +1035,14 @@ impl<T: AstInfo> FunctionArgs<T> {
         Self::Args {
             args,
             order_by: vec![],
+        }
+    }
+
+    /// The first positional argument, if any (the `*` form has none).
+    pub fn first(&self) -> Option<&Expr<T>> {
+        match self {
+            FunctionArgs::Star => None,
+            FunctionArgs::Args { args, .. } => args.first(),
         }
     }
 
