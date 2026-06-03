@@ -347,8 +347,7 @@ impl MirRelationExpr {
     /// visited in `type_stack`.
     pub fn typ(&self) -> ReprRelationType {
         let mut type_stack = Vec::new();
-        #[allow(deprecated)]
-        self.visit_pre_post_nolimit(
+        self.visit_pre_post(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
                     MirRelationExpr::Let { body, .. } => Some(vec![&*body]),
@@ -960,8 +959,7 @@ impl MirRelationExpr {
     /// visited in `arity_stack`.
     pub fn arity(&self) -> usize {
         let mut arity_stack = Vec::new();
-        #[allow(deprecated)]
-        self.visit_pre_post_nolimit(
+        self.visit_pre_post(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
                     MirRelationExpr::Let { body, .. } => {

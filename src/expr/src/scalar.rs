@@ -1621,7 +1621,7 @@ impl FilterCharacteristics {
                         }
                     }
                 },
-            )?;
+            );
             if literal_inequality_in_current_filter {
                 literal_inequality += 1;
             }
@@ -2568,8 +2568,7 @@ mod tests {
                 *expr = then;
             }
             _ => {}
-        })
-        .unwrap();
+        });
 
         // collapses to then-most branch
         assert_eq!(expr, col(3));
@@ -2581,7 +2580,6 @@ mod tests {
     /// value. Miri's aliasing model should shout if the "stack mirrors the call
     /// stack" becomes untrue.
     #[mz_ore::test]
-    #[allow(deprecated)]
     fn test_visit_mut_pre_post_explicit_children() {
         let col = MirScalarExpr::column;
         let mut expr = col(5)
@@ -2615,8 +2613,7 @@ mod tests {
                     *n += 10;
                 }
             },
-        )
-        .unwrap();
+        );
 
         // conditions become 0; everyone else += 10
         let expected = col(0).if_then_else(col(0).if_then_else(col(12), col(13)), col(14));

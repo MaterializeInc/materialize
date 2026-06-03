@@ -11,7 +11,7 @@
 //!
 //! Recursive types can implement the [`VisitChildren`] trait, to
 //! specify how their recursive entries can be accessed. The extension
-//! trait [`Visit`] then adds support for recursively traversing
+//! trait [`Visit`] then adds support for iteratively traversing
 //! instances of those types.
 //!
 //! # Naming
@@ -34,12 +34,6 @@
 //!   * no suffix: recursively visit children in pre- and post-order
 //!     using a ~Visitor~` that encapsulates the shared context.
 
-use std::marker::PhantomData;
-
-use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError, maybe_grow};
-
-use crate::RECURSION_LIMIT;
-
 /// A trait for types that can visit their direct children of type `T`.
 ///
 /// Implementing [`VisitChildren<Self>`] automatically also implements
@@ -59,7 +53,7 @@ pub trait VisitChildren<T> {
     where
         F: FnMut(&T),
     {
-        self.children().into_iter().for_each(f);
+        self.children().for_each(f);
     }
 
     /// Apply an infallible mutable function `f` to each direct child.
@@ -67,7 +61,7 @@ pub trait VisitChildren<T> {
     where
         F: FnMut(&mut T),
     {
-        self.children_mut().into_iter().for_each(f);
+        self.children_mut().for_each(f);
     }
 
     /// Apply a fallible immutable function `f` to each direct child.
@@ -121,26 +115,12 @@ pub trait VisitChildren<T> {
 /// of children or access to parents.
 pub trait Visit {
     /// Post-order immutable infallible visitor for `self`.
-    fn visit_post<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
-    where
-        F: FnMut(&Self);
-
-    /// Post-order immutable infallible visitor for `self`.
-    /// Does not enforce a recursion limit.
-    #[deprecated = "Use `visit_post` instead."]
-    fn visit_post_nolimit<F>(&self, f: &mut F)
+    fn visit_post<F>(&self, f: &mut F)
     where
         F: FnMut(&Self);
 
     /// Post-order mutable infallible visitor for `self`.
-    fn visit_mut_post<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
-    where
-        F: FnMut(&mut Self);
-
-    /// Post-order mutable infallible visitor for `self`.
-    /// Does not enforce a recursion limit.
-    #[deprecated = "Use `visit_mut_post` instead."]
-    fn visit_mut_post_nolimit<F>(&mut self, f: &mut F)
+    fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self);
 
@@ -155,7 +135,7 @@ pub trait Visit {
         F: FnMut(&mut Self) -> Result<(), E>;
 
     /// Pre-order immutable infallible visitor for `self`.
-    fn visit_pre<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
+    fn visit_pre<F>(&self, f: &mut F)
     where
         F: FnMut(&Self);
 
@@ -175,28 +155,13 @@ pub trait Visit {
         init: Context,
         acc_fun: &mut AccFun,
         visitor: &mut Visitor,
-    ) -> Result<(), RecursionLimitError>
-    where
+    ) where
         Context: Clone,
         AccFun: FnMut(Context, &Self) -> Context,
         Visitor: FnMut(&Context, &Self);
 
-    /// Pre-order immutable infallible visitor for `self`.
-    /// Does not enforce a recursion limit.
-    #[deprecated = "Use `visit_pre` instead."]
-    fn visit_pre_nolimit<F>(&self, f: &mut F)
-    where
-        F: FnMut(&Self);
-
     /// Pre-order mutable infallible visitor for `self`.
-    fn visit_mut_pre<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
-    where
-        F: FnMut(&mut Self);
-
-    /// Pre-order mutable infallible visitor for `self`.
-    /// Does not enforce a recursion limit.
-    #[deprecated = "Use `visit_mut_pre` instead."]
-    fn visit_mut_pre_nolimit<F>(&mut self, f: &mut F)
+    fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self);
 
@@ -217,25 +182,7 @@ pub trait Visit {
     ///
     /// Optionally, `pre` can return which children, if any, should be visited
     /// (default is to visit all children).
-    fn visit_pre_post<F1, F2>(
-        &self,
-        pre: &mut F1,
-        post: &mut F2,
-    ) -> Result<(), RecursionLimitError>
-    where
-        F1: FnMut(&Self) -> Option<Vec<&Self>>,
-        F2: FnMut(&Self);
-
-    /// A generalization of [`Visit::visit_pre`] and [`Visit::visit_post`].
-    /// Does not enforce a recursion limit.
-    ///
-    /// The function `pre` runs on `self` before it runs on any of the children.
-    /// The function `post` runs on children first before the parent.
-    ///
-    /// Optionally, `pre` can return which children, if any, should be visited
-    /// (default is to visit all children).
-    #[deprecated = "Use `visit` instead."]
-    fn visit_pre_post_nolimit<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self);
@@ -249,28 +196,7 @@ pub trait Visit {
     /// (default is to visit all children).
     ///
     /// It is improtant for safety that `pre` is (a) safe code and (b) returns children only.
-    #[deprecated = "Use `visit_mut` instead."]
-    fn visit_mut_pre_post<F1, F2>(
-        &mut self,
-        pre: &mut F1,
-        post: &mut F2,
-    ) -> Result<(), RecursionLimitError>
-    where
-        F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
-        F2: FnMut(&mut Self);
-
-    /// A generalization of [`Visit::visit_mut_pre`] and [`Visit::visit_mut_post`].
-    /// Does not enforce a recursion limit.
-    ///
-    /// The function `pre` runs on `self` before it runs on any of the children.
-    /// The function `post` runs on children first before the parent.
-    ///
-    /// Optionally, `pre` can return which children, if any, should be visited
-    /// (default is to visit all children).
-    ///
-    /// It is improtant for safety that `pre` is (a) safe code and (b) returns children only.
-    #[deprecated = "Use `visit_mut_pre_post` instead."]
-    fn visit_mut_pre_post_nolimit<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
+    fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
         F2: FnMut(&mut Self);
@@ -315,7 +241,7 @@ enum VisitMutAction<T> {
 }
 
 impl<T: VisitChildren<T>> Visit for T {
-    fn visit_post<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
+    fn visit_post<F>(&self, f: &mut F)
     where
         F: FnMut(&Self),
     {
@@ -326,24 +252,15 @@ impl<T: VisitChildren<T>> Visit for T {
                 Enter(elt) => {
                     stack.push(Leave(elt));
                     // Push children in reverse so they pop (and are visited) left-to-right.
-                    stack.extend(elt.children().into_iter().rev().map(Enter));
+                    stack.extend(elt.children().rev().map(Enter));
                 }
                 Leave(elt) => f(elt),
             }
         }
-
-        Ok(())
-    }
-
-    fn visit_post_nolimit<F>(&self, f: &mut F)
-    where
-        F: FnMut(&Self),
-    {
-        StackSafeVisit::new().visit_post_nolimit(self, f)
     }
 
     #[allow(clippy::as_conversions)]
-    fn visit_mut_post<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
+    fn visit_mut_post<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
@@ -363,26 +280,11 @@ impl<T: VisitChildren<T>> Visit for T {
                     stack.push(Leave(ptr));
                     let elt = unsafe { &mut *ptr };
                     // Push children in reverse so they pop (and are visited) left-to-right.
-                    stack.extend(
-                        elt.children_mut()
-                            .into_iter()
-                            .rev()
-                            .map(|child| Enter(child as *mut T)),
-                    );
+                    stack.extend(elt.children_mut().rev().map(|child| Enter(child as *mut T)));
                 }
                 Leave(elt) => f(unsafe { &mut *elt }),
             }
         }
-
-        Ok(())
-    }
-
-    #[allow(clippy::as_conversions)]
-    fn visit_mut_post_nolimit<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        StackSafeVisit::new().visit_mut_post_nolimit(self, f)
     }
 
     fn try_visit_post<F, E>(&self, f: &mut F) -> Result<(), E>
@@ -396,7 +298,7 @@ impl<T: VisitChildren<T>> Visit for T {
                 Enter(elt) => {
                     stack.push(Leave(elt));
                     // Push children in reverse so they pop (and are visited) left-to-right.
-                    stack.extend(elt.children().into_iter().rev().map(Enter));
+                    stack.extend(elt.children().rev().map(Enter));
                 }
                 Leave(elt) => f(elt)?,
             }
@@ -426,12 +328,7 @@ impl<T: VisitChildren<T>> Visit for T {
                     stack.push(Leave(ptr));
                     let elt = unsafe { &mut *ptr };
                     // Push children in reverse so they pop (and are visited) left-to-right.
-                    stack.extend(
-                        elt.children_mut()
-                            .into_iter()
-                            .rev()
-                            .map(|child| Enter(child as *mut T)),
-                    );
+                    stack.extend(elt.children_mut().rev().map(|child| Enter(child as *mut T)));
                 }
                 Leave(ptr) => f(unsafe { &mut *ptr })?,
             }
@@ -440,7 +337,7 @@ impl<T: VisitChildren<T>> Visit for T {
         Ok(())
     }
 
-    fn visit_pre<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
+    fn visit_pre<F>(&self, f: &mut F)
     where
         F: FnMut(&Self),
     {
@@ -448,10 +345,8 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(elt) = stack.pop() {
             f(elt);
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(elt.children().into_iter().rev());
+            stack.extend(elt.children().rev());
         }
-
-        Ok(())
     }
 
     fn visit_pre_with_context<Context, AccFun, Visitor>(
@@ -459,8 +354,7 @@ impl<T: VisitChildren<T>> Visit for T {
         init: Context,
         acc_fun: &mut AccFun,
         visitor: &mut Visitor,
-    ) -> Result<(), RecursionLimitError>
-    where
+    ) where
         Context: Clone,
         AccFun: FnMut(Context, &Self) -> Context,
         Visitor: FnMut(&Context, &Self),
@@ -470,25 +364,11 @@ impl<T: VisitChildren<T>> Visit for T {
             visitor(&ctx, elt);
             let ctx = acc_fun(ctx, elt);
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(
-                elt.children()
-                    .into_iter()
-                    .rev()
-                    .map(|child| (child, ctx.clone())),
-            );
+            stack.extend(elt.children().rev().map(|child| (child, ctx.clone())));
         }
-
-        Ok(())
     }
 
-    fn visit_pre_nolimit<F>(&self, f: &mut F)
-    where
-        F: FnMut(&Self),
-    {
-        StackSafeVisit::new().visit_pre_nolimit(self, f)
-    }
-
-    fn visit_mut_pre<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
+    fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
@@ -496,17 +376,8 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(elt) = stack.pop() {
             f(elt);
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(elt.children_mut().into_iter().rev())
+            stack.extend(elt.children_mut().rev())
         }
-
-        Ok(())
-    }
-
-    fn visit_mut_pre_nolimit<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        StackSafeVisit::new().visit_mut_pre_nolimit(self, f)
     }
 
     fn try_visit_pre<F, E>(&self, f: &mut F) -> Result<(), E>
@@ -517,7 +388,7 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(elt) = stack.pop() {
             f(elt)?;
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(elt.children().into_iter().rev());
+            stack.extend(elt.children().rev());
         }
 
         Ok(())
@@ -531,12 +402,12 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(elt) = stack.pop() {
             f(elt)?;
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(elt.children_mut().into_iter().rev());
+            stack.extend(elt.children_mut().rev());
         }
 
         Ok(())
     }
-    fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2) -> Result<(), RecursionLimitError>
+    fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self),
@@ -552,7 +423,7 @@ impl<T: VisitChildren<T>> Visit for T {
                             stack.push(Enter(child));
                         }
                     } else {
-                        for child in elt.children().into_iter().rev() {
+                        for child in elt.children().rev() {
                             stack.push(Enter(child));
                         }
                     }
@@ -562,24 +433,10 @@ impl<T: VisitChildren<T>> Visit for T {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    fn visit_pre_post_nolimit<F1, F2>(&self, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&Self) -> Option<Vec<&Self>>,
-        F2: FnMut(&Self),
-    {
-        StackSafeVisit::new().visit_pre_post_nolimit(self, pre, post)
     }
 
     #[allow(clippy::as_conversions)]
-    fn visit_mut_pre_post<F1, F2>(
-        &mut self,
-        pre: &mut F1,
-        post: &mut F2,
-    ) -> Result<(), RecursionLimitError>
+    fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
         F2: FnMut(&mut Self),
@@ -617,117 +474,11 @@ impl<T: VisitChildren<T>> Visit for T {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    fn visit_mut_pre_post_nolimit<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
-        F2: FnMut(&mut Self),
-    {
-        StackSafeVisit::new().visit_mut_pre_post_nolimit(self, pre, post)
-    }
-}
-
-struct StackSafeVisit<T> {
-    recursion_guard: RecursionGuard,
-    _type: PhantomData<T>,
-}
-
-impl<T> CheckedRecursion for StackSafeVisit<T> {
-    fn recursion_guard(&self) -> &RecursionGuard {
-        &self.recursion_guard
-    }
-}
-
-impl<T: VisitChildren<T>> StackSafeVisit<T> {
-    fn new() -> Self {
-        Self {
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-            _type: PhantomData,
-        }
-    }
-
-    fn visit_post_nolimit<F>(&self, value: &T, f: &mut F)
-    where
-        F: FnMut(&T),
-    {
-        maybe_grow(|| {
-            value.visit_children(|child| self.visit_post_nolimit(child, f));
-            f(value)
-        })
-    }
-
-    fn visit_mut_post_nolimit<F>(&self, value: &mut T, f: &mut F)
-    where
-        F: FnMut(&mut T),
-    {
-        maybe_grow(|| {
-            value.visit_mut_children(|child| self.visit_mut_post_nolimit(child, f));
-            f(value)
-        })
-    }
-
-    fn visit_pre_nolimit<F>(&self, value: &T, f: &mut F)
-    where
-        F: FnMut(&T),
-    {
-        maybe_grow(|| {
-            f(value);
-            value.visit_children(|child| self.visit_pre_nolimit(child, f))
-        })
-    }
-
-    fn visit_mut_pre_nolimit<F>(&self, value: &mut T, f: &mut F)
-    where
-        F: FnMut(&mut T),
-    {
-        maybe_grow(|| {
-            f(value);
-            value.visit_mut_children(|child| self.visit_mut_pre_nolimit(child, f))
-        })
-    }
-
-    fn visit_pre_post_nolimit<F1, F2>(&self, value: &T, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&T) -> Option<Vec<&T>>,
-        F2: FnMut(&T),
-    {
-        maybe_grow(|| {
-            if let Some(to_visit) = pre(value) {
-                for child in to_visit {
-                    self.visit_pre_post_nolimit(child, pre, post);
-                }
-            } else {
-                value.visit_children(|child| self.visit_pre_post_nolimit(child, pre, post));
-            }
-            post(value);
-        })
-    }
-
-    fn visit_mut_pre_post_nolimit<F1, F2>(&self, value: &mut T, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&mut T) -> Option<Vec<&mut T>>,
-        F2: FnMut(&mut T),
-    {
-        maybe_grow(|| {
-            if let Some(to_visit) = pre(value) {
-                for child in to_visit {
-                    self.visit_mut_pre_post_nolimit(child, pre, post);
-                }
-            } else {
-                value.visit_mut_children(|child| self.visit_mut_pre_post_nolimit(child, pre, post));
-            }
-            post(value);
-        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-
     use super::*;
 
     // This test demonstrates how to build visitors for mutually recursive definitions.
@@ -830,8 +581,7 @@ mod tests {
             F: FnMut(&A),
         {
             VisitChildren::visit_children(self, |expr: &B| {
-                #[allow(deprecated)]
-                Visit::visit_post_nolimit(expr, &mut |expr| match expr {
+                Visit::visit_post(expr, &mut |expr| match expr {
                     B::FrA(expr) => f(expr.as_ref()),
                     _ => (),
                 });
@@ -852,8 +602,7 @@ mod tests {
             F: FnMut(&mut A),
         {
             VisitChildren::visit_mut_children(self, |expr: &mut B| {
-                #[allow(deprecated)]
-                Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
+                Visit::visit_mut_post(expr, &mut |expr| match expr {
                     B::FrA(expr) => f(expr.as_mut()),
                     _ => (),
                 });
@@ -1030,7 +779,7 @@ mod tests {
         {
             // VisitChildren::visit_children(self, |expr: &A| {
             //     #[allow(deprecated)]
-            //     Visit::visit_post_nolimit(expr, &mut |expr| match expr {
+            //     Visit::visit_post(expr, &mut |expr| match expr {
             //         A::FrB(expr) => f(expr.as_ref()),
             //         _ => (),
             //     });
@@ -1285,12 +1034,11 @@ mod tests {
         let mut act = test_term_rec_a(0);
         let exp = test_term_rec_a(20);
 
-        let res = act.visit_mut_pre(&mut |expr| match expr {
+        act.visit_mut_pre(&mut |expr| match expr {
             A::Lit(x) => *x = *x + 20,
             _ => (),
         });
 
-        assert_ok!(res);
         assert_eq!(act, exp);
     }
 
@@ -1299,12 +1047,11 @@ mod tests {
         let mut act = test_term_rec_b(0);
         let exp = test_term_rec_b(30);
 
-        let res = act.visit_mut_pre(&mut |expr| match expr {
+        act.visit_mut_pre(&mut |expr| match expr {
             B::Lit(x) => *x = *x + 30,
             _ => (),
         });
 
-        assert_ok!(res);
         assert_eq!(act, exp);
     }
 }

@@ -28,7 +28,6 @@ pub use mz_expr::{
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
-use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_ore::{soft_assert_or_log, stack};
@@ -2500,12 +2499,12 @@ impl HirRelationExpr {
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     pub fn could_run_expensive_function(&self) -> bool {
         let mut result = false;
-        if let Err(_) = self.visit_pre(&mut |e: &HirRelationExpr| {
+        self.visit_pre(&mut |e: &HirRelationExpr| {
             use HirRelationExpr::*;
             use HirScalarExpr::*;
 
             e.visit_children(|scalar: &HirScalarExpr| {
-                if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
+                scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
                     result |= match scalar {
                         Column(..)
                         | Literal(..)
@@ -2520,55 +2519,49 @@ impl HirRelationExpr {
                         | CallVariadic { .. }
                         | Windowing(..) => true,
                     };
-                }) {
-                    // Conservatively set `true` on RecursionLimitError.
-                    result = true;
-                }
+                })
             });
 
             // CallTable has a table function; Reduce has an aggregate function.
             // Other constructs use MirScalarExpr to run a function
             result |= matches!(e, CallTable { .. } | Reduce { .. });
-        }) {
-            // Conservatively set `true` on RecursionLimitError.
-            result = true;
-        }
+        });
 
         result
     }
 
     /// Whether the expression contains an [`UnmaterializableFunc::MzNow`] call.
-    pub fn contains_temporal(&self) -> Result<bool, RecursionLimitError> {
+    pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |expr| {
             expr.visit_children(|expr: &HirScalarExpr| {
                 contains = contains || expr.contains_temporal()
             })
-        })?;
-        Ok(contains)
+        });
+        contains
     }
 
     /// Whether the expression contains any [`UnmaterializableFunc`] call.
-    pub fn contains_unmaterializable(&self) -> Result<bool, RecursionLimitError> {
+    pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |expr| {
             expr.visit_children(|expr: &HirScalarExpr| {
                 contains = contains || expr.contains_unmaterializable()
             })
-        })?;
-        Ok(contains)
+        });
+        contains
     }
 
     /// Whether the expression contains any [`UnmaterializableFunc`] call other than
     /// [`UnmaterializableFunc::MzNow`].
-    pub fn contains_unmaterializable_except_temporal(&self) -> Result<bool, RecursionLimitError> {
+    pub fn contains_unmaterializable_except_temporal(&self) -> bool {
         let mut contains = false;
         self.visit_post(&mut |expr| {
             expr.visit_children(|expr: &HirScalarExpr| {
                 contains = contains || expr.contains_unmaterializable_except_temporal()
             })
-        })?;
-        Ok(contains)
+        });
+        contains
     }
 }
 
@@ -3569,13 +3562,7 @@ impl HirScalarExpr {
     where
         F: FnMut(&HirRelationExpr),
     {
-        // The infallible variants of the post-walk are deprecated in favor
-        // of the limit-aware `try_visit_post`, but we have no error channel
-        // here (the surrounding signature is infallible, mirroring the
-        // infallible `VisitChildren::{visit_children, visit_mut_children}`
-        // impls that this helper is designed to be called from).
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             VisitChildren::<HirRelationExpr>::visit_children(e, &mut f);
         });
     }
@@ -3585,10 +3572,7 @@ impl HirScalarExpr {
     where
         F: FnMut(&mut HirRelationExpr),
     {
-        // See the comment on `visit_direct_subqueries` for why we use the
-        // deprecated `_nolimit` walk here.
-        #[allow(deprecated)]
-        self.visit_mut_post_nolimit(&mut |e| {
+        self.visit_mut_post(&mut |e| {
             VisitChildren::<HirRelationExpr>::visit_mut_children(e, &mut f);
         });
     }
@@ -3697,8 +3681,7 @@ impl HirScalarExpr {
     /// Whether the expression contains an [`UnmaterializableFunc::MzNow`] call.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let Self::CallUnmaterializable(UnmaterializableFunc::MzNow, _name) = e {
                 contains = true;
             }
@@ -3709,8 +3692,7 @@ impl HirScalarExpr {
     /// Whether the expression contains any [`UnmaterializableFunc`] call.
     pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let Self::CallUnmaterializable(_, _) = e {
                 contains = true;
             }
@@ -3722,8 +3704,7 @@ impl HirScalarExpr {
     /// [`UnmaterializableFunc::MzNow`].
     pub fn contains_unmaterializable_except_temporal(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let Self::CallUnmaterializable(f, _) = e {
                 if *f != UnmaterializableFunc::MzNow {
                     contains = true;
