@@ -364,6 +364,9 @@ pub enum ReplicaCreateDropReason {
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
     GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -385,6 +388,9 @@ impl ReplicaCreateDropReason {
             ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
             }
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
         };

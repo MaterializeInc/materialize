@@ -2112,6 +2112,8 @@ class FlipFlagsAction(Action):
             # it low would make ordinary DELETE/UPDATE/INSERT ... SELECT fail,
             # which the workload does not expect.
             "read_then_write_max_dependencies",
+            "enable_hydration_burst",
+            "default_hydration_burst_linger",
         ]
 
     def run(self, exe: Executor) -> bool:

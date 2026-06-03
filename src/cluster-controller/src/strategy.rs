@@ -32,7 +32,8 @@ use mz_controller_types::ReplicaId;
 use mz_repr::Timestamp;
 
 use crate::ctx::{
-    ClusterState, OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
+    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterState,
+    OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
     ReconfigurationWrite, ReplicaShape, StateWrite,
 };
 
@@ -98,6 +99,9 @@ pub trait Strategy: Send + Sync {
 pub struct SignalRequest {
     /// Probe which of the cluster's replicas report all collections hydrated.
     pub hydration: bool,
+    /// Check whether the cluster has at least one hydratable object (an index,
+    /// materialized view, ingestion source, or sink bound to it).
+    pub hydratable_objects: bool,
 }
 
 impl SignalRequest {
@@ -105,9 +109,13 @@ impl SignalRequest {
     pub fn union(self, other: SignalRequest) -> SignalRequest {
         // Exhaustive destructure (no `..`): a signal added to the request is a
         // compile error here until its union is spelled out.
-        let SignalRequest { hydration } = other;
+        let SignalRequest {
+            hydration,
+            hydratable_objects,
+        } = other;
         SignalRequest {
             hydration: self.hydration || hydration,
+            hydratable_objects: self.hydratable_objects || hydratable_objects,
         }
     }
 }
@@ -122,6 +130,9 @@ pub struct LiveSignals {
     /// The replicas observed this tick to have *all* current collections on the
     /// cluster hydrated.
     pub hydrated_replicas: BTreeSet<ReplicaId>,
+    /// Whether the cluster has at least one hydratable object. `false` when not
+    /// requested.
+    pub has_hydratable_objects: bool,
 }
 
 /// The implicit baseline strategy, always present.
@@ -218,6 +229,7 @@ impl Strategy for GracefulReconfigurationStrategy {
                 .reconfiguration
                 .as_ref()
                 .is_some_and(|record| record.is_in_progress()),
+            ..Default::default()
         }
     }
 
@@ -332,5 +344,239 @@ impl Strategy for GracefulReconfigurationStrategy {
                 shape: shape.clone(),
             })
             .collect()
+    }
+}
+
+/// A millisecond [`Duration`] as a [`Timestamp`], saturating at [`Timestamp::MAX`]
+/// on overflow.
+///
+/// The input (the burst linger duration) is validated to fit during planning,
+/// so the saturation is not expected to trigger. Saturating rather than
+/// panicking is deliberate: this is a pure strategy kernel, and clamping an
+/// out-of-range duration to the largest representable value degrades to "keep
+/// the replica on" rather than crashing the controller on a bad input.
+///
+/// [`Duration`]: std::time::Duration
+fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
+    Timestamp::try_from(duration).unwrap_or(Timestamp::MAX)
+}
+
+/// The hydration-burst strategy.
+///
+/// Engaged for clusters whose `AUTO SCALING STRATEGY` sets `ON HYDRATION`. While
+/// the cluster is On and there exists an object on it that no steady-state
+/// (realized-config) replica has hydrated, it runs one extra replica at the
+/// configured `HYDRATION SIZE` to accelerate hydration; the burst replica tears
+/// down a `linger_duration` after the steady set first hydrates. Zero objects
+/// make the condition vacuously unsatisfied, so a brand-new cluster never bursts
+/// before its first object lands. The burst is keyed entirely on the presence of a
+/// durable `burst` record (written/cleared by [`Strategy::update_state`]); the
+/// burst replica is an ordinary replica. The union/diff reconciler creates and
+/// drops it by shape+count with no special identity.
+///
+/// There is deliberately no TTL on the burst replica: if the steady set can never
+/// hydrate at `cluster.size`, the burst stays up indefinitely (the cluster runs
+/// permanently oversized, visible in billing and the audit log), the accepted
+/// trade for keeping the cluster serving. Burst is **not** suppressed during a
+/// reconfiguration; the two coexist.
+///
+/// Steady-replica hydration and object existence are live signals requested via
+/// [`Strategy::signal_request`] while an `ON HYDRATION` policy is active.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HydrationBurstStrategy;
+
+/// The audit-attribution name of the hydration-burst strategy.
+pub const HYDRATION_BURST_STRATEGY_NAME: &str = "hydration-burst";
+
+impl HydrationBurstStrategy {
+    /// The cluster's active `ON HYDRATION` policy, but only when burst is permitted
+    /// at all: the break-glass flag is on and the cluster is On (`rf > 0`). `None`
+    /// otherwise. No burst is warranted and any existing record is torn down.
+    fn active_policy<'a>(
+        &self,
+        state: &'a ClusterState,
+    ) -> Option<&'a crate::ctx::OnHydrationPolicy> {
+        if !state.burst_enabled || state.replication_factor == 0 {
+            return None;
+        }
+        state.auto_scaling_policy.as_ref()?.on_hydration.as_ref()
+    }
+
+    /// Whether at least one steady-state (realized-config) replica reports all
+    /// current objects hydrated. On a cluster with zero user objects a replica
+    /// reads hydrated once its (near-instant) introspection-log dataflows
+    /// hydrate. The hydration signal counts those too; false when no steady
+    /// replica reports at all (absent, or not yet registered with the compute
+    /// controller).
+    fn steady_hydrated(&self, state: &ClusterState, signals: &LiveSignals) -> bool {
+        let steady_shape = state.realized_shape();
+        state
+            .replicas
+            .iter()
+            .filter(|r| r.shape.matches(&steady_shape))
+            .any(|r| signals.hydrated_replicas.contains(&r.replica_id))
+    }
+}
+
+impl Strategy for HydrationBurstStrategy {
+    fn name(&self) -> &'static str {
+        HYDRATION_BURST_STRATEGY_NAME
+    }
+
+    fn signal_request(&self, state: &ClusterState) -> SignalRequest {
+        // Hydration is consulted whenever the policy is active: by the arm
+        // check with no record, and by the linger lifecycle with one. Object
+        // existence only gates arming, so it is requested only record-less.
+        // The requests are independent, so an object-less cluster with a
+        // policy still gets its replicas probed each tick. The probe is
+        // in-memory controller state, an accepted cost for keeping requests
+        // pure over durable state.
+        let active = self.active_policy(state).is_some();
+        SignalRequest {
+            hydration: active,
+            hydratable_objects: active && state.burst.is_none(),
+            ..Default::default()
+        }
+    }
+
+    fn update_state(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        now: Timestamp,
+    ) -> StateWrite {
+        // Both teardown arms clear the record, but they declare different
+        // causes: only this decision point knows whether the burst ran its
+        // course or was cut short by a config change.
+        let clear = |cause: BurstFinishCause| StateWrite {
+            burst: Some(BurstWrite {
+                record: None,
+                audit: Some(BurstAudit::Finished { cause }),
+            }),
+            ..Default::default()
+        };
+
+        // Cleanup precedence: a burst no longer warranted by current config tears
+        // down regardless of linger. `active_policy` is `None` when burst is
+        // disabled / the cluster is off / no policy; a `HYDRATION SIZE` change makes
+        // the record's size stale (a fresh record at the new size is written below
+        // on a later tick once warranted).
+        let Some(policy) = self.active_policy(state) else {
+            return if state.burst.is_some() {
+                clear(BurstFinishCause::NoLongerWarranted)
+            } else {
+                StateWrite::default()
+            };
+        };
+        if let Some(record) = &state.burst {
+            if record.burst_size != policy.hydration_size {
+                return clear(BurstFinishCause::NoLongerWarranted);
+            }
+        }
+
+        let steady_hydrated = self.steady_hydrated(state, signals);
+
+        match &state.burst {
+            // No record: arm a burst only while some object exists that the
+            // steady set has not hydrated. The object gate is what keeps an
+            // object-less cluster from bursting: without it, an absent or
+            // not-yet-registered steady replica reads as un-hydrated and a
+            // brand-new cluster would burst at creation with nothing to
+            // accelerate. It also makes `steady_hydrated`'s zero-object
+            // ambiguity (true once a reporting replica's log dataflows hydrate,
+            // false for an absent one) irrelevant here. The record-present arms
+            // below deliberately do not consult the gate: if all objects are
+            // dropped mid-burst, the steady set reads hydrated as soon as a
+            // replica's log dataflows do and the linger clears the record.
+            None => {
+                if steady_hydrated || !signals.has_hydratable_objects {
+                    StateWrite::default()
+                } else {
+                    let linger_duration =
+                        policy.linger_duration.unwrap_or(state.default_burst_linger);
+                    StateWrite {
+                        burst: Some(BurstWrite {
+                            record: Some(BurstRecord {
+                                burst_size: policy.hydration_size.clone(),
+                                linger_duration,
+                                steady_hydrated_at: None,
+                            }),
+                            audit: Some(BurstAudit::Started),
+                        }),
+                        ..Default::default()
+                    }
+                }
+            }
+            // Record present: drive the linger/teardown/re-arm lifecycle.
+            Some(record) => {
+                match (record.steady_hydrated_at, steady_hydrated) {
+                    // Steady set hydrated and the linger has elapsed: tear down.
+                    // A linger so large it overflows the timestamp space reads as
+                    // never-elapsed (hold the burst), matching `duration_to_ts`'s
+                    // degrade-to-keep-on intent and keeping the kernel panic-free.
+                    (Some(hydrated_at), true)
+                        if now
+                            > hydrated_at
+                                .try_step_forward_by(&duration_to_ts(record.linger_duration))
+                                .unwrap_or(Timestamp::MAX) =>
+                    {
+                        clear(BurstFinishCause::LingerElapsed)
+                    }
+                    // Steady set hydrated, linger not yet elapsed: hold.
+                    (Some(_), true) => StateWrite::default(),
+                    // First observation of the steady set hydrated: stamp the
+                    // linger start. A bookkeeping rewrite, not a lifecycle
+                    // transition, so it declares no audit.
+                    (None, true) => StateWrite {
+                        burst: Some(BurstWrite {
+                            record: Some(BurstRecord {
+                                steady_hydrated_at: Some(now),
+                                ..record.clone()
+                            }),
+                            audit: None,
+                        }),
+                        ..Default::default()
+                    },
+                    // The steady set went un-hydrated again after we had stamped a
+                    // hydration time: re-arm so the linger restarts after the next
+                    // successful hydration. Also bookkeeping: the burst replica
+                    // keeps running throughout, so no lifecycle event.
+                    (Some(_), false) => StateWrite {
+                        burst: Some(BurstWrite {
+                            record: Some(BurstRecord {
+                                steady_hydrated_at: None,
+                                ..record.clone()
+                            }),
+                            audit: None,
+                        }),
+                        ..Default::default()
+                    },
+                    // Steady set still un-hydrated and never stamped: keep waiting.
+                    (None, false) => StateWrite::default(),
+                }
+            }
+        }
+    }
+
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        _signals: &LiveSignals,
+        _now: Timestamp,
+    ) -> Vec<DesiredReplica> {
+        // Keyed purely on the record's presence: the cleanup arm of `update_state`
+        // clears a stale record, so a record present here always reflects a burst
+        // the current config still warrants. One replica at the burst size, with
+        // the cluster's AZ pool and logging (only the size differs from steady).
+        let Some(record) = &state.burst else {
+            return Vec::new();
+        };
+        vec![DesiredReplica {
+            shape: ReplicaShape {
+                size: record.burst_size.clone(),
+                availability_zones: AvailabilityZones(state.availability_zones.clone()),
+                logging: state.logging.clone(),
+            },
+        }]
     }
 }

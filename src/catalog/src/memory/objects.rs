@@ -414,9 +414,10 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
-                // Not surfaced in the create plan: these are controller-managed
-                // runtime state and (for the policy) a separate SQL surface.
-                auto_scaling_strategy: _,
+                // The user-configured policy is surfaced in the create plan (so
+                // `SHOW CREATE CLUSTER` renders it). The in-flight runtime records
+                // are controller-managed and not part of the create statement.
+                auto_scaling_strategy,
                 reconfiguration: _,
                 burst: _,
             }) => {
@@ -441,6 +442,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    auto_scaling_strategy: auto_scaling_strategy.clone(),
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -3875,6 +3877,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         }
     }
 
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                auto_scaling_strategy,
+                ..
+            }) => auto_scaling_strategy.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         self.try_to_plan()
     }

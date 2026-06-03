@@ -53,11 +53,11 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    ClusterAutoScalingStrategyOptionValue, ClusterFeature, ClusterFeatureName, ClusterOption,
+    ClusterOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType,
+    CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
@@ -73,14 +73,14 @@ use mz_sql_parser::ast::{
     LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
+    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
+    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -152,22 +152,23 @@ use crate::plan::{
     AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
     AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
     AlterSourceTimestampIntervalPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    AlterSystemSetPlan, AlterTablePlan, AutoScalingStrategy, ClusterSchedule, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
+    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
+    self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
+    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
+    ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -4691,6 +4692,7 @@ pub fn describe_create_cluster(
 // to ALTER CLUSTER would always reset the value of that option to the default.
 generate_extracted_config!(
     ClusterOption,
+    (AutoScalingStrategy, ClusterAutoScalingStrategyOptionValue),
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
     (IntrospectionDebugging, bool),
@@ -4787,6 +4789,7 @@ pub fn plan_create_cluster_inner(
     }: CreateClusterStatement<Aug>,
 ) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
+        auto_scaling_strategy,
         availability_zones,
         introspection_debugging,
         introspection_interval,
@@ -4887,6 +4890,23 @@ pub fn plan_create_cluster_inner(
             ..Default::default()
         };
 
+        // Plan the autoscaling strategy. Gated by a `feature_flags!` flag (not a
+        // dyncfg) because a stored `CREATE CLUSTER` is re-parsed at catalog
+        // rehydration, where dyncfgs are not consulted.
+        let auto_scaling_strategy = match auto_scaling_strategy {
+            Some(value) => {
+                scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                let strategy = plan_auto_scaling_strategy(value)?;
+                if let Some(strategy) = &strategy {
+                    let schedule_non_manual =
+                        !matches!(schedule, ClusterScheduleOptionValue::Manual);
+                    validate_auto_scaling_strategy(strategy, Some(&size), schedule_non_manual)?;
+                }
+                strategy
+            }
+            None => None,
+        };
+
         let schedule = plan_cluster_schedule(schedule)?;
 
         Ok(CreateClusterPlan {
@@ -4898,6 +4918,7 @@ pub fn plan_create_cluster_inner(
                 compute,
                 optimizer_feature_overrides,
                 schedule,
+                auto_scaling_strategy,
             }),
             workload_class,
         })
@@ -4905,6 +4926,9 @@ pub fn plan_create_cluster_inner(
         let Some(replica_defs) = replicas else {
             sql_bail!("REPLICAS must be specified for unmanaged clusters");
         };
+        if auto_scaling_strategy.is_some() {
+            sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
+        }
         if availability_zones.is_some() {
             sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
         }
@@ -4964,8 +4988,12 @@ pub fn unplan_create_cluster(
             compute,
             optimizer_feature_overrides,
             schedule,
+            auto_scaling_strategy,
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
+            let auto_scaling_strategy = auto_scaling_strategy
+                .as_ref()
+                .map(unplan_auto_scaling_strategy);
             let OptimizerFeatureOverrides {
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,
@@ -5030,6 +5058,7 @@ pub fn unplan_create_cluster(
             let options_extracted = ClusterOptionExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
+                auto_scaling_strategy,
                 availability_zones,
                 disk: None,
                 introspection_debugging: Some(introspection_debugging),
@@ -5263,6 +5292,95 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
                 hydration_time_estimate: Some(interval_value),
             }
         }
+    }
+}
+
+/// Convert a [`ClusterAutoScalingStrategyOptionValue`] into an
+/// [`AutoScalingStrategy`]. An empty block (no sub-policies) maps to `None`
+/// (autoscaling disabled), so an empty `AUTO SCALING STRATEGY = ()` behaves like
+/// a reset.
+///
+/// This is a pure conversion. The cross-config invariants (`HYDRATION SIZE` vs.
+/// the cluster `SIZE`, and incompatibility with a non-MANUAL `SCHEDULE`) are
+/// checked separately by [`validate_auto_scaling_strategy`] against the cluster's
+/// *effective* config, so that they hold no matter which side of the constraint
+/// an `ALTER` changes.
+///
+/// The reverse of [`unplan_auto_scaling_strategy`].
+fn plan_auto_scaling_strategy(
+    value: ClusterAutoScalingStrategyOptionValue,
+) -> Result<Option<AutoScalingStrategy>, PlanError> {
+    let ClusterAutoScalingStrategyOptionValue { on_hydration } = value;
+    let Some(on_hydration) = on_hydration else {
+        // An empty block disables autoscaling.
+        return Ok(None);
+    };
+
+    let hydration_size = String::try_from_value(on_hydration.hydration_size)?;
+
+    let linger_duration = on_hydration
+        .linger_duration
+        .map(Duration::try_from_value)
+        .transpose()?;
+
+    Ok(Some(AutoScalingStrategy {
+        on_hydration: Some(OnHydration {
+            hydration_size,
+            linger_duration,
+        }),
+    }))
+}
+
+/// Validate an effective [`AutoScalingStrategy`] against the cluster's effective
+/// `SIZE` and `SCHEDULE`. Rejects a burst `HYDRATION SIZE` equal to the cluster
+/// `SIZE` (a no-op burst) and the `AUTO SCALING STRATEGY` + non-MANUAL `SCHEDULE`
+/// combination.
+///
+/// Called on both `CREATE` and `ALTER` with the *effective* config (the values an
+/// `ALTER` sets, else the cluster's current ones), so the invariants cannot be
+/// established by changing either side of the constraint independently.
+///
+/// `cluster_size` is `None` only when the effective size is unknown at plan time
+/// (an unmanaged→managed `ALTER` that does not set `SIZE`, which fails later for
+/// the missing size); the size equality check is then skipped, but the
+/// schedule-incompatibility check still runs.
+fn validate_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+    cluster_size: Option<&str>,
+    schedule_non_manual: bool,
+) -> Result<(), PlanError> {
+    if let (Some(on_hydration), Some(cluster_size)) = (&strategy.on_hydration, cluster_size) {
+        if on_hydration.hydration_size == cluster_size {
+            sql_bail!(
+                "HYDRATION SIZE must differ from the cluster SIZE ('{cluster_size}'); a burst replica at the same size would not accelerate hydration"
+            );
+        }
+    }
+    if schedule_non_manual {
+        sql_bail!("AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL");
+    }
+    Ok(())
+}
+
+/// Convert an [`AutoScalingStrategy`] back into a
+/// [`ClusterAutoScalingStrategyOptionValue`] for `SHOW CREATE CLUSTER` rendering.
+///
+/// The reverse of [`plan_auto_scaling_strategy`].
+fn unplan_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+) -> ClusterAutoScalingStrategyOptionValue {
+    ClusterAutoScalingStrategyOptionValue {
+        on_hydration: strategy
+            .on_hydration
+            .as_ref()
+            .map(|on_hydration| OnHydrationOptionValue {
+                hydration_size: Value::String(on_hydration.hydration_size.clone()),
+                linger_duration: on_hydration.linger_duration.map(|d| {
+                    let interval = Interval::from_duration(&d)
+                        .expect("planning ensured this is convertible back to Interval");
+                    Value::Interval(literal::unplan_interval(&interval))
+                }),
+            }),
     }
 }
 
@@ -6220,6 +6338,7 @@ pub fn plan_alter_cluster(
             with_options,
         } => {
             let ClusterOptionExtracted {
+                auto_scaling_strategy,
                 availability_zones,
                 introspection_debugging,
                 introspection_interval,
@@ -6312,10 +6431,46 @@ pub fn plan_alter_cluster(
                             }
                         }
                     }
+
+                    if let Some(value) = auto_scaling_strategy {
+                        scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                        let strategy = plan_auto_scaling_strategy(value)?;
+                        options.auto_scaling_strategy = AlterOptionParameter::Set(strategy);
+                    }
+
+                    // Validate the two `AUTO SCALING STRATEGY` invariants against the
+                    // cluster's *effective* config (the values this `ALTER` sets, else
+                    // the cluster's current ones). Doing this here (rather than only
+                    // when the strategy option itself is present) catches the case
+                    // where the constraint is established by changing the *other* side:
+                    // setting `SIZE` to equal an existing `HYDRATION SIZE`, or setting a
+                    // non-MANUAL `SCHEDULE` on a cluster that already has a strategy.
+                    let effective_strategy = match &options.auto_scaling_strategy {
+                        AlterOptionParameter::Set(s) => s.clone(),
+                        AlterOptionParameter::Reset => None,
+                        AlterOptionParameter::Unchanged => cluster.auto_scaling_strategy().cloned(),
+                    };
+                    if let Some(effective_strategy) = &effective_strategy {
+                        let effective_size = size.as_deref().or_else(|| cluster.managed_size());
+                        let schedule_non_manual = match &schedule {
+                            Some(s) => !matches!(s, ClusterScheduleOptionValue::Manual),
+                            None => cluster
+                                .schedule()
+                                .is_some_and(|s| !matches!(s, ClusterSchedule::Manual)),
+                        };
+                        validate_auto_scaling_strategy(
+                            effective_strategy,
+                            effective_size,
+                            schedule_non_manual,
+                        )?;
+                    }
                 }
                 false => {
                     if !with_options.is_empty() {
                         sql_bail!("ALTER... WITH not supported for unmanaged clusters");
+                    }
+                    if auto_scaling_strategy.is_some() {
+                        sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
                     }
                     if availability_zones.is_some() {
                         sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
@@ -6421,8 +6576,13 @@ pub fn plan_alter_cluster(
                 }
             }
 
+            if reset_options.contains(&AutoScalingStrategy) {
+                scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+            }
+
             for option in reset_options {
                 match option {
+                    AutoScalingStrategy => options.auto_scaling_strategy = Reset,
                     AvailabilityZones => options.availability_zones = Reset,
                     Disk => scx
                         .catalog

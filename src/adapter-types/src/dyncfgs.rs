@@ -385,6 +385,28 @@ pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::ne
     "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (WAIT ...).",
 );
 
+/// Break-glass for the hydration-burst strategy: when off the controller never
+/// runs a burst replica; graceful reconfiguration and `ON REFRESH` scheduling
+/// are unaffected.
+///
+/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on. A cluster can only
+/// carry an `AUTO SCALING STRATEGY` while its SQL acceptance feature flag is
+/// on, so this is the second of the two gates burst sits behind.
+pub const ENABLE_HYDRATION_BURST: Config<bool> = Config::new(
+    "enable_hydration_burst",
+    true,
+    "Whether the cluster controller's hydration-burst strategy may run a burst replica (break-glass; leaves graceful reconfiguration and ON REFRESH untouched).",
+);
+
+/// The burst-replica linger duration written into a new `burst` record when the
+/// cluster's `AUTO SCALING STRATEGY` omits `LINGER DURATION`. The burst replica
+/// stays up this long after the steady-state replicas first hydrate.
+pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
+    "default_hydration_burst_linger",
+    Duration::from_secs(0),
+    "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -393,6 +415,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
+        .add(&ENABLE_HYDRATION_BURST)
+        .add(&DEFAULT_HYDRATION_BURST_LINGER)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)

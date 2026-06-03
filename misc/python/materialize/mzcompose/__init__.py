@@ -740,6 +740,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_background_alter_cluster",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",
+    "enable_hydration_burst",
+    "default_hydration_burst_linger",
 ]
 
 

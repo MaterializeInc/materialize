@@ -47,8 +47,8 @@ use crate::ctx::{
     ReplicaShape, StateWrite,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, LiveSignals, SignalRequest,
-    Strategy,
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, HydrationBurstStrategy,
+    LiveSignals, SignalRequest, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -64,14 +64,14 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with the implicit baseline and the graceful-reconfiguration
-    /// strategy. The baseline holds the steady set. Graceful engages only while a
-    /// `reconfiguration` record is in flight.
+    /// A controller with the full set of strategies. Each strategy's rustdoc
+    /// describes when it engages.
     pub fn new() -> Self {
         Self {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
+                Box::new(HydrationBurstStrategy),
             ],
         }
     }
@@ -319,6 +319,9 @@ impl ClusterController {
                     acc.union(strategy.signal_request(state))
                 });
             let mut live = LiveSignals::default();
+            if request.hydratable_objects {
+                live.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
+            }
             if request.hydration {
                 let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
                 if !replica_ids.is_empty() {
@@ -444,8 +447,16 @@ fn reconcile_replicas(
 
     let mut decisions = Vec::new();
 
-    // Track existing names so freshly-created replicas avoid collisions.
-    let used_names: Vec<&str> = state.replicas.iter().map(|r| r.name.as_str()).collect();
+    // Track existing names so freshly-created replicas avoid collisions: both the
+    // controller-owned replicas and the non-owned (INTERNAL / BILLED AS) names the
+    // observation reserves, so a generated name can never collide with a replica
+    // already on the cluster.
+    let used_names: Vec<&str> = state
+        .replicas
+        .iter()
+        .map(|r| r.name.as_str())
+        .chain(state.reserved_replica_names.iter().map(String::as_str))
+        .collect();
     let mut name_gen = ReplicaNameGen::new(&used_names);
 
     // The compare-and-append witness for every create/drop this tick emits for
