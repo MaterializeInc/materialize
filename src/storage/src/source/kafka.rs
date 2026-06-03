@@ -488,7 +488,7 @@ fn render_reader<'scope>(
                         num_workers = config.worker_count,
                         "Failed to fetch watermarks for topic {topic}: {e}"
                     );
-                    let update = HealthStatusUpdate::halting(
+                    let update = HealthStatusUpdate::stalled(
                         format!("Failed to fetch watermarks for topic {topic}: {e}"),
                         None,
                     );
@@ -507,6 +507,28 @@ fn render_reader<'scope>(
                                 id: Some(output.id),
                                 namespace: StatusNamespace::Kafka,
                                 update,
+                            },
+                        );
+                    }
+                    let ssh_update = match consumer.client().context().tunnel_status() {
+                        SshTunnelStatus::Running => HealthStatusUpdate::running(),
+                        SshTunnelStatus::Errored(e) => HealthStatusUpdate::stalled(e, None),
+                    };
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            id: None,
+                            namespace: StatusNamespace::Ssh,
+                            update: ssh_update.clone(),
+                        },
+                    );
+                    for (output, ssh_update) in outputs.iter().repeat_clone(ssh_update) {
+                        health_output.give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                id: Some(output.id),
+                                namespace: StatusNamespace::Ssh,
+                                update: ssh_update,
                             },
                         );
                     }
