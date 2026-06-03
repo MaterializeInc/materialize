@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs::ENABLE_CLUSTER_CONTROLLER;
 use mz_audit_log::SchedulingDecisionsWithReasonsV2;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
@@ -109,7 +110,17 @@ impl SchedulingDecision {
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     /// Call each scheduling policy.
+    ///
+    /// No-ops when the cluster controller owns the replica set
+    /// ([`ENABLE_CLUSTER_CONTROLLER`]): the controller's `OnRefreshStrategy` is
+    /// then the sole authority over scheduled clusters, so the legacy policy must
+    /// not also toggle their replication factor (two writers of the replica set is
+    /// not allowed). The legacy path remains in place to drive scheduling while the
+    /// gate is off.
     pub(crate) async fn check_scheduling_policies(&self) {
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
         // (So far, we have only this one policy.)
         self.check_refresh_policy();
     }
@@ -282,6 +293,14 @@ impl Coordinator {
         &mut self,
         decisions: Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>,
     ) {
+        // When the cluster controller owns the replica set it is the sole writer
+        // for scheduled clusters; drop any legacy decisions still in flight from a
+        // background task spawned before the gate flipped on, so the two never
+        // contend. (`check_scheduling_policies` already stops spawning new ones.)
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
+
         let start_time = Instant::now();
 
         // 1. Add the received decisions to `cluster_scheduling_decisions`.

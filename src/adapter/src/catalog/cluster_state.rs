@@ -16,8 +16,8 @@
 //! and wherever it is checked keeps the compared fields from drifting apart.
 
 use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ExpectedClusterState, OnTimeout, ReconfigurationRecord,
-    ReconfigurationTarget,
+    AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState, OnTimeout,
+    ReconfigurationRecord, ReconfigurationTarget,
 };
 use mz_catalog::memory::objects::{
     BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -38,7 +38,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         logging,
         replication_factor,
         optimizer_feature_overrides: _,
-        schedule: _,
+        schedule,
         auto_scaling_strategy: _,
         reconfiguration,
         burst,
@@ -48,6 +48,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         replication_factor: *replication_factor,
         availability_zones: AvailabilityZones(availability_zones.clone()),
         logging: logging.clone(),
+        schedule: cluster_schedule(schedule),
         reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
         burst: burst.as_ref().map(burst_record),
     }
@@ -102,6 +103,17 @@ fn on_timeout(action: OnTimeoutAction) -> OnTimeout {
     match action {
         OnTimeoutAction::Commit => OnTimeout::Commit,
         OnTimeoutAction::Rollback => OnTimeout::Rollback,
+    }
+}
+
+fn cluster_schedule(schedule: &mz_sql::plan::ClusterSchedule) -> ClusterSchedule {
+    match schedule {
+        mz_sql::plan::ClusterSchedule::Manual => ClusterSchedule::Manual,
+        mz_sql::plan::ClusterSchedule::Refresh {
+            hydration_time_estimate,
+        } => ClusterSchedule::Refresh {
+            hydration_time_estimate: *hydration_time_estimate,
+        },
     }
 }
 
