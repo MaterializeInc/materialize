@@ -1378,16 +1378,26 @@ impl crate::coord::Coordinator {
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
-        self.implement_peek_plan(
-            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
-            planned_peek,
-            finishing,
-            compute_instance,
-            target_replica,
-            max_result_size,
-            max_query_result_size,
-        )
-        .await
+        let mut ctx_guard =
+            ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
+        let result = self
+            .implement_peek_plan(
+                &mut ctx_guard,
+                planned_peek,
+                finishing,
+                compute_instance,
+                target_replica,
+                max_result_size,
+                max_query_result_size,
+            )
+            .await;
+        if result.is_err() {
+            // On error the frontend logs the end of execution (as `Errored`,
+            // with the returned error); defuse the guard so its auto-retire
+            // does not end the statement a second time.
+            let _ = ctx_guard.defuse();
+        }
+        result
     }
 
     /// Implements a `COPY TO` command by installing peek watch sets,

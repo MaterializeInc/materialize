@@ -341,11 +341,15 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 // An advisory (`AS OF AT LEAST`) bound ages in: clamp it up to
                 // `since`, so the changelog starts at the earliest available
                 // history rather than erroring. A strict (`AS OF`) bound is
-                // pinned as written; if it precedes `since`, installing the
-                // import's read hold fails and dataflow creation errors,
-                // surfacing the unavailable history.
+                // pinned as written; if it precedes `since` the requested
+                // history is unavailable, which is an error. (The controller
+                // re-validates the start against the import's read hold at
+                // dataflow creation, as a backstop.)
                 let start = match since {
                     Some(since) if !strict => start.max(since),
+                    Some(since) if start < since => {
+                        return Err(OptimizerError::ChangesHistoryUnavailable { start, since });
+                    }
                     _ => start,
                 };
                 // Multiple changelog reads of the same input share one source
