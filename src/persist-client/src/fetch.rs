@@ -259,7 +259,7 @@ where
     }
 
     /// Diagnoses a missing-blob fetch failure for a part leased by the given
-    /// reader. See [missing_blob_diagnostics].
+    /// reader. See the free function `missing_blob_diagnostics`.
     pub async fn missing_blob_diagnostics(&self, reader_id: &LeasedReaderId) -> String {
         missing_blob_diagnostics(self.schema_cache.applier(), reader_id).await
     }
