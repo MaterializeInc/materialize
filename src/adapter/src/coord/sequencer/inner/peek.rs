@@ -10,7 +10,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use itertools::Either;
 use mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION;
 use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
@@ -50,7 +49,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::{self, Optimize};
+use crate::optimize;
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
@@ -274,7 +273,7 @@ impl Coordinator {
                 let (_, index_id) = self.allocate_transient_id();
 
                 // Build an optimizer for this SELECT.
-                Either::Left(optimize::peek::Optimizer::new(
+                optimize::PeekOptimizer::Select(optimize::peek::Optimizer::new(
                     Arc::clone(&catalog),
                     compute_instance,
                     plan.finishing.clone(),
@@ -304,7 +303,7 @@ impl Coordinator {
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
                 let (_, view_id) = self.allocate_transient_id();
                 // Build an optimizer for this COPY TO.
-                Either::Right(optimize::copy_to::Optimizer::new(
+                optimize::PeekOptimizer::CopyTo(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),
                     compute_instance,
                     view_id,
@@ -451,10 +450,7 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageTimestampReadHold,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let cluster_id = match optimizer.as_ref() {
-            Either::Left(optimizer) => optimizer.cluster_id(),
-            Either::Right(optimizer) => optimizer.cluster_id(),
-        };
+        let cluster_id = optimizer.cluster_id();
         let id_bundle = self
             .dataflow_builder(cluster_id)
             .sufficient_collections(source_ids.iter().copied());
@@ -533,61 +529,30 @@ impl Coordinator {
             || "optimize peek",
             move || {
                 span.in_scope(|| {
-                    let pipeline = || -> Result<
-                        Either<
-                            optimize::peek::GlobalLirPlan,
-                            optimize::copy_to::GlobalLirPlan,
-                        >,
-                        AdapterError,
-                    > {
+                    // Run the optimization pipeline. This is wrapped in a closure
+                    // so that we control where the `?`s return from: even when a
+                    // `catch_unwind_optimize` call inside `optimize` fails, we can
+                    // still handle `EXPLAIN BROKEN` below.
+                    let pipeline = || -> Result<optimize::PeekGlobalLirPlan, AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
                         let raw_expr = plan.source.clone();
 
-                        match optimizer.as_mut() {
-                            // Optimize SELECT statement.
-                            Either::Left(optimizer) => {
-                                // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan =
-                                    optimizer.catch_unwind_optimize(raw_expr)?;
-                                // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(
-                                    timestamp_context.clone(),
-                                    &session,
-                                    stats,
-                                );
-                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan =
-                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
-
-                                Ok(Either::Left(global_lir_plan))
-                            }
-                            // Optimize COPY TO statement.
-                            Either::Right(optimizer) => {
-                                // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan =
-                                    optimizer.catch_unwind_optimize(raw_expr)?;
-                                // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(
-                                    timestamp_context.clone(),
-                                    &session,
-                                    stats,
-                                );
-                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan =
-                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
-
-                                Ok(Either::Right(global_lir_plan))
-                            }
-                        }
+                        Ok(optimizer.optimize(
+                            raw_expr,
+                            timestamp_context.clone(),
+                            &session,
+                            stats,
+                        )?)
                     };
 
                     let pipeline_result = pipeline();
                     let optimization_finished_at = now();
 
                     let stage = match pipeline_result {
-                        Ok(Either::Left(global_lir_plan)) => {
-                            let optimizer = optimizer.unwrap_left();
+                        Ok(optimize::PeekGlobalLirPlan::Select(global_lir_plan)) => {
+                            let optimizer =
+                                optimizer.into_select().expect("a SELECT/EXPLAIN optimizer");
                             // Enable fast path cluster calculation for slow path plans.
                             let needs_plan_insights = explain_ctx.needs_plan_insights();
                             // Disable anything that uses the optimizer if we only want the notice and
@@ -687,8 +652,9 @@ impl Coordinator {
                                 }
                             }
                         }
-                        Ok(Either::Right(global_lir_plan)) => {
-                            let optimizer = optimizer.unwrap_right();
+                        Ok(optimize::PeekGlobalLirPlan::CopyTo(global_lir_plan)) => {
+                            let optimizer =
+                                optimizer.into_copy_to().expect("a COPY TO optimizer");
                             PeekStage::CopyToPreflight(PeekStageCopyTo {
                                 validity,
                                 optimizer,
@@ -700,7 +666,7 @@ impl Coordinator {
                         // Internal optimizer errors are handled differently
                         // depending on the caller.
                         Err(err) => {
-                            let Some(optimizer) = optimizer.left() else {
+                            let Some(optimizer) = optimizer.into_select() else {
                                 // In `COPY TO` contexts, immediately retire the
                                 // execution with the error.
                                 return Err(err);

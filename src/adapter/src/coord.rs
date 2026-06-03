@@ -87,7 +87,7 @@ use futures::StreamExt;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use http::Uri;
 use ipnet::IpNet;
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -608,7 +608,7 @@ pub struct PeekStageLinearizeTimestamp {
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    optimizer: optimize::PeekOptimizer,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
@@ -623,7 +623,7 @@ pub struct PeekStageRealTimeRecency {
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    optimizer: optimize::PeekOptimizer,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
@@ -639,7 +639,7 @@ pub struct PeekStageTimestampReadHold {
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    optimizer: optimize::PeekOptimizer,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
@@ -654,7 +654,7 @@ pub struct PeekStageOptimize {
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    optimizer: optimize::PeekOptimizer,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
