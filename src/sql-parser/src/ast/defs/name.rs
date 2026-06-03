@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{AS, Keyword};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, SOME};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -303,6 +303,12 @@ impl Ident {
                         // `AS OF` timestamp keyword (an empty projection), so a
                         // bare `as` identifier/function name fails to reparse.
                         || kw == AS
+                        // `ANY`/`ALL`/`SOME` after a comparison operator start a
+                        // quantified-comparison (`x op ANY (...)`), so a bare such
+                        // identifier — e.g. `0 # some` — reparses as the start of a
+                        // quantifier rather than an identifier. (`ALL` is already
+                        // always-reserved; the others are not.)
+                        || matches!(kw, ANY | ALL | SOME)
                 })
                 .unwrap_or(false)
     }
