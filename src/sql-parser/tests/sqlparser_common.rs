@@ -353,6 +353,24 @@ fn test_special_keyword_function_name_display_roundtrip() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_quantifier_keyword_bare_identifier_display_roundtrip() {
+    // `ANY`/`ALL`/`SOME` after a comparison operator begin a quantified
+    // comparison (`x op ANY (...)`), so a bare such identifier on the operator's
+    // right-hand side — e.g. `0 # some` — reparses as the start of a quantifier
+    // rather than as an identifier. `can_be_printed_bare` must force these quoted
+    // (`ALL` is already always-reserved; `ANY`/`SOME` are not). Regression for the
+    // parse_pretty_roundtrip finding `SELECT * FROM (SELECT x ORDER BY (SELECT 0 # "some"))`.
+    for kw in ["any", "all", "some"] {
+        assert_display_roundtrips(&format!(r#"SELECT 0 # "{kw}""#));
+        assert_display_roundtrips(&format!(r#"SELECT 0 = "{kw}""#));
+        assert_display_roundtrips(&format!(
+            r#"SELECT * FROM (SELECT x ORDER BY (SELECT 0 # "{kw}"))"#
+        ));
+    }
+}
+
 /// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
 /// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
 fn assert_display_roundtrips(sql: &str) {

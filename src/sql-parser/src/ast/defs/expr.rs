@@ -989,19 +989,15 @@ impl<T: AstInfo> Function<T> {
         // parser form, an unquoted name on reparse would trigger the
         // special-grammar parser instead of a regular function call. Emit the
         // always-quoted stable form so the regular function-call path is
-        // preserved. The list tracks the parser's dispatch table; add a new
-        // entry whenever a keyword grows special-grammar parens. Two sources:
-        //   * `(Token::Keyword(KW), Some(Token::LParen))` dispatch in
-        //     `parse_prefix` (array, coalesce, ...).
-        //   * the `ANY`/`ALL`/`SOME` quantifier suffix of a comparison operator
-        //     (`x op ANY(...)`), so e.g. `0 # "some"(1)` stays a function call
-        //     and doesn't reparse as `0 # SOME(1)`.
+        // preserved. The list tracks the `(Token::Keyword(KW), Some(Token::LParen))`
+        // dispatch in `parse_prefix` (array, coalesce, ...); add a new entry
+        // whenever a keyword grows special-grammar parens. (The `ANY`/`ALL`/`SOME`
+        // quantifier keywords are handled more generally by `can_be_printed_bare`,
+        // since they're also unsafe as bare identifiers, e.g. `0 # some`.)
         let name_stable = self.name.to_ast_string_stable();
         let needs_quote_to_disambiguate = matches!(
             name_stable.as_str(),
-            r#""all""#
-                | r#""any""#
-                | r#""array""#
+            r#""array""#
                 | r#""coalesce""#
                 | r#""exists""#
                 | r#""extract""#
@@ -1013,7 +1009,6 @@ impl<T: AstInfo> Function<T> {
                 | r#""nullif""#
                 | r#""position""#
                 | r#""row""#
-                | r#""some""#
                 | r#""substring""#
                 | r#""trim""#
         );
