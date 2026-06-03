@@ -56,10 +56,11 @@ pub mod strategy;
 use std::collections::BTreeSet;
 
 use crate::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
+    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
+    RefreshWindowDecision, ReplicaShape,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, OnRefreshStrategy, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -75,15 +76,17 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with the implicit baseline and the graceful-reconfiguration
-    /// strategy. The baseline holds the steady set; graceful engages only while a
-    /// `reconfiguration` record is in flight. Later PRs add the remaining policy
-    /// strategies.
+    /// A controller with the implicit baseline, the graceful-reconfiguration
+    /// strategy, and the on-refresh scheduling strategy. The baseline holds the
+    /// steady set of MANUAL clusters; graceful engages only while a
+    /// `reconfiguration` record is in flight; on-refresh owns the replica set of
+    /// scheduled clusters.
     pub fn new() -> Self {
         Self {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
+                Box::new(OnRefreshStrategy),
             ],
         }
     }
@@ -100,6 +103,7 @@ impl ClusterController {
         // apply them under their compare-and-append guards.
         let mut states = ctx.cluster_states(&cluster_ids).await;
         self.enrich_hydration(ctx, &mut states).await;
+        self.enrich_refresh_window(ctx, &mut states).await;
         let now = ctx.now();
         let mut state_decisions = Vec::new();
         for state in &states {
@@ -129,17 +133,17 @@ impl ClusterController {
             }
         };
 
-        // Phase 2: desired_replicas. The barrier exists so that a cut-over a
-        // phase-1 write performed is visible before we diff the replica set
-        // against the realized config. When phase 1 wrote nothing the first read
-        // (including its hydration enrichment) is still the current view, so we
-        // reuse it wholesale and re-probe nothing; otherwise we re-read and
-        // re-enrich to pick up the applied writes. A stale diff is harmless either
+        // Phase 2: desired_replicas. We re-read (and re-enrich) the cluster
+        // state when phase 1 wrote anything, so that a cut-over performed by
+        // those writes is visible before we diff the replica set against the
+        // realized config; if phase 1 wrote nothing the first read is still
+        // current and we reuse it as is. A stale diff would be harmless either
         // way: every create/drop carries its `expected` and is rejected by the
         // apply guard if the durable state has since diverged.
         let states = if phase_1_wrote {
             let mut states = ctx.cluster_states(&cluster_ids).await;
             self.enrich_hydration(ctx, &mut states).await;
+            self.enrich_refresh_window(ctx, &mut states).await;
             states
         } else {
             states
@@ -183,6 +187,22 @@ impl ClusterController {
                 continue;
             }
             state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+        }
+    }
+
+    /// Populate each scheduled cluster's [`ClusterState::refresh_window`] live
+    /// signal. Only the on-refresh strategy consults it, and only for
+    /// non-MANUAL clusters, so a MANUAL cluster is never probed.
+    async fn enrich_refresh_window(
+        &self,
+        ctx: &mut dyn ClusterControllerCtx,
+        states: &mut [ClusterState],
+    ) {
+        for state in states.iter_mut() {
+            if matches!(state.schedule, crate::ctx::ClusterSchedule::Manual) {
+                continue;
+            }
+            state.refresh_window = ctx.refresh_window_inputs(state.cluster_id).await;
         }
     }
 
@@ -259,37 +279,53 @@ impl ClusterController {
 /// - For each shape, if actual count < desired count we create the difference;
 ///   if actual count > desired count we drop the difference, picking specific
 ///   excess replicas. A replica of a shape no strategy desires is dropped.
-/// - Creates carry the names of the strategies that desired the shape; drops
-///   carry no attribution — a drop happens exactly when no strategy desires
-///   the replica.
+/// - Creates carry the names of the strategies that desired the shape, plus the
+///   merged `audit_detail` of the slots behind it (per shape, first `Some` wins —
+///   only the on-refresh strategy produces one today, so the rule is documented,
+///   not load-bearing); drops carry no attribution — a drop happens exactly when
+///   no strategy desires the replica.
 fn reconcile_replicas(
     state: &ClusterState,
     contributions: &[(&'static str, Vec<DesiredReplica>)],
 ) -> Vec<Decision> {
     // Desired count per shape = max over strategies of how many that strategy
-    // wants of the shape, and the union of which strategies want it.
+    // wants of the shape, the union of which strategies want it, and the merged
+    // audit detail of the slots.
     let mut desired: Vec<DesiredShape> = Vec::new();
     for (name, slots) in contributions {
-        // How many of each shape this strategy wants.
-        let mut per_shape: Vec<(ReplicaShape, usize)> = Vec::new();
+        // How many of each shape this strategy wants, and the detail (if any) it
+        // attached to the shape's slots.
+        let mut per_shape: Vec<(ReplicaShape, usize, Option<RefreshWindowDecision>)> = Vec::new();
         for slot in slots {
-            match per_shape.iter_mut().find(|(s, _)| s.matches(&slot.shape)) {
-                Some((_, count)) => *count += 1,
-                None => per_shape.push((slot.shape.clone(), 1)),
+            match per_shape
+                .iter_mut()
+                .find(|(s, _, _)| s.matches(&slot.shape))
+            {
+                Some((_, count, detail)) => {
+                    *count += 1;
+                    if detail.is_none() {
+                        *detail = slot.audit_detail.clone();
+                    }
+                }
+                None => per_shape.push((slot.shape.clone(), 1, slot.audit_detail.clone())),
             }
         }
-        for (shape, count) in per_shape {
+        for (shape, count, audit_detail) in per_shape {
             match desired.iter_mut().find(|d| d.shape.matches(&shape)) {
                 Some(existing) => {
                     existing.count = existing.count.max(count);
                     if !existing.reasons.contains(name) {
                         existing.reasons.push(*name);
                     }
+                    if existing.audit_detail.is_none() {
+                        existing.audit_detail = audit_detail;
+                    }
                 }
                 None => desired.push(DesiredShape {
                     shape,
                     count,
                     reasons: vec![*name],
+                    audit_detail,
                 }),
             }
         }
@@ -333,6 +369,9 @@ fn reconcile_replicas(
                 name: name_gen.next_name(),
                 shape: d.shape.clone(),
                 reasons: d.reasons.clone(),
+                // Multiple creates of one shape in a tick share the same window
+                // decision, as the legacy scheduler's events did.
+                audit_detail: d.audit_detail.clone(),
                 expected: expected.clone(),
             });
         }
@@ -358,11 +397,13 @@ fn reconcile_replicas(
     decisions
 }
 
-/// A shape the union desires, how many, and which strategies wanted it.
+/// A shape the union desires, how many, which strategies wanted it, and the
+/// merged audit detail of the slots behind it.
 struct DesiredShape {
     shape: ReplicaShape,
     count: usize,
     reasons: Vec<&'static str>,
+    audit_detail: Option<RefreshWindowDecision>,
 }
 
 /// Generates deterministic fresh replica names that avoid a set of in-use names.

@@ -493,7 +493,16 @@ the lifecycle.
 
 ## PR 5 — `ON REFRESH` scheduling as a strategy
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review — implementation landed on `cluster-autoscaling`. `OnRefreshStrategy`
+ported into the controller (pure), the refresh-window ctx pull (read-ts / frontiers /
+compaction estimate) backed in the adapter driver, scheduled-cluster `replication_factor`
+normalized to `0` at runtime, and the legacy `cluster_scheduling.rs` tick gated off when the
+controller owns the replica set — all dark behind the master gate. A later follow-up
+(2026-06-03, same branch) restored the on-refresh MV write frontier to a full-fidelity
+`timely` `Antichain<Timestamp>` at the `ClusterControllerCtx` seam (matching the legacy
+refresh policy's `less_than` / `as_option` comparisons), reverting an earlier
+`Option<Timestamp>` upper-bound collapse — behavior-identical for single-input MVs, dark
+preserved. See the Progress Log.
 
 **Goal.** Port the existing `ON REFRESH` policy into the controller as `OnRefreshStrategy`, so
 the framework owns all three existing behaviours — still dark; legacy `cluster_scheduling.rs`
@@ -521,11 +530,29 @@ window decision (in/out-of-window; frontier vs. estimate) where they're cheap.
 `ON REFRESH` cluster's replica lifecycle matches today's behaviour, driven by the strategy.
 
 **Checklist.**
-- [ ] Implement `OnRefreshStrategy` (pure); targeted parity unit tests for the window decision.
-- [ ] Normalize scheduled-cluster `replication_factor` to 0 via `update_state` (so flag-enablement needs no migration).
-- [ ] Back the read-ts / frontier ctx methods used by the refresh strategy.
-- [ ] Integration test (gate forced on) for window on/off.
-- [ ] `cargo fmt`/`check` clean; update tracker.
+- [x] Implement `OnRefreshStrategy` (pure); targeted parity unit tests for the window decision.
+- [x] Normalize scheduled-cluster `replication_factor` to 0 via `update_state` (so flag-enablement needs no migration).
+- [x] Back the read-ts / frontier ctx methods used by the refresh strategy.
+- [x] Integration test (gate forced on) for window on/off (`cluster_controller.slt`, authored for CI).
+- [x] `cargo fmt`/`check` clean; update tracker.
+
+**Deferred (with reasons).**
+- **Rich `ClusterScheduling` audit attribution on on-refresh creates/drops.** The legacy
+  scheduler attaches a `SchedulingDecisionsWithReasonsV2` (objects needing refresh / compaction,
+  hydration-time estimate) to each scheduling-driven replica create/drop, computed where the
+  decision is made. The controller attributes commands only by strategy *name* (`on-refresh`),
+  not by that rich per-decision detail, and the audit reason `ReplicaCreateDropReason::ClusterScheduling`
+  requires a non-empty `Vec<SchedulingDecision>` (its `into_element()` panics on empty). Rather
+  than fabricate or recompute that detail at the agnostic apply site, on-refresh creates/drops
+  carry the interim `Manual` tag (as the baseline does). The controller is dark, so the tag is
+  immaterial until the gate is enabled; richer reconfiguration/scheduling drop-lifecycle audit
+  attribution is the audit-surface work owned by the observability PRs (cf. PR 4's deferred
+  drop-lifecycle attribution).
+- **Restart-survival / live window integration beyond the slt.** As with PR 3, a platform-check
+  that flips `enable_cluster_controller` env-wide would change behavior for every other check in
+  the shared dark suite. The on/off window behavior is asserted deterministically in the kernel
+  parity tests and the gate-on `cluster_controller.slt`; a dedicated restart/upgrade test belongs
+  with the rollout enablement, not the dark suite.
 
 ---
 
@@ -649,6 +676,119 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-03_ — **PR 5 follow-up review: frontier-comment precision** (fixup on
+  `cluster-autoscaling`, separate commit on PR 5). Tightened two doc/test comments from the
+  frontier-fidelity restoration so they describe what the code proves rather than overstating it.
+  The added kernel test (`on_refresh_empty_frontier_needs_no_refresh`) only feeds the empty/sealed
+  frontier `[]`, where the `Antichain` and the prior `Option` model agree, so its comment no longer
+  claims antichain-specific discrimination; it now states it guards the empty-frontier arm and notes
+  a multi-element frontier is not reachable for a single-input total-order MV. The `RefreshMvInfo`
+  doc comment no longer implies a frontier always has a single upper bound: it describes `as_option`
+  reading the lone element and falling back to the schedule's last refresh on `[]`, mirroring the
+  legacy policy. (`Antichain::as_option` for a `TotalOrder` element asserts at most one element, so
+  the multi-element case is not a producible runtime input here — a single-input MV's frontier holds
+  at most one element.) Comment-only, no behavior change. **Ran:** `cargo fmt`;
+  `cargo check -p mz-cluster-controller -p mz-adapter`; `cargo test -p mz-cluster-controller`
+  (33 pass); `bin/lint-cargo` (clean).
+
+- _2026-06-03_ — **PR 5 follow-up: full-fidelity MV write frontier at the seam** (fixup on
+  `cluster-autoscaling`, separate commit on PR 5). The on-refresh strategy had collapsed each
+  REFRESH MV's storage write frontier to an `Option<Timestamp>` (the antichain's single upper
+  bound via `as_option().copied()`) at the `ClusterControllerCtx` seam. Restored it to the real
+  `timely` `Antichain<Timestamp>` the storage controller reports, so the seam carries the same
+  abstraction as the legacy `check_refresh_policy` and the window decision is correct regardless
+  of element count (`as_option()` returns `None` for *both* the empty/sealed frontier and a
+  multi-element one — the `Option` collapse conflated the two). **Changes:** added the `timely`
+  workspace dep to `mz-cluster-controller` (`timely.workspace = true`; already in the build graph
+  via `mz-repr`, so `Cargo.lock` gained only the dependency edge, no version bumps); `ctx::RefreshMvInfo.write_frontier`
+  is now `Antichain<Timestamp>`; `OnRefreshStrategy::cluster_on` compares with
+  `write_frontier.less_than(&read_ts_adjusted)` (needs-refresh) and
+  `write_frontier.as_option()` (needs-compaction prev-refresh), byte-for-byte the legacy
+  semantics; the adapter driver `Coordinator::refresh_window_inputs` passes the owned `Antichain`
+  from `collection_frontiers` straight through (no `as_option()`); kernel tests build the field
+  with `Antichain::from_elem(ts)` / `Antichain::new()` and keep their existing expected outcomes.
+  Added one kernel test (`on_refresh_empty_frontier_needs_no_refresh`) asserting the empty/sealed
+  frontier reads as not-needing-refresh via `less_than`, the parity case the `Antichain` model
+  carries directly. Dark and behavior-preserving: for a single-input MV the frontier has at most
+  one element, so `less_than`/`as_option` agree with the prior `Option` model — every existing
+  test passes unchanged. **Ran:** `cargo fmt`; `cargo check -p mz-cluster-controller -p mz-adapter`;
+  `cargo clippy -p mz-cluster-controller`; `cargo test -p mz-cluster-controller` (33 pass);
+  `bin/lint-cargo` (clean — the new workspace dep passes). Did not run the optimized build or the
+  slt suite.
+
+- _2026-06-03_ — **PR 5 review follow-up** (same branch, separate commit on PR 5). Addressed the
+  review's two minors/nits. **Schedule witness now tested at the seam:** the `FakeCtx` gained an
+  opt-in `witness_check` that performs the real per-decision compare-and-append (re-reading each
+  decision's `expected` against stored durable state, mirroring the adapter's
+  `cluster_state_matches`), plus a `concurrent_schedule_alter` hook that splices an
+  `ALTER ... SET (SCHEDULE = ...)` in between the controller's read and its append. Two new tests:
+  `on_refresh_schedule_alter_rejects_in_flight_decision` (a concurrent flip to `MANUAL`, changing
+  *only* the `schedule` field, rejects the in-flight on-refresh drop — so removing `schedule` from
+  `ExpectedClusterState` now fails a test) and its non-vacuous dual
+  `on_refresh_unchanged_schedule_passes_witness`. The legacy "all policies decided" **restart latch**
+  is deliberately omitted, not deferred: it compensates for the legacy scheduler gathering policy
+  decisions asynchronously, whereas the controller derives a complete decision from durable +
+  storage state each tick — so the half-populated-decision-map failure mode it guards cannot occur.
+  Rationale documented on `OnRefreshStrategy`.
+  **Conversion divergence** (saturating `Duration → Timestamp` vs the legacy panic) centralized in
+  a `duration_to_ts` helper using the existing `TryFrom<Duration>` and documented as deliberate (a
+  pure kernel must not panic on input). **Comment chronology** trimmed where it did not explain
+  current behavior (`ClusterController::new` doc, the legacy gating doc, and the on-refresh audit
+  caveat no longer name future PRs). `cargo fmt`/`check`/`clippy` clean on
+  `mz-cluster-controller`/`mz-adapter`; `mz-cluster-controller` tests 32 pass.
+
+- _2026-06-03_ — **PR 5 implemented** (`ON REFRESH` scheduling as a controller strategy, all dark
+  behind the master gate). **Strategy:** new pure `OnRefreshStrategy` in `mz-cluster-controller` —
+  engaged for non-MANUAL clusters; `desired_replicas` contributes one replica at the realized
+  shape while the cluster is inside a refresh window and nothing otherwise, with the window
+  decision (needs-refresh OR needs-compaction) ported verbatim from the legacy
+  `check_refresh_policy` (write_frontier < read_ts + hydration_time_estimate; prev_refresh +
+  compaction_estimate > read_ts). `update_state` normalizes a scheduled cluster's realized
+  `replication_factor` to `0` at runtime (self-healing — no migration; makes
+  `mz_clusters.replication_factor` read 0, with `mz_cluster_replicas` authoritative), writing only
+  when it is actually non-zero so steady ticks stay no-ops. The implicit `BaselineStrategy` now
+  contributes nothing on a scheduled cluster (the on-refresh strategy is the sole contributor
+  there), so the two views agree even on the first pre-normalization tick. Registered in
+  `ClusterController::new()` alongside the baseline and graceful strategies. **Seam:** modeled the
+  refresh-window signals purely as a new `RefreshWindowInputs { read_ts, compaction_estimate,
+  refresh_mvs: Vec<RefreshMvInfo { write_frontier: Option<Timestamp>, refresh_schedule }> }` on
+  `ClusterState`, plus a `schedule: ClusterSchedule` mirror (kept out of the SQL-layer dep by a
+  controller-local enum, like `OnTimeout`). The MV write frontier is carried as the antichain's
+  `as_option()` upper bound — exact for a single-input total-order collection — which keeps the
+  pure crate free of a direct `timely` dep while preserving the exact `less_than` / `as_option`
+  semantics the legacy logic relies on. New ctx method `refresh_window_inputs(cluster_id) ->
+  Option<RefreshWindowInputs>`, pulled on demand the same pay-for-what-you-use way as
+  `hydrated_replicas`: the controller's `enrich_refresh_window` probes a cluster only when it is
+  scheduled, so a MANUAL cluster is never probed. Added `schedule` to the CaA witness
+  (`ExpectedClusterState`) so a concurrent `ALTER ... SET (SCHEDULE = ...)` flipping which strategy
+  owns the replica set rejects an in-flight on-refresh decision. **Adapter driver:** the new
+  `Coordinator::refresh_window_inputs` backs the pull against the same signals
+  `check_refresh_policy` reads — the local oracle read ts (`get_local_read_ts`), the system
+  `cluster_refresh_mv_compaction_estimate`, and each bound REFRESH MV's
+  `collection_frontiers().as_option()` + `refresh_schedule`; `observe_cluster_state` threads the
+  schedule via `schedule_to_controller`. On-refresh creates/drops carry the interim `Manual` reason
+  (the rich `ClusterScheduling` attribution is deferred, see below). **Legacy gating:**
+  `check_scheduling_policies` and `handle_scheduling_decisions` now no-op when
+  `enable_cluster_controller` is on (two writers of a scheduled cluster's replica set is not
+  allowed), mirroring how PR 3 gated the graceful 3-stage machine; the legacy path stays for
+  gate-off and is removed in PR 7. **Tests:** 10 new on-refresh tests in `mz-cluster-controller`
+  (30 total, all pass) — baseline-holds-nothing-on-scheduled, rf-normalization (+ no-op when
+  already 0 / MANUAL), in-window-desires-one, caught-up-at-read-ts-is-off,
+  hydration-estimate-opens-window-early, compaction-window-keeps-on, and two end-to-end
+  FakeCtx-driven seam tests (creates in window / drops out of window, with rf normalized to 0).
+  `cluster_controller.slt` (gate + fast tick forced on) gained an ON REFRESH section asserting a
+  scheduled cluster reads rf=0 with no replica when no REFRESH MV is bound, brings up exactly one
+  replica at the cluster size once a `REFRESH EVERY` MV (large HYDRATION TIME ESTIMATE for a
+  deterministic always-open window) is bound, and that a MANUAL cluster is untouched — authored for
+  CI, not run locally. **Cheap checks:** `cargo fmt` + `cargo check`/`clippy` clean on
+  `mz-cluster-controller`/`mz-adapter`; `bin/lint-cargo` clean; `Cargo.lock` unchanged (no new
+  deps). Did **not** run the slt suite, platform-checks, or the full optimized build. **Deferred
+  (see the PR-5 section):** the rich `ClusterScheduling` per-decision audit attribution (the
+  controller attributes by strategy name, not the legacy `SchedulingDecisionsWithReasonsV2`
+  detail; `into_element()` panics on empty, so an empty-vec interim is unsafe — on-refresh
+  create/drop carries `Manual`); and a restart-survival platform-check (would flip the master gate
+  env-wide in the shared dark suite).
 
 - _2026-06-03_ — **PR 4 follow-up: reconfiguration relation reworked into a materialized view**
   (fixup against PR 4's observability commit, same branch). The team has moved away from
