@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use k8s_openapi::{
     api::core::v1::{EnvVar, ResourceRequirements},
@@ -60,6 +61,10 @@ pub mod v1alpha1 {
         /// cancelled, those read holds are released. If left unpromoted for an extended time, this
         /// data can build up, and can cause extreme deletion load on the metadata backend database
         /// when finally promoted or cancelled.
+        ///
+        /// To guard against this, a rollout that remains in progress longer
+        /// than `rolloutRequestTimeout` (default 24h) is automatically
+        /// cancelled.
         /// {{</warning>}}
         ManuallyPromote,
 
@@ -74,6 +79,32 @@ pub mod v1alpha1 {
         /// Tear down the old generation of pods and promote the new generation of pods immediately,
         /// without waiting for the new generation of pods to be ready.
         ImmediatelyPromoteCausingDowntime,
+    }
+
+    /// Default for [`RolloutRequestTimeout`]. A new generation that sits
+    /// un-promoted holds back compaction via read holds, and promoting it
+    /// after a long delay can cause incident-inducing load; 24h is a
+    /// conservative upper bound on how long any rollout should take.
+    pub const DEFAULT_ROLLOUT_REQUEST_TIMEOUT: &str = "24h";
+
+    /// The maximum time [`MaterializeSpec::rollout_request_timeout`] allows a
+    /// rollout to remain in progress.
+    ///
+    /// A transparent wrapper around the duration string whose [`Default`] is
+    /// [`DEFAULT_ROLLOUT_REQUEST_TIMEOUT`]. Routing the default through `Default`
+    /// keeps a single source of truth: the derived `Default` for
+    /// [`MaterializeSpec`], serde's `#[serde(default)]` (applied when the field
+    /// is omitted on deserialize), and the schema default surfaced in the
+    /// generated CRD (so the API server fills it in and `kubectl explain` shows
+    /// it) all resolve to the same value.
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+    #[serde(transparent)]
+    pub struct RolloutRequestTimeout(pub String);
+
+    impl Default for RolloutRequestTimeout {
+        fn default() -> Self {
+            RolloutRequestTimeout(DEFAULT_ROLLOUT_REQUEST_TIMEOUT.to_owned())
+        }
     }
 
     #[derive(
@@ -186,6 +217,28 @@ pub mod v1alpha1 {
         /// Rollout strategy to use when upgrading this Materialize instance.
         #[serde(default)]
         pub rollout_strategy: MaterializeRolloutStrategy,
+        /// The maximum amount of time a rollout may remain in progress before
+        /// it is automatically cancelled.
+        ///
+        /// While a rollout is in progress, the new generation of `environmentd`
+        /// runs in a read-only, un-promoted state and holds back compaction via
+        /// read holds. Leaving it in this state for too long can cause
+        /// incident-inducing load when it is eventually promoted, so the
+        /// operator cancels the rollout once this timeout is exceeded: the new
+        /// generation is torn down and the previously-active generation
+        /// continues serving. A new rollout can then be triggered by setting
+        /// `requestRollout` to a new value.
+        ///
+        /// This does not apply to the `ImmediatelyPromoteCausingDowntime`
+        /// rollout strategy or to force-promoted rollouts, since by the time
+        /// those are in progress the old generation may already be gone.
+        ///
+        /// The value is parsed as a human-readable duration, e.g. `24h`,
+        /// `90m`, or `1h 30m`. Defaults to [`DEFAULT_ROLLOUT_REQUEST_TIMEOUT`]
+        /// when omitted (the API server fills it in); an unparseable value also
+        /// falls back to that default.
+        #[serde(default)]
+        pub rollout_request_timeout: RolloutRequestTimeout,
         /// The name of a secret containing `metadata_backend_url` and `persist_backend_url`.
         /// It may also contain `external_login_password_mz_system`, which will be used as
         /// the password for the `mz_system` user if `authenticatorKind` is `Password`,
@@ -412,6 +465,80 @@ pub mod v1alpha1 {
                     .status
                     .as_ref()
                     .map_or_else(Uuid::nil, |status| status.last_completed_rollout_request)
+        }
+
+        /// The maximum amount of time a rollout may remain in progress before
+        /// it is automatically cancelled. Parsed from
+        /// [`MaterializeSpec::rollout_request_timeout`], falling back to
+        /// [`DEFAULT_ROLLOUT_REQUEST_TIMEOUT`] when unset or unparseable.
+        pub fn rollout_request_timeout(&self) -> Duration {
+            let timeout = &self.spec.rollout_request_timeout.0;
+            humantime::parse_duration(timeout)
+                .or_else(|e| {
+                    tracing::warn!(
+                        rollout_request_timeout = %timeout,
+                        "failed to parse rolloutRequestTimeout, using default: {e}",
+                    );
+                    humantime::parse_duration(DEFAULT_ROLLOUT_REQUEST_TIMEOUT)
+                })
+                .expect("DEFAULT_ROLLOUT_REQUEST_TIMEOUT must be a valid duration")
+        }
+
+        /// If a timeout-eligible rollout is currently in progress, returns the
+        /// time at which it entered the in-progress (`Unknown`) state. Used to
+        /// enforce the rollout timeout.
+        ///
+        /// The `Applying` and `ReadyToPromote` phases are both reported as a
+        /// single in-progress window: [`Self::up_to_date_transition_time`]
+        /// carries the timestamp forward across them (they share the `Unknown`
+        /// status), so the timeout spans the whole pre-promotion rollout rather
+        /// than resetting at each phase.
+        ///
+        /// The `Promoting` phase is deliberately excluded even though it is
+        /// also `Unknown`: once a rollout has reached promotion it must never
+        /// be cancelled by the timeout, since the previously-active generation
+        /// may already be torn down, leaving nothing to fall back to. (The
+        /// controller also never reaches the timeout check while promoting,
+        /// because `is_promoting` takes priority; this is belt-and-suspenders.)
+        pub fn rollout_in_progress_since(&self) -> Option<Timestamp> {
+            self.status
+                .as_ref()?
+                .conditions
+                .iter()
+                .find_map(|condition| {
+                    if condition.type_ == "UpToDate"
+                        && condition.status == "Unknown"
+                        && condition.reason != "Promoting"
+                    {
+                        Some(condition.last_transition_time.0)
+                    } else {
+                        None
+                    }
+                })
+        }
+
+        /// The `last_transition_time` to record for a new `UpToDate` condition
+        /// with `new_status`, following the Kubernetes convention that
+        /// `last_transition_time` marks when the condition's *status* last
+        /// changed — not its reason or message. While the status is unchanged
+        /// the existing timestamp is carried forward; it only resets to `now`
+        /// when the status actually changes (or there is no prior condition).
+        ///
+        /// This is what lets a rollout that moves through several same-status
+        /// phases (`Applying` -> `ReadyToPromote`, both `Unknown`) be measured
+        /// from when it first entered that status, so the rollout timeout
+        /// covers the phases together instead of restarting at each one.
+        pub fn up_to_date_transition_time(&self, new_status: &str, now: Timestamp) -> Timestamp {
+            self.status
+                .as_ref()
+                .and_then(|status| {
+                    status
+                        .conditions
+                        .iter()
+                        .find(|condition| condition.type_ == "UpToDate")
+                })
+                .filter(|condition| condition.status == new_status)
+                .map_or(now, |condition| condition.last_transition_time.0)
         }
 
         /// Returns the environmentd image ref of the currently-active
@@ -689,10 +816,17 @@ fn parse_image_ref(image_ref: &str) -> Option<Version> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+    use k8s_openapi::jiff::Timestamp;
     use kube::core::ObjectMeta;
     use semver::Version;
 
-    use super::v1alpha1::{Materialize, MaterializeSpec};
+    use super::v1alpha1::{
+        DEFAULT_ROLLOUT_REQUEST_TIMEOUT, Materialize, MaterializeSpec, MaterializeStatus,
+        RolloutRequestTimeout,
+    };
 
     #[mz_ore::test]
     fn meets_minimum_version() {
@@ -837,6 +971,175 @@ mod tests {
                 "v{active_version} can't upgrade to v{next_version}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn rollout_request_timeout() {
+        let mz_with = |timeout: &str| Materialize {
+            spec: MaterializeSpec {
+                rollout_request_timeout: RolloutRequestTimeout(timeout.to_owned()),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+
+        // The default const is a valid duration and resolves to 24h.
+        let default = humantime::parse_duration(DEFAULT_ROLLOUT_REQUEST_TIMEOUT).unwrap();
+        assert_eq!(default, Duration::from_secs(24 * 60 * 60));
+
+        // The field's Default (used by `MaterializeSpec::default()` and serde's
+        // `#[serde(default)]`) is the 24h default, with no empty intermediate.
+        assert_eq!(
+            RolloutRequestTimeout::default().0,
+            DEFAULT_ROLLOUT_REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            Materialize {
+                spec: MaterializeSpec::default(),
+                metadata: ObjectMeta::default(),
+                status: None,
+            }
+            .rollout_request_timeout(),
+            default
+        );
+
+        // Parseable values are honored.
+        assert_eq!(
+            mz_with("1h").rollout_request_timeout(),
+            Duration::from_secs(60 * 60)
+        );
+        assert_eq!(
+            mz_with("90m").rollout_request_timeout(),
+            Duration::from_secs(90 * 60)
+        );
+        assert_eq!(
+            mz_with("1h 30m").rollout_request_timeout(),
+            Duration::from_secs(90 * 60)
+        );
+        // Unparseable values fall back to the default.
+        assert_eq!(mz_with("not a duration").rollout_request_timeout(), default);
+    }
+
+    #[mz_ore::test]
+    fn rollout_request_timeout_schema_default() {
+        // The default must be surfaced in the generated CRD's OpenAPI schema
+        // (not just in the Rust helper), so the Kubernetes API server defaults
+        // omitted fields and `kubectl explain` shows it.
+        let crd = serde_json::to_value(<Materialize as kube::CustomResourceExt>::crd())
+            .expect("CRD serializes");
+        let default = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+            ["properties"]["rolloutRequestTimeout"]["default"];
+        assert_eq!(
+            default,
+            &serde_json::json!(DEFAULT_ROLLOUT_REQUEST_TIMEOUT),
+            "rolloutRequestTimeout schema default missing/wrong in generated CRD",
+        );
+    }
+
+    #[mz_ore::test]
+    fn rollout_in_progress_since() {
+        let now = Timestamp::now();
+        let condition = |type_: &str, status: &str| Condition {
+            type_: type_.to_owned(),
+            status: status.to_owned(),
+            last_transition_time: Time(now),
+            message: String::new(),
+            observed_generation: None,
+            reason: "Test".to_owned(),
+        };
+        let mz_with = |conditions: Vec<Condition>| Materialize {
+            spec: MaterializeSpec::default(),
+            metadata: ObjectMeta::default(),
+            status: Some(MaterializeStatus {
+                conditions,
+                ..Default::default()
+            }),
+        };
+
+        // No status at all.
+        let mz = Materialize {
+            spec: MaterializeSpec::default(),
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        assert_eq!(mz.rollout_in_progress_since(), None);
+
+        // A timeout-eligible rollout in progress is signalled by an `Unknown`
+        // `UpToDate` condition (the Applying and ReadyToPromote phases).
+        assert_eq!(
+            mz_with(vec![condition("UpToDate", "Unknown")]).rollout_in_progress_since(),
+            Some(now)
+        );
+
+        // The `Promoting` phase is also `Unknown`, but must NOT be reported:
+        // once promoting, the rollout can no longer be cancelled by the
+        // timeout.
+        assert_eq!(
+            mz_with(vec![Condition {
+                reason: "Promoting".to_owned(),
+                ..condition("UpToDate", "Unknown")
+            }])
+            .rollout_in_progress_since(),
+            None
+        );
+
+        // A settled rollout (True/False) is not in progress.
+        assert_eq!(
+            mz_with(vec![condition("UpToDate", "True")]).rollout_in_progress_since(),
+            None
+        );
+        assert_eq!(
+            mz_with(vec![condition("UpToDate", "False")]).rollout_in_progress_since(),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn up_to_date_transition_time() {
+        // Two distinct, fixed instants so we can tell "carried the old
+        // timestamp" apart from "reset to now".
+        let stored = Timestamp::from_second(1_000).unwrap();
+        let now = Timestamp::from_second(2_000).unwrap();
+
+        let condition = |status: &str| Condition {
+            type_: "UpToDate".to_owned(),
+            status: status.to_owned(),
+            last_transition_time: Time(stored),
+            message: String::new(),
+            observed_generation: None,
+            reason: "Test".to_owned(),
+        };
+        let mz_with = |conditions: Vec<Condition>| Materialize {
+            spec: MaterializeSpec::default(),
+            metadata: ObjectMeta::default(),
+            status: Some(MaterializeStatus {
+                conditions,
+                ..Default::default()
+            }),
+        };
+
+        // No prior condition: use `now`.
+        let mz = Materialize {
+            spec: MaterializeSpec::default(),
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        assert_eq!(mz.up_to_date_transition_time("Unknown", now), now);
+
+        // Same status as the prior condition: carry its timestamp forward, so
+        // consecutive same-status phases (Applying -> ReadyToPromote) share one
+        // timer.
+        assert_eq!(
+            mz_with(vec![condition("Unknown")]).up_to_date_transition_time("Unknown", now),
+            stored
+        );
+
+        // Status changed: reset to `now`.
+        assert_eq!(
+            mz_with(vec![condition("Unknown")]).up_to_date_transition_time("True", now),
+            now
+        );
     }
 
     #[mz_ore::test]
