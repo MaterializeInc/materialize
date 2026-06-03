@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, SOME};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, SOME};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -309,6 +309,14 @@ impl Ident {
                         // quantifier rather than an identifier. (`ALL` is already
                         // always-reserved; the others are not.)
                         || matches!(kw, ANY | ALL | SOME)
+                        // `LIST` followed by `[` re-lexes as a `LIST[...]` literal
+                        // (`list[1]` is a valid one-element list), so a bare `list`
+                        // identifier that gets subscripted — `"list"[1]` — would
+                        // reparse as a list literal instead of a subscript. (`ARRAY`
+                        // is reserved-in-scalar-expression and so already quoted;
+                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
+                        // subscript.)
+                        || kw == LIST
                 })
                 .unwrap_or(false)
     }

@@ -1177,14 +1177,23 @@ impl Pretty {
                         self.doc_expr(expr2).nest(TAB),
                     ])
                 } else {
-                    // See the AstDisplay `Expr::Op` comment: `- 2::t` reparses
-                    // as `(-2)::t`, so parenthesize a numeric cast operand under
-                    // a prefix operator to keep its grouping.
-                    let numeric_cast = match expr1.as_ref() {
-                        Expr::Cast { expr, .. } => {
-                            matches!(expr.as_ref(), Expr::Value(Value::Number(_)))
+                    // See the AstDisplay `Expr::Op` comment: `- 2::t` — or a cast
+                    // chain `- 2::t::u` — reparses as `(-2)::t`, so parenthesize a
+                    // numeric cast-chain operand under a prefix operator to keep
+                    // its grouping.
+                    let numeric_cast = {
+                        let mut e = expr1.as_ref();
+                        let mut saw_cast = false;
+                        loop {
+                            match e {
+                                Expr::Cast { expr, .. } => {
+                                    saw_cast = true;
+                                    e = expr.as_ref();
+                                }
+                                Expr::Value(Value::Number(_)) => break saw_cast,
+                                _ => break false,
+                            }
                         }
-                        _ => false,
                     };
                     let operand = if numeric_cast {
                         bracket("(", self.doc_expr(expr1), ")")

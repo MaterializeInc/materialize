@@ -320,14 +320,24 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str(op);
                     f.write_str(" ");
                     // `- <number>` folds into a negative literal at parse time,
-                    // and the `::` cast binds looser, so printing `- 2::t` would
-                    // reparse as `(-2)::t` rather than `- (2::t)`. Parenthesize a
-                    // numeric cast operand so the prefix operator keeps its scope.
-                    let numeric_cast = match expr1.as_ref() {
-                        Expr::Cast { expr, .. } => {
-                            matches!(expr.as_ref(), Expr::Value(Value::Number(_)))
+                    // and the `::` cast binds looser, so printing `- 2::t` — or a
+                    // cast *chain* like `- 2::t::u` — would reparse as `(-2)::t`,
+                    // migrating the negation into the innermost (numeric) operand.
+                    // Parenthesize whenever the operand is a cast chain bottoming
+                    // out in a numeric literal so the prefix operator keeps scope.
+                    let numeric_cast = {
+                        let mut e = expr1.as_ref();
+                        let mut saw_cast = false;
+                        loop {
+                            match e {
+                                Expr::Cast { expr, .. } => {
+                                    saw_cast = true;
+                                    e = expr.as_ref();
+                                }
+                                Expr::Value(Value::Number(_)) => break saw_cast,
+                                _ => break false,
+                            }
                         }
-                        _ => false,
                     };
                     if numeric_cast {
                         f.write_str("(");
@@ -954,7 +964,19 @@ impl<T: AstInfo> Function<T> {
         // This block handles printing function calls that have special parsing. In stable mode, the
         // name is quoted and so won't get the special parsing. We only need to print the special
         // formats in non-stable mode.
-        if allow_special_form && !f.stable() {
+        //
+        // The special forms (`position(a IN b)`, `extract(field FROM source)`)
+        // have no syntax for `DISTINCT`, a within-group `ORDER BY`, a `FILTER`,
+        // or an `OVER` window. A call literally named `"position"`/`"extract"`
+        // that carries any of those modifiers (only reachable via the quoted
+        // name — the real special grammar doesn't accept them) must therefore
+        // fall through to the plain quoted-call form, or the special form
+        // silently drops them on display.
+        let has_call_modifiers = self.distinct
+            || self.filter.is_some()
+            || self.over.is_some()
+            || matches!(&self.args, FunctionArgs::Args { order_by, .. } if !order_by.is_empty());
+        if allow_special_form && !f.stable() && !has_call_modifiers {
             let special: Option<(&str, &[Option<Keyword>])> =
                 match self.name.to_ast_string_stable().as_str() {
                     // `extract(field FROM source)` parses `field` into a string
