@@ -216,7 +216,7 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
-                auto_scaling_strategy: _,
+                auto_scaling_strategy,
                 reconfiguration: _,
                 burst: _,
             }) => {
@@ -257,6 +257,12 @@ impl Coordinator {
                     Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
+                match &options.auto_scaling_strategy {
+                    Set(new_strategy) => auto_scaling_strategy.clone_from(new_strategy),
+                    // The default is autoscaling disabled.
+                    Reset => *auto_scaling_strategy = None,
+                    Unchanged => {}
+                }
                 if !matches!(options.replicas, Unchanged) {
                     coord_bail!("Cannot change REPLICAS of managed clusters");
                 }
@@ -276,6 +282,9 @@ impl Coordinator {
                 }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
+                }
+                if !matches!(options.auto_scaling_strategy, Unchanged) {
+                    coord_bail!("Cannot change AUTO SCALING STRATEGY of unmanaged clusters");
                 }
             }
         }
@@ -983,7 +992,7 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
-                    auto_scaling_strategy: None,
+                    auto_scaling_strategy: plan.auto_scaling_strategy.clone(),
                     reconfiguration: None,
                     burst: None,
                 })
@@ -1025,6 +1034,7 @@ impl Coordinator {
             size,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         cluster_name: String,

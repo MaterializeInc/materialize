@@ -68,7 +68,8 @@ use crate::ctx::{
     RefreshWindowDecision, ReplicaShape, StateWrite,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, OnRefreshStrategy, Strategy,
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, HydrationBurstStrategy,
+    OnRefreshStrategy, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -84,17 +85,15 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with the implicit baseline, the graceful-reconfiguration
-    /// strategy, and the on-refresh scheduling strategy. The baseline holds the
-    /// steady set of MANUAL clusters. Graceful engages only while a
-    /// `reconfiguration` record is in flight. On-refresh owns the replica set of
-    /// scheduled clusters.
+    /// A controller with the full set of strategies. Each strategy's rustdoc
+    /// describes when it engages.
     pub fn new() -> Self {
         Self {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
                 Box::new(OnRefreshStrategy),
+                Box::new(HydrationBurstStrategy),
             ],
         }
     }
@@ -264,21 +263,26 @@ impl ClusterController {
         merged
     }
 
-    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal,
-    /// pulling it through the ctx only where a strategy needs it.
-    ///
-    /// Hydration is only consulted by the graceful strategy, and only while a
-    /// `reconfiguration` is in flight, so we probe a cluster's replicas exactly
-    /// then. A steady cluster is never probed, keeping the seam pay-for-what-you-
-    /// use. The pull is per-cluster (the controller asks only about that cluster's
-    /// replicas).
+    /// Populate each cluster's [`ClusterState::has_hydratable_objects`] and
+    /// [`ClusterState::hydrated_replicas`] live signals where a strategy will
+    /// consult them this tick (see [`Self::needs_hydration_signal`]). Probing is
+    /// per-cluster and not free, so a steady cluster with no reconfiguration and
+    /// no possible burst is never probed.
     async fn enrich_hydration(
         &self,
         ctx: &mut dyn ClusterControllerCtx,
         states: &mut [ClusterState],
     ) {
         for state in states.iter_mut() {
-            if state.reconfiguration.is_none() {
+            // The burst strategy arms only for a cluster with at least one
+            // hydratable object, so pull that bit first for arming candidates.
+            // Besides gating the arm condition itself, it lets us skip the
+            // hydration probe entirely for an object-less cluster nothing else
+            // needs probed.
+            if Self::burst_arming_candidate(state) {
+                state.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
+            }
+            if !Self::needs_hydration_signal(state) {
                 continue;
             }
             let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
@@ -287,6 +291,33 @@ impl ClusterController {
             }
             state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
         }
+    }
+
+    /// Whether the burst strategy could *arm* on this cluster this tick: no
+    /// burst record yet, but the cluster carries an `ON HYDRATION` policy, burst
+    /// is enabled env-wide, and the cluster is On. Exactly the condition under
+    /// which the strategy's arm branch consults the object-existence and
+    /// hydration signals.
+    fn burst_arming_candidate(state: &ClusterState) -> bool {
+        state.burst.is_none()
+            && state.burst_enabled
+            && state.replication_factor > 0
+            && state
+                .auto_scaling_policy
+                .as_ref()
+                .is_some_and(|p| p.on_hydration.is_some())
+    }
+
+    /// Whether a strategy needs this cluster's per-replica hydration signal this
+    /// tick: a reconfiguration is in flight (graceful cut-over), a burst is in
+    /// flight (linger/re-arm lifecycle), or a burst could arm *and* the cluster
+    /// has something to hydrate. With zero hydratable objects the arm branch
+    /// never fires, so the probe would be wasted.
+    fn needs_hydration_signal(state: &ClusterState) -> bool {
+        if state.reconfiguration.is_some() || state.burst.is_some() {
+            return true;
+        }
+        Self::burst_arming_candidate(state) && state.has_hydratable_objects
     }
 
     /// Populate each scheduled cluster's [`ClusterState::refresh_window`] live
@@ -428,8 +459,16 @@ fn reconcile_replicas(
 
     let mut decisions = Vec::new();
 
-    // Track existing names so freshly-created replicas avoid collisions.
-    let used_names: Vec<&str> = state.replicas.iter().map(|r| r.name.as_str()).collect();
+    // Track existing names so freshly-created replicas avoid collisions: both the
+    // controller-owned replicas and the non-owned (INTERNAL / BILLED AS) names the
+    // observation reserves, so a generated name can never collide with a replica
+    // already on the cluster.
+    let used_names: Vec<&str> = state
+        .replicas
+        .iter()
+        .map(|r| r.name.as_str())
+        .chain(state.reserved_replica_names.iter().map(String::as_str))
+        .collect();
     let mut name_gen = ReplicaNameGen::new(&used_names);
 
     // The compare-and-append witness for every create/drop this tick emits for

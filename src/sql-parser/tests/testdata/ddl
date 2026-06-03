@@ -1978,14 +1978,14 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Cluster
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
 ----
-error: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
+error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found WITH
 CREATE CLUSTER cluster WITH REPLICAS ()
                        ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
-error: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
+error: Expected one of AUTO or AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found identifier "badopt"
 CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
@@ -2163,6 +2163,55 @@ CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRA
 error: Expected right parenthesis, found EOF
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
                                                                                                               ^
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc', LINGER DURATION = '600s')))
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc', LINGER DURATION = '600s')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: Some(String("600s")) }) })) }], features: [] })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], features: [] })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
+----
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: None })) }], features: [] })
+
+parse-statement
+ALTER CLUSTER cluster SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+----
+ALTER CLUSTER cluster SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: SetOptions { options: [ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], with_options: [] } })
+
+parse-statement
+ALTER CLUSTER cluster RESET (AUTO SCALING STRATEGY)
+----
+ALTER CLUSTER cluster RESET (AUTO SCALING STRATEGY)
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("cluster"), action: ResetOptions([AutoScalingStrategy]) })
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION))
+----
+error: Expected left parenthesis, found right parenthesis
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION))
+                                                                                         ^
+
+parse-statement
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc'), ON HYDRATION (HYDRATION SIZE = '800cc')))
+----
+error: ON HYDRATION specified more than once
+CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc'), ON HYDRATION (HYDRATION SIZE = '800cc')))
+                                                                                                                                                            ^
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS NULL)

@@ -22,8 +22,14 @@
 //!
 //! The interface is **pull-based**: a tick fetches only the signals it actually
 //! examines (no eager all-clusters-all-replicas snapshot is pushed in), and the
-//! controller drives what is fetched. Read methods are batched so a separate-task
-//! deployment can bound its round-trips to the Coordinator.
+//! controller drives what is fetched. The two whole-tick reads
+//! (`managed_cluster_ids`, `cluster_states`) are batched across all clusters; the
+//! live signals (`hydrated_replicas`, `has_hydratable_objects`,
+//! `refresh_window_inputs`) are pulled per cluster, on demand, only where a
+//! strategy needs them. A tick therefore costs the two batched round-trips plus
+//! one per cluster needing a live signal, bounded by the managed-cluster count,
+//! not constant. Batching the per-cluster pulls is left for when the controller
+//! actually moves off-process.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -40,8 +46,8 @@ use timely::progress::Antichain;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState, OnTimeout,
-    ReconfigurationRecord, ReconfigurationTarget, ReplicaShape,
+    AutoScalingPolicy, AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState,
+    OnHydrationPolicy, OnTimeout, ReconfigurationRecord, ReconfigurationTarget, ReplicaShape,
 };
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
@@ -137,16 +143,46 @@ pub struct ClusterState {
     /// The cluster's scheduling policy. Drives whether the implicit baseline owns
     /// the replica set (MANUAL) or the on-refresh strategy does (REFRESH).
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, if any. Drives the hydration-burst
+    /// strategy.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// In-flight graceful reconfiguration, if any.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
+    /// Whether the hydration-burst strategy is enabled environment-wide (the
+    /// break-glass flag). A **config signal**, not durable cluster state, so it is
+    /// excluded from [`ClusterState::expected`]: the controller derives it fresh
+    /// each tick and a flip does not need to reject an in-flight decision.
+    pub burst_enabled: bool,
+    /// The system-default burst linger duration, written into a new `burst` record
+    /// when the policy's `linger_duration` is omitted. A config signal, excluded
+    /// from the witness for the same reason as `burst_enabled`.
+    pub default_burst_linger: Duration,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
+    /// Names of replicas physically on the cluster that the controller does *not*
+    /// own (INTERNAL / BILLED AS): excluded from [`Self::replicas`] so the kernel
+    /// neither counts nor drops them, but still off-limits as names for replicas
+    /// the controller creates. The name generator avoids these too, so a generated
+    /// `rN` can never collide with a user-attached replica that happens to use an
+    /// `rN` name.
+    pub reserved_replica_names: Vec<String>,
     /// The refresh-window live signals, populated only for scheduled clusters
     /// (pulled on demand via [`ClusterControllerCtx::refresh_window_inputs`]);
     /// `None` for MANUAL clusters, which are never probed.
     pub refresh_window: Option<RefreshWindowInputs>,
+    /// Whether the cluster has at least one hydratable object (an index,
+    /// materialized view, ingestion source, or sink bound to it). The burst
+    /// strategy arms only when this holds: with zero objects there is nothing
+    /// a burst could accelerate, so a brand-new cluster never bursts at
+    /// creation. A **live signal** like [`ClusterState::hydrated_replicas`],
+    /// so it is excluded from [`ClusterState::expected`].
+    ///
+    /// Populated on demand (via [`ClusterControllerCtx::has_hydratable_objects`])
+    /// only for clusters where the burst strategy could arm this tick; `false`
+    /// otherwise, where no strategy consults it.
+    pub has_hydratable_objects: bool,
     /// The replicas observed this tick to have *all* current collections on the
     /// cluster hydrated. A **live signal**, not durable state, so it is excluded
     /// from [`ClusterState::expected`] (the compare-and-append witness).
@@ -175,6 +211,7 @@ impl ClusterState {
             availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
             schedule: self.schedule,
+            auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
@@ -282,7 +319,11 @@ pub enum ApplyOutcome {
 /// channel from the controller's own task, hence the `Send` bound).
 #[async_trait]
 pub trait ClusterControllerCtx: Send {
-    /// Current wall-clock time, as the controller's strategies should see it.
+    /// The wall-clock time the strategies and reconcile kernel should treat as
+    /// "now". An implementation must keep this stable across a reconcile phase
+    /// (in practice by latching it at the [`Self::cluster_states`] read), so every
+    /// strategy and the kernel decide against one consistent time, not a clock
+    /// that drifts between calls within a tick.
     fn now(&self) -> Timestamp;
 
     /// A consistent durable view of the given managed clusters and their
@@ -307,6 +348,22 @@ pub trait ClusterControllerCtx: Send {
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
+
+    /// Whether `cluster_id` has at least one hydratable object bound to it (an
+    /// index, materialized view, ingestion source, or sink, the
+    /// dataflow-backed items).
+    ///
+    /// This is a catalog-level approximation of "the hydration check has
+    /// something to count": the per-replica hydration signal treats some item
+    /// classes as trivially hydrated, so the two sets can disagree at the
+    /// margin. The mismatch is self-healing. If this reports objects but the
+    /// hydration check counts none of them, a steady replica reads hydrated
+    /// as soon as its (near-instant) introspection-log dataflows do, and the
+    /// burst record's linger clears it.
+    ///
+    /// Pulled on demand like [`Self::hydrated_replicas`]: the controller asks
+    /// only for clusters where the burst strategy could arm this tick.
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
     /// The refresh-window live signals for one scheduled cluster: the read
     /// timestamp, the compaction estimate, and the bound REFRESH MVs' write

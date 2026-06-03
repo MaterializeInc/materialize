@@ -72,6 +72,9 @@ pub struct ExpectedClusterState {
     /// policy owns the replica set, so a write conditioned on one schedule must
     /// not apply under another.
     pub schedule: ClusterSchedule,
+    /// The autoscaling policy. Part of the witness because it determines whether,
+    /// and at what size, a burst is warranted.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     pub reconfiguration: Option<ReconfigurationRecord>,
     pub burst: Option<BurstRecord>,
 }
@@ -141,4 +144,27 @@ pub enum ClusterSchedule {
     /// how far ahead of a refresh the cluster should turn on so it can rehydrate
     /// before the refresh time.
     Refresh { hydration_time_estimate: Duration },
+}
+
+/// The user-configured autoscaling policy of a managed cluster, mirrored from
+/// durable state. A plain-data mirror of `mz_sql::plan::AutoScalingStrategy`,
+/// free of a dependency on the SQL layer.
+///
+/// Extensible: future strategies are additional optional sub-policies. v1 carries
+/// only the `ON HYDRATION` burst policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoScalingPolicy {
+    pub on_hydration: Option<OnHydrationPolicy>,
+}
+
+/// The `ON HYDRATION` burst sub-policy: while some object on the cluster is not
+/// hydrated on a steady replica, run one extra replica at `hydration_size` to
+/// accelerate hydration, lingering for `linger_duration` after the steady set
+/// hydrates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnHydrationPolicy {
+    pub hydration_size: String,
+    /// `None` falls back to the system default linger when the burst strategy
+    /// writes its record.
+    pub linger_duration: Option<Duration>,
 }

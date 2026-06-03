@@ -381,3 +381,146 @@ drop retired true
 > SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
 1
 > DROP CLUSTER cc_manual
+
+# ----- Hydration burst: AUTO SCALING STRATEGY SQL surface (PR 6) -----
+
+# SQL acceptance is gated by a feature flag (not a dyncfg) so stored CREATE CLUSTER
+# statements re-parse at rehydration regardless of the dyncfgs. The break-glass
+# burst strategy is disabled so the in-flight burst state here is deterministically
+# empty regardless of arming semantics. This section exercises parse/render/
+# validation, not arming.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_auto_scaling_strategy = true
+ALTER SYSTEM SET enable_hydration_burst = false
+
+# A managed cluster can carry an ON HYDRATION burst policy.
+> CREATE CLUSTER cc_burst (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+# SHOW CREATE CLUSTER renders the policy back, and the rendered statement re-parses
+# (the planner's create-roundtrip asserts unplan->parse->plan equality).
+> SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''%' FROM (SHOW CREATE CLUSTER cc_burst)
+true
+
+# The cluster serves a steady replica set at its own size (the baseline).
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_burst'
+1
+
+# mz_cluster_auto_scaling_strategies surfaces the configured policy (the strategy
+# JSON carries the HYDRATION SIZE) and the in-flight state. With the burst strategy
+# disabled no burst is ever armed, so `state` is NULL.
+> SELECT mz_clusters.name, ass.strategy->'on_hydration'->>'hydration_size', ass.state IS NULL FROM mz_internal.mz_cluster_auto_scaling_strategies ass JOIN mz_clusters ON mz_clusters.id = ass.cluster_id WHERE mz_clusters.name = 'cc_burst'
+cc_burst scale=2,workers=2 true
+
+# With nothing in flight, SHOW CLUSTERS reports no activity.
+> SELECT name, activity FROM (SHOW CLUSTERS) WHERE name = 'cc_burst'
+cc_burst <null>
+
+# RESET disables autoscaling; SHOW CREATE no longer renders the block.
+> ALTER CLUSTER cc_burst RESET (AUTO SCALING STRATEGY)
+> SELECT create_sql LIKE '%AUTO SCALING STRATEGY%' FROM (SHOW CREATE CLUSTER cc_burst)
+false
+
+# Setting it back via ALTER also works (omitting LINGER DURATION).
+> ALTER CLUSTER cc_burst SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+> SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''))%' FROM (SHOW CREATE CLUSTER cc_burst)
+true
+
+> DROP CLUSTER cc_burst
+
+# HYDRATION SIZE equal to the cluster SIZE is rejected (a burst at the same size
+# would not accelerate hydration).
+! CREATE CLUSTER cc_burst_bad (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+contains:HYDRATION SIZE must differ from the cluster SIZE
+
+# AUTO SCALING STRATEGY combined with a non-MANUAL SCHEDULE is rejected.
+! CREATE CLUSTER cc_burst_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+contains:AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+
+# The two invariants are also enforced when an ALTER changes the *other* side of
+# the constraint on a cluster that already carries a strategy.
+> CREATE CLUSTER cc_burst_alt (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# Setting SIZE equal to the existing HYDRATION SIZE would make the burst a no-op.
+! ALTER CLUSTER cc_burst_alt SET (SIZE = 'scale=2,workers=2')
+contains:HYDRATION SIZE must differ from the cluster SIZE
+
+# Setting a non-MANUAL SCHEDULE on a cluster that already has a strategy is rejected.
+! ALTER CLUSTER cc_burst_alt SET (SCHEDULE = ON REFRESH)
+contains:AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+
+> DROP CLUSTER cc_burst_alt
+
+# The invariants also fire when an ALTER *introduces* a strategy that conflicts with
+# the cluster's current config.
+> CREATE CLUSTER cc_burst_set (SIZE 'scale=1,workers=1')
+
+! ALTER CLUSTER cc_burst_set SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+contains:HYDRATION SIZE must differ from the cluster SIZE
+
+> DROP CLUSTER cc_burst_set
+
+> CREATE CLUSTER cc_burst_onref (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH)
+
+! ALTER CLUSTER cc_burst_onref SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+contains:AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+
+> DROP CLUSTER cc_burst_onref
+
+# With SQL acceptance gated off, the option is rejected at plan time.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_auto_scaling_strategy = false
+
+! CREATE CLUSTER cc_burst_gated (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+contains:`AUTO SCALING STRATEGY` cluster option is not available
+
+# ----- Hydration burst: no burst on a cluster with nothing to hydrate (PR 8c) -----
+#
+# Burst arming is existential: a burst is warranted iff there exists an object on
+# the cluster that no steady replica has hydrated. A strategy-carrying cluster with
+# zero objects therefore never bursts, in particular not at creation, before its
+# steady replica has even registered. With the burst strategy enabled this is
+# deterministic exactly because of the object gate.
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_auto_scaling_strategy = true
+ALTER SYSTEM SET enable_hydration_burst = true
+
+> CREATE CLUSTER cc_burst_empty (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+# Liveness synchronizer: a reconfiguration elsewhere proves the controller ran many
+# ticks with the burst strategy enabled. Every tick was a chance to arm a burst on
+# cc_burst_empty. It never does, because the cluster has no object to hydrate. (A
+# burst that did arm would stick around for its 600s linger and fail the checks below.)
+> CREATE CLUSTER cc_burst_tick (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+> ALTER CLUSTER cc_burst_tick SET (REPLICATION FACTOR 2)
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_burst_tick'
+2
+> DROP CLUSTER cc_burst_tick
+
+# No burst is in flight: the auto-scaling state is empty ...
+> SELECT mz_clusters.name, ass.state IS NULL FROM mz_internal.mz_cluster_auto_scaling_strategies ass JOIN mz_clusters ON mz_clusters.id = ass.cluster_id WHERE mz_clusters.name = 'cc_burst_empty'
+cc_burst_empty true
+
+# ... SHOW CLUSTERS reports no activity ...
+> SELECT name, activity FROM (SHOW CLUSTERS) WHERE name = 'cc_burst_empty'
+cc_burst_empty <null>
+
+# ... the replica set is exactly the steady baseline ...
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_burst_empty'
+cc_burst_empty r1 scale=1,workers=1
+
+# ... and the audit log records neither a burst lifecycle event nor a
+# burst-attributed replica.
+> SELECT count(*) FROM mz_catalog.mz_audit_events WHERE (details->>'cluster_name' = 'cc_burst_empty' AND details->>'burst_size' IS NOT NULL) OR (object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_burst_empty' AND details->>'reason' = 'hydration-burst')
+0
+
+> DROP CLUSTER cc_burst_empty
+
+# Restore pristine server state (including the tick-interval override).
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM RESET enable_cluster_controller
+ALTER SYSTEM RESET cluster_controller_tick_interval
+ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration
+ALTER SYSTEM RESET enable_background_alter_cluster
+ALTER SYSTEM RESET enable_auto_scaling_strategy
+ALTER SYSTEM RESET enable_hydration_burst

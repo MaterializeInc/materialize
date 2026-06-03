@@ -16,8 +16,8 @@
 //! and wherever it is checked keeps the compared fields from drifting apart.
 
 use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState, OnTimeout,
-    ReconfigurationRecord, ReconfigurationTarget,
+    AutoScalingPolicy, AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState,
+    OnHydrationPolicy, OnTimeout, ReconfigurationRecord, ReconfigurationTarget,
 };
 use mz_catalog::memory::objects::{
     BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -39,7 +39,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         replication_factor,
         optimizer_feature_overrides: _,
         schedule,
-        auto_scaling_strategy: _,
+        auto_scaling_strategy,
         reconfiguration,
         burst,
     } = managed;
@@ -49,6 +49,7 @@ pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClust
         availability_zones: AvailabilityZones(availability_zones.clone()),
         logging: logging.clone(),
         schedule: cluster_schedule(schedule),
+        auto_scaling_policy: auto_scaling_strategy.as_ref().map(auto_scaling_policy),
         reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
         burst: burst.as_ref().map(burst_record),
     }
@@ -130,5 +131,21 @@ fn burst_record(record: &BurstState) -> BurstRecord {
         burst_size: burst_size.clone(),
         linger_duration: *linger_duration,
         steady_hydrated_at: *steady_hydrated_at,
+    }
+}
+
+fn auto_scaling_policy(strategy: &mz_sql::plan::AutoScalingStrategy) -> AutoScalingPolicy {
+    let mz_sql::plan::AutoScalingStrategy { on_hydration } = strategy;
+    AutoScalingPolicy {
+        on_hydration: on_hydration.as_ref().map(|on_hydration| {
+            let mz_sql::plan::OnHydration {
+                hydration_size,
+                linger_duration,
+            } = on_hydration;
+            OnHydrationPolicy {
+                hydration_size: hydration_size.clone(),
+                linger_duration: *linger_duration,
+            }
+        }),
     }
 }

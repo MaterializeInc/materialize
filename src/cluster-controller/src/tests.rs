@@ -15,6 +15,7 @@
 //! and recovered. A handful of pure-kernel tests cover the multiset union/diff.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
@@ -24,8 +25,8 @@ use mz_repr::{GlobalId, Timestamp};
 
 use crate::ClusterController;
 use crate::ctx::{
-    ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
-    ObservedReplica, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ApplyOutcome, AutoScalingPolicy, AvailabilityZones, ClusterControllerCtx, ClusterSchedule,
+    ClusterState, Decision, ObservedReplica, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use crate::strategy::{DesiredReplica, Strategy};
 
@@ -55,6 +56,11 @@ fn observed(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
 
 /// Builds a MANUAL managed cluster state with the given realized size,
 /// replication factor, and replicas. No reconfiguration or burst in flight.
+/// `has_hydratable_objects` defaults to `true` so kernel-level scenarios that
+/// are about replica hydration (not object existence) keep their meaning;
+/// through the seam the field is irrelevant. `FakeCtx::cluster_states`
+/// returns it at the adapter default and the controller's pull consults
+/// `FakeCtx::has_hydratable_objects` instead.
 fn state(
     cluster_id: ClusterId,
     size: &str,
@@ -68,11 +74,16 @@ fn state(
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
         schedule: ClusterSchedule::Manual,
+        auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
+        burst_enabled: true,
+        default_burst_linger: Duration::ZERO,
         replicas,
+        reserved_replica_names: Vec::new(),
         hydrated_replicas: BTreeSet::new(),
         refresh_window: None,
+        has_hydratable_objects: true,
     }
 }
 
@@ -100,9 +111,26 @@ struct FakeCtx {
     /// but before its append. Combined with `witness_check`, this exercises the
     /// `schedule` field of the compare-and-append witness end-to-end.
     concurrent_schedule_alter: BTreeMap<ClusterId, ClusterSchedule>,
+    /// As `concurrent_schedule_alter`, but for the autoscaling policy: each
+    /// entry's value is written onto the stored state's `auto_scaling_policy`
+    /// before the witness check, modeling an `ALTER ... SET/RESET (AUTO SCALING
+    /// STRATEGY ...)` that lands mid-tick. Exercises the `auto_scaling_policy`
+    /// field of the witness.
+    concurrent_policy_alter: BTreeMap<ClusterId, Option<AutoScalingPolicy>>,
     /// Replicas the fake reports as hydrated when the controller probes. A
     /// graceful test sets this to drive cut-over.
     hydrated: BTreeSet<ReplicaId>,
+    /// How many times the controller probed hydration, for asserting that an
+    /// object-less cluster is never probed.
+    hydration_probes: usize,
+    /// What the fake answers when the controller pulls the object-existence
+    /// signal; an absent entry reads `false` (no objects). Held beside the
+    /// states (like `hydrated`) rather than read from them, and
+    /// `cluster_states` returns the state field at the adapter default
+    /// (`false`), so the signal reaches the controller only through the
+    /// `has_hydratable_objects` pull, keeping that pull load-bearing for
+    /// the seam tests.
+    has_hydratable_objects: BTreeMap<ClusterId, bool>,
     /// Refresh-window inputs the fake returns per cluster when the controller
     /// probes a scheduled cluster. An on-refresh test sets this to drive the
     /// window decision.
@@ -118,7 +146,10 @@ impl FakeCtx {
             reject_next: 0,
             witness_check: false,
             concurrent_schedule_alter: BTreeMap::new(),
+            concurrent_policy_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
+            hydration_probes: 0,
+            has_hydratable_objects: BTreeMap::new(),
             refresh_window: BTreeMap::new(),
         }
     }
@@ -152,6 +183,13 @@ impl ClusterControllerCtx for FakeCtx {
         clusters
             .iter()
             .filter_map(|id| self.states.get(id).cloned())
+            .map(|mut s| {
+                // Live signal, delivered only via the `has_hydratable_objects`
+                // pull: return the field at the adapter default so a seam test
+                // fails if the controller skips the pull.
+                s.has_hydratable_objects = false;
+                s
+            })
             .collect()
     }
 
@@ -164,11 +202,19 @@ impl ClusterControllerCtx for FakeCtx {
         _cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId> {
+        self.hydration_probes += 1;
         replicas
             .iter()
             .copied()
             .filter(|r| self.hydrated.contains(r))
             .collect()
+    }
+
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool {
+        self.has_hydratable_objects
+            .get(&cluster_id)
+            .copied()
+            .unwrap_or(false)
     }
 
     async fn refresh_window_inputs(
@@ -192,6 +238,11 @@ impl ClusterControllerCtx for FakeCtx {
         for (cluster_id, schedule) in std::mem::take(&mut self.concurrent_schedule_alter) {
             if let Some(state) = self.states.get_mut(&cluster_id) {
                 state.schedule = schedule;
+            }
+        }
+        for (cluster_id, policy) in std::mem::take(&mut self.concurrent_policy_alter) {
+            if let Some(state) = self.states.get_mut(&cluster_id) {
+                state.auto_scaling_policy = policy;
             }
         }
         if self.witness_check && !self.witness_holds(&decisions) {
@@ -330,6 +381,34 @@ async fn steady_state_is_a_noop() {
         ctx.applied.is_empty(),
         "steady cluster should produce no decisions, got {:?}",
         ctx.applied
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn create_skips_reserved_replica_names() {
+    // A non-owned (INTERNAL / BILLED AS) replica already occupies "r1": it is
+    // reserved but not part of the controller-owned set, so the baseline's create
+    // must skip that name rather than collide with it.
+    let c = cluster(1);
+    let mut s = state(c, "100cc", 1, vec![]);
+    s.reserved_replica_names = vec!["r1".to_string()];
+    let mut ctx = FakeCtx::new(vec![s]);
+
+    ClusterController::new().reconcile(&mut ctx).await;
+
+    let created: Vec<&str> = ctx
+        .applied
+        .iter()
+        .flatten()
+        .filter_map(|d| match d {
+            Decision::CreateReplica { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        created,
+        vec!["r2"],
+        "the created replica should skip the reserved name r1"
     );
 }
 
@@ -664,6 +743,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 schedule: ClusterSchedule::Manual,
+                auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
             }
@@ -754,6 +834,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 schedule: ClusterSchedule::Manual,
+                auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
             }
@@ -988,11 +1069,16 @@ fn reconfiguring_state(
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
         schedule: ClusterSchedule::Manual,
+        auto_scaling_policy: None,
         reconfiguration: Some(rec),
         burst: None,
+        burst_enabled: true,
+        default_burst_linger: Duration::ZERO,
         replicas,
+        reserved_replica_names: Vec::new(),
         hydrated_replicas: hydrated,
         refresh_window: None,
+        has_hydratable_objects: true,
     }
 }
 
@@ -1222,6 +1308,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         availability_zones: vec!["az1".to_string()],
         logging: ComputeReplicaLogging::default(),
         schedule: ClusterSchedule::Manual,
+        auto_scaling_policy: None,
         reconfiguration: Some(ReconfigurationRecord {
             target: ReconfigurationTarget {
                 size: "100cc".to_string(),
@@ -1233,6 +1320,8 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
             on_timeout: OnTimeout::Rollback,
         }),
         burst: None,
+        burst_enabled: true,
+        default_burst_linger: Duration::ZERO,
         replicas: vec![ObservedReplica {
             replica_id: replica(1),
             name: "r0".to_string(),
@@ -1242,8 +1331,10 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 logging: ComputeReplicaLogging::default(),
             },
         }],
+        reserved_replica_names: Vec::new(),
         hydrated_replicas: BTreeSet::new(),
         refresh_window: None,
+        has_hydratable_objects: true,
     };
     let now = Timestamp::from(1000u64);
 
@@ -1507,8 +1598,6 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
 
 // ----- On-refresh scheduling strategy. -----
 
-use std::time::Duration;
-
 use mz_repr::refresh_schedule::RefreshSchedule;
 use timely::progress::Antichain;
 
@@ -1534,11 +1623,16 @@ fn scheduled_state(
         schedule: Sched::Refresh {
             hydration_time_estimate: Duration::from_millis(hydration_time_estimate_ms),
         },
+        auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
+        burst_enabled: true,
+        default_burst_linger: Duration::ZERO,
         replicas,
+        reserved_replica_names: Vec::new(),
         hydrated_replicas: BTreeSet::new(),
         refresh_window,
+        has_hydratable_objects: true,
     }
 }
 
@@ -1937,4 +2031,683 @@ async fn on_refresh_unchanged_schedule_passes_witness() {
         ctx.states[&c].replicas.is_empty(),
         "the drop applied under a matching witness"
     );
+}
+
+mod hydration_burst {
+    use std::time::Duration;
+
+    use mz_compute_types::config::ComputeReplicaLogging;
+    use mz_repr::Timestamp;
+
+    use super::{ObservedReplica, cluster, observed, replica, state};
+    use crate::ctx::{
+        AutoScalingPolicy, AvailabilityZones, BurstRecord, ClusterState, OnHydrationPolicy,
+        ReplicaShape, StateWrite,
+    };
+    use crate::strategy::{HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, Strategy};
+
+    /// A MANUAL cluster carrying an `ON HYDRATION` policy at `hydration_size` with
+    /// the given linger, plus an optional in-flight burst record. `burst_enabled`
+    /// is on and the default linger is zero, matching a steady environment.
+    fn burst_state(
+        size: &str,
+        rf: u32,
+        hydration_size: &str,
+        linger: Duration,
+        replicas: Vec<ObservedReplica>,
+        burst: Option<BurstRecord>,
+    ) -> ClusterState {
+        let mut s = state(cluster(1), size, rf, replicas);
+        s.auto_scaling_policy = Some(AutoScalingPolicy {
+            on_hydration: Some(OnHydrationPolicy {
+                hydration_size: hydration_size.to_string(),
+                linger_duration: Some(linger),
+            }),
+        });
+        s.burst = burst;
+        s
+    }
+
+    fn record(burst_size: &str, linger: Duration, stamped: Option<u64>) -> BurstRecord {
+        BurstRecord {
+            burst_size: burst_size.to_string(),
+            linger_duration: linger,
+            steady_hydrated_at: stamped.map(Timestamp::from),
+        }
+    }
+
+    fn now(ms: u64) -> Timestamp {
+        Timestamp::from(ms)
+    }
+
+    #[mz_ore::test]
+    fn burst_arms_when_steady_unhydrated() {
+        // Policy set, cluster On, the one steady replica not hydrated, no record:
+        // arm a burst at the hydration size.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        let burst = write
+            .burst
+            .expect("a burst record is written")
+            .expect("present");
+        assert_eq!(burst.burst_size, "400cc");
+        assert_eq!(burst.linger_duration, Duration::from_millis(10));
+        assert_eq!(burst.steady_hydrated_at, None);
+    }
+
+    #[mz_ore::test]
+    fn burst_uses_default_linger_when_omitted() {
+        // The policy omits LINGER DURATION, so the record takes the env default.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::ZERO,
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        s.auto_scaling_policy = Some(AutoScalingPolicy {
+            on_hydration: Some(OnHydrationPolicy {
+                hydration_size: "400cc".to_string(),
+                linger_duration: None,
+            }),
+        });
+        s.default_burst_linger = Duration::from_secs(42);
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        let burst = write.burst.expect("written").expect("present");
+        assert_eq!(burst.linger_duration, Duration::from_secs(42));
+    }
+
+    #[mz_ore::test]
+    fn burst_does_not_arm_when_steady_hydrated() {
+        // The steady replica is already hydrated, so no burst is warranted: no
+        // record is written.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        s.hydrated_replicas.insert(replica(1));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_does_not_arm_without_objects() {
+        // Zero hydratable objects: a burst is never warranted, no matter what
+        // the steady set looks like. Neither an un-hydrated steady replica, an
+        // absent one, nor a hydrated one arms a burst.
+        let base = |replicas| {
+            let mut s = burst_state(
+                "100cc",
+                1,
+                "400cc",
+                Duration::from_millis(10),
+                replicas,
+                None,
+            );
+            s.has_hydratable_objects = false;
+            s
+        };
+
+        // Steady replica present but un-hydrated.
+        let s = base(vec![observed(replica(1), "r0", "100cc")]);
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+        // Steady replica absent entirely (a brand-new cluster's first ticks).
+        let s = base(Vec::new());
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+        // Steady replica reporting hydrated despite zero user objects (its
+        // log dataflows hydrated).
+        let mut s = base(vec![observed(replica(1), "r0", "100cc")]);
+        s.hydrated_replicas.insert(replica(1));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_arms_with_unreporting_steady_replica_and_objects() {
+        // A cluster WITH objects whose steady replica reports nothing (crashed,
+        // restarting, or not yet registered with the compute controller) reads
+        // as un-hydrated, so a burst arms. Correct: the objects are not served
+        // and a burst replica can pick them up.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        assert!(
+            write.burst.is_some(),
+            "burst arms on an unreporting steady replica"
+        );
+
+        // Same with the steady replica absent entirely.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            Vec::new(),
+            None,
+        );
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        assert!(
+            write.burst.is_some(),
+            "burst arms with no steady replica at all"
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_desires_one_replica_at_hydration_size() {
+        // With a record present, the strategy desires exactly one replica at the
+        // burst size (with the cluster's AZ pool and logging).
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(10), None)),
+        );
+        let desired = HydrationBurstStrategy.desired_replicas(&s, now(1000));
+        assert_eq!(desired.len(), 1);
+        assert_eq!(desired[0].shape.size, "400cc");
+    }
+
+    #[mz_ore::test]
+    fn burst_no_record_desires_nothing() {
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        assert!(
+            HydrationBurstStrategy
+                .desired_replicas(&s, now(1000))
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_stamps_then_lingers_then_tears_down() {
+        // Record present, steady replica hydrated for the first time: stamp the
+        // linger start.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        s.hydrated_replicas.insert(replica(1));
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        let burst = write.burst.expect("stamped").expect("present");
+        assert_eq!(burst.steady_hydrated_at, Some(now(1000)));
+
+        // Stamped, linger not yet elapsed (now=1050, stamped=1000, linger=100): hold.
+        let mut s = s.clone();
+        s.burst = Some(record("400cc", Duration::from_millis(100), Some(1000)));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1050))
+                .is_empty()
+        );
+
+        // Stamped, linger elapsed (now=1101 > 1000+100): tear down.
+        let write = HydrationBurstStrategy.update_state(&s, now(1101));
+        assert_eq!(write.burst, Some(None), "burst record cleared at teardown");
+    }
+
+    #[mz_ore::test]
+    fn burst_re_arms_when_steady_unhydrates() {
+        // Record present, previously stamped, but the steady set is no longer
+        // hydrated: reset the stamp so the linger restarts after the next hydration.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(100), Some(1000))),
+        );
+        // hydrated_replicas is empty: the steady replica went un-hydrated.
+        let write = HydrationBurstStrategy.update_state(&s, now(1050));
+        let burst = write.burst.expect("rewritten").expect("present");
+        assert_eq!(burst.steady_hydrated_at, None, "stamp reset on re-arm");
+    }
+
+    #[mz_ore::test]
+    fn burst_tears_down_when_cluster_off() {
+        // The cluster was turned off (rf=0). A burst is no longer warranted, so the
+        // record is cleared regardless of linger.
+        let mut s = burst_state(
+            "100cc",
+            0,
+            "400cc",
+            Duration::from_millis(100),
+            Vec::new(),
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        s.replication_factor = 0;
+        assert_eq!(
+            HydrationBurstStrategy.update_state(&s, now(1000)).burst,
+            Some(None)
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_tears_down_when_policy_removed() {
+        // The policy was removed (the cluster no longer carries ON HYDRATION). The
+        // stale record is cleared.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        s.auto_scaling_policy = None;
+        assert_eq!(
+            HydrationBurstStrategy.update_state(&s, now(1000)).burst,
+            Some(None)
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_tears_down_on_size_change() {
+        // The HYDRATION SIZE changed from the record's size: the stale record is
+        // cleared (a fresh one at the new size is written on a later tick).
+        let s = burst_state(
+            "100cc",
+            1,
+            "800cc",
+            Duration::from_millis(100),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        assert_eq!(
+            HydrationBurstStrategy.update_state(&s, now(1000)).burst,
+            Some(None)
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_break_glass_disables_strategy() {
+        // The break-glass flag is off: no burst is armed even when steady is
+        // un-hydrated, and an existing record is torn down.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        s.burst_enabled = false;
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+
+        s.burst = Some(record("400cc", Duration::from_millis(100), None));
+        assert_eq!(
+            HydrationBurstStrategy.update_state(&s, now(1000)).burst,
+            Some(None)
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_no_policy_is_a_noop() {
+        // A plain MANUAL cluster with no autoscaling policy: the strategy never
+        // writes or desires anything.
+        let s = state(
+            cluster(1),
+            "100cc",
+            1,
+            vec![observed(replica(1), "r0", "100cc")],
+        );
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+        assert!(
+            HydrationBurstStrategy
+                .desired_replicas(&s, now(1000))
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_replica_shape_carries_az_and_logging() {
+        // The burst replica differs from steady only in size: it carries the
+        // cluster's AZ pool and logging.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            Vec::new(),
+            Some(record("400cc", Duration::from_millis(10), None)),
+        );
+        s.availability_zones = vec!["az1".to_string(), "az2".to_string()];
+        let desired = HydrationBurstStrategy.desired_replicas(&s, now(1000));
+        let expected = ReplicaShape {
+            size: "400cc".to_string(),
+            availability_zones: AvailabilityZones(s.availability_zones.clone()),
+            logging: ComputeReplicaLogging::default(),
+        };
+        assert!(desired[0].shape.matches(&expected));
+    }
+
+    #[mz_ore::test]
+    fn burst_strategy_name() {
+        assert_eq!(HydrationBurstStrategy.name(), HYDRATION_BURST_STRATEGY_NAME);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_seam_creates_then_tears_down() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+        use crate::ctx::Decision;
+
+        // A cluster with a 100cc steady replica that is not hydrated and an
+        // ON HYDRATION (400cc) policy. The controller writes a burst record
+        // (phase 1) and creates the 400cc burst replica (phase 2).
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
+        let controller = ClusterController::new();
+        controller.reconcile(&mut ctx).await;
+
+        // The burst replica was created at the hydration size.
+        let burst_creates: Vec<_> = ctx
+            .creates()
+            .into_iter()
+            .filter(|d| matches!(d, Decision::CreateReplica { shape, .. } if shape.size == "400cc"))
+            .collect();
+        assert_eq!(burst_creates.len(), 1, "one 400cc burst replica created");
+        assert!(
+            matches!(&burst_creates[0], Decision::CreateReplica { reasons, .. } if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME)),
+            "the create is attributed to the burst strategy"
+        );
+        assert!(
+            matches!(
+                &burst_creates[0],
+                Decision::CreateReplica {
+                    audit_detail: None,
+                    ..
+                }
+            ),
+            "only on-refresh creates carry a window decision"
+        );
+        assert!(
+            ctx.states[&c].burst.is_some(),
+            "the burst record was written"
+        );
+
+        // Now mark the steady replica hydrated; with a zero linger the next tick
+        // (advancing `now`) stamps and then tears down the burst.
+        ctx.hydrated.insert(replica(1));
+        ctx.now = Timestamp::from(2000u64);
+        controller.reconcile(&mut ctx).await;
+        // First post-hydration tick stamps `steady_hydrated_at`.
+        ctx.now = Timestamp::from(3000u64);
+        controller.reconcile(&mut ctx).await;
+        assert!(
+            ctx.states[&c].burst.is_none(),
+            "the burst record is cleared after the (zero) linger elapses"
+        );
+        assert!(
+            !ctx.states[&c]
+                .replicas
+                .iter()
+                .any(|r| r.shape.size == "400cc"),
+            "the burst replica is torn down"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_empty_cluster_never_arms_through_seam() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+
+        // A strategy-carrying cluster with zero hydratable objects never arms,
+        // tick after tick, neither while its steady replica has not yet
+        // registered (reports un-hydrated) nor once it reports hydrated (its
+        // log dataflows). This is the brand-new-cluster case: no burst at
+        // creation.
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        // No `has_hydratable_objects` entry on the ctx: the pull reports no
+        // objects.
+        let mut ctx = FakeCtx::new(vec![s]);
+        let controller = ClusterController::new();
+
+        // Ticks with the steady replica not reporting hydrated (booting).
+        controller.reconcile(&mut ctx).await;
+        ctx.now = Timestamp::from(2000u64);
+        controller.reconcile(&mut ctx).await;
+        // Ticks once it reports.
+        ctx.hydrated.insert(replica(1));
+        ctx.now = Timestamp::from(3000u64);
+        controller.reconcile(&mut ctx).await;
+
+        assert!(
+            ctx.applied.is_empty(),
+            "an object-less cluster produces no decisions at all, got {:?}",
+            ctx.applied
+        );
+        assert!(ctx.states[&c].burst.is_none(), "no burst record ever");
+        assert_eq!(
+            ctx.hydration_probes, 0,
+            "an object-less cluster is never even probed for hydration"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_arms_when_first_object_lands_through_seam() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+        use crate::ctx::Decision;
+
+        // The dual of the never-arms test: the same cluster arms as soon as its
+        // first hydratable object exists while the steady set is un-hydrated.
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let mut ctx = FakeCtx::new(vec![s]);
+        let controller = ClusterController::new();
+
+        controller.reconcile(&mut ctx).await;
+        assert!(ctx.applied.is_empty(), "no objects: nothing happens");
+
+        // The first object lands (e.g. CREATE INDEX); the steady replica has
+        // not hydrated it. The controller only learns this through its
+        // `has_hydratable_objects` pull.
+        ctx.has_hydratable_objects.insert(c, true);
+        ctx.now = Timestamp::from(2000u64);
+        controller.reconcile(&mut ctx).await;
+
+        assert!(
+            ctx.states[&c].burst.is_some(),
+            "the burst record was written once an object existed"
+        );
+        let burst_creates: Vec<_> = ctx
+            .creates()
+            .into_iter()
+            .filter(|d| matches!(d, Decision::CreateReplica { shape, .. } if shape.size == "400cc"))
+            .collect();
+        assert_eq!(burst_creates.len(), 1, "one 400cc burst replica created");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_policy_alter_rejects_in_flight_decision() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+        use crate::ctx::Decision;
+
+        // The `auto_scaling_policy` field of the compare-and-append witness is
+        // load-bearing: a concurrent `ALTER ... RESET (AUTO SCALING STRATEGY)`
+        // that lands between the controller's read and its append must reject the
+        // in-flight burst write, so the controller never arms a burst on a cluster
+        // whose policy the user just cleared. With `witness_check` on, this
+        // exercises the real per-decision compare, so dropping `auto_scaling_policy`
+        // from `ExpectedClusterState` would make this test fail.
+        let c = cluster(1);
+        // Policy set, cluster On, the steady replica not hydrated, no record: the
+        // strategy emits a phase-1 burst write carrying `expected.auto_scaling_policy`.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
+        ctx.witness_check = true;
+        // The `ALTER` clears only the policy (size, rf, azs, logging unchanged), so
+        // the rejection is attributable solely to the witness `auto_scaling_policy`.
+        ctx.concurrent_policy_alter.insert(c, None);
+
+        let controller = ClusterController::new();
+        controller.reconcile(&mut ctx).await;
+
+        // The burst write was attempted but rejected by its compare-and-append
+        // guard, so no burst record landed and no burst replica was created.
+        let writes: Vec<_> = ctx
+            .applied
+            .iter()
+            .flatten()
+            .filter(|d| matches!(d, Decision::UpdateClusterState { .. }))
+            .collect();
+        assert_eq!(writes.len(), 1, "the burst write was attempted");
+        assert!(
+            ctx.states[&c].burst.is_none(),
+            "the rejected write left no burst record"
+        );
+        assert!(
+            !ctx.states[&c]
+                .replicas
+                .iter()
+                .any(|r| r.shape.size == "400cc"),
+            "no burst replica was created under the rejected witness"
+        );
+        assert!(
+            ctx.states[&c].auto_scaling_policy.is_none(),
+            "the user's policy reset stands"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_unchanged_policy_passes_witness() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+
+        // The dual of the rejection test: with the witness check on but no
+        // concurrent policy `ALTER`, the matching `auto_scaling_policy` lets the
+        // same burst write apply, so the check is not vacuously rejecting.
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
+        ctx.witness_check = true;
+
+        let controller = ClusterController::new();
+        controller.reconcile(&mut ctx).await;
+
+        assert!(
+            ctx.states[&c].burst.is_some(),
+            "the burst record was written under a matching witness"
+        );
+        assert!(
+            ctx.states[&c]
+                .replicas
+                .iter()
+                .any(|r| r.shape.size == "400cc"),
+            "the burst replica was created under a matching witness"
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_success_precedence_when_hydrated_with_record() {
+        // Record present and steady hydrated, but already stamped within linger:
+        // the record is held, not torn down, until linger elapses (a previous
+        // arm/stamp test path). Here a fresh stamp happens because not yet stamped.
+        let mut s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(50),
+            vec![observed(replica(1), "r0", "100cc")],
+            Some(record("400cc", Duration::from_millis(50), None)),
+        );
+        s.hydrated_replicas.insert(replica(1));
+        let write: StateWrite = HydrationBurstStrategy.update_state(&s, now(2000));
+        let burst = write.burst.expect("stamped").expect("present");
+        assert_eq!(burst.steady_hydrated_at, Some(now(2000)));
+    }
 }

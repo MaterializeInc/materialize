@@ -191,6 +191,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
     cluster_check_scheduling_policies_interval
+    cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
     cluster_soften_az_affinity
@@ -221,14 +222,19 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     crdb_keepalives_interval
     crdb_keepalives_retries
     crdb_tcp_user_timeout
+    default_cluster_reconfiguration_timeout
+    default_hydration_burst_linger
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
+    enable_auto_scaling_strategy
+    enable_background_alter_cluster
     enable_binary_date_bin
     enable_bounded_staleness_isolation
+    enable_cluster_controller
     enable_coalesce_case_transform
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
@@ -239,6 +245,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_eq_classes_withholding_errors
     enable_frontend_subscribes
     enable_glue_schema_registry
+    enable_hydration_burst
     enable_introspection_subscribes
     enable_kafka_broker_matching_rules
     enable_less_reduce_in_eqprop

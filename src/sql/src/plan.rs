@@ -587,6 +587,9 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, or `None` if autoscaling is
+    /// disabled for the cluster.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
 #[derive(Debug)]
@@ -2082,6 +2085,9 @@ pub struct PlanClusterOption {
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
+    /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
+    /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
+    pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
 }
 
 impl Default for PlanClusterOption {
@@ -2096,6 +2102,7 @@ impl Default for PlanClusterOption {
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
+            auto_scaling_strategy: AlterOptionParameter::Unchanged,
         }
     }
 }
