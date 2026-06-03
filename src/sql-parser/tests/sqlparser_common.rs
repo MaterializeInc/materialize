@@ -313,6 +313,12 @@ fn test_negated_cast_display_roundtrip() {
         "SELECT -CAST(2 AS int4)",
         "SELECT -CAST(2 AS n)",
         "SELECT -CAST(2.5 AS double)",
+        // Cast *chains* must parenthesize too: a unary minus over `3.14::int2::int2`
+        // would otherwise display as `- 3.14::int2::int2` and reparse with the
+        // negation folded into the innermost operand. (The `CAST(CAST(..))` form
+        // builds the chain without the `-` folding at parse time.)
+        "SELECT -CAST(CAST(3.14 AS int2) AS int2)",
+        "SELECT -CAST(CAST(CAST(2 AS int4) AS int8) AS int8)",
     ] {
         assert_display_roundtrips(sql);
     }
@@ -392,6 +398,46 @@ fn assert_display_roundtrips(sql: &str) {
         reparsed.to_ast_string_stable(),
         "display round trip drifted for {sql:?} (displayed {displayed:?})"
     );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_special_form_function_with_modifiers_display_roundtrip() {
+    // The `position(a IN b)` / `extract(f FROM src)` special grammars have no
+    // syntax for `DISTINCT`, a within-group `ORDER BY`, a `FILTER`, or an `OVER`
+    // window. A call literally named `"position"`/`"extract"` that carries any
+    // of those modifiers (reachable only via the quoted name) must fall back to
+    // the plain quoted-call form, or the printer's special form silently drops
+    // the modifier. Regression for the grammar_roundtrip fuzz finding.
+    for sql in [
+        r#"SELECT "position"(a, b ORDER BY c)"#,
+        r#"SELECT "position"(a, b) FILTER (WHERE d)"#,
+        r#"SELECT "position"(a, b) OVER (ORDER BY e)"#,
+        r#"SELECT "position"(DISTINCT a, b)"#,
+        r#"SELECT "position"(a, b ORDER BY c) FILTER (WHERE d) OVER (ORDER BY e)"#,
+        r#"SELECT "extract"('x', y ORDER BY z)"#,
+        // No modifiers: the special form is still used and round-trips.
+        r#"SELECT "position"(a, b)"#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_list_keyword_bare_identifier_subscript_display_roundtrip() {
+    // `list[1]` is a valid one-element `LIST` literal, so a bare `list`
+    // identifier that gets subscripted re-lexes as a list literal rather than a
+    // subscript — `can_be_printed_bare` must quote it. Regression for the
+    // grammar_roundtrip fuzz finding `"list"['%':0]`.
+    for sql in [
+        r#"SELECT "list"[1]"#,
+        r#"SELECT "list"[1:2]"#,
+        r#"SELECT "list"['a':0]"#,
+        r#"SELECT "list""#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
 }
 
 #[mz_ore::test]
