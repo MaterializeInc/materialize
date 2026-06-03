@@ -626,6 +626,19 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     true,
 );
 
+/// The maximum window a maintained `CHANGES` changelog read may trail
+/// `mz_now()` by. The window directly sizes the compaction hold a `CHANGES`
+/// materialized view imposes on its input, so larger windows must be opted
+/// into explicitly. Checked at `CREATE MATERIALIZED VIEW` only, so lowering
+/// the cap does not wedge existing objects at bootstrap.
+pub static CHANGES_MAX_WINDOW: VarDefinition = VarDefinition::new(
+    "changes_max_window",
+    // 1 day
+    value!(Duration; Duration::from_secs(24 * 60 * 60)),
+    "The maximum window of a CHANGES changelog read in a materialized view (Materialize).",
+    false,
+);
+
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     "persist_fast_path_limit",
     value!(usize; 25),

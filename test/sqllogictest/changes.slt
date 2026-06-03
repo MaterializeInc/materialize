@@ -134,6 +134,45 @@ CREATE MATERIALIZED VIEW changes_mv_refresh
   WITH (REFRESH EVERY '1 day')
   AS SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
 
+# The window holds back compaction of the input for its entire length, so it
+# is capped by the changes_max_window system variable (default 1 day). The cap
+# is enforced at creation only; lowering it does not affect existing objects.
+statement error trails mz_now\(\) by 172800000ms, more than the maximum allowed window of 86400000ms
+CREATE MATERIALIZED VIEW changes_mv_wide AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '2 days')
+
+# A window of exactly the cap is allowed.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_cap AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1 day')
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_cap
+
+# Raising the cap admits wider windows.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET changes_max_window = '2 d'
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_wide AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '2 days')
+
+# Lowering the cap leaves the existing materialized view intact.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET changes_max_window
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM changes_mv_wide
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_wide
+
 # Other maintained contexts (a view, an index) are not wired up, even with a
 # sliding bound.
 statement error CHANGES outside a one-off SELECT or a materialized view

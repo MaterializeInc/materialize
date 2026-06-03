@@ -32,6 +32,7 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -647,6 +648,19 @@ impl Coordinator {
         let mut changelog_starts = Vec::new();
         for (id, import) in global_lir_plan.df_desc().source_imports.iter() {
             if let Some(ChangelogMode::Maintained { window, .. }) = &import.changelog {
+                // The window holds back compaction of the input for its entire
+                // length, so windows beyond `changes_max_window` must be opted
+                // into explicitly. Checked only here, at creation: bootstrap
+                // re-optimizes existing materialized views, and erroring there
+                // would wedge the system when the cap is lowered.
+                let max_window = self.catalog().system_config().changes_max_window();
+                let window_duration = Duration::from_millis(u64::from(*window));
+                if window_duration > max_window {
+                    return Err(AdapterError::ChangesWindowTooLarge {
+                        window: window_duration,
+                        max: max_window,
+                    });
+                }
                 let lagged = dataflow_as_of
                     .iter()
                     .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window))))
