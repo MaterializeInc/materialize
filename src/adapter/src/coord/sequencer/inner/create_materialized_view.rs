@@ -33,6 +33,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
 use std::time::Duration;
+use timely::PartialOrder;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -640,14 +641,39 @@ impl Coordinator {
         );
 
         // `CHANGES`: resolve each maintained changelog import's read start,
-        // `join(since, as_of - window)`. At creation the input's `since` is
-        // typically recent, so the window ages in from there rather than
-        // looking back (`CHANGES` cannot manufacture history the input did not
-        // retain). The read holds acquired above keep the start readable until
-        // the dataflow ships and the controller installs its own holds.
-        let mut changelog_starts = Vec::new();
+        // `join(since, as_of - window)`. On a default-retention input the
+        // `since` is recent and the window ages in from there; an input that
+        // retains history serves the retained part of the window immediately
+        // (`CHANGES` cannot manufacture history the input did not retain).
+        //
+        // Start resolution must see the inputs' *collection* `since`: the
+        // `read_holds` used for timestamp selection above may be transaction
+        // read holds sitting at the query timestamp (the frontend sequencing
+        // stores those), which would hide retained history — over-clamping an
+        // advisory start and failing a strict one. Acquire fresh holds at the
+        // collections' actual `since`; they keep the starts readable until the
+        // dataflow ships and the controller installs its own import holds.
+        let has_changelog_imports = global_lir_plan
+            .df_desc()
+            .source_imports
+            .values()
+            .any(|import| import.changelog.is_some());
+        // Held until the end of this function, past dataflow creation.
+        let changelog_inputs = has_changelog_imports.then(|| {
+            let bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+            let holds = self.acquire_read_holds(&bundle);
+            (bundle, holds)
+        });
+        let mut dataflow_as_of = dataflow_as_of;
+        let mut storage_as_of = storage_as_of;
+        let mut changelog_imports = Vec::new();
         for (id, import) in global_lir_plan.df_desc().source_imports.iter() {
-            if let Some(ChangelogMode::Maintained { window, .. }) = &import.changelog {
+            if let Some(ChangelogMode::Maintained {
+                window,
+                strict_window,
+                ..
+            }) = &import.changelog
+            {
                 // The window holds back compaction of the input for its entire
                 // length, so windows beyond `changes_max_window` must be opted
                 // into explicitly. Checked only here, at creation: bootstrap
@@ -661,13 +687,64 @@ impl Coordinator {
                         max: max_window,
                     });
                 }
-                let lagged = dataflow_as_of
-                    .iter()
-                    .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window))))
-                    .collect::<Antichain<_>>();
-                let start = lagged.join(&read_holds.since(id));
-                changelog_starts.push((*id, start));
+                let (bundle, holds) = changelog_inputs
+                    .as_ref()
+                    .expect("acquired above: dataflow has changelog imports");
+                let since = holds.since(id);
+                // A strict (`AS OF`) sliding bound requires a full retained
+                // window. The selected `as_of` is the least valid read (the
+                // inputs' `since`), at which the window cannot be full; the
+                // `as_of` is free to be later, so advance it to
+                // `since + strict_window` — making the window exactly the
+                // retained history — as long as that stays within the
+                // greatest available read (the inputs have produced the data).
+                // Beyond it the input genuinely does not retain a full window
+                // yet, which is an error: aging in silently is exactly what
+                // strict opts out of. Creation-time only: restarts resolve the
+                // start advisorily regardless (erroring an existing
+                // materialized view at bootstrap would wedge the system); the
+                // lagged dependency holds reproduce the window exactly across
+                // restarts anyway.
+                if let Some(strict_window) = strict_window {
+                    let required = since
+                        .iter()
+                        .map(|t| {
+                            Timestamp::from(u64::from(*t).saturating_add(u64::from(*strict_window)))
+                        })
+                        .collect::<Antichain<_>>();
+                    let available = self.greatest_available_read(bundle);
+                    if PartialOrder::less_than(&available, &required) {
+                        // At the latest admissible `as_of`, the window start
+                        // still precedes the earliest retained history.
+                        let start = available
+                            .iter()
+                            .map(|t| {
+                                Timestamp::from(
+                                    u64::from(*t).saturating_sub(u64::from(*strict_window)),
+                                )
+                            })
+                            .collect::<Antichain<_>>()
+                            .into_option()
+                            .expect("available is non-empty when below required");
+                        let since = since.into_option().expect("non-empty since");
+                        return Err(AdapterError::Optimizer(
+                            optimize::OptimizerError::ChangesHistoryUnavailable { start, since },
+                        ));
+                    }
+                    dataflow_as_of.join_assign(&required);
+                    storage_as_of.join_assign(&required);
+                }
+                changelog_imports.push((*id, *window, since));
             }
+        }
+        // Compute the changelog starts against the (possibly advanced) `as_of`.
+        let mut changelog_starts = Vec::new();
+        for (id, window, since) in changelog_imports {
+            let lagged = dataflow_as_of
+                .iter()
+                .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(window))))
+                .collect::<Antichain<_>>();
+            changelog_starts.push((id, lagged.join(&since)));
         }
 
         let initial_as_of = storage_as_of.clone();

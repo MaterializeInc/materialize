@@ -291,10 +291,21 @@ impl Optimize<LocalMirPlan> for Optimizer {
         // machinery requires, with the interval arithmetic on the column side
         // (`mz_timestamp` itself deliberately supports no arithmetic).
         let mut changelog_windows = BTreeMap::new();
+        // Per input: the widest window among *strict* (`AS OF`) reads, if any.
+        // The sequencer errors at creation unless the input retains that much
+        // history; advisory reads age in instead.
+        let mut strict_windows: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
         for build in df_desc.objects_to_build.iter_mut() {
             let mut result = Ok(());
             build.plan.as_inner_mut().visit_mut_post(&mut |e| {
-                if let MirRelationExpr::Changes { id, bound, typ, .. } = e {
+                if let MirRelationExpr::Changes {
+                    id,
+                    bound,
+                    typ,
+                    strict,
+                    ..
+                } = e
+                {
                     if self.refresh_schedule.is_some() {
                         // REFRESH rounds the dataflow `as_of` and `until` in
                         // ways the sliding changelog start does not compose
@@ -320,6 +331,12 @@ impl Optimize<LocalMirPlan> for Optimizer {
                         .entry(*id)
                         .and_modify(|w| *w = std::cmp::max(*w, window))
                         .or_insert(window);
+                    if *strict {
+                        strict_windows
+                            .entry(*id)
+                            .and_modify(|w| *w = std::cmp::max(*w, window))
+                            .or_insert(window);
+                    }
 
                     // The `mz_timestamp` column precedes `mz_diff` at the end.
                     let ts_col = typ.arity() - 2;
@@ -362,6 +379,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
                 ChangelogMode::Maintained {
                     window,
                     start: None,
+                    strict_window: strict_windows.get(&id).copied(),
                 },
             );
         }

@@ -3074,26 +3074,24 @@ fn plan_changes(
     let sliding = bound_hir.contains_temporal();
 
     // Execution is wired up for one-off `SELECT`s (the peek path) and for
-    // materialized views with a sliding, advisory bound (the maintained path).
-    // Gate everything else:
+    // materialized views with a sliding bound (the maintained path). Gate
+    // everything else:
     //   * A durable maintained object (materialized view, index) with a fixed
     //     bound would pin the input's `since` open indefinitely, the retained
     //     history growing without bound — rejected with a targeted message.
-    //   * A maintained materialized view with a *strict* sliding bound would
-    //     have to error at creation unless the input already retains a full
-    //     window of history; deferred, only the advisory (`AS OF AT LEAST`)
-    //     form is wired up.
     //   * Any other non-`SELECT` use (a sliding bound in an index, SUBSCRIBE,
     //     a view, ...) is structurally fine but not yet wired up.
+    //
+    // A *strict* sliding bound in a materialized view is checked at creation:
+    // the sequencer errors unless the input retains a full window
+    // (`since <= as_of - window`); the advisory form ages in instead. The
+    // enforcement is creation-time only — restarts stay advisory, since
+    // erroring an existing materialized view at bootstrap would wedge the
+    // system — but the lagged dependency holds reproduce the window exactly
+    // across restarts regardless.
     match qcx.lifetime {
         QueryLifetime::OneShot => {}
-        QueryLifetime::MaterializedView if sliding && !strict => {}
-        QueryLifetime::MaterializedView if sliding && strict => {
-            bail_unsupported!(
-                "CHANGES with a strict AS OF bound in a materialized view \
-                 (use AS OF AT LEAST)"
-            );
-        }
+        QueryLifetime::MaterializedView if sliding => {}
         lifetime => {
             if lifetime.is_maintained() && !sliding {
                 return Err(PlanError::ChangesRequiresSlidingBound);

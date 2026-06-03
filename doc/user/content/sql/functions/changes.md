@@ -51,13 +51,17 @@ The state of the input at the changelog start appears as a set of insertions at 
 Context | Fixed bound | Sliding bound
 --------|-------------|--------------
 One-off `SELECT` | Supported | Supported (the window ends at the query time)
-Materialized view | Not supported (it would pin the input's history forever) | Supported with `AS OF AT LEAST`
+Materialized view | Not supported (it would pin the input's history forever) | Supported
 View, index, `SUBSCRIBE` | Not supported | Not supported
 
 ### Maintained sliding windows
 
 A materialized view over `CHANGES` with a sliding bound maintains a rolling window of changes: new updates enter the changelog as they happen, and updates leave it once they age past the window.
 Aggregations over the view are continuously correct over the window.
+
+With an advisory bound (`AS OF AT LEAST`), the view starts from whatever history the input retains and ages in from there.
+With a strict bound (`AS OF`), creation fails unless the input already retains a full window — the view never silently serves a partial window.
+The strict check applies at creation; a view that exists keeps maintaining its window across restarts.
 
 The window determines how much history of the input Materialize must retain, so its size is capped by the `changes_max_window` system parameter (default: 1 day).
 

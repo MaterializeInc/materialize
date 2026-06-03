@@ -706,6 +706,16 @@ pub enum ChangelogMode {
         /// position. `None` until first resolved; must be `Some` by the time
         /// the dataflow ships to a replica.
         start: Option<Antichain<Timestamp>>,
+        /// `Some(w)` if any read of this import uses a *strict* (`AS OF`)
+        /// sliding bound; `w` is the widest such window. At creation the
+        /// sequencer errors unless the input retains a full strict window
+        /// (`since <= as_of - w`), instead of silently aging in. Creation-time
+        /// only: restarts resolve the start advisorily regardless (erroring an
+        /// existing materialized view at bootstrap would wedge the system).
+        ///
+        /// May be narrower than `window` (the max over *all* reads, which
+        /// sizes the hold) when strict and advisory reads of one input mix.
+        strict_window: Option<Timestamp>,
     },
 }
 

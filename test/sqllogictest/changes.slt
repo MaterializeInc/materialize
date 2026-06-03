@@ -117,11 +117,26 @@ CREATE MATERIALIZED VIEW changes_mv AS
 statement ok
 DROP MATERIALIZED VIEW changes_mv
 
-# The strict sliding form is deferred: at creation it would have to error
-# unless the input already retains a full window of history.
-statement error CHANGES with a strict AS OF bound in a materialized view
+# The strict sliding form errors at creation unless the input retains a full
+# window of history (instead of silently aging in, as the advisory form does).
+# The freshly created default-retention table does not retain 30 minutes.
+statement error is less than the earliest available history of its input
 CREATE MATERIALIZED VIEW changes_mv_strict AS
   SELECT * FROM CHANGES (t AS OF mz_now() - INTERVAL '30 minutes')
+
+# A strict zero-lag window requires no history at all and is always admissible.
+# The enforcement is creation-time only; restarts resolve the start advisorily.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_strict_zero AS
+  SELECT * FROM CHANGES (t AS OF mz_now())
+
+query I
+SELECT count(*) FROM changes_mv_strict_zero
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_strict_zero
 
 # Only the `mz_now() - <interval>` shape is blessed as a sliding bound;
 # anything else falls through to ordinary planning, where mz_timestamp

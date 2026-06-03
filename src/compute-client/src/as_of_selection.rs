@@ -1440,6 +1440,7 @@ mod tests {
         df.source_imports.get_mut(&s1).unwrap().changelog = Some(ChangelogMode::Maintained {
             window: window.into(),
             start: None,
+            strict_window: None,
         });
 
         let mut dataflows = [df];

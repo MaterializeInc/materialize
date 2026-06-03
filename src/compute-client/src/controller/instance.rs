@@ -1326,7 +1326,7 @@ impl Instance {
                 // downgrade fails and dataflow creation errors, surfacing the
                 // unavailable history.
                 Some(ChangelogMode::OneShot { start }) => start.clone(),
-                Some(ChangelogMode::Maintained { window, start }) => {
+                Some(ChangelogMode::Maintained { window, start, .. }) => {
                     changelog_windows.insert(id, *window);
                     match start {
                         Some(start) => start.clone(),

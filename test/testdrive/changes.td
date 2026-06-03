@@ -231,3 +231,37 @@ SELECT mz_now()::text
 > DROP MATERIALIZED VIEW w_changes
 
 > DROP TABLE w
+
+# A maintained materialized view with a *strict* sliding bound requires the
+# input to retain a full window at creation. The table retains history, and
+# after waiting out the (tiny) window the strict creation is admissible; on a
+# default-retention table the same statement would error (covered in
+# changes.slt).
+> CREATE TABLE ws (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> INSERT INTO ws VALUES (1)
+
+# Wait out the strict window: the table's `since` is pinned at its creation by
+# RETAIN HISTORY, so once more than the window has elapsed the strict creation
+# is admissible. (testdrive also retries the CREATE on failure.)
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+
+> CREATE MATERIALIZED VIEW ws_changes AS
+  SELECT a, mz_diff FROM CHANGES (ws AS OF mz_now() - INTERVAL '1 second')
+
+> DROP MATERIALIZED VIEW ws_changes
+
+# An advisory bound over the same retained input serves the retained part of
+# the window immediately rather than aging in from "now": the insert made
+# before the view existed is in the window. (Start resolution reads the
+# input's collection `since`, not the transaction read holds, which sit at the
+# query timestamp.)
+> CREATE MATERIALIZED VIEW ws_changes_lookback AS
+  SELECT a, mz_diff FROM CHANGES (ws AS OF AT LEAST mz_now() - INTERVAL '1 hour')
+
+> SELECT a, mz_diff FROM ws_changes_lookback
+1 1
+
+> DROP MATERIALIZED VIEW ws_changes_lookback
+
+> DROP TABLE ws
