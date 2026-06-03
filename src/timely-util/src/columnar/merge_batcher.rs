@@ -42,8 +42,8 @@ use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::column_pager::{self, ColumnPager, PagedColumn};
-use crate::columnar::Column;
 use crate::columnar::batcher::{empty_chunk, recycle_chunk};
+use crate::columnar::{Column, OVERSIZE_RECYCLE_BYTES};
 
 /// Max recycled empty chunks held in the per-batcher stash. Deliberately
 /// tight: the stash is a hot-buffer cache for the result/keep/ship churn,
@@ -61,20 +61,19 @@ use crate::columnar::batcher::{empty_chunk, recycle_chunk};
 /// entirely — only a small minority ever flow back through the stash.
 const STASH_CAP: usize = 2;
 
-/// Don't park a buffer larger than this in the free-list. A transiently
-/// oversize merge buffer (post-explosion, past the natural ship threshold)
-/// held resident would compete with the pager's budget; drop it and let a
-/// fresh default regrow. 2 × the natural ship word count (≈ 4 MiB
-/// serialized) keeps normal ship-sized chunks while excluding pathological
-/// ones.
-const MAX_RECYCLE_BYTES: usize = 1 << 22;
-
-/// Recycle `chunk` only if the stash isn't already at [`STASH_CAP`] and the
-/// chunk isn't oversize per [`MAX_RECYCLE_BYTES`]. `length_in_bytes` is
-/// measured before clear, so it reflects the data the chunk was carrying
-/// (a proxy for the capacity we'd park).
+/// Recycle `chunk` for reuse. `Align` chunks — the warm buffers materialized by
+/// a file-backed [`ColumnPager::take`] — hand their `Vec<u64>` backing to the
+/// pager's body pool so the next page-in reads into resident memory. `Typed`
+/// chunks go to the local `stash` (unless it is full or the chunk is oversize
+/// per [`OVERSIZE_RECYCLE_BYTES`]); `length_in_bytes` is measured before clear,
+/// so it reflects the data the chunk was carrying (a proxy for the capacity we'd
+/// park). `Bytes` chunks have no reusable allocation and are dropped.
 fn recycle_capped<C: Columnar>(chunk: Column<C>, stash: &mut Vec<Column<C>>) {
-    if stash.len() < STASH_CAP && chunk.length_in_bytes() <= MAX_RECYCLE_BYTES {
+    if let Column::Align(buf) = chunk {
+        column_pager::recycle_body(buf);
+        return;
+    }
+    if stash.len() < STASH_CAP && chunk.length_in_bytes() <= OVERSIZE_RECYCLE_BYTES {
         recycle_chunk(chunk, stash);
     }
 }

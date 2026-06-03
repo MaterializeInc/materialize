@@ -57,6 +57,14 @@ impl Handle {
         self.len() == 0
     }
 
+    /// Returns `true` if this handle is backed by the file backend. Lets callers
+    /// route file-backed reads (which fault a fresh destination buffer) through
+    /// a warm buffer pool, while leaving the swap backend — which fills the
+    /// destination from resident memory — on its own path.
+    pub fn is_file(&self) -> bool {
+        matches!(self.inner, HandleInner::File(_))
+    }
+
     pub(crate) fn from_swap(inner: SwapInner) -> Self {
         Self {
             inner: HandleInner::Swap(inner),
