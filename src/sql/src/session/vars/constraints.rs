@@ -128,7 +128,7 @@ impl DomainConstraint for NonZeroDuration {
             Err(VarError::InvalidParameterValue {
                 name: var.name(),
                 invalid_values: vec![format!("{:?}", d)],
-                reason: "only supports durations greater than zero".to_string(),
+                reason: "only supports non-zero durations".to_string(),
             })
         } else {
             Ok(())
