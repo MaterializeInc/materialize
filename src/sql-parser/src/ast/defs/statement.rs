@@ -1966,7 +1966,13 @@ impl AstDisplay for RoleAttribute {
             RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
             RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
             RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
-            RoleAttribute::Password(_) => f.write_str("PASSWORD"),
+            // `PASSWORD NULL` removes the password and carries no secret, so
+            // print it verbatim. A `PASSWORD '<secret>'` is always redacted (in
+            // every mode, matching the prior behavior) — but as a *parseable*
+            // placeholder string, not a bare `PASSWORD`, which fails to reparse
+            // (the grammar requires `NULL` or a string literal after `PASSWORD`).
+            RoleAttribute::Password(None) => f.write_str("PASSWORD NULL"),
+            RoleAttribute::Password(Some(_)) => f.write_str("PASSWORD '<REDACTED>'"),
         }
     }
 }

@@ -585,6 +585,36 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
     }
 }
 
+/// Whether `needle` is safe to print bare as the left operand of the
+/// `position(<needle> IN <haystack>)` special form. The parser reads the needle
+/// at `Precedence::Like`, so a needle whose top operator binds at or below `Like`
+/// — `NOT` (whose operand greedily consumes the `IN`), a comparison, `IS`, a
+/// boolean connective, `IN`/`LIKE`/`BETWEEN`, or a quantified comparison — would
+/// either swallow the delimiter or stop short of it on reparse. For those, the
+/// caller must fall back to the plain quoted `"position"(a, b)` call form.
+fn needle_safe_before_in<T: AstInfo>(needle: &Expr<T>) -> bool {
+    !matches!(
+        needle,
+        Expr::Not { .. }
+            | Expr::And { .. }
+            | Expr::Or { .. }
+            | Expr::IsExpr { .. }
+            | Expr::Like { .. }
+            | Expr::Between { .. }
+            | Expr::InList { .. }
+            | Expr::InSubquery { .. }
+            | Expr::AnyExpr { .. }
+            | Expr::AllExpr { .. }
+            | Expr::AnySubquery { .. }
+            | Expr::AllSubquery { .. }
+    ) && !matches!(
+        needle,
+        Expr::Op { op, expr2: Some(_), .. }
+            if op.namespace.is_none()
+                && matches!(op.op.as_str(), "=" | "<" | "<=" | "<>" | "!=" | ">" | ">=")
+    )
+}
+
 /// Write `expr` as the receiver of a `[…]` subscript. An unparenthesized
 /// `Identifier(["map"])` reparses as `Token::Keyword(MAP)` followed by `[`,
 /// which dispatches to `parse_map` (the map-literal grammar) instead of a
@@ -989,7 +1019,16 @@ impl<T: AstInfo> Function<T> {
                     {
                         Some(("extract", &[None, Some(FROM)]))
                     }
-                    r#""position""# if self.args.len() == Some(2) => {
+                    // `position(<needle> IN <haystack>)` parses the needle at
+                    // `Precedence::Like`, so a low-precedence needle (`NOT`, a
+                    // comparison, `IS`, a boolean connective, a quantified
+                    // comparison, ...) printed bare before the `IN` would swallow
+                    // or stop short of the delimiter. Only use the special form
+                    // with a needle that's safe to sit left of `IN`.
+                    r#""position""#
+                        if self.args.len() == Some(2)
+                            && self.args.first().is_some_and(needle_safe_before_in) =>
+                    {
                         Some(("position", &[None, Some(IN)]))
                     }
 
