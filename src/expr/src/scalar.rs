@@ -2476,6 +2476,35 @@ mod tests {
     use crate::scalar::func::variadic::Coalesce;
 
     #[mz_ore::test]
+    fn test_reduce_and_or_does_not_propagate_operand_error() {
+        // Regression: AND/OR are non-strict, so a `false`/`true` operand
+        // dominates an erroring operand at runtime (`false AND <error>` is
+        // `false`). `reduce` must therefore not fold `x AND <error>` (or
+        // `x OR <error>`) to the error, which would make a query fail that
+        // otherwise succeeds. Found by the mir_scalar_reduce fuzz target.
+        let bool_typ = ReprScalarType::Bool;
+        let types = vec![bool_typ.clone().nullable(true)];
+        let err = || MirScalarExpr::literal(Err(EvalError::DivisionByZero), bool_typ.clone());
+        let arena = RowArena::new();
+
+        let mut and = MirScalarExpr::call_variadic(And, vec![MirScalarExpr::column(0), err()]);
+        and.reduce(&types);
+        assert!(
+            !and.is_literal_err(),
+            "reduce folded AND with an error operand to an error: {and:?}"
+        );
+        assert_eq!(and.eval(&[Datum::False], &arena), Ok(Datum::False));
+
+        let mut or = MirScalarExpr::call_variadic(Or, vec![MirScalarExpr::column(0), err()]);
+        or.reduce(&types);
+        assert!(
+            !or.is_literal_err(),
+            "reduce folded OR with an error operand to an error: {or:?}"
+        );
+        assert_eq!(or.eval(&[Datum::True], &arena), Ok(Datum::True));
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type: Vec<ReprColumnType> = vec![
