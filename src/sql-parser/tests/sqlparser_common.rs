@@ -319,6 +319,12 @@ fn test_negated_cast_display_roundtrip() {
         // builds the chain without the `-` folding at parse time.)
         "SELECT -CAST(CAST(3.14 AS int2) AS int2)",
         "SELECT -CAST(CAST(CAST(2 AS int4) AS int8) AS int8)",
+        // A prefix op binds tighter than `COLLATE`, so a `CAST(x COLLATE c AS t)`
+        // operand (parsed without a `Nested` wrapper) must parenthesize or
+        // `- x COLLATE c::t` reparses as `(- x) COLLATE c::t`. The numeric variant
+        // additionally folds the sign into the literal.
+        r#"SELECT -CAST(1 COLLATE "c" AS int4)"#,
+        r#"SELECT -CAST(x COLLATE "c" AS int4)"#,
     ] {
         assert_display_roundtrips(sql);
     }
