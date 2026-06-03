@@ -31,9 +31,9 @@ use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ExpectedClusterState,
-    ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationTarget, ReplicaShape,
-    StateWrite,
+    ApplyOutcome, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
+    ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationTarget,
+    RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use mz_cluster_controller::strategy::GRACEFUL_RECONFIGURATION_STRATEGY_NAME;
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -70,6 +70,13 @@ pub enum ClusterControllerRequest {
         cluster_id: ClusterId,
         replicas: Vec<ReplicaId>,
         tx: oneshot::Sender<BTreeSet<ReplicaId>>,
+    },
+    /// The refresh-window live signals for one scheduled cluster (read ts,
+    /// compaction estimate, bound REFRESH MVs). `None` for a cluster that is not
+    /// scheduled `ON REFRESH`.
+    RefreshWindowInputs {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<Option<RefreshWindowInputs>>,
     },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
@@ -150,6 +157,15 @@ impl ClusterControllerCtx for CoordCtx {
         })
         .await
         .unwrap_or_default()
+    }
+
+    async fn refresh_window_inputs(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Option<RefreshWindowInputs> {
+        self.request(|tx| ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx })
+            .await
+            .flatten()
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -264,6 +280,10 @@ impl Coordinator {
                 let hydrated = self.hydrated_replicas(cluster_id, replicas).await;
                 let _ = tx.send(hydrated);
             }
+            ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx } => {
+                let inputs = self.refresh_window_inputs(cluster_id).await;
+                let _ = tx.send(inputs);
+            }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
                     self.apply_cluster_decisions(decisions).await
@@ -293,7 +313,7 @@ impl Coordinator {
             logging,
             replication_factor,
             optimizer_feature_overrides: _,
-            schedule: _,
+            schedule,
             auto_scaling_strategy: _,
             reconfiguration,
             burst,
@@ -329,12 +349,14 @@ impl Coordinator {
             replication_factor: *replication_factor,
             availability_zones: availability_zones.clone(),
             logging: logging.clone(),
+            schedule: schedule_to_controller(schedule),
             reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
             burst: burst.as_ref().map(burst_record),
             replicas,
-            // A live signal the controller pulls separately (via
-            // `hydrated_replicas`) only when a strategy needs it.
+            // Live signals the controller pulls separately (via `hydrated_replicas`
+            // / `refresh_window_inputs`) only when a strategy needs them.
             hydrated_replicas: BTreeSet::new(),
+            refresh_window: None,
         })
     }
 
@@ -388,6 +410,68 @@ impl Coordinator {
             }
         }
         hydrated
+    }
+
+    /// The refresh-window live signals for one scheduled cluster, or `None` if the
+    /// cluster is missing, unmanaged, or not scheduled `ON REFRESH`.
+    ///
+    /// Backs the controller's [`ClusterControllerCtx::refresh_window_inputs`]
+    /// pull against the same signals the legacy `check_refresh_policy` reads: the
+    /// local oracle read timestamp, the system compaction estimate, and each bound
+    /// REFRESH materialized view's storage write frontier and refresh schedule. The
+    /// pure on-refresh strategy takes the window decision from these.
+    ///
+    /// The MV write frontier is carried through with full fidelity as the
+    /// `Antichain` the storage controller reports, matching the legacy refresh
+    /// policy; the on-refresh strategy compares against it directly.
+    async fn refresh_window_inputs(&self, cluster_id: ClusterId) -> Option<RefreshWindowInputs> {
+        use mz_catalog::memory::objects::CatalogItem;
+
+        let cluster = self.catalog().try_get_cluster(cluster_id)?;
+        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+            return None;
+        };
+        if !matches!(
+            managed.schedule,
+            mz_sql::plan::ClusterSchedule::Refresh { .. }
+        ) {
+            return None;
+        }
+
+        let refresh_mvs = cluster
+            .bound_objects
+            .iter()
+            .filter_map(|id| {
+                let CatalogItem::MaterializedView(mv) = self.catalog().get_entry(id).item() else {
+                    return None;
+                };
+                let refresh_schedule = mv.refresh_schedule.clone()?;
+                // The storage controller knows about every MV in the catalog. The
+                // write frontier is passed through with full fidelity as the
+                // `Antichain` reported here.
+                let (_since, write_frontier) = self
+                    .controller
+                    .storage
+                    .collection_frontiers(mv.global_id_writes())
+                    .expect("storage controller knows about catalog MVs");
+                Some(RefreshMvInfo {
+                    write_frontier,
+                    refresh_schedule,
+                })
+            })
+            .collect();
+
+        let compaction_estimate = self
+            .catalog()
+            .system_config()
+            .cluster_refresh_mv_compaction_estimate();
+        let read_ts = self.get_local_read_ts().await;
+
+        Some(RefreshWindowInputs {
+            read_ts,
+            compaction_estimate,
+            refresh_mvs,
+        })
     }
 
     /// Apply one batch of decisions.
@@ -616,6 +700,7 @@ impl Coordinator {
             && managed.replication_factor == expected.replication_factor
             && managed.availability_zones == expected.availability_zones
             && managed.logging == expected.logging
+            && schedule_to_controller(&managed.schedule) == expected.schedule
             && managed.reconfiguration.as_ref().map(reconfiguration_record)
                 == expected.reconfiguration
             && managed.burst.as_ref().map(burst_record) == expected.burst
@@ -626,13 +711,24 @@ impl Coordinator {
 /// create/drop event.
 ///
 /// A create/drop the graceful strategy desired is recorded as a graceful
-/// reconfiguration. Everything else — baseline-held replicas, replicas no
-/// strategy desired (an ordinary drop) — is `Manual`, today's tag for
-/// controller-driven steady-state replica lifecycle.
+/// reconfiguration. Everything else — baseline-held replicas, on-refresh-desired
+/// replicas, replicas no strategy desired (an ordinary drop) — is `Manual`,
+/// today's tag for controller-driven steady-state replica lifecycle.
+///
+/// On-refresh creates/drops do not carry the legacy `ClusterScheduling` reason
+/// with its rich `SchedulingDecisionsWithReasonsV2` detail (objects needing
+/// refresh / compaction, hydration-time estimate): that detail is the legacy
+/// scheduler's, computed where the decision is made, not reconstructable from the
+/// controller's strategy-name attribution alone, and the reason variant requires a
+/// non-empty decision vec. Until that attribution is recomputed at the apply site,
+/// on-refresh creates/drops carry the `Manual` tag; the controller is dark, so the
+/// tag is immaterial until the gate is enabled.
 fn reason_from_strategies(reasons: &[&'static str]) -> ReplicaCreateDropReason {
     if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
         ReplicaCreateDropReason::GracefulReconfiguration
     } else {
+        // The on-refresh strategy and the baseline both fall through to `Manual`
+        // (see the doc comment for the on-refresh attribution caveat).
         ReplicaCreateDropReason::Manual
     }
 }
@@ -663,6 +759,17 @@ fn reconfiguration_record(
         },
         deadline: record.deadline,
         on_timeout: on_timeout_to_controller(record.on_timeout),
+    }
+}
+
+fn schedule_to_controller(schedule: &mz_sql::plan::ClusterSchedule) -> ClusterSchedule {
+    match schedule {
+        mz_sql::plan::ClusterSchedule::Manual => ClusterSchedule::Manual,
+        mz_sql::plan::ClusterSchedule::Refresh {
+            hydration_time_estimate,
+        } => ClusterSchedule::Refresh {
+            hydration_time_estimate: *hydration_time_estimate,
+        },
     }
 }
 

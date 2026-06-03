@@ -23,11 +23,14 @@
 //! deployment can bound its round-trips to the Coordinator.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::Timestamp;
+use mz_repr::refresh_schedule::RefreshSchedule;
+use timely::progress::Antichain;
 
 /// The config shape of a replica: the dimensions a reconfiguration changes and
 /// that the reconcile kernel matches desired slots against actual replicas by.
@@ -116,8 +119,59 @@ impl ReconfigurationTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BurstRecord {
     pub burst_size: String,
-    pub linger_duration: std::time::Duration,
+    pub linger_duration: Duration,
     pub steady_hydrated_at: Option<Timestamp>,
+}
+
+/// A managed cluster's scheduling policy, mirrored from durable state. The
+/// controller's own mirror of `mz_sql::plan::ClusterSchedule`, kept here so the
+/// pure crate need not depend on the SQL layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClusterSchedule {
+    /// The cluster is user-managed: the implicit baseline owns the replica set
+    /// and `replication_factor` is the user's capacity knob.
+    Manual,
+    /// The cluster is scheduled `ON REFRESH`: the controller owns the replica
+    /// set, `replication_factor` is held at `0`, and the on-refresh strategy is
+    /// the sole contributor of replicas. `hydration_time_estimate` is how far
+    /// ahead of a refresh the cluster should turn on so it can rehydrate before
+    /// the refresh time.
+    Refresh { hydration_time_estimate: Duration },
+}
+
+/// One REFRESH materialized view bound to a scheduled cluster, as the on-refresh
+/// strategy needs to see it.
+///
+/// `write_frontier` is the MV's storage write frontier, carried with full
+/// fidelity as the `Antichain` the storage controller reports. The strategy
+/// compares it against the read timestamp (`less_than`) to decide whether the MV
+/// still needs a refresh. For the compaction window it reads the frontier's lone
+/// element via `as_option` to find the previous refresh time, falling back to the
+/// schedule's last refresh on the empty/sealed frontier `[]`, mirroring the
+/// legacy refresh policy. The frontier of a single-input total-order MV holds at
+/// most one element.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshMvInfo {
+    pub write_frontier: Antichain<Timestamp>,
+    pub refresh_schedule: RefreshSchedule,
+}
+
+/// The live signals the on-refresh strategy reads to decide whether a scheduled
+/// cluster is inside a refresh window: the current read timestamp, the
+/// Persist-compaction time estimate, and the bound REFRESH MVs' frontiers and
+/// schedules.
+///
+/// Pulled on demand only for scheduled clusters; a MANUAL cluster carries `None`
+/// and is never probed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshWindowInputs {
+    /// The local oracle read timestamp the window decision is taken against.
+    pub read_ts: Timestamp,
+    /// How long after a refresh an MV is estimated to still need Persist
+    /// compaction, which also keeps the cluster on.
+    pub compaction_estimate: Duration,
+    /// The REFRESH MVs bound to the cluster.
+    pub refresh_mvs: Vec<RefreshMvInfo>,
 }
 
 /// The durable state of a single managed cluster plus its observed replicas, as
@@ -134,12 +188,19 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
+    /// The cluster's scheduling policy. Drives whether the implicit baseline owns
+    /// the replica set (MANUAL) or the on-refresh strategy does (REFRESH).
+    pub schedule: ClusterSchedule,
     /// In-flight graceful reconfiguration, if any.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
+    /// The refresh-window live signals, populated only for scheduled clusters
+    /// (pulled on demand via [`ClusterControllerCtx::refresh_window_inputs`]);
+    /// `None` for MANUAL clusters, which are never probed.
+    pub refresh_window: Option<RefreshWindowInputs>,
     /// The replicas observed this tick to have *all* current collections on the
     /// cluster hydrated. A **live signal**, not durable state, so it is excluded
     /// from [`ClusterState::expected`] (the compare-and-append witness).
@@ -167,6 +228,7 @@ impl ClusterState {
             replication_factor: self.replication_factor,
             availability_zones: self.availability_zones.clone(),
             logging: self.logging.clone(),
+            schedule: self.schedule,
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
@@ -183,6 +245,10 @@ pub struct ExpectedClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
+    /// The scheduling policy. A concurrent `ALTER ... SET (SCHEDULE = ...)` flips
+    /// which strategy owns the replica set, so it is part of the witness: a
+    /// scheduled→MANUAL change must reject an in-flight on-refresh decision.
+    pub schedule: ClusterSchedule,
     pub reconfiguration: Option<ReconfigurationRecord>,
     pub burst: Option<BurstRecord>,
 }
@@ -298,20 +364,24 @@ pub trait ClusterControllerCtx: Send {
     /// `reconfiguration` is in flight). The baseline-only controller never calls
     /// this; the first hydration-dependent strategy (graceful reconfiguration)
     /// does.
-    ///
-    /// This is the first of the live-signal reads the seam will grow. The
-    /// remaining ones — collection write frontiers and a read timestamp, which
-    /// the refresh strategy needs to decide whether a cluster is inside a refresh
-    /// window — are deliberately *not* declared here. Their signatures are
-    /// dictated by that consumer (e.g. an `Antichain<Timestamp>` frontier type),
-    /// and declaring them speculatively would both fix the wrong shape and pull
-    /// an otherwise-unused frontier dependency into this pure crate. They land
-    /// with their first consumer, backed the same pull-on-demand way as this one.
     async fn hydrated_replicas(
         &mut self,
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
+
+    /// The refresh-window live signals for one scheduled cluster: the read
+    /// timestamp, the compaction estimate, and the bound REFRESH MVs' write
+    /// frontiers and schedules. Returns `None` for a cluster that is not
+    /// scheduled `ON REFRESH` (the on-refresh strategy never asks about a MANUAL
+    /// cluster).
+    ///
+    /// Pulled on demand the same way as [`Self::hydrated_replicas`]: the
+    /// controller probes a cluster only when the on-refresh strategy needs the
+    /// signal (i.e. the cluster is scheduled), so a steady MANUAL cluster never
+    /// pays for it.
+    async fn refresh_window_inputs(&mut self, cluster_id: ClusterId)
+    -> Option<RefreshWindowInputs>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

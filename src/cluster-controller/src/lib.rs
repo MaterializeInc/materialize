@@ -59,7 +59,7 @@ use crate::ctx::{
     ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, OnRefreshStrategy, Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -75,15 +75,17 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with the implicit baseline and the graceful-reconfiguration
-    /// strategy. The baseline holds the steady set; graceful engages only while a
-    /// `reconfiguration` record is in flight. Later PRs add the remaining policy
-    /// strategies.
+    /// A controller with the implicit baseline, the graceful-reconfiguration
+    /// strategy, and the on-refresh scheduling strategy. The baseline holds the
+    /// steady set of MANUAL clusters; graceful engages only while a
+    /// `reconfiguration` record is in flight; on-refresh owns the replica set of
+    /// scheduled clusters.
     pub fn new() -> Self {
         Self {
             strategies: vec![
                 Box::new(BaselineStrategy),
                 Box::new(GracefulReconfigurationStrategy),
+                Box::new(OnRefreshStrategy),
             ],
         }
     }
@@ -100,6 +102,7 @@ impl ClusterController {
         // apply them under their compare-and-append guards.
         let mut states = ctx.cluster_states(&cluster_ids).await;
         self.enrich_hydration(ctx, &mut states).await;
+        self.enrich_refresh_window(ctx, &mut states).await;
         let now = ctx.now();
         let mut state_decisions = Vec::new();
         for state in &states {
@@ -129,17 +132,17 @@ impl ClusterController {
             }
         };
 
-        // Phase 2: desired_replicas. The barrier exists so that a cut-over a
-        // phase-1 write performed is visible before we diff the replica set
-        // against the realized config. When phase 1 wrote nothing the first read
-        // (including its hydration enrichment) is still the current view, so we
-        // reuse it wholesale and re-probe nothing; otherwise we re-read and
-        // re-enrich to pick up the applied writes. A stale diff is harmless either
+        // Phase 2: desired_replicas. We re-read (and re-enrich) the cluster
+        // state when phase 1 wrote anything, so that a cut-over performed by
+        // those writes is visible before we diff the replica set against the
+        // realized config; if phase 1 wrote nothing the first read is still
+        // current and we reuse it as is. A stale diff would be harmless either
         // way: every create/drop carries its `expected` and is rejected by the
         // apply guard if the durable state has since diverged.
         let states = if phase_1_wrote {
             let mut states = ctx.cluster_states(&cluster_ids).await;
             self.enrich_hydration(ctx, &mut states).await;
+            self.enrich_refresh_window(ctx, &mut states).await;
             states
         } else {
             states
@@ -183,6 +186,22 @@ impl ClusterController {
                 continue;
             }
             state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+        }
+    }
+
+    /// Populate each scheduled cluster's [`ClusterState::refresh_window`] live
+    /// signal. Only the on-refresh strategy consults it, and only for
+    /// non-MANUAL clusters, so a MANUAL cluster is never probed.
+    async fn enrich_refresh_window(
+        &self,
+        ctx: &mut dyn ClusterControllerCtx,
+        states: &mut [ClusterState],
+    ) {
+        for state in states.iter_mut() {
+            if matches!(state.schedule, crate::ctx::ClusterSchedule::Manual) {
+                continue;
+            }
+            state.refresh_window = ctx.refresh_window_inputs(state.cluster_id).await;
         }
     }
 

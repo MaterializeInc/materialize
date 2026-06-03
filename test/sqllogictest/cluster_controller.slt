@@ -335,5 +335,104 @@ finalized
 statement ok
 DROP CLUSTER cc_cancel
 
+# ON REFRESH scheduling driven by the controller (PR 5). With the gate on, the
+# on-refresh strategy — not the legacy cluster_scheduling.rs tick — owns a
+# scheduled cluster's replica set: it normalizes the realized replication factor
+# to 0 and brings up a single replica while the cluster is inside a refresh
+# window. The behavior must match today's scheduler.
+
+# A scheduled cluster with no bound REFRESH MV is outside any refresh window, so
+# it has no replica and its replication factor reads 0. The large HYDRATION TIME
+# ESTIMATE below makes the window deterministically open once a fast-refreshing MV
+# is bound (the cluster must always be on to stay that far ahead of the next
+# refresh), so the in-window assertions don't race the refresh cadence.
+statement ok
+CREATE CLUSTER cc_sched (
+  SIZE 'scale=1,workers=1',
+  SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+----
+0
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+0
+
+# Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh
+# window (it must rehydrate ahead of each refresh), so the controller brings up
+# exactly one replica at the cluster size. The replication factor still reads 0 —
+# it is the controller's domain for a scheduled cluster — and mz_cluster_replicas
+# is authoritative for what is actually running.
+statement ok
+CREATE TABLE sched_t (x int)
+
+statement ok
+CREATE MATERIALIZED VIEW cc_sched_mv IN CLUSTER cc_sched
+  WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_t
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+----
+0
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+1
+
+# The replica runs at the cluster size, and the MV computes a result on it.
+query T
+SELECT r.size FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+----
+scale=1,workers=1
+
+query I
+SELECT count FROM cc_sched_mv
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW cc_sched_mv
+
+statement ok
+DROP TABLE sched_t
+
+statement ok
+DROP CLUSTER cc_sched
+
+# A MANUAL cluster is untouched by the on-refresh strategy: its replica set is the
+# user's replication factor, owned by the implicit baseline.
+statement ok
+CREATE CLUSTER cc_manual (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+----
+1
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
+----
+1
+
+statement ok
+DROP CLUSTER cc_manual
+
 # Restore pristine server state (including the tick-interval override).
 reset-server
