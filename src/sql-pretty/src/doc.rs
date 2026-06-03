@@ -1177,7 +1177,21 @@ impl Pretty {
                         self.doc_expr(expr2).nest(TAB),
                     ])
                 } else {
-                    RcDoc::concat([RcDoc::text(format!("{} ", op)), self.doc_expr(expr1)])
+                    // See the AstDisplay `Expr::Op` comment: `- 2::t` reparses
+                    // as `(-2)::t`, so parenthesize a numeric cast operand under
+                    // a prefix operator to keep its grouping.
+                    let numeric_cast = match expr1.as_ref() {
+                        Expr::Cast { expr, .. } => {
+                            matches!(expr.as_ref(), Expr::Value(Value::Number(_)))
+                        }
+                        _ => false,
+                    };
+                    let operand = if numeric_cast {
+                        bracket("(", self.doc_expr(expr1), ")")
+                    } else {
+                        self.doc_expr(expr1)
+                    };
+                    RcDoc::concat([RcDoc::text(format!("{} ", op)), operand])
                 }
             }
             Expr::Case {
