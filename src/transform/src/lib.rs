@@ -336,17 +336,18 @@ where
         Ok(result) => result.map_err(|e| e),
         Err(panic) => {
             // A panic during optimization is always a bug; log an error, including the panic
-            // location and a backtrace from the panic site, so we learn about it.
+            // location and a backtrace from the panic site, so we learn about it. Pass the
+            // pieces as structured fields rather than encoding them into the message string.
             let location = panic.location.as_deref().unwrap_or("<unknown location>");
             let backtrace = panic
                 .backtrace
                 .as_deref()
                 .unwrap_or("<backtrace unavailable>");
             tracing::error!(
-                "caught a panic during query optimization: {} (at {})\n{}",
-                panic.message,
                 location,
                 backtrace,
+                message = %panic.message,
+                "caught a panic during query optimization",
             );
 
             // Surface at least the panic location in the user-facing error, so that internal
