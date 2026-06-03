@@ -434,5 +434,128 @@ JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
 statement ok
 DROP CLUSTER cc_manual
 
+# ----- Hydration burst (PR 6): AUTO SCALING STRATEGY SQL surface. -----
+
+# SQL acceptance is gated by a feature flag (not a dyncfg) so stored CREATE CLUSTER
+# statements re-parse at rehydration regardless of the dyncfgs.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_auto_scaling_strategy = true
+----
+COMPLETE 0
+
+# These checks exercise the AUTO SCALING STRATEGY SQL surface (parse, render,
+# validation), not live burst arming — the controller's own tests cover arming, and
+# it is non-deterministic here (an arming burst races the steady replica's boot and
+# hydration, then lingers). Disable the break-glass burst strategy so the in-flight
+# burst state is deterministically empty.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_hydration_burst = false
+----
+COMPLETE 0
+
+# A managed cluster can carry an ON HYDRATION burst policy.
+statement ok
+CREATE CLUSTER cc_burst (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+# SHOW CREATE CLUSTER renders the policy back, and the rendered statement re-parses
+# (the planner's create-roundtrip asserts unplan->parse->plan equality, so a faulty
+# render would already have failed the CREATE above). The rendered SQL mentions the
+# block.
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+true
+
+# The cluster serves a steady replica set at its own size (the baseline).
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_burst'
+----
+1
+
+# SHOW CLUSTERS surfaces the burst column; with the burst strategy disabled no burst
+# is ever in flight, so it reads NULL.
+query TT
+SELECT name, burst_size FROM (SHOW CLUSTERS) WHERE name = 'cc_burst'
+----
+cc_burst  NULL
+
+# RESET disables autoscaling; SHOW CREATE no longer renders the block.
+statement ok
+ALTER CLUSTER cc_burst RESET (AUTO SCALING STRATEGY)
+
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+false
+
+# Setting it back via ALTER also works (omitting LINGER DURATION).
+statement ok
+ALTER CLUSTER cc_burst SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+query T
+SELECT create_sql LIKE '%AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = ''scale=2,workers=2''))%' FROM (SHOW CREATE CLUSTER cc_burst)
+----
+true
+
+statement ok
+DROP CLUSTER cc_burst
+
+# HYDRATION SIZE equal to the cluster SIZE is rejected (a burst at the same size
+# would not accelerate hydration).
+statement error HYDRATION SIZE must differ from the cluster SIZE
+CREATE CLUSTER cc_burst_bad (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+
+# AUTO SCALING STRATEGY combined with a non-MANUAL SCHEDULE is rejected.
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+CREATE CLUSTER cc_burst_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH, AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# The two invariants are also enforced when an ALTER changes the *other* side of
+# the constraint on a cluster that already carries a strategy.
+statement ok
+CREATE CLUSTER cc_burst_alt (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# Setting SIZE equal to the existing HYDRATION SIZE would make the burst a no-op.
+statement error HYDRATION SIZE must differ from the cluster SIZE
+ALTER CLUSTER cc_burst_alt SET (SIZE = 'scale=2,workers=2')
+
+# Setting a non-MANUAL SCHEDULE on a cluster that already has a strategy is rejected.
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+ALTER CLUSTER cc_burst_alt SET (SCHEDULE = ON REFRESH)
+
+statement ok
+DROP CLUSTER cc_burst_alt
+
+# The invariants also fire when an ALTER *introduces* a strategy that conflicts with
+# the cluster's current config (the strategy-set side, validated against the
+# effective size and schedule).
+statement ok
+CREATE CLUSTER cc_burst_set (SIZE 'scale=1,workers=1')
+
+# A HYDRATION SIZE equal to the cluster's current SIZE is rejected.
+statement error HYDRATION SIZE must differ from the cluster SIZE
+ALTER CLUSTER cc_burst_set SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=1,workers=1')))
+
+statement ok
+DROP CLUSTER cc_burst_set
+
+# Adding a strategy to a cluster whose current SCHEDULE is non-MANUAL is rejected.
+statement ok
+CREATE CLUSTER cc_burst_onref (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH)
+
+statement error AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL
+ALTER CLUSTER cc_burst_onref SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+statement ok
+DROP CLUSTER cc_burst_onref
+
+# With SQL acceptance gated off, the option is rejected at plan time.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_auto_scaling_strategy = false
+----
+COMPLETE 0
+
+statement error AUTO SCALING STRATEGY. cluster option is not available
+CREATE CLUSTER cc_burst_gated (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
 # Restore pristine server state (including the tick-interval override).
 reset-server

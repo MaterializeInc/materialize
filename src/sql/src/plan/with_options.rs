@@ -16,9 +16,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, KafkaMatchingBrokerRule, NetworkPolicyRuleDefinition, RefreshOptionValue,
-    ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterAutoScalingStrategyOptionValue, ClusterScheduleOptionValue,
+    ConnectionDefaultAwsPrivatelink, Expr, Ident, KafkaBroker, KafkaMatchingBrokerRule,
+    NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
@@ -705,6 +705,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_)
+            | WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)
             | WithOptionValue::NetworkPolicyRules(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
@@ -726,6 +727,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::KafkaMatchingBrokerRule(_) => "matching broker rule",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
+                    WithOptionValue::ClusterAutoScalingStrategyOptionValue(_) =>
+                        "cluster auto scaling strategy",
                     WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
                 },
                 V::name()
@@ -977,6 +980,30 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
 
     fn name() -> String {
         "cluster schedule option value".to_string()
+    }
+}
+
+impl ImpliedValue for ClusterAutoScalingStrategyOptionValue {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an auto scaling strategy option value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAutoScalingStrategyOptionValue {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ClusterAutoScalingStrategyOptionValue(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for an auto scaling strategy", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(self))
+    }
+
+    fn name() -> String {
+        "auto scaling strategy option value".to_string()
     }
 }
 

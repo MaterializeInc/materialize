@@ -558,7 +558,15 @@ window decision (in/out-of-window; frontier vs. estimate) where they're cheap.
 
 ## PR 6 — Hydration burst (last feature PR; lands dark)
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review — implementation landed on `cluster-autoscaling`. The
+`AUTO SCALING STRATEGY = (ON HYDRATION (...))` SQL surface (AST + parser + planner +
+`SHOW CREATE CLUSTER` + the item-parsing `enable_auto_scaling_strategy` gate), the pure
+`HydrationBurstStrategy`, the `enable_hydration_burst` break-glass + `default_hydration_burst_linger`
+dyncfgs, the validations (HYDRATION SIZE == SIZE; AUTO SCALING + ON REFRESH), and burst
+observability/audit (the `HydrationBurst` create/drop reason + a `ClusterHydrationBurstV1`
+started/finished lifecycle event; the PR-4 `mz_cluster_reconfigurations.burst_size` column already
+reads the record) — all dark behind the gates. Authored-for-CI: parser testdata, the burst section of
+`cluster_controller.slt`. See the Progress Log.
 
 **Goal.** Add the new `ON HYDRATION` burst capability: the SQL surface, the strategy, the
 break-glass flag, validations, and burst observability/audit. This completes the feature; like
@@ -600,13 +608,32 @@ a burst replica spins up when warranted and tears down after linger with no user
 break-glass flag disables it; rejected combinations error. With the gates off (default), nothing changes.
 
 **Checklist.**
-- [ ] SQL: AST + parser + planner for `AUTO SCALING STRATEGY`/`ON HYDRATION`; `SHOW CREATE CLUSTER`; `enable_auto_scaling_strategy` gate.
-- [ ] Validations: HYDRATION SIZE == SIZE; AUTO SCALING + ON REFRESH.
-- [ ] `HydrationBurstStrategy` (pure); targeted kernel tests (arm/linger/re-arm/teardown).
-- [ ] `enable_hydration_burst` break-glass dyncfg.
-- [ ] Burst observability columns + audit events.
-- [ ] Integration tests (burst lifecycle, break-glass, rejections).
-- [ ] `cargo fmt`/`check` clean; update tracker.
+- [x] SQL: AST + parser + planner for `AUTO SCALING STRATEGY`/`ON HYDRATION`; `SHOW CREATE CLUSTER`; `enable_auto_scaling_strategy` gate. (New `ClusterOptionName::AutoScalingStrategy` + `WithOptionValue::ClusterAutoScalingStrategyOptionValue` (`{ on_hydration: Option<OnHydrationOptionValue { hydration_size, linger_duration }> }`); `AUTO`/`SCALING`/`LINGER`/`DURATION` keywords; `parse_cluster_option_auto_scaling_strategy`; threaded through `ClusterOptionExtracted` → `CreateClusterManagedPlan.auto_scaling_strategy` / `PlanClusterOption.auto_scaling_strategy` (`Set(None)` = disable) → durable `ClusterVariantManaged.auto_scaling_strategy`. `unplan_auto_scaling_strategy` + `Cluster::try_to_plan` surface it for `SHOW CREATE CLUSTER` (round-trip-checked by `plan_create_cluster`). Gate is a `feature_flags!` flag (item-parsing), **not** a dyncfg — a stored `CREATE CLUSTER` re-parses at rehydration where dyncfgs aren't consulted (design *Feature gate*).)
+- [x] Validations: HYDRATION SIZE == SIZE; AUTO SCALING + ON REFRESH. (Both at plan time, on `CREATE` and `ALTER`. The `ALTER` check (`validate_auto_scaling_strategy`) runs against the cluster's *effective* config — the values the `ALTER` sets, else its current ones (`cluster.auto_scaling_strategy()`/`managed_size()`/`schedule()`) — regardless of whether the `ALTER` touches the strategy option, so the invariants cannot be established by changing the *other* side (e.g. `ALTER ... SET (SIZE = <existing HYDRATION SIZE>)` or `... SET (SCHEDULE = ON REFRESH)` on a cluster that already carries a strategy). Rejected for unmanaged clusters in planner and adapter.)
+- [x] `HydrationBurstStrategy` (pure); targeted kernel tests (arm/linger/re-arm/teardown). (Engaged on `ON HYDRATION` + break-glass on + cluster On; `update_state` cleanup/arm/linger/teardown/re-arm; `desired_replicas` keys one replica at `HYDRATION SIZE` on the record's presence. 16 kernel tests + a FakeCtx seam test (create-then-teardown).)
+- [x] `enable_hydration_burst` break-glass dyncfg. (Default **true** at GA; plus `default_hydration_burst_linger` for an omitted `LINGER DURATION`. Both pulled into `ClusterState` as config signals — excluded from the CaA witness.)
+- [x] Burst observability columns + audit events. (`mz_cluster_reconfigurations.burst_size` already reads the record (PR 4); `mz_internal.mz_show_clusters` (and the `SHOW CLUSTERS` projection in `show.rs`) gained a `burst_size` column joined from it, so a single `SHOW CLUSTERS` answers "is a burst running" — NULL when none. New `ReplicaCreateDropReason::HydrationBurst` → `CreateOrDropClusterReplicaReasonV1::HydrationBurst` (proto variant added in place to unshipped v86) on burst create/drop; new `EventDetails::ClusterHydrationBurstV1` started/finished lifecycle classified at the `Op::UpdateClusterConfig` write site (alongside the reconfiguration lifecycle), proto + `RustType` added in place to v86, hashes regenerated.)
+- [x] Integration tests (burst lifecycle, break-glass, rejections). (`cluster_controller.slt` burst section: SQL acceptance + `SHOW CREATE` round-trip + RESET + rejections (HYDRATION SIZE == SIZE, + ON REFRESH, gate-off) — authored for CI. The deterministic burst-replica lifecycle is in the kernel + FakeCtx tests, since an empty slt cluster hydrates promptly and races the linger.)
+- [x] `cargo fmt`/`check` clean; update tracker.
+
+**Deferred (with reasons).**
+- **Restart-survival platform-check for burst.** As with PR 3/PR 5, a platform-check that flips
+  `enable_cluster_controller` (and `enable_auto_scaling_strategy`) env-wide would change behavior for
+  every other check in the shared dark suite (the controller would own all replica sets). Burst
+  survival across restart is guaranteed by construction (the `burst` record is durable catalog state)
+  and exercised by the controller kernel + FakeCtx seam tests; a dedicated restart test belongs with
+  the rollout enablement, not the dark suite.
+- **Rich `SchedulingDecisions`-style audit detail on burst create/drop.** Burst create/drop carry the
+  `HydrationBurst` reason (a clean attribution); they do not carry a rich per-decision detail blob.
+  None is defined for burst (unlike the legacy `SchedulingDecisionsWithReasonsV2` for on-refresh), so
+  there is nothing to fabricate — the `ClusterHydrationBurstV1` started/finished lifecycle event plus
+  the reason-tagged replica events cover the burst lifecycle.
+- **Live-server regen of autogenerated catalog/keyword snapshots.** The parser testdata and the burst
+  `cluster_controller.slt` section are authored to match the generators' format but were not run
+  against a booted `environmentd` (operating rules say not to block on the optimized build). The
+  `enable_auto_scaling_strategy` flag is intentionally **not** added to the mzcompose default
+  feature-flag list — adding it would enable the SQL surface env-wide for every mzcompose test, which
+  contradicts landing dark.
 
 ---
 
@@ -676,6 +703,122 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-03_ — **PR 6 review follow-up** (fixup on `cluster-autoscaling`, separate commit on PR 6).
+  Addressed the adversarial review of the implementation commit:
+  (1) **ALTER-side validation gaps (two majors).** The `HYDRATION SIZE == SIZE` and
+  `AUTO SCALING + non-MANUAL SCHEDULE` rejections only fired when the `ALTER` itself set
+  `AUTO SCALING STRATEGY`, so the prohibited states could be reached by `ALTER`ing the *other* side
+  (e.g. `SET (SIZE = <existing HYDRATION SIZE>)` or `SET (SCHEDULE = ON REFRESH)` on a cluster that
+  already carries a strategy). Split `plan_auto_scaling_strategy` into a pure AST→plan conversion plus
+  a new `validate_auto_scaling_strategy(strategy, effective_size, schedule_non_manual)`, and call the
+  validator in `plan_alter_cluster` against the cluster's *effective* config regardless of which
+  options the `ALTER` touches. Added a `CatalogCluster::auto_scaling_strategy()` accessor (the planner
+  needs the cluster's current strategy to compute the effective value). Fixed the
+  `plan_auto_scaling_strategy` doc comment, which had claimed a "re-validated against the realized
+  config" path that did not exist. Kept the single validation in the planner (the design's parse/plan
+  rejection point) rather than duplicating it in the adapter sequencer — every `ALTER` flows through
+  the planner, so the plan reaching the sequencer is already validated; a second `coord_bail!` would
+  fork the invariant.
+  (2) **SHOW CLUSTERS burst indication (major; design Scope-in).** Added a `burst_size` column to
+  `mz_internal.mz_show_clusters` (joined from `mz_cluster_reconfigurations`, which already projects it)
+  and to the `SHOW CLUSTERS` projection in `show.rs` — NULL when no burst is in flight. Updated the
+  `mz_catalog_server_index_accounting.slt` column list; no migration (builtin view, recreated from its
+  definition).
+  (3) **Burst audit-classification test (major; false confidence).** Added
+  `test_classify_burst_transition` mirroring the PR-4 reconfiguration sibling: Started on write,
+  Finished on clear, Started on a `burst_size` re-arm, and crucially **None** on a same-size record
+  change (the `steady_hydrated_at` stamp) and `None`/`None`.
+  (4) **Witness coverage for `auto_scaling_policy` (minor).** Added a `concurrent_policy_alter` hook to
+  the `FakeCtx` and two seam tests (`burst_policy_alter_rejects_in_flight_decision` + a non-vacuous
+  unchanged-policy dual) so removing `auto_scaling_policy` from the CaA witness would now fail a test.
+  (5) **Kernel no-panic hardening (minor).** The burst teardown guard used `step_forward_by` (panics on
+  overflow) on a `duration_to_ts` result that may saturate to `Timestamp::MAX`; switched to
+  `try_step_forward_by(...).unwrap_or(Timestamp::MAX)`, reading a saturated linger as never-elapsed
+  (hold the burst), consistent with `duration_to_ts`'s degrade-to-keep-on intent. **Not** applied to
+  the on-refresh `read_ts.step_forward_by` at `strategy.rs`: it must mirror the legacy
+  `check_refresh_policy` (which uses the same panicking call) for frontier fidelity, and its inputs
+  (a bounded read timestamp, a planning-capped hydration estimate) do not share the burst case's
+  unbounded-dyncfg reachability.
+  (6) **Parser duplicate rejection (nit).** `AUTO SCALING STRATEGY = (ON HYDRATION (...), ON HYDRATION
+  (...))` silently kept the last entry; now errors "ON HYDRATION specified more than once". Kept the
+  comma-separated loop (the design's extensible sub-policy list) and rejects only a repeated keyword.
+  Added a parser testdata case (rewritten via `REWRITE=1`) and `cluster_controller.slt` cases for the
+  ALTER-other-side rejections + the `SHOW CLUSTERS` burst column. Cheap checks: `cargo +nightly fmt`
+  clean; `cargo +nightly check` clean on `mz-sql-parser`/`mz-sql`/`mz-catalog`/`mz-cluster-controller`/
+  `mz-adapter`; `bin/lint-cargo` clean; `cargo +nightly clippy -p mz-cluster-controller` clean in the
+  touched files. Tests: `mz-cluster-controller` (51, +2 witness), `mz-sql-parser` datadriven,
+  `mz-adapter` `catalog::transact` (4, +1 burst classify), `mz-catalog` `builtin::` (7) +
+  `durable::upgrade` (146). Did **not** run the slt/testdrive suites (the new slt cases are
+  authored-for-CI) or the optimized build.
+- _2026-06-03_ — **PR 6 implemented** (hydration burst — the last feature PR; all dark behind gates
+  defaulting to the no-burst state). **SQL surface:** new `AUTO SCALING STRATEGY = (ON HYDRATION
+  (HYDRATION SIZE = '...', LINGER DURATION = '...'))` cluster option, available at `CREATE CLUSTER`
+  and `ALTER CLUSTER SET/RESET`. Added `ClusterOptionName::AutoScalingStrategy`, a dedicated
+  `WithOptionValue::ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration:
+  Option<OnHydrationOptionValue { hydration_size: Value, linger_duration: Option<Value> }> })` AST
+  node (mirroring `ClusterScheduleOptionValue`), the `AUTO`/`SCALING`/`LINGER`/`DURATION` keywords,
+  and `parse_cluster_option_auto_scaling_strategy` (an empty `()` disables). Threaded through
+  `ClusterOptionExtracted` → `CreateClusterManagedPlan.auto_scaling_strategy` and
+  `PlanClusterOption.auto_scaling_strategy` (`Set(Some)`/`Set(None)`-on-empty/`Reset`-on-RESET) → the
+  durable `ClusterVariantManaged.auto_scaling_strategy` (PR 1 field) on both the create and alter
+  sequencer paths; `plan_auto_scaling_strategy`/`unplan_auto_scaling_strategy` + `Cluster::try_to_plan`
+  render it for `SHOW CREATE CLUSTER` (the planner's create-roundtrip asserts the unplan/parse/plan
+  equality). **Gate:** SQL acceptance is the `enable_auto_scaling_strategy` **`feature_flags!`** flag
+  (`enable_for_item_parsing: true`, default off) — *not* a dyncfg, because a stored `CREATE CLUSTER`
+  re-parses at catalog rehydration where dyncfgs aren't consulted (design *Feature gate*). The plan's
+  dyncfg table listed it as a dyncfg; the design is authoritative — recorded here. **Validations
+  (plan time):** reject `HYDRATION SIZE == cluster SIZE` (a no-op burst) and `AUTO SCALING STRATEGY`
+  with a non-MANUAL `SCHEDULE` (both on `CREATE` and `ALTER`, the latter against the effective
+  size/schedule); reject the option for unmanaged clusters in both the planner and the adapter.
+  **Strategy:** new pure `HydrationBurstStrategy` in `mz-cluster-controller`, registered in
+  `ClusterController::new()`. Engaged when the cluster carries `ON HYDRATION`, the break-glass flag is
+  on, and the cluster is On (`rf > 0`). `update_state` runs the lifecycle in precedence order:
+  cleanup (clear the record when burst is no longer warranted — policy removed, `HYDRATION SIZE`
+  changed so the record's size is stale, cluster off, or break-glass off — regardless of linger), arm
+  (write a record while the steady set is un-hydrated), then linger/teardown/re-arm (stamp
+  `steady_hydrated_at` on first steady hydration, clear once `now > stamp + linger`, reset the stamp
+  if the steady set un-hydrates again). `desired_replicas` keys one extra replica at `HYDRATION SIZE`
+  purely on the record's presence. No TTL (accepted permanent oversize), coexists with a
+  reconfiguration. **Seam:** added `AutoScalingPolicy`/`OnHydrationPolicy` controller mirrors (kept
+  out of the SQL dep like `ClusterSchedule`/`OnTimeout`), an `auto_scaling_policy` field on
+  `ClusterState` *and* `ExpectedClusterState` (so a concurrent `ALTER` of the policy rejects an
+  in-flight burst decision via CaA), and `burst_enabled` + `default_burst_linger` config signals on
+  `ClusterState` (excluded from the witness). `enrich_hydration` now also probes a cluster when a
+  burst is in flight or warranted, not only during a reconfiguration. **Adapter driver:**
+  `observe_cluster_state` threads the policy + reads `ENABLE_HYDRATION_BURST` /
+  `DEFAULT_HYDRATION_BURST_LINGER`; `cluster_state_matches` compares the policy;
+  `reason_from_strategies` maps a burst-desired create to the new `HydrationBurst` reason. **Dyncfgs:**
+  `enable_hydration_burst` (break-glass, default **true** at GA) and `default_hydration_burst_linger`
+  (default 0). **Audit:** new `ReplicaCreateDropReason::HydrationBurst` →
+  `CreateOrDropClusterReplicaReasonV1::HydrationBurst` on burst create/drop; new
+  `EventDetails::ClusterHydrationBurstV1` started/finished cluster lifecycle, classified from the
+  `burst` before/after at the single `Op::UpdateClusterConfig` write site (next to the reconfiguration
+  lifecycle). Both proto variants were added **in place** to the unshipped v86
+  (`objects.rs` + `objects_v86.rs`, `objects_hashes.json` regenerated to
+  `78a3650e8eec5a81c02e459eef26f7f7`) with `RustType` conversions in `catalog-protos/audit_log.rs`;
+  the audit reason/event are not part of the durable `StateUpdateKind` snapshot, so `objects_v86.txt`
+  needed no regen. The PR-4 `mz_cluster_reconfigurations.burst_size` column already reads the record,
+  so the introspection surface needs no schema change. **Tests:** 16 new burst kernel tests + 1
+  FakeCtx seam test in `mz-cluster-controller` (49 total, all pass); parser testdata for the new
+  option (5 cases + the two updated keyword-list error messages, rewritten via `REWRITE=1`); a burst
+  section in `cluster_controller.slt` (acceptance, `SHOW CREATE` round-trip via `create_sql LIKE`,
+  RESET, and the three rejections incl. gate-off) authored for CI. **Cheap checks:** `cargo +nightly
+  fmt`; `cargo +nightly check` clean on every touched crate (`mz-sql-parser`, `mz-sql`, `mz-catalog`,
+  `mz-catalog-protos`, `mz-audit-log`, `mz-adapter`, `mz-adapter-types`, `mz-cluster-controller`);
+  `cargo +nightly clippy` clean on `mz-cluster-controller`/`mz-adapter-types`; `bin/lint-cargo` clean;
+  `Cargo.lock` unchanged (no new third-party deps). Tests run: `mz-cluster-controller` (49),
+  `mz-sql-parser` datadriven, `mz-sql-lexer`, `mz-audit-log`, `mz-catalog` `builtin::` (7) +
+  `durable::upgrade` (146, incl. proto-serialization stability), `mz-adapter` `catalog::transact` (3,
+  incl. the reconfiguration classify test), `mz-catalog-protos` (proto roundtrip). The local
+  toolchain is stable 1.95 but the workspace pins `rust-version = 1.96`, so all builds used
+  `cargo +nightly` (1.98) with `OPENSSL_DIR` pointed at the vendored openssl build. Did **not** run the
+  slt/testdrive suites or the optimized build. **Deferred (see the PR-6 section):** a restart-survival
+  platform-check (would flip the gates env-wide in the shared dark suite); rich
+  `SchedulingDecisions`-style audit detail on burst (none defined; the lifecycle event + reason cover
+  it); and a live-server regen of the autogenerated snapshots. `enable_auto_scaling_strategy` is
+  deliberately **not** added to the mzcompose default feature-flag list (that would enable the surface
+  env-wide, contradicting dark).
 
 - _2026-06-03_ — **PR 5 follow-up review: frontier-comment precision** (fixup on
   `cluster-autoscaling`, separate commit on PR 5). Tightened two doc/test comments from the

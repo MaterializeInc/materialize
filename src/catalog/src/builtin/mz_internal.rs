@@ -5016,6 +5016,9 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         // `mz_internal.mz_cluster_reconfigurations`; this view is indexed, so it
         // stays non-temporal and does not compare the deadline to `mz_now()`.
         .with_column("reconfiguration_in_flight", SqlScalarType::Bool.nullable(true))
+        // The size of the in-flight hydration-burst replica, if any. `NULL` when
+        // no burst is running (or for unmanaged clusters); the size while one is.
+        .with_column("burst_size", SqlScalarType::String.nullable(true))
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
@@ -5041,6 +5044,7 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         recon.current_size,
         recon.target_size,
         recon.reconfiguration_in_flight,
+        recon.burst_size,
         COALESCE(comment, '') as comment
     FROM clusters
     LEFT JOIN comments ON clusters.id = comments.id

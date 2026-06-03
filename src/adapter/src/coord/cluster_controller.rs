@@ -27,15 +27,20 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::{
+    CLUSTER_CONTROLLER_TICK_INTERVAL, DEFAULT_HYDRATION_BURST_LINGER, ENABLE_CLUSTER_CONTROLLER,
+    ENABLE_HYDRATION_BURST,
+};
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
-    ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationTarget,
-    RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ApplyOutcome, AutoScalingPolicy, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
+    ExpectedClusterState, ObservedReplica, OnHydrationPolicy, OnTimeout, ReconfigurationRecord,
+    ReconfigurationTarget, RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
-use mz_cluster_controller::strategy::GRACEFUL_RECONFIGURATION_STRATEGY_NAME;
+use mz_cluster_controller::strategy::{
+    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME,
+};
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
@@ -314,7 +319,7 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule,
-            auto_scaling_strategy: _,
+            auto_scaling_strategy,
             reconfiguration,
             burst,
         } = managed;
@@ -343,6 +348,10 @@ impl Coordinator {
             })
             .collect();
 
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let burst_enabled = ENABLE_HYDRATION_BURST.get(dyncfgs);
+        let default_burst_linger = DEFAULT_HYDRATION_BURST_LINGER.get(dyncfgs);
+
         Some(ClusterState {
             cluster_id,
             size: size.clone(),
@@ -350,8 +359,13 @@ impl Coordinator {
             availability_zones: availability_zones.clone(),
             logging: logging.clone(),
             schedule: schedule_to_controller(schedule),
+            auto_scaling_policy: auto_scaling_strategy
+                .as_ref()
+                .map(auto_scaling_policy_to_controller),
             reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
             burst: burst.as_ref().map(burst_record),
+            burst_enabled,
+            default_burst_linger,
             replicas,
             // Live signals the controller pulls separately (via `hydrated_replicas`
             // / `refresh_window_inputs`) only when a strategy needs them.
@@ -701,6 +715,11 @@ impl Coordinator {
             && managed.availability_zones == expected.availability_zones
             && managed.logging == expected.logging
             && schedule_to_controller(&managed.schedule) == expected.schedule
+            && managed
+                .auto_scaling_strategy
+                .as_ref()
+                .map(auto_scaling_policy_to_controller)
+                == expected.auto_scaling_policy
             && managed.reconfiguration.as_ref().map(reconfiguration_record)
                 == expected.reconfiguration
             && managed.burst.as_ref().map(burst_record) == expected.burst
@@ -708,24 +727,19 @@ impl Coordinator {
 }
 
 /// Map a decision's strategy-attribution to the audit reason carried on the
-/// create/drop event.
+/// create/drop event. Graceful wins over burst when both desired a shape (their
+/// shapes differ in practice, so this is a stable tie-break); everything else —
+/// baseline-held replicas, on-refresh replicas, ordinary drops — is `Manual`,
+/// the tag for controller-driven steady-state replica lifecycle.
 ///
-/// A create/drop the graceful strategy desired is recorded as a graceful
-/// reconfiguration. Everything else — baseline-held replicas, on-refresh-desired
-/// replicas, replicas no strategy desired (an ordinary drop) — is `Manual`,
-/// today's tag for controller-driven steady-state replica lifecycle.
-///
-/// On-refresh creates/drops do not carry the legacy `ClusterScheduling` reason
-/// with its rich `SchedulingDecisionsWithReasonsV2` detail (objects needing
-/// refresh / compaction, hydration-time estimate): that detail is the legacy
-/// scheduler's, computed where the decision is made, not reconstructable from the
-/// controller's strategy-name attribution alone, and the reason variant requires a
-/// non-empty decision vec. Until that attribution is recomputed at the apply site,
-/// on-refresh creates/drops carry the `Manual` tag; the controller is dark, so the
-/// tag is immaterial until the gate is enabled.
+/// On-refresh creates/drops also carry `Manual` rather than the legacy
+/// `ClusterScheduling` reason: its per-MV detail is computed where the legacy
+/// scheduler decides and cannot be reconstructed from a strategy name here.
 fn reason_from_strategies(reasons: &[&'static str]) -> ReplicaCreateDropReason {
     if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
         ReplicaCreateDropReason::GracefulReconfiguration
+    } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
+        ReplicaCreateDropReason::HydrationBurst
     } else {
         // The on-refresh strategy and the baseline both fall through to `Manual`
         // (see the doc comment for the on-refresh attribution caveat).
@@ -784,6 +798,20 @@ fn on_timeout_from_controller(action: OnTimeout) -> mz_sql::plan::OnTimeoutActio
     match action {
         OnTimeout::Commit => mz_sql::plan::OnTimeoutAction::Commit,
         OnTimeout::Rollback => mz_sql::plan::OnTimeoutAction::Rollback,
+    }
+}
+
+fn auto_scaling_policy_to_controller(
+    strategy: &mz_sql::plan::AutoScalingStrategy,
+) -> AutoScalingPolicy {
+    AutoScalingPolicy {
+        on_hydration: strategy
+            .on_hydration
+            .as_ref()
+            .map(|on_hydration| OnHydrationPolicy {
+                hydration_size: on_hydration.hydration_size.clone(),
+                linger_duration: on_hydration.linger_duration,
+            }),
     }
 }
 
