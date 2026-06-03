@@ -134,14 +134,13 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
-use columnar::bytes::indexed;
-use columnar::{
-    Borrow, BorrowedOf, Clear, Columnar, ContainerOf, FromBytes, Index, Len, Push, Ref,
-};
+use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
+use mz_timely_util::columnar::Column;
 use timely::PartialOrder;
+use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{ChannelLogging, SizeMetrics};
@@ -166,63 +165,6 @@ impl<D> Data for D where
         + Send
         + Sync
 {
-}
-
-/// Storage for a chunk's worth of updates.
-///
-/// Mirrors [`mz_timely_util::columnar::Column`] minus the `Bytes` variant: that variant wraps
-/// `timely::bytes::arc::Bytes`, which contains `Arc<dyn Any>` and is therefore `!Sync`.
-/// `CorrectionV2::updates_before` returns a `+ Send` iterator that captures `&self`, which in
-/// turn captures the chunk storage, so the storage must be `Sync`.
-enum ChunkData<D: Data> {
-    /// Typed, mutable columnar container (each column is a `Vec`-like). Used while a chunk is
-    /// still being filled by a [`ChunkBuilder`].
-    Typed(ContainerOf<(D, Timestamp, Diff)>),
-    /// Finished chunk encoded into a single aligned `Vec<u64>` allocation. Produced by
-    /// [`ChunkBuilder`] once enough data has accumulated to reach a ~2 MiB serialized boundary.
-    Align(Vec<u64>),
-}
-
-impl<D: Data> Default for ChunkData<D> {
-    fn default() -> Self {
-        Self::Typed(Default::default())
-    }
-}
-
-impl<D: Data> ChunkData<D> {
-    /// Return a borrowed view of the contained columnar data.
-    #[inline]
-    fn borrow(&self) -> BorrowedOf<'_, (D, Timestamp, Diff)> {
-        match self {
-            Self::Typed(c) => columnar::Borrow::borrow(c),
-            Self::Align(a) => {
-                <BorrowedOf<'_, (D, Timestamp, Diff)>>::from_bytes(&mut indexed::decode(a))
-            }
-        }
-    }
-
-    /// Return the number of updates in this chunk.
-    #[inline]
-    fn len(&self) -> usize {
-        self.borrow().len()
-    }
-
-    /// Return the size of the chunk, for use in metrics.
-    fn length_in_bytes(&self) -> usize {
-        match self {
-            Self::Typed(c) => indexed::length_in_bytes(&columnar::Borrow::borrow(c)),
-            Self::Align(a) => 8 * a.len(),
-        }
-    }
-}
-
-impl<D: Data> fmt::Debug for ChunkData<D> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Typed(_) => write!(f, "ChunkData::Typed(<{}>)", self.len()),
-            Self::Align(a) => write!(f, "ChunkData::Align(<{} bytes>)", 8 * a.len()),
-        }
-    }
 }
 
 /// A data structure used to store corrections in the MV sink implementation.
@@ -1103,9 +1045,18 @@ impl<D: Data> Cursor<D> {
 /// means each chunk corresponds to a single, predictable allocation; the previous
 /// columnation-backed `Vec<T>`-plus-region representation had no convenient way to pre-size
 /// the storage.
+///
+/// The chunk holds a [`Column`] directly. `Column` became `Send + Sync` in
+/// `timely_bytes` 0.30, which lets [`CorrectionV2::updates_before`] return a `+ Send`
+/// iterator that captures `&self`. Paging chunks out via
+/// [`mz_timely_util::column_pager::ColumnPager`] (introduced in #36552) would need a deeper
+/// rework of the cursor sharing model — `Cursor` holds `Rc<Chunk<D>>` and accesses chunk data
+/// through `&self`, while `pager.take` consumes its `PagedColumn`. Picking that up should
+/// happen at the `Chain` boundary (chains carry `Vec<PagedColumn>`, with chunks materialized
+/// at `into_cursor` time) and is out of scope for the spilling-correctness fix here.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: ChunkData<D>,
+    data: Column<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1115,14 +1066,14 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Wrap the given chunk data into a chunk.
-    fn from_data(data: ChunkData<D>) -> Self {
+    /// Wrap the given column into a chunk.
+    fn from_column(data: Column<(D, Timestamp, Diff)>) -> Self {
         Self { data }
     }
 
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
-        self.data.len()
+        self.data.borrow().len()
     }
 
     /// Return the update at the given index.
@@ -1178,78 +1129,63 @@ impl<D: Data> Chunk<D> {
 
 /// Builder that produces a stream of fixed-size [`Chunk`]s.
 ///
-/// Updates are pushed into an in-progress columnar container; once its serialized size is
-/// within 10 % of the next 2 MiB boundary, the contents are encoded into a single aligned
-/// `Vec<u64>` (a [`ChunkData::Align`]) and the in-progress container is cleared for reuse.
-/// The 10 %/2 MiB heuristic matches `mz_timely_util::columnar::builder::ColumnBuilder`, so
-/// chunks produced here are sized comparably to chunks shipped via the merge batcher.
+/// Wraps [`mz_timely_util::columnar::builder::ColumnBuilder`], which mints a new
+/// [`Column::Align`] chunk whenever its in-progress columnar container reaches a fixed
+/// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
+/// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
 struct ChunkBuilder<D: Data> {
-    /// In-progress chunk.
-    current: ContainerOf<(D, Timestamp, Diff)>,
-    /// Already-minted chunks ready to be consumed.
-    pending: VecDeque<ChunkData<D>>,
+    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
 }
-
-/// Words per 2 MiB. `indexed::length_in_words` returns the serialized size in `u64` units,
-/// so this is the page count we round up to. Picked to match the same boundary that
-/// `mz_timely_util::columnar::builder::ColumnBuilder` uses.
-const SHIP_WORDS: usize = 1 << 18;
 
 impl<D: Data> Default for ChunkBuilder<D> {
     fn default() -> Self {
         Self {
-            current: Default::default(),
-            pending: Default::default(),
+            inner: Default::default(),
         }
     }
 }
 
 impl<D: Data> ChunkBuilder<D> {
     /// Push an update into the builder.
+    ///
+    /// Accepts whatever the inner [`ColumnBuilder`]'s [`PushInto`] impl accepts — both the
+    /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
+    /// tuples drained from the staging buffer.
+    ///
+    /// [`ColumnBuilder`]: mz_timely_util::columnar::builder::ColumnBuilder
+    /// [`PushInto`]: timely::container::PushInto
     #[inline]
     fn push<T>(&mut self, item: T)
     where
-        ContainerOf<(D, Timestamp, Diff)>: Push<T>,
+        mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>:
+            timely::container::PushInto<T>,
     {
-        self.current.push(item);
-        self.maybe_mint();
-    }
-
-    /// If `current` is close to the serialized capacity boundary, mint a new chunk.
-    #[inline]
-    fn maybe_mint(&mut self) {
-        let words = indexed::length_in_words(&self.current.borrow());
-        let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
-        if round - words < round / 10 {
-            self.mint(words);
-        }
-    }
-
-    /// Encode the in-progress chunk into an aligned `Vec<u64>` and stash it in `pending`.
-    #[cold]
-    fn mint(&mut self, words: usize) {
-        let mut alloc: Vec<u64> = Vec::with_capacity(words);
-        indexed::encode(&mut alloc, &self.current.borrow());
-        self.pending.push_back(ChunkData::Align(alloc));
-        self.current.clear();
+        timely::container::PushInto::push_into(&mut self.inner, item);
     }
 
     /// Pop a finished chunk, if one is available.
     fn pop(&mut self) -> Option<Chunk<D>> {
-        self.pending.pop_front().map(Chunk::from_data)
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::extract` stashes the popped chunk in its `finished` slot so the
+        // caller can read it through `&mut`; move it out with `mem::take` so we own it
+        // (leaves `Column::Typed(Default::default())` behind, which the next `extract`
+        // overwrites).
+        self.inner
+            .extract()
+            .map(|c| Chunk::from_column(std::mem::take(c)))
     }
 
     /// Finalize the builder: flush any in-progress updates as a typed chunk and drain pending.
-    ///
-    /// The remainder (which is unlikely to be exactly at a 2 MiB boundary) is emitted in
-    /// `Typed` form rather than `Align`, since its small size means the aligned encoding
-    /// wouldn't help.
     fn finish(mut self) -> impl Iterator<Item = Chunk<D>> {
-        if !columnar::Len::is_empty(&self.current) {
-            self.pending
-                .push_back(ChunkData::Typed(std::mem::take(&mut self.current)));
-        }
-        self.pending.into_iter().map(Chunk::from_data)
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
+        // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
+        // the rest until `None`. Translate that into an owning iterator.
+        std::iter::from_fn(move || {
+            self.inner
+                .finish()
+                .map(|c| Chunk::from_column(std::mem::take(c)))
+        })
     }
 }
 
