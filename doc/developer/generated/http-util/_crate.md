@@ -1,6 +1,6 @@
 ---
 source: src/http-util/src/lib.rs
-revision: 8b77a4950e
+revision: c8a90af6a2
 ---
 
 # mz-http-util
@@ -17,7 +17,9 @@ It exports a collection of axum handler functions and a macro for serving static
 * `template_response` — renders an `askama` template into an `axum` `Html` response.
 * `make_handle_static\!` — macro that generates a `handle_static` route handler; serves embedded files in release mode and reads from the filesystem in `dev-web` mode.
 * `handle_liveness_check` — returns `200 OK` for health probes.
-* `handle_prometheus` — encodes Prometheus metrics from a `MetricsRegistry` into the Prometheus text or protobuf exposition format, selected by the caller's `Accept` header.
+* `handle_prometheus` — encodes Prometheus metrics from a `MetricsRegistry` into the Prometheus text or protobuf exposition format, selected by the caller's `Accept` header. When the caller sends `X-Materialize-Accept-Enrich-Rules: 1`, the response also includes an `X-Materialize-Enrich-Rules` header carrying the registry's per-metric enrichment rules as gzipped, base64-encoded JSON.
+* `encode_enrich_rules` / `decode_enrich_rules` — serialize and deserialize the enrichment-rules map (gzip + base64) for transport in `X-Materialize-Enrich-Rules`.
+* `MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER` / `MATERIALIZE_ENRICH_RULES_HEADER` — the request and response header name constants for the enrichment-rules negotiation.
 * `handle_reload_tracing_filter` — accepts a JSON body with a new `EnvFilter` string and reloads the tracing layer via a `TracingHandle`.
 * `handle_tracing` — returns the current tracing level filter as JSON.
 * `origin_is_allowed` — returns `true` if an `Origin` header value matches any entry in an allowed list; supports bare `*` (any origin), exact match, and wildcard subdomain globs (`*.example.com`).

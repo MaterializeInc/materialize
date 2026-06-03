@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: cc7f2656e3
+revision: bfa6499c3b
 ---
 
 # mz-row-spine
@@ -9,8 +9,8 @@ Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. 
 
 ## Public types
 
-* `DatumContainer` — packed-bytes container for `Row` keys or values; implements `columnar::Container` and serves as the storage type for `Row`-valued spine layouts.
-* `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ToDatumIter`.
+* `DatumContainer` — packed-bytes container for `Row` keys or values; implements `columnar::Container` and serves as the storage type for `Row`-valued spine layouts. Also implements `PushInto<&RowRef>`, pushing the raw bytes of a `RowRef` directly into the backing byte container.
+* `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ToDatumIter` and `PartialEq<&RowRef>` (comparing the underlying byte slices).
 * `OffsetOptimized` — offset list implementation wrapping `differential_dataflow`'s `OffsetList`, used in `OrdValBatch` and `OrdKeyBatch` layouts.
 
 ## Spine type aliases
@@ -31,6 +31,8 @@ All batchers use `MergeBatcher` from `differential_dataflow` with `ColumnationCh
 All builders use `RcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKeyBuilder` with a `ColumnationStack` input:
 
 * `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
+
+`RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with `Col2ValPagedBatcher` for the spillable arrange path.
 
 ## Layout structs (internal)
 

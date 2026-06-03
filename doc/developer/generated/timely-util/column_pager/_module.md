@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager.rs
-revision: cc7f2656e3
+revision: bfa6499c3b
 ---
 
 # timely-util::column_pager
@@ -33,9 +33,25 @@ The serialization uses the existing `ContainerBytes` protocol on `Column<C>`, so
 - `Paged { handle, meta }` — raw `ContainerBytes` payload stored via a `pager::Handle`.
 - `Compressed { inner, meta }` — lz4-framed bytes held either in a resident `Vec<u8>` (`CompressedInner::Memory`) or in a pager handle (`CompressedInner::Paged`).
 
-`ResidentTicket` is a drop guard that holds an `Arc<dyn PagingPolicy>` and the byte count charged at decide time. On drop it fires `PageEvent::ResidentReleased` so the policy can reclaim the budget it granted.
+`ResidentTicket` is a drop guard that holds an `Arc<dyn PagingPolicy>` and the byte count charged at decide time. On drop it calls `metrics::observe_resident_released` and fires `PageEvent::ResidentReleased` so the policy can reclaim the budget it granted.
 
 `ColumnPager` is cheap to clone (wraps an `Arc<dyn PagingPolicy>`). `ColumnPager::page` drains a `Column<C>` into a `PagedColumn<C>`, leaving the source as an empty typed default ready to be refilled. `ColumnPager::take` rehydrates a `PagedColumn<C>` back into a `Column<C>`, consuming the handle and reclaiming storage.
+
+`ColumnPager::disabled` constructs a pager that never pages out: every `page` call returns a `PagedColumn::Resident` whose ticket discards release events. Useful as a placeholder before injecting a real policy. It is backed by `AlwaysResidentPolicy`, a private struct that always returns `PageDecision::Skip` and ignores events.
+
+## Process-global pager
+
+A `LazyLock<RwLock<ColumnPager>>` named `GLOBAL_PAGER` holds the process-wide active pager, defaulting to `ColumnPager::disabled` until `set_global_pager` is called.
+
+`set_global_pager(pager)` installs a new process-wide pager. For the production path, `apply_tiered_config` is preferred: it reuses the singleton `TIERED_POLICY` so in-flight `ResidentTicket`s remain coherent with the running budget after reconfiguration.
+
+`TIERED_POLICY` is a `LazyLock<Arc<policy::TieredPolicy>>` singleton initialized with zero budget. A singleton is required because every `ResidentTicket` holds an `Arc<dyn PagingPolicy>` pointing at the policy that granted residency; replacing the global policy would orphan in-flight tickets onto the old atomic, draining the new pool.
+
+`tiered_policy()` returns a `&'static policy::TieredPolicy` reference to the singleton.
+
+`apply_tiered_config(enabled, total_budget, backend, codec)` calls `reconfigure` on the singleton policy and then either installs a `ColumnPager` backed by it (when `enabled`) or installs `ColumnPager::disabled`.
+
+`global_pager()` returns the current global pager by cloning the inner `Arc<dyn PagingPolicy>`.
 
 ## Pageout paths
 
@@ -43,4 +59,4 @@ The serialization uses the existing `ContainerBytes` protocol on `Column<C>`, so
 - **Uncompressed, other variants**: the column is serialized via `ContainerBytes::into_bytes`, then the byte buffer is widened to `Vec<u64>` and handed to the pager.
 - **Compressed**: serialized bytes stream through an lz4 `FrameEncoder` directly into the output buffer; no intermediate uncompressed allocation is materialized.
 
-The `policy` submodule provides the concrete `TieredPolicy` implementation.
+The `metrics` submodule provides metric observation helpers called at each paging event. The `policy` submodule provides the concrete `TieredPolicy` implementation.
