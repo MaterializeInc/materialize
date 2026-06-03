@@ -104,10 +104,13 @@ pub trait VisitChildren<T> {
         Ok(())
     }
 
-    // The `T`-typed children of this element.
+    /// The `T`-typed children of this element.
     fn children(&self) -> Vec<&T>;
 
-    // The `&mut T`-typed children of this element.
+    /// The `&mut T`-typed children of this element.
+    ///
+    /// It is critical for the safety of mutable post-order traversals that this
+    /// function be written using safe code.
     fn children_mut(&mut self) -> Vec<&mut T>;
 }
 
@@ -119,9 +122,9 @@ pub trait VisitChildren<T> {
 ///
 /// All methods provided by this trait are iterative.
 ///
-/// NB that any trait with post-traversal uses unsafe code---any shenanigans
-/// in the visitor could result in unsoundness. Ordinary rust code in the visitor
-/// that does not move pointers in the structure are fine.
+/// NB that any visitor with mutable post-traversal uses unsafe code. It is critical
+/// that `VisitChildren::children_mut` be written using safe code, i.e., no aliasing
+/// of children or access to parents.
 pub trait Visit {
     /// Post-order immutable infallible visitor for `self`.
     fn visit_post<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
@@ -275,12 +278,41 @@ pub trait Visit {
         F2: FnMut(&mut Self);
 }
 
+/// Frames for immutable post-traversals, will be kept in a stack.
 enum VisitAction<'a, T> {
+    /// Put on the stack when entering a node.
+    ///
+    /// Causes us to push children.
     Enter(&'a T),
+    /// Put on the stack when leaving a node, all children visited.
+    ///
+    /// Causes us to do the post-traversal visit of the parent.
     Leave(&'a T),
 }
+
+/// Frames for mutable post-traversals, will be kept in a stack.
+///
+/// Notice that we use mutable pointers, because mutable post-traversal is unsafe in rust.
+///
+/// The core argument for correctness mirrors the tree-borrow correctness argument Rust's
+/// borrow checker uses for the ordinary function call stack. Loosely:
+///
+///  - We split a mutable parent node into its children, and put them on the stack.
+///  - We keep a mutable pointer to the parent node, but won't touch it until we're done with all children.
+///    + In the function call stack, this mutable pointer is the stack frame, safely inaccessible.
+///    + In our `unsafe` action stack, this mutable pointer is below all of the `Enter` actions,
+///      and we promise not to touch it until they complete.
+///  - When we have processed all children, we can reassemble access to the parent from its parts.
+///    + In the function call stack, we do this on return from recursive calls.
+///    - In our `unsafe` action stack, we do this after popping all children.
 enum VisitMutAction<T> {
+    /// Put on the stack when entering a node.
+    ///
+    /// Causes us to push children.
     Enter(*mut T),
+    /// Put on the stack when leaving a node, all children visited.
+    ///
+    /// Causes us to do the post-traversal visit of the parent.
     Leave(*mut T),
 }
 
