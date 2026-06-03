@@ -587,32 +587,42 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
 
 /// Whether `needle` is safe to print bare as the left operand of the
 /// `position(<needle> IN <haystack>)` special form. The parser reads the needle
-/// at `Precedence::Like`, so a needle whose top operator binds at or below `Like`
-/// — `NOT` (whose operand greedily consumes the `IN`), a comparison, `IS`, a
-/// boolean connective, `IN`/`LIKE`/`BETWEEN`, or a quantified comparison — would
-/// either swallow the delimiter or stop short of it on reparse. For those, the
-/// caller must fall back to the plain quoted `"position"(a, b)` call form.
+/// with `parse_subexpr(Precedence::Like)`, which stops at the first operator that
+/// binds at or below `Like` it reaches in the needle's left spine — so any such
+/// operator anywhere reachable on that spine (a comparison, `IN`, `IS`, `NOT`, a
+/// boolean connective, a quantified comparison, or even a higher-precedence
+/// binary op whose own left operand exposes one, e.g. `(a IN q) ->> b`) would
+/// split the special form on the wrong token on reparse. Rather than chase every
+/// such shape, only emit the special form for a *primary* needle — one that is
+/// atomic or self-delimiting (parenthesized, bracketed, `name(...)`, …) — and
+/// fall back to the plain quoted `"position"(a, b)` call form for anything else.
 fn needle_safe_before_in<T: AstInfo>(needle: &Expr<T>) -> bool {
-    !matches!(
-        needle,
-        Expr::Not { .. }
-            | Expr::And { .. }
-            | Expr::Or { .. }
-            | Expr::IsExpr { .. }
-            | Expr::Like { .. }
-            | Expr::Between { .. }
-            | Expr::InList { .. }
-            | Expr::InSubquery { .. }
-            | Expr::AnyExpr { .. }
-            | Expr::AllExpr { .. }
-            | Expr::AnySubquery { .. }
-            | Expr::AllSubquery { .. }
-    ) && !matches!(
-        needle,
-        Expr::Op { op, expr2: Some(_), .. }
-            if op.namespace.is_none()
-                && matches!(op.op.as_str(), "=" | "<" | "<=" | "<>" | "!=" | ">" | ">=")
-    )
+    match needle {
+        Expr::Value(_)
+        | Expr::Identifier(_)
+        | Expr::QualifiedWildcard(_)
+        | Expr::Parameter(_)
+        | Expr::Function(_)
+        | Expr::HomogenizingFunction { .. }
+        | Expr::NullIf { .. }
+        | Expr::Subquery(_)
+        | Expr::Exists(_)
+        | Expr::Nested(_)
+        | Expr::Array(_)
+        | Expr::ArraySubquery(_)
+        | Expr::List(_)
+        | Expr::ListSubquery(_)
+        | Expr::Map(_)
+        | Expr::MapSubquery(_)
+        | Expr::Case { .. }
+        | Expr::Row { .. } => true,
+        // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
+        // so they are safe only when their inner operand is.
+        Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
+            needle_safe_before_in(expr)
+        }
+        _ => false,
+    }
 }
 
 /// Write `expr` as the receiver of a `[…]` subscript. An unparenthesized
