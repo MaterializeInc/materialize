@@ -149,6 +149,20 @@ SELECT mz_now()::text
 3 1
 20 1
 
+# A predicate on an input column is pushed below the changelog reinterpretation
+# into the persist read (see optimize_dataflow_filters). It filters the
+# changelog by the row's column values, keeping the full history of matching
+# rows: both the snapshot insert and the later deletion of 1.
+> SELECT a, mz_diff FROM CHANGES (h AS OF ${h-as-of}) WHERE a = 1 ORDER BY mz_diff
+1 -1
+1 1
+
+# A predicate on the appended mz_diff column is applied above the
+# reinterpretation (it cannot be pushed): all deletions in the window.
+> SELECT a, mz_diff FROM CHANGES (h AS OF ${h-as-of}) WHERE mz_diff < 0 ORDER BY a
+1 -1
+2 -1
+
 > DROP TABLE h
 
 # Multiple CHANGES with distinct bounds on distinct inputs in one query: each
@@ -203,6 +217,13 @@ SELECT mz_now()::text
 > CREATE MATERIALIZED VIEW w_changes AS
   SELECT a, mz_diff FROM CHANGES (w AS OF AT LEAST mz_now() - INTERVAL '1 hour')
 
+# A maintained view with a predicate on an input column: the filter is pushed
+# into the changelog source import of the view's dataflow (see
+# optimize_dataflow_filters) and keeps the full history of matching rows.
+> CREATE MATERIALIZED VIEW w_changes_filtered AS
+  SELECT a, mz_diff FROM CHANGES (w AS OF AT LEAST mz_now() - INTERVAL '1 hour')
+  WHERE a < 2
+
 # The window ages in empty: no changes yet.
 > SELECT count(*) FROM w_changes
 0
@@ -227,6 +248,13 @@ SELECT mz_now()::text
 1 0
 2 1
 3 1
+
+# The filtered changelog: 1's insert and deletion, nothing else.
+> SELECT a, mz_diff FROM w_changes_filtered ORDER BY mz_diff
+1 -1
+1 1
+
+> DROP MATERIALIZED VIEW w_changes_filtered
 
 > DROP MATERIALIZED VIEW w_changes
 

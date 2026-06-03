@@ -638,7 +638,10 @@ impl Plan {
             // down would apply it (e.g. a projection referencing the appended
             // `mz_timestamp`/`mz_diff` columns) to the raw, narrower rows and
             // index out of bounds. The MFP stays on the `Get`, where rendering
-            // applies it to the reinterpreted, extended collection.
+            // applies it to the reinterpreted, extended collection. The subset
+            // of predicates that commutes with the reinterpretation (those on
+            // input columns, non-temporal) is pushed at the MIR level instead,
+            // by `optimize_dataflow_filters`.
             if source_import.read_as_changelog() {
                 continue;
             }

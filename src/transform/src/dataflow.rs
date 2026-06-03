@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexImport};
 use mz_expr::{
-    AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
+    AccessStrategy, CollectionPlan, Columns, Id, JoinImplementation, LocalId, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -364,15 +364,24 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 
     // Push predicate information into the SourceDesc.
     for (source_id, source_import) in dataflow.source_imports.iter_mut() {
-        // A changelog read (`CHANGES`) reads the raw source and reinterprets it
-        // into the extended changelog rows during rendering; predicates must not
-        // be pushed below that reinterpretation (they stay on the `Get`). See the
-        // matching guard in `Plan::refine_source_mfps`.
-        if source_import.read_as_changelog() {
-            continue;
-        }
         let source = &mut source_import.desc;
-        if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
+        if let Some(mut list) = predicates.remove(&Id::Global(*source_id)) {
+            // A changelog read (`CHANGES`) reads the raw source and reinterprets it
+            // into the extended `(input.., mz_timestamp, mz_diff)` rows during
+            // rendering, *after* `persist_source` applies these operators. The
+            // reinterpretation is per-row, so predicates over the input's columns
+            // commute with it and may be pushed below (the input columns lead the
+            // changelog schema, so column references carry over unchanged). Predicates
+            // referencing the appended columns must stay on the `Get`, and temporal
+            // predicates too: at the source they would be evaluated against the
+            // update's true (historical) time rather than the dataflow `as_of`. See
+            // also the matching guard in `Plan::refine_source_mfps`.
+            if source_import.changelog.is_some() {
+                let input_arity = source.typ.arity();
+                list.retain(|p| {
+                    !p.contains_temporal() && p.support().iter().all(|c| *c < input_arity)
+                });
+            }
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
                 let mut list = list.into_iter().collect::<Vec<_>>();

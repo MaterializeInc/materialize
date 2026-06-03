@@ -255,6 +255,104 @@ Target cluster: quickstart
 
 EOF
 
+# A non-temporal predicate on an input column is pushed below the changelog
+# reinterpretation, into the source import (the `filter=` on the Source),
+# enabling persist part-stats pruning. It also remains above the Changes leaf.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+----
+Explained Query:
+  Filter (#0{a} = 3)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+  filter=((#0{a} = 3))
+
+Target cluster: quickstart
+
+EOF
+
+# A predicate on the appended changelog columns (mz_timestamp, mz_diff) does not
+# exist at the raw source and must not be pushed: the Source carries no filter.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE mz_diff < 0
+----
+Explained Query:
+  Filter (#2{mz_diff} < 0)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# An unfiltered second read of the same changelog blocks the pushdown: only
+# predicates common to every use of the input may be applied at the source.
+# (Common subexpression elimination binds the identical reads to one leaf.)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 5)
+----
+Explained Query:
+  With
+    cte l0 =
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+  Return
+    Union
+      Filter (#0{a} = 3)
+        Get l0
+      Get l0
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Distinct bounds keep the two reads as separate leaves; the unfiltered one
+# still blocks the pushdown.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 6)
+----
+Explained Query:
+  Union
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(6)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A predicate common to every read of the input is pushed, even across reads
+# with distinct bounds.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 6) WHERE a = 3
+----
+Explained Query:
+  Union
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(6)
+
+Source materialize.public.t
+  filter=((#0{a} = 3))
+
+Target cluster: quickstart
+
+EOF
+
 # Other maintained contexts (a view, an index) are not wired up, even with a
 # sliding bound.
 statement error CHANGES outside a one-off SELECT or a materialized view
