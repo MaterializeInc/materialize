@@ -7067,6 +7067,7 @@ pub fn plan_alter_connection(
         Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
         Connection::Kafka(_) => CreateConnectionType::Kafka,
         Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::GlueSchemaRegistry(_) => CreateConnectionType::GlueSchemaRegistry,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,

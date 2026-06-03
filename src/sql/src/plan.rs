@@ -59,8 +59,9 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
-    AwsPrivatelinkConnection, CsrConnection, IcebergCatalogConnection, KafkaConnection,
-    MySqlConnection, PostgresConnection, SqlServerConnectionDetails, SshConnection,
+    AwsPrivatelinkConnection, CsrConnection, GlueSchemaRegistryConnection,
+    IcebergCatalogConnection, KafkaConnection, MySqlConnection, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -1668,6 +1669,7 @@ pub struct Connection {
 pub enum ConnectionDetails {
     Kafka(KafkaConnection<ReferencedConnection>),
     Csr(CsrConnection<ReferencedConnection>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>),
     Postgres(PostgresConnection<ReferencedConnection>),
     Ssh {
         connection: SshConnection,
@@ -1688,6 +1690,9 @@ impl ConnectionDetails {
                 mz_storage_types::connections::Connection::Kafka(c.clone())
             }
             ConnectionDetails::Csr(c) => mz_storage_types::connections::Connection::Csr(c.clone()),
+            ConnectionDetails::GlueSchemaRegistry(c) => {
+                mz_storage_types::connections::Connection::GlueSchemaRegistry(c.clone())
+            }
             ConnectionDetails::Postgres(c) => {
                 mz_storage_types::connections::Connection::Postgres(c.clone())
             }

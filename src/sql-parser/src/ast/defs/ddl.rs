@@ -785,6 +785,7 @@ pub enum ConnectionOptionName {
     PublicKey1,
     PublicKey2,
     Region,
+    Registry,
     SaslMechanisms,
     SaslPassword,
     SaslUsername,
@@ -826,6 +827,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::PublicKey1 => "PUBLIC KEY 1",
             ConnectionOptionName::PublicKey2 => "PUBLIC KEY 2",
             ConnectionOptionName::Region => "REGION",
+            ConnectionOptionName::Registry => "REGISTRY",
             ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
             ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
@@ -875,6 +877,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::PublicKey1
             | ConnectionOptionName::PublicKey2
             | ConnectionOptionName::Region
+            | ConnectionOptionName::Registry
             | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName
             | ConnectionOptionName::SaslMechanisms
@@ -911,6 +914,7 @@ impl_display_t!(ConnectionOption);
 pub enum CreateConnectionType {
     Aws,
     AwsPrivatelink,
+    GlueSchemaRegistry,
     Kafka,
     Csr,
     Postgres,
@@ -928,6 +932,7 @@ impl CreateConnectionType {
             Self::Postgres => "postgres",
             Self::Aws => "aws",
             Self::AwsPrivatelink => "aws-privatelink",
+            Self::GlueSchemaRegistry => "glue-schema-registry",
             Self::Ssh => "ssh-tunnel",
             Self::MySql => "mysql",
             Self::SqlServer => "sql-server",
@@ -953,6 +958,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::AwsPrivatelink => {
                 f.write_str("AWS PRIVATELINK");
+            }
+            Self::GlueSchemaRegistry => {
+                f.write_str("AWS GLUE SCHEMA REGISTRY");
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
