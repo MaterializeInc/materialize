@@ -54,6 +54,9 @@ One-off `SELECT` | Supported | Supported (the window ends at the query time)
 Materialized view | Not supported (it would pin the input's history forever) | Supported
 View, index, `SUBSCRIBE` | Not supported | Not supported
 
+A single query cannot read a collection both directly and via `CHANGES`.
+Move one of the reads into a separate query, or read `CHANGES` of a materialized view over the collection.
+
 ### Maintained sliding windows
 
 A materialized view over `CHANGES` with a sliding bound maintains a rolling window of changes: new updates enter the changelog as they happen, and updates leave it once they age past the window.

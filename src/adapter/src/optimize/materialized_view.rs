@@ -25,7 +25,7 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -295,9 +295,21 @@ impl Optimize<LocalMirPlan> for Optimizer {
         // The sequencer errors at creation unless the input retains that much
         // history; advisory reads age in instead.
         let mut strict_windows: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
+        // Collections also read directly (any access path): a collection's
+        // single source import carries one read mode, so a direct read of a
+        // changelog-read collection would consume changelog rows. Rejected
+        // below; lifting this requires per-read-site imports.
+        let mut plain_reads: BTreeSet<GlobalId> = BTreeSet::new();
         for build in df_desc.objects_to_build.iter_mut() {
             let mut result = Ok(());
             build.plan.as_inner_mut().visit_mut_post(&mut |e| {
+                if let MirRelationExpr::Get {
+                    id: mz_expr::Id::Global(id),
+                    ..
+                } = e
+                {
+                    plain_reads.insert(*id);
+                }
                 if let MirRelationExpr::Changes {
                     id,
                     bound,
@@ -372,6 +384,14 @@ impl Optimize<LocalMirPlan> for Optimizer {
                 }
             })?;
             result?;
+        }
+        if let Some(id) = changelog_windows.keys().find(|id| plain_reads.contains(id)) {
+            let entry = self.catalog.get_entry(id);
+            let name = self
+                .catalog
+                .resolve_full_name(entry.name(), None)
+                .to_string();
+            return Err(OptimizerError::ChangesMixedRead { name });
         }
         for (id, window) in changelog_windows {
             df_desc.set_source_changelog(

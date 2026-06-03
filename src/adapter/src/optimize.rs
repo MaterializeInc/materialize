@@ -411,6 +411,12 @@ pub enum OptimizerError {
         start: mz_repr::Timestamp,
         since: mz_repr::Timestamp,
     },
+    /// One dataflow reads a collection both directly and via `CHANGES`. The two
+    /// reads would share the collection's single source import, which carries
+    /// one read mode: rendering would reinterpret it as a changelog and the
+    /// direct read would consume changelog rows.
+    #[error("cannot read {name} both directly and via CHANGES in the same query")]
+    ChangesMixedRead { name: String },
     /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
     /// catch it and swallow it in some cases.
     #[error("internal optimizer error: MfpPlan couldn't be converted into SafeMfpPlan")]
@@ -448,6 +454,11 @@ impl OptimizerError {
             Self::ChangesHistoryUnavailable { .. } => Some(
                 "Use AS OF AT LEAST to start from the earliest available history, or \
                  configure RETAIN HISTORY on the input to retain more."
+                    .into(),
+            ),
+            Self::ChangesMixedRead { .. } => Some(
+                "Move one of the reads into a separate query, or read CHANGES of a \
+                 materialized view over the collection."
                     .into(),
             ),
             _ => None,

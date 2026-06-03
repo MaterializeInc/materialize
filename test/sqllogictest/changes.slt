@@ -206,6 +206,42 @@ CREATE MATERIALIZED VIEW changes_mv_zero AS
 statement ok
 DROP MATERIALIZED VIEW changes_mv_zero
 
+# Reading a collection both directly and via CHANGES in one query is rejected:
+# the two reads would share the collection's single source import, which
+# carries one read mode, and the direct read would consume changelog rows
+# (regression: it silently did).
+query error cannot read materialize\.public\.t both directly and via CHANGES in the same query
+SELECT count(*) FROM t AS u, CHANGES (t AS OF mz_now())
+
+# The same through scalar subqueries (one dataflow serves both).
+query error cannot read materialize\.public\.t both directly and via CHANGES in the same query
+SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+
+# The same through a view: the view is inlined into the dataflow, so its read
+# of `t` is a direct read alongside the changelog read.
+query error cannot read materialize\.public\.t both directly and via CHANGES in the same query
+SELECT count(*) FROM v, CHANGES (t AS OF mz_now())
+
+# And in a materialized view definition.
+statement error cannot read materialize\.public\.t both directly and via CHANGES in the same query
+CREATE MATERIALIZED VIEW changes_mixed AS
+  SELECT u.a FROM t AS u, CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+# Two CHANGES reads of the same input are fine (they share the import's
+# changelog mode), as is a direct read of a *different* collection.
+statement ok
+CREATE TABLE t_other (a int)
+
+query I
+SELECT (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+  + (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+  + (SELECT count(*) FROM t_other)
+----
+0
+
+statement ok
+DROP TABLE t_other
+
 # EXPLAIN renders the Changes leaf with its bound and strictness.
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM CHANGES (t AS OF AT LEAST 5)
