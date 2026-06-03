@@ -319,7 +319,23 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    f.write_node(&expr1);
+                    // `- <number>` folds into a negative literal at parse time,
+                    // and the `::` cast binds looser, so printing `- 2::t` would
+                    // reparse as `(-2)::t` rather than `- (2::t)`. Parenthesize a
+                    // numeric cast operand so the prefix operator keeps its scope.
+                    let numeric_cast = match expr1.as_ref() {
+                        Expr::Cast { expr, .. } => {
+                            matches!(expr.as_ref(), Expr::Value(Value::Number(_)))
+                        }
+                        _ => false,
+                    };
+                    if numeric_cast {
+                        f.write_str("(");
+                        f.write_node(&expr1);
+                        f.write_str(")");
+                    } else {
+                        f.write_node(&expr1);
+                    }
                 }
             }
             Expr::Cast { expr, data_type } => {

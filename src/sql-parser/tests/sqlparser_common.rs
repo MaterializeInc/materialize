@@ -301,6 +301,23 @@ fn test_show_query_body_display_roundtrip() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_negated_cast_display_roundtrip() {
+    // `- <number>` folds into a negative literal at parse time and the `::` cast
+    // binds looser, so a unary minus applied to `CAST(<number> AS t)` must print
+    // the cast parenthesized: otherwise `- 2::t` reparses as `(-2)::t`, migrating
+    // the negation into the cast operand and changing the AST. Regression for
+    // the parse_pretty_roundtrip / parse_display_roundtrip fuzz finding.
+    for sql in [
+        "SELECT -CAST(2 AS int4)",
+        "SELECT -CAST(2 AS n)",
+        "SELECT -CAST(2.5 AS double)",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
 /// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
 /// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
 fn assert_display_roundtrips(sql: &str) {
