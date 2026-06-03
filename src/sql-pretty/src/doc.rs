@@ -1350,7 +1350,9 @@ impl Pretty {
                 // through the special grammar instead of a regular call.
                 let needs_quote = matches!(
                     name_stable.as_str(),
-                    r#""array""#
+                    r#""all""#
+                        | r#""any""#
+                        | r#""array""#
                         | r#""coalesce""#
                         | r#""exists""#
                         | r#""extract""#
@@ -1362,6 +1364,7 @@ impl Pretty {
                         | r#""nullif""#
                         | r#""position""#
                         | r#""row""#
+                        | r#""some""#
                         | r#""substring""#
                         | r#""trim""#
                 );

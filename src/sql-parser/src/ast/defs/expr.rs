@@ -985,18 +985,23 @@ impl<T: AstInfo> Function<T> {
             }
         }
 
-        // If the function name clashes with a keyword that has its own
-        // special parser form (any `(Token::Keyword(KW), Some(Token::LParen))`
-        // dispatch in `parse_expr`), an unquoted name on reparse would
-        // trigger the special-grammar parser instead of a regular function
-        // call. Emit the always-quoted stable form for the name in that
-        // case so the regular function-call path is preserved. The list
-        // tracks the parser's dispatch table; add a new entry here whenever
-        // a new keyword grows special-grammar parens.
+        // If the function name clashes with a keyword that has its own special
+        // parser form, an unquoted name on reparse would trigger the
+        // special-grammar parser instead of a regular function call. Emit the
+        // always-quoted stable form so the regular function-call path is
+        // preserved. The list tracks the parser's dispatch table; add a new
+        // entry whenever a keyword grows special-grammar parens. Two sources:
+        //   * `(Token::Keyword(KW), Some(Token::LParen))` dispatch in
+        //     `parse_prefix` (array, coalesce, ...).
+        //   * the `ANY`/`ALL`/`SOME` quantifier suffix of a comparison operator
+        //     (`x op ANY(...)`), so e.g. `0 # "some"(1)` stays a function call
+        //     and doesn't reparse as `0 # SOME(1)`.
         let name_stable = self.name.to_ast_string_stable();
         let needs_quote_to_disambiguate = matches!(
             name_stable.as_str(),
-            r#""array""#
+            r#""all""#
+                | r#""any""#
+                | r#""array""#
                 | r#""coalesce""#
                 | r#""exists""#
                 | r#""extract""#
@@ -1008,6 +1013,7 @@ impl<T: AstInfo> Function<T> {
                 | r#""nullif""#
                 | r#""position""#
                 | r#""row""#
+                | r#""some""#
                 | r#""substring""#
                 | r#""trim""#
         );
