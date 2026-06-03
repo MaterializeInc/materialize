@@ -1152,10 +1152,16 @@ impl PeekClient {
             match tokio::time::timeout(optimization_timeout, optimization_future).await {
                 Ok(Ok(result)) => result,
                 Ok(Err(AdapterError::Optimizer(err))) => {
-                    return Err(AdapterError::Internal(format!(
-                        "internal error in optimizer: {}",
-                        err
-                    )));
+                    return Err(match err {
+                        // User-facing optimizer errors pass through with their
+                        // error code, detail, and hint intact.
+                        err @ crate::optimize::OptimizerError::ChangesHistoryUnavailable {
+                            ..
+                        } => AdapterError::Optimizer(err),
+                        err => {
+                            AdapterError::Internal(format!("internal error in optimizer: {}", err))
+                        }
+                    });
                 }
                 Ok(Err(err)) => {
                     return Err(err);
