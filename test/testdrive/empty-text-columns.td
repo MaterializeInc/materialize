@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Test Postgres version
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -16,6 +18,7 @@ CREATE TABLE foo (id INT PRIMARY KEY, name TEXT);
 ALTER TABLE foo REPLICA IDENTITY FULL;
 INSERT INTO foo VALUES (1, 'hello');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pgconn TO POSTGRES (
     HOST postgres,
@@ -26,4 +29,28 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SOURCE s FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 
 ! CREATE TABLE foo FROM SOURCE s (REFERENCE = public.foo) WITH (TEXT COLUMNS = ());
+
+
+# Test MySql version
+
+$ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+
+CREATE TABLE bar (id INT PRIMARY KEY, name TEXT);
+
+> CREATE SECRET mysqlpass AS 'p@ssw0rd';
+
+> CREATE CONNECTION mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE SOURCE s2 FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE bar FROM SOURCE s2 (REFERENCE = public.bar) WITH (TEXT COLUMNS = ());
 contains: invalid TEXT COLUMNS option value: cannot be empty

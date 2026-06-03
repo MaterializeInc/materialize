@@ -104,6 +104,11 @@ c "anotha one"
 > DROP TABLE t1;
 > DROP TABLE t2;
 
+# Errors on empty text columns
+! CREATE TABLE baz FROM SOURCE ms_src (REFERENCE = dbo.text_cols) WITH (TEXT COLUMNS = ());
+contains: invalid TEXT COLUMNS option value: cannot be empty
+
+
 # source tables support text columns
 > CREATE TABLE text_cols FROM SOURCE ms_src (REFERENCE dbo.text_cols) WITH (TEXT COLUMNS = (c1, c2, c3, c4));
 
