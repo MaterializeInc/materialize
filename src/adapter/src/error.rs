@@ -563,6 +563,9 @@ impl AdapterError {
     }
 
     pub fn code(&self) -> SqlState {
+        // We define this up here to make sure `AdapterError::` and `OptimizerError::` act the same way.
+        const RECURSION_LIMIT_ERROR_CODE: SqlState = SqlState::INTERNAL_ERROR;
+
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
@@ -641,7 +644,7 @@ impl AdapterError {
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }
-            AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::RecursionLimit(_) => RECURSION_LIMIT_ERROR_CODE,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
@@ -661,9 +664,7 @@ impl AdapterError {
                     SqlState::UNDEFINED_PARAMETER
                 }
                 OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
-                OptimizerError::RecursionLimitError(e) => {
-                    AdapterError::RecursionLimit(e.clone()).code() // Delegate to outer
-                }
+                OptimizerError::RecursionLimitError(_) => RECURSION_LIMIT_ERROR_CODE,
                 OptimizerError::Internal(s) => {
                     AdapterError::Internal(s.clone()).code() // Delegate to outer
                 }
