@@ -5009,7 +5009,14 @@ impl<T: AstInfo> AstDisplay for FetchStatement<T> {
         if let Some(ref count) = self.count {
             f.write_str(format!("{} ", count));
         }
-        f.write_node(&self.name);
+        // `FETCH` consumes an optional leading `FORWARD` keyword, so a cursor
+        // literally named `forward` printed bare with no preceding count would
+        // be swallowed on reparse, leaving no cursor name. Force it to quote.
+        if self.count.is_none() && self.name.as_str().eq_ignore_ascii_case("forward") {
+            f.write_str(self.name.to_ast_string_stable());
+        } else {
+            f.write_node(&self.name);
+        }
         if !self.options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.options));
