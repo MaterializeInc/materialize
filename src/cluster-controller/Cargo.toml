@@ -16,6 +16,7 @@ mz-compute-types = { path = "../compute-types" }
 mz-controller-types = { path = "../controller-types" }
 mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-repr = { path = "../repr" }
+timely.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

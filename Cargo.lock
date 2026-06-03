@@ -6400,6 +6400,7 @@ dependencies = [
  "mz-controller-types",
  "mz-ore",
  "mz-repr",
+ "timely",
  "tokio",
  "tracing",
 ]

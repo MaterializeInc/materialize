@@ -24,9 +24,12 @@
 //!
 //! [`ClusterControllerCtx`]: crate::ctx::ClusterControllerCtx
 
-use mz_repr::Timestamp;
+use mz_repr::{Timestamp, TimestampManipulation};
 
-use crate::ctx::{ClusterState, OnTimeout, ReconfigurationRecord, ReplicaShape, StateWrite};
+use crate::ctx::{
+    ClusterSchedule, ClusterState, OnTimeout, ReconfigurationRecord, RefreshWindowDecision,
+    RefreshWindowInputs, ReplicaShape, StateWrite,
+};
 
 /// A replica slot a strategy desires this tick. The reconcile kernel unions
 /// slots across strategies and matches them by [`ReplicaShape`] against the
@@ -34,6 +37,10 @@ use crate::ctx::{ClusterState, OnTimeout, ReconfigurationRecord, ReplicaShape, S
 #[derive(Clone, Debug)]
 pub struct DesiredReplica {
     pub shape: ReplicaShape,
+    /// The window decision behind the slot, set only by the on-refresh strategy.
+    /// Carried onto the create decision a slot may produce, for the audit log's
+    /// `scheduling_policies` detail.
+    pub audit_detail: Option<RefreshWindowDecision>,
 }
 
 /// One cluster-autoscaling strategy: a pair of pure functions the controller
@@ -65,6 +72,13 @@ pub trait Strategy: Send + Sync {
 /// so that the policy strategies can be purely additive. They only ever add to
 /// the baseline. With only the baseline engaged, the desired set equals the
 /// realized set, so a steady-state managed cluster reconciles to no decisions.
+///
+/// The baseline holds the set only for MANUAL clusters. On a scheduled cluster
+/// the controller (not the user's `replication_factor`) owns the replica set,
+/// so the baseline desires nothing there and the on-refresh strategy is the sole
+/// contributor. (The on-refresh strategy also normalizes a scheduled cluster's
+/// `replication_factor` to `0` via `update_state`, so the two views agree after
+/// the first tick regardless.)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BaselineStrategy;
 
@@ -77,10 +91,14 @@ impl Strategy for BaselineStrategy {
     }
 
     fn desired_replicas(&self, state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        if !matches!(state.schedule, ClusterSchedule::Manual) {
+            return Vec::new();
+        }
         let shape = state.realized_shape();
         (0..state.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
+                audit_detail: None,
             })
             .collect()
     }
@@ -204,7 +222,158 @@ impl Strategy for GracefulReconfigurationStrategy {
         (0..record.target.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
+                audit_detail: None,
             })
             .collect()
+    }
+}
+
+/// The `ON REFRESH` scheduling strategy.
+///
+/// Engaged for clusters with a non-MANUAL [`ClusterSchedule`]. It contributes one
+/// replica at the cluster's realized shape while the cluster is inside a refresh
+/// window, and nothing otherwise. The window decision keys on the bound REFRESH
+/// materialized views' write frontiers, their refresh schedules, the configured
+/// hydration-time estimate, and the current read timestamp (the same signals the
+/// legacy scheduler reads), all carried in [`RefreshWindowInputs`].
+///
+/// The controller (not the user's `replication_factor`) owns a scheduled
+/// cluster's replica set, so [`Strategy::update_state`] normalizes the realized
+/// `replication_factor` to `0`. This is self-healing (no migration needed to
+/// enable the controller) and makes `mz_clusters.replication_factor` read `0` for
+/// a scheduled cluster, with `mz_cluster_replicas` authoritative for what is
+/// actually running.
+///
+/// NB: the decision is re-derived purely from the live signals each tick; there
+/// is no "all policies have decided" latch like `cluster_scheduling.rs` needs.
+/// That scheduler collects policy decisions asynchronously and across ticks, so
+/// turning a cluster off is only safe once every policy has reported. We pull a
+/// complete decision from durable + storage state on every tick, so the first
+/// tick after a restart already decides from the same inputs as a steady tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OnRefreshStrategy;
+
+/// The audit-attribution name of the on-refresh scheduling strategy.
+pub const ON_REFRESH_STRATEGY_NAME: &str = "on-refresh";
+
+/// A millisecond [`Duration`] as a [`Timestamp`], saturating at [`Timestamp::MAX`]
+/// on overflow.
+///
+/// Both inputs (the cluster's hydration-time estimate and the system compaction
+/// estimate) are validated to fit during planning/config, so the saturation is
+/// not expected to trigger. Saturating rather than panicking is deliberate: this
+/// is a pure strategy kernel, and clamping an out-of-range estimate to the
+/// largest representable window degrades to "keep the cluster on" rather than
+/// crashing the controller on a bad input.
+///
+/// [`Duration`]: std::time::Duration
+fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
+    Timestamp::try_from(duration).unwrap_or(Timestamp::MAX)
+}
+
+impl OnRefreshStrategy {
+    /// The window decision for the cluster: which bound REFRESH MVs either still
+    /// need a refresh (their write frontier has not advanced past the read
+    /// timestamp adjusted by the hydration-time estimate) or are estimated to
+    /// still need Persist compaction after their last refresh. The cluster
+    /// should be On iff either list is non-empty
+    /// ([`RefreshWindowDecision::window_open`]), so an open window always names
+    /// the MVs that explain it.
+    ///
+    /// `hydration_time_estimate` comes from the schedule; the remaining signals
+    /// come from `inputs`. With no bound REFRESH MVs both lists are empty and
+    /// the cluster is Off.
+    fn window_decision(
+        &self,
+        hydration_time_estimate: std::time::Duration,
+        inputs: &RefreshWindowInputs,
+    ) -> RefreshWindowDecision {
+        // 1. Needs refresh: write_frontier < read_ts + hydration_time_estimate.
+        // The cluster is turned on `hydration_time_estimate` ahead of a refresh
+        // so it can rehydrate before the refresh time.
+        let read_ts_adjusted = inputs
+            .read_ts
+            .step_forward_by(&duration_to_ts(hydration_time_estimate));
+        let objects_needing_refresh = inputs
+            .refresh_mvs
+            .iter()
+            .filter(|mv| mv.write_frontier.less_than(&read_ts_adjusted))
+            .map(|mv| mv.id)
+            .collect();
+
+        // 2. Needs compaction: prev_refresh + compaction_estimate > read_ts. We
+        // keep the cluster on for a while after a refresh so Persist can compact.
+        let compaction_estimate = duration_to_ts(inputs.compaction_estimate);
+        let objects_needing_compaction = inputs
+            .refresh_mvs
+            .iter()
+            .filter(|mv| {
+                // `prev_refresh` is None in two cases, both meaning "schedule no
+                // compaction time now": no refresh has happened yet (no frontier to
+                // round down and no past `AT`), or a `REFRESH EVERY` MV with an empty
+                // write frontier (we have no wall-clock handle on its last refresh).
+                let prev_refresh = match mv.write_frontier.as_option() {
+                    Some(frontier) => frontier.round_down_minus_1(&mv.refresh_schedule),
+                    None => mv.refresh_schedule.last_refresh(),
+                };
+                prev_refresh
+                    .is_some_and(|prev| prev.step_forward_by(&compaction_estimate) > inputs.read_ts)
+            })
+            .map(|mv| mv.id)
+            .collect();
+
+        RefreshWindowDecision {
+            objects_needing_refresh,
+            objects_needing_compaction,
+            hydration_time_estimate,
+        }
+    }
+}
+
+impl Strategy for OnRefreshStrategy {
+    fn name(&self) -> &'static str {
+        ON_REFRESH_STRATEGY_NAME
+    }
+
+    fn update_state(&self, state: &ClusterState, _now: Timestamp) -> StateWrite {
+        // The controller owns a scheduled cluster's replica set, so hold the
+        // realized `replication_factor` at `0`. A stale non-zero value (e.g. left
+        // by the legacy scheduler toggling 0↔1) would otherwise have the implicit
+        // baseline desire a replica the on-refresh strategy does not, a flap.
+        // Only write when it is actually non-zero, to keep steady ticks no-ops.
+        if matches!(state.schedule, ClusterSchedule::Manual) || state.replication_factor == 0 {
+            return StateWrite::default();
+        }
+        StateWrite {
+            new_replication_factor: Some(0),
+            ..Default::default()
+        }
+    }
+
+    fn desired_replicas(&self, state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        let ClusterSchedule::Refresh {
+            hydration_time_estimate,
+        } = state.schedule
+        else {
+            return Vec::new();
+        };
+        // The refresh-window signals are pulled only for scheduled clusters; if
+        // they are absent we cannot decide a window, so contribute nothing (the
+        // next tick re-pulls).
+        let Some(inputs) = &state.refresh_window else {
+            return Vec::new();
+        };
+        let decision = self.window_decision(hydration_time_estimate, inputs);
+        if !decision.window_open() {
+            return Vec::new();
+        }
+        // One replica at the realized shape (`cluster.size` plus the cluster's AZ
+        // pool and logging), matching what the legacy scheduler brings up. The
+        // window decision rides along so the create it may produce can carry the
+        // audit detail.
+        vec![DesiredReplica {
+            shape: state.realized_shape(),
+            audit_detail: Some(decision),
+        }]
     }
 }
