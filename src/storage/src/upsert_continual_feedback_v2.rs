@@ -533,8 +533,8 @@ where
                 upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
                 upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
 
-                stash_records = stash_records
-                    .saturating_sub(drain_stats.eligible + drain_stats.dropped);
+                stash_records =
+                    stash_records.saturating_sub(drain_stats.eligible + drain_stats.dropped);
                 stash_bytes = stash_bytes.saturating_sub(drain_stats.bytes_drained);
 
                 if hydrating {
@@ -625,7 +625,10 @@ struct DrainStats {
 fn value_byte_len(v: &Option<UpsertValue>) -> u64 {
     match v {
         None | Some(Err(_)) => 0,
-        Some(Ok(row)) => row.byte_len() as u64,
+        Some(Ok(row)) => row
+            .byte_len()
+            .try_into()
+            .expect("usize should always fit into u64"),
     }
 }
 
@@ -1318,53 +1321,51 @@ mod test {
             .get_delete_on_drop_metric(vec![source_id.to_string(), "0".to_string()]);
 
         timely::execute_directly(move |worker| {
-            let (mut input, mut persist) =
-                worker.dataflow::<MzTimestamp, _, _>(|scope| {
-                    scope.scoped::<Ts, _, _>("upsert", |scope| {
-                        let (input_handle, input) = scope.new_input();
-                        let (persist_handle, persist_input) = scope.new_input();
+            let (mut input, mut persist) = worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                scope.scoped::<Ts, _, _>("upsert", |scope| {
+                    let (input_handle, input) = scope.new_input();
+                    let (persist_handle, persist_input) = scope.new_input();
 
-                        let upsert_metrics =
-                            UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+                    let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
 
-                        let reg2 = MetricsRegistry::new();
-                        let storage_metrics = StorageMetrics::register_with(&reg2);
-                        let reg3 = MetricsRegistry::new();
-                        let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
-                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
-                            source_arity: 2,
-                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
-                            key_indices: vec![0],
-                        });
-                        let source_statistics = SourceStatistics::new(
-                            source_id,
-                            0,
-                            &stats_defs,
-                            source_id,
-                            &ShardId::new(),
-                            envelope,
-                            Antichain::from_elem(Timestamp::minimum()),
-                        );
-                        let source_config = SourceExportCreationConfig {
-                            id: source_id,
-                            worker_id: 0,
-                            metrics: storage_metrics,
-                            source_statistics,
-                        };
+                    let reg2 = MetricsRegistry::new();
+                    let storage_metrics = StorageMetrics::register_with(&reg2);
+                    let reg3 = MetricsRegistry::new();
+                    let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                    let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                        source_arity: 2,
+                        style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                        key_indices: vec![0],
+                    });
+                    let source_statistics = SourceStatistics::new(
+                        source_id,
+                        0,
+                        &stats_defs,
+                        source_id,
+                        &ShardId::new(),
+                        envelope,
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
+                    let source_config = SourceExportCreationConfig {
+                        id: source_id,
+                        worker_id: 0,
+                        metrics: storage_metrics,
+                        source_statistics,
+                    };
 
-                        let (_, _, _, button) = upsert_inner(
-                            input.as_collection(),
-                            vec![0],
-                            Antichain::from_elem(Timestamp::minimum()),
-                            persist_input.as_collection(),
-                            None,
-                            upsert_metrics,
-                            source_config,
-                        );
-                        std::mem::forget(button);
-                        (input_handle, persist_handle)
-                    })
-                });
+                    let (_, _, _, button) = upsert_inner(
+                        input.as_collection(),
+                        vec![0],
+                        Antichain::from_elem(Timestamp::minimum()),
+                        persist_input.as_collection(),
+                        None,
+                        upsert_metrics,
+                        source_config,
+                    );
+                    std::mem::forget(button);
+                    (input_handle, persist_handle)
+                })
+            });
 
             // ── Phase 1: records land in the batcher ────────────────────────
             // Two distinct keys with non-trivial Row payloads so byte_len > 0.
