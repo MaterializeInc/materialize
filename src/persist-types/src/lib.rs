@@ -238,6 +238,13 @@ impl std::str::FromStr for ShardId {
             Some(x) => x,
             None => return Err(format!("invalid ShardId {}: incorrect prefix", s)),
         };
+        // `Uuid::parse_str` panics (rather than erroring) while building its
+        // parse error for some malformed inputs — e.g. non-ASCII bytes make it
+        // slice the input on a non-char boundary. Reject anything that can't be
+        // a UUID first: the shortest valid form is 32 hex digits, all ASCII.
+        if uuid_encoded.len() < 32 || !uuid_encoded.is_ascii() {
+            return Err(format!("invalid ShardId {}: malformed UUID", s));
+        }
         let uuid = Uuid::parse_str(uuid_encoded)
             .map_err(|err| format!("invalid ShardId {}: {}", s, err))?;
         Ok(ShardId(*uuid.as_bytes()))

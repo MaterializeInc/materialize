@@ -618,13 +618,14 @@ mod tests {
                     .to_string()
             )
         );
+        // Too short to be a UUID: rejected before the `uuid` crate (which
+        // panics building an error for some such inputs), so the message is
+        // generic rather than the crate's "invalid length".
         assert_eq!(
             ShardId::from_str("s0"),
-            Err(
-                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
-                    .to_string()
-            )
+            Err("invalid ShardId s0: malformed UUID".to_string())
         );
+        // Long enough and ASCII, so the `uuid` crate's own error survives.
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
             Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `O` at 38".to_string())

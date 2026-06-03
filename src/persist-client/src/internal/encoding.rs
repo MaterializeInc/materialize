@@ -295,6 +295,13 @@ pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<
         Some(x) => x,
         None => return Err(format!("invalid {} {}: incorrect prefix", id_type, encoded)),
     };
+    // `Uuid::parse_str` panics (rather than erroring) while building its parse
+    // error for some malformed inputs — e.g. non-ASCII bytes make it slice the
+    // input on a non-char boundary. Reject anything that can't be a UUID first:
+    // the shortest valid form is 32 hex digits, all ASCII.
+    if uuid_encoded.len() < 32 || !uuid_encoded.is_ascii() {
+        return Err(format!("invalid {} {}: malformed UUID", id_type, encoded));
+    }
     let uuid = Uuid::parse_str(uuid_encoded)
         .map_err(|err| format!("invalid {} {}: {}", id_type, encoded, err))?;
     Ok(*uuid.as_bytes())
@@ -1970,6 +1977,22 @@ mod tests {
     use crate::tests::new_test_client_cache;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn parse_id_rejects_malformed_uuid_without_panicking() {
+        // `Uuid::parse_str` panics (rather than erroring) while building its
+        // parse error for some malformed inputs — e.g. non-ASCII bytes make it
+        // slice the input on a non-char boundary. `parse_id` must turn these
+        // into clean errors. Regression for the rollup_proto_roundtrip finding.
+        let nonascii = "é".repeat(40);
+        let weird = format!("w{nonascii}");
+        for encoded in ["w", "wnotauuid", "w{}", weird.as_str()] {
+            assert!(
+                parse_id("w", "WriterId", encoded).is_err(),
+                "{encoded:?} should error, not panic",
+            );
+        }
+    }
 
     #[mz_ore::test]
     fn rollup_inline_batch_part_with_hollow_fields_is_error() {
