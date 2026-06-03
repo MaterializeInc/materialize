@@ -352,6 +352,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `zlibVersion` on OS `linux`
     async fn handle_prometheus_emits_rules_header_when_opted_in() {
         let registry = registry_with_rules();
         let mut headers = HeaderMap::new();
