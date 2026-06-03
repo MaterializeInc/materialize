@@ -225,5 +225,115 @@ scale=1,workers=1
 statement ok
 DROP CLUSTER cc_timeout
 
+# ----- Observability: introspection view + SHOW CLUSTERS (PR 4) -----
+#
+# mz_internal.mz_cluster_reconfigurations reports, per managed cluster, the
+# realized config and the in-flight reconfiguration target. In steady state (no
+# record in flight) the target columns mirror the current ones and the in-flight
+# flag is false. The records are written only by the (gated) controller, so for a
+# settled cluster the two shapes coincide.
+
+statement ok
+CREATE CLUSTER cc_obs (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# Steady state: current == target, nothing in flight, no deadline, no burst.
+query TITIBBBB
+SELECT current_size, current_replication_factor, target_size, target_replication_factor,
+       reconfiguration_in_flight, reconfiguration_deadline IS NOT NULL, burst_size IS NOT NULL,
+       (current_size = target_size AND current_replication_factor = target_replication_factor)
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_obs'
+----
+scale=1,workers=1  2  scale=1,workers=1  2  false  false  false  true
+
+# SHOW CLUSTERS surfaces the realized (current) and target size and the in-flight
+# indicator. For a settled cluster current == target and reconfiguration is null.
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+----
+cc_obs  scale=1,workers=1  scale=1,workers=1  false
+
+# A completed background reconfiguration advances both current and target to the
+# new size, and clears the in-flight record.
+statement ok
+ALTER CLUSTER cc_obs SET (SIZE 'scale=1,workers=2')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
+----
+cc_obs  scale=1,workers=2  scale=1,workers=2  false
+
+# The audit log captured the reconfiguration lifecycle: a `started` event when the
+# record was written, and a `finalized` (or `timed-out`) event at cut-over. The
+# started event records the active deadline.
+query TB
+SELECT
+    details->>'transition',
+    details->>'deadline' IS NOT NULL
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_obs'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started  true
+finalized  false
+
+statement ok
+DROP CLUSTER cc_obs
+
+# An ALTER-back cancel: a reconfiguration is started and then re-targeted back to
+# the cluster's still-realized size before it cuts over. The lifecycle records a
+# `started`, then a `cancelled` at the ALTER-back (the in-flight target replicas
+# are dropped and the record converges), then a `finalized` as the now-trivial
+# (target == realized) reconfiguration clears.
+statement ok
+CREATE CLUSTER cc_cancel (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+statement ok
+ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=2')
+
+statement ok
+ALTER CLUSTER cc_cancel SET (SIZE 'scale=1,workers=1')
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+# The cluster is back at its original realized size and nothing is in flight.
+query TTTB
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name = 'cc_cancel'
+----
+cc_cancel  scale=1,workers=1  scale=1,workers=1  false
+
+query T
+SELECT details->>'transition'
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_cancel'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started
+cancelled
+finalized
+
+statement ok
+DROP CLUSTER cc_cancel
+
 # Restore pristine server state (including the tick-interval override).
 reset-server

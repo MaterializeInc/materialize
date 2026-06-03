@@ -14,17 +14,19 @@
 //! because of Rust's orphan rules.
 
 use mz_audit_log::{
-    AlterAddColumnV1, AlterApplyReplacementV1, AlterDefaultPrivilegeV1, AlterRetainHistoryV1,
-    AlterSetClusterV1, AlterSourceSinkV1, AlterSourceTimestampIntervalV1, CreateClusterReplicaV1,
-    CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1,
-    CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1,
-    CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1,
-    DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1,
-    FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
-    RefreshDecisionWithReasonV2, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
-    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
-    SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    AlterAddColumnV1, AlterApplyReplacementV1, AlterClusterReconfigurationV1,
+    AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
+    AlterSourceTimestampIntervalV1, CreateClusterReplicaV1, CreateClusterReplicaV2,
+    CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
+    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
+    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
+    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, ReconfigurationLifecycleV1,
+    RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2, RenameClusterReplicaV1,
+    RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1,
+    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2,
+    SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
+    VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -304,6 +306,61 @@ impl RustType<crate::objects::audit_log_event_v1::RenameClusterReplicaV1>
             replica_id: proto.replica_id,
             old_name: proto.old_name,
             new_name: proto.new_name,
+        })
+    }
+}
+
+impl RustType<crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1>
+    for ReconfigurationLifecycleV1
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1 {
+        use crate::objects::audit_log_event_v1::reconfiguration_lifecycle_v1::Transition;
+        let transition = match self {
+            ReconfigurationLifecycleV1::Started => Transition::Started(Empty {}),
+            ReconfigurationLifecycleV1::Finalized => Transition::Finalized(Empty {}),
+            ReconfigurationLifecycleV1::TimedOut => Transition::TimedOut(Empty {}),
+            ReconfigurationLifecycleV1::Cancelled => Transition::Cancelled(Empty {}),
+        };
+        crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1 { transition }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::ReconfigurationLifecycleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use crate::objects::audit_log_event_v1::reconfiguration_lifecycle_v1::Transition;
+        Ok(match proto.transition {
+            Transition::Started(_) => ReconfigurationLifecycleV1::Started,
+            Transition::Finalized(_) => ReconfigurationLifecycleV1::Finalized,
+            Transition::TimedOut(_) => ReconfigurationLifecycleV1::TimedOut,
+            Transition::Cancelled(_) => ReconfigurationLifecycleV1::Cancelled,
+        })
+    }
+}
+
+impl RustType<crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1>
+    for AlterClusterReconfigurationV1
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1 {
+        crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            transition: self.transition.into_proto(),
+            target_size: self.target_size.to_string(),
+            target_replication_factor: self.target_replication_factor,
+            deadline: self.deadline,
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterClusterReconfigurationV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            transition: proto.transition.into_rust()?,
+            target_size: proto.target_size,
+            target_replication_factor: proto.target_replication_factor,
+            deadline: proto.deadline,
         })
     }
 }
@@ -1394,6 +1451,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::AlterSourceTimestampIntervalV1(details) => {
                 AlterSourceTimestampIntervalV1(details.into_proto())
             }
+            EventDetails::AlterClusterReconfigurationV1(details) => {
+                AlterClusterReconfigurationV1(details.into_proto())
+            }
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
             EventDetails::SetV1(details) => SetV1(details.into_proto()),
@@ -1483,6 +1543,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             AlterAddColumnV1(details) => Ok(EventDetails::AlterAddColumnV1(details.into_rust()?)),
             AlterSourceTimestampIntervalV1(details) => Ok(
                 EventDetails::AlterSourceTimestampIntervalV1(details.into_rust()?),
+            ),
+            AlterClusterReconfigurationV1(details) => Ok(
+                EventDetails::AlterClusterReconfigurationV1(details.into_rust()?),
             ),
         }
     }

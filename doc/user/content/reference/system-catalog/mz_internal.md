@@ -165,6 +165,27 @@ The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each 
 | `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                   |
 | `refresh_hydration_time_estimate`   | [`interval`] | The interval given in the `HYDRATION TIME ESTIMATE` option.    |
 
+## `mz_cluster_reconfigurations`
+
+The `mz_cluster_reconfigurations` table shows, for each managed cluster, the realized
+configuration it is currently serving and the target configuration it is reconfiguring to.
+While a background `ALTER CLUSTER` is in flight the current and target shapes differ; otherwise
+they coincide.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_reconfigurations -->
+| Field                          | Type             | Meaning                                                        |
+|--------------------------------|------------------|----------------------------------------------------------------|
+| `cluster_id`                   | [`text`]         | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
+| `current_size`                 | [`text`]         | The realized size the cluster is currently serving, matching `mz_clusters.size`. |
+| `current_replication_factor`   | [`uint4`]        | The realized replication factor the cluster is currently serving. |
+| `current_availability_zones`   | [`text list`]    | The realized availability-zone pool the cluster is currently serving. An unpinned pool is an empty list (not `NULL`, unlike `mz_clusters.availability_zones`). |
+| `target_size`                  | [`text`]         | The size the cluster is reconfiguring to; equals `current_size` when no reconfiguration is in flight. |
+| `target_replication_factor`    | [`uint4`]        | The replication factor the cluster is reconfiguring to; equals `current_replication_factor` when no reconfiguration is in flight. |
+| `target_availability_zones`    | [`text list`]    | The availability-zone pool the cluster is reconfiguring to; equals `current_availability_zones` when no reconfiguration is in flight. An unpinned pool is an empty list (not `NULL`). |
+| `reconfiguration_in_flight`    | [`boolean`]      | Whether a background reconfiguration is in progress (or has timed out and parked, in which case `reconfiguration_deadline` is in the past). |
+| `reconfiguration_deadline`     | [`mz_timestamp`] | The deadline of the in-flight reconfiguration, after which the configured `ON TIMEOUT` action applies. `NULL` when no reconfiguration is in flight. |
+| `burst_size`                   | [`text`]         | **Unstable** The size of the in-flight hydration-burst replica, if any. `NULL` when no burst is in flight. |
+
 ## `mz_cluster_replica_metrics`
 
 The `mz_cluster_replica_metrics` view gives the last known CPU and RAM utilization statistics

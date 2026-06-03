@@ -42,3 +42,27 @@ mz_support
 NULL
 mz_system
 r1 (scale=1,workers=2)
+
+# `SHOW CLUSTERS` additionally surfaces the realized (current) size, the
+# reconfiguration target size, and an in-flight indicator. With the cluster
+# controller at its default (off), no reconfiguration record is ever written, so
+# current and target sizes coincide and nothing is in flight. Unmanaged clusters
+# (foo) have no size and no row in the reconfiguration relation, so both are NULL.
+statement ok
+CREATE CLUSTER baz (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+query TTTB rowsort
+SELECT name, current_size, target_size, reconfiguration_in_flight
+FROM (SHOW CLUSTERS) WHERE name IN ('baz', 'foo')
+----
+baz
+scale=1,workers=1
+scale=1,workers=1
+false
+foo
+NULL
+NULL
+NULL
+
+statement ok
+DROP CLUSTER baz
