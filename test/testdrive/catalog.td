@@ -722,6 +722,8 @@ pg_authid_core                           ""
 > SHOW MATERIALIZED VIEWS FROM mz_internal
 name                   cluster             comment
 ----------------------------------------------------
+mz_cluster_auto_scaling_strategies    mz_catalog_server   ""
+mz_cluster_reconfigurations    mz_catalog_server   ""
 mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
@@ -832,7 +834,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-270
+272
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
