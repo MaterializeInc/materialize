@@ -18,7 +18,7 @@
 //! signals are pulled on demand, so a tick's round-trips scale with the number of
 //! managed clusters that need a live signal, not with a constant.
 //!
-//! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default off). With
+//! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default on). With
 //! the gate off the task does not tick, so the legacy scheduling and graceful
 //! paths remain the sole writers of the replica set. With the gate on the
 //! controller owns the *user* managed-cluster replica set; the legacy entry
@@ -33,12 +33,12 @@ use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
+    ApplyOutcome, AuditDetail, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
     ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationTarget, ReplicaShape, StateWrite,
+    ReconfigurationTarget, RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use mz_cluster_controller::strategy::{
-    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME,
+    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::ClusterStatus;
@@ -82,6 +82,13 @@ pub enum ClusterControllerRequest {
     HasHydratableObjects {
         cluster_id: ClusterId,
         tx: oneshot::Sender<bool>,
+    },
+    /// The refresh-window live signals for one scheduled cluster (read ts,
+    /// compaction estimate, bound REFRESH MVs). `None` for a cluster that is not
+    /// scheduled `ON REFRESH`.
+    RefreshWindowInputs {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<Option<RefreshWindowInputs>>,
     },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
@@ -175,6 +182,15 @@ impl ClusterControllerCtx for CoordCtx {
             // A lost reply means shutdown; "no objects" arms nothing, which is
             // the safe answer.
             .unwrap_or(false)
+    }
+
+    async fn refresh_window_inputs(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Option<RefreshWindowInputs> {
+        self.request(|tx| ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx })
+            .await
+            .flatten()
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -316,6 +332,30 @@ impl Coordinator {
             ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
                 let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
             }
+            ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx } => {
+                // Gather the catalog- and storage-derived inputs on the loop,
+                // then complete the reply from a spawned task: the oracle
+                // read is a network round-trip (to the Postgres/CRDB-backed
+                // timestamp oracle) and must never run on the serial
+                // coordinator loop. The legacy `check_refresh_policy` makes
+                // the same split.
+                match self.refresh_window_catalog_inputs(cluster_id) {
+                    None => {
+                        let _ = tx.send(None);
+                    }
+                    Some((compaction_estimate, refresh_mvs)) => {
+                        let oracle = self.get_local_timestamp_oracle();
+                        spawn(|| "cluster_controller_refresh_window_read_ts", async move {
+                            let read_ts = oracle.read_ts().await;
+                            let _ = tx.send(Some(RefreshWindowInputs {
+                                read_ts,
+                                compaction_estimate,
+                                refresh_mvs,
+                            }));
+                        });
+                    }
+                }
+            }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
                     self.apply_cluster_decisions(decisions).await
@@ -365,6 +405,7 @@ impl Coordinator {
             availability_zones: expected.availability_zones.0,
             logging: expected.logging,
             arrangement_compression: expected.arrangement_compression,
+            schedule: expected.schedule,
             auto_scaling_policy: expected.auto_scaling_policy,
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
@@ -463,6 +504,70 @@ impl Coordinator {
             }
         }
         checks
+    }
+
+    /// The catalog- and storage-derived refresh-window signals for one scheduled
+    /// cluster (the system compaction estimate and each bound REFRESH
+    /// materialized view's storage write frontier and refresh schedule), or
+    /// `None` if the cluster is missing, unmanaged, or not scheduled `ON
+    /// REFRESH`. These are the same signals the legacy `check_refresh_policy`
+    /// reads.
+    ///
+    /// The oracle read timestamp completing [`RefreshWindowInputs`] is
+    /// deliberately not fetched here: this runs on the coordinator loop, and
+    /// the oracle read is a network round-trip the request handler performs on
+    /// a spawned task instead.
+    ///
+    /// The MV write frontier is carried through with full fidelity as the
+    /// `Antichain` the storage controller reports, matching the legacy refresh
+    /// policy; the on-refresh strategy compares against it directly.
+    fn refresh_window_catalog_inputs(
+        &self,
+        cluster_id: ClusterId,
+    ) -> Option<(Duration, Vec<RefreshMvInfo>)> {
+        use mz_catalog::memory::objects::CatalogItem;
+
+        let cluster = self.catalog().try_get_cluster(cluster_id)?;
+        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+            return None;
+        };
+        if !matches!(
+            managed.schedule,
+            mz_sql::plan::ClusterSchedule::Refresh { .. }
+        ) {
+            return None;
+        }
+
+        let refresh_mvs = cluster
+            .bound_objects
+            .iter()
+            .filter_map(|id| {
+                let CatalogItem::MaterializedView(mv) = self.catalog().get_entry(id).item() else {
+                    return None;
+                };
+                let refresh_schedule = mv.refresh_schedule.clone()?;
+                // The storage controller knows about every MV in the catalog. The
+                // write frontier is passed through with full fidelity as the
+                // `Antichain` reported here.
+                let (_since, write_frontier) = self
+                    .controller
+                    .storage
+                    .collection_frontiers(mv.global_id_writes())
+                    .expect("storage controller knows about catalog MVs");
+                Some(RefreshMvInfo {
+                    id: mv.global_id_writes(),
+                    write_frontier,
+                    refresh_schedule,
+                })
+            })
+            .collect();
+
+        let compaction_estimate = self
+            .catalog()
+            .system_config()
+            .cluster_refresh_mv_compaction_estimate();
+
+        Some((compaction_estimate, refresh_mvs))
     }
 
     /// Apply one batch of decisions under their compare-and-append guards.
@@ -597,10 +702,11 @@ impl Coordinator {
                     name,
                     shape,
                     reasons,
+                    audit_detail,
                     ..
                 } => {
                     let replica_id = replica_ids.next().expect("one pre-allocated id per create");
-                    let reason = reason_from_strategies(&reasons);
+                    let reason = reason_from_strategies(&reasons, audit_detail);
                     match self.build_create_replica_op(cluster_id, replica_id, name, &shape, reason)
                     {
                         Ok(Some(op)) => mutations.push(op),
@@ -825,17 +931,31 @@ impl Coordinator {
 
 /// Map a create decision's strategy-attribution to the audit reason carried on
 /// the create event. Graceful wins over burst when both desired a shape (their
-/// shapes differ in practice, so this is a stable tie-break); a baseline-held
-/// replica is `Manual`, the tag for replicas the user's own config calls for.
+/// shapes differ in practice, so this is a stable tie-break); on-refresh maps to
+/// the `schedule` reason, carrying the create's window decision as the
+/// `scheduling_policies` detail; a baseline-held replica is `Manual`, the tag
+/// for replicas the user's own config calls for.
+///
+/// The detail is attached only when on-refresh wins the precedence, so the blob
+/// appears iff the audited reason is `schedule`, the same invariant the legacy
+/// scheduler's events had. (A shape desired by both graceful and on-refresh
+/// audits `reconfiguration` with no blob: consistent, since the blob explains a
+/// `schedule` decision.)
 ///
 /// Drops never come through here: a drop happens exactly when no strategy
 /// desires the replica, so it carries no attribution and is uniformly audited
 /// [`ReplicaCreateDropReason::Retired`].
-fn reason_from_strategies(reasons: &[&'static str]) -> ReplicaCreateDropReason {
+fn reason_from_strategies(
+    reasons: &[&'static str],
+    audit_detail: Option<AuditDetail>,
+) -> ReplicaCreateDropReason {
     if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
         ReplicaCreateDropReason::GracefulReconfiguration
     } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
         ReplicaCreateDropReason::HydrationBurst
+    } else if reasons.contains(&ON_REFRESH_STRATEGY_NAME) {
+        let decision = audit_detail.map(|AuditDetail::OnRefresh(decision)| decision);
+        ReplicaCreateDropReason::OnRefresh(decision)
     } else {
         ReplicaCreateDropReason::Manual
     }
@@ -943,36 +1063,61 @@ mod tests {
     #[mz_ore::test]
     fn test_reason_from_strategies() {
         use ReplicaCreateDropReason as Reason;
+        use mz_cluster_controller::ctx::RefreshWindowDecision;
+
+        let detail = || {
+            Some(AuditDetail::OnRefresh(RefreshWindowDecision {
+                objects_needing_refresh: Vec::new(),
+                objects_needing_compaction: Vec::new(),
+                hydration_time_estimate: Duration::ZERO,
+            }))
+        };
 
         // Each strategy maps to its own reason; the baseline (or no
         // attribution) is `Manual`.
         assert!(matches!(
-            reason_from_strategies(&[BASELINE_STRATEGY_NAME]),
+            reason_from_strategies(&[BASELINE_STRATEGY_NAME], None),
             Reason::Manual
         ));
-        assert!(matches!(reason_from_strategies(&[]), Reason::Manual));
+        assert!(matches!(reason_from_strategies(&[], None), Reason::Manual));
         assert!(matches!(
-            reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME]),
+            reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME], None),
             Reason::GracefulReconfiguration
         ));
         assert!(matches!(
-            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME]),
+            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME], None),
             Reason::HydrationBurst
+        ));
+        // The on-refresh reason carries the create's window decision through to
+        // the audit detail.
+        assert!(matches!(
+            reason_from_strategies(&[ON_REFRESH_STRATEGY_NAME], detail()),
+            Reason::OnRefresh(Some(_))
         ));
 
         // Graceful wins the tie-break when several strategies desired the
         // shape, and any strategy attribution beats the baseline's `Manual`.
+        // The window decision is attached only when on-refresh wins, so the
+        // `scheduling_policies` blob appears iff the audited reason is
+        // `schedule`.
         assert!(matches!(
-            reason_from_strategies(&[
-                BASELINE_STRATEGY_NAME,
-                HYDRATION_BURST_STRATEGY_NAME,
-                GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
-            ]),
+            reason_from_strategies(
+                &[
+                    BASELINE_STRATEGY_NAME,
+                    HYDRATION_BURST_STRATEGY_NAME,
+                    ON_REFRESH_STRATEGY_NAME,
+                    GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
+                ],
+                detail(),
+            ),
             Reason::GracefulReconfiguration
         ));
         assert!(matches!(
-            reason_from_strategies(&[BASELINE_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME]),
-            Reason::HydrationBurst
+            reason_from_strategies(
+                &[BASELINE_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME],
+                detail()
+            ),
+            Reason::OnRefresh(Some(_))
         ));
     }
 }

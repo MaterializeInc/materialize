@@ -6671,6 +6671,24 @@ pub fn plan_alter_cluster(
             }
             if let Some(replication_factor) = replication_factor {
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
+            } else if schedule
+                .as_ref()
+                .is_some_and(|s| !matches!(s, ClusterScheduleOptionValue::Manual))
+                && managed != Some(true)
+            {
+                // Setting a non-MANUAL schedule hands the replica set to the
+                // scheduler, so normalize the replication factor to 0 exactly
+                // as CREATE CLUSTER does for a scheduled cluster. Giving
+                // REPLICATION FACTOR together with a non-MANUAL SCHEDULE was
+                // rejected above, so `replication_factor` is `None` here.
+                //
+                // Not when the same statement converts an unmanaged cluster to
+                // managed: that conversion adopts the existing replicas, so the
+                // sequencer requires a replication factor matching their count
+                // and derives it when none is given. Forcing 0 would reject the
+                // conversion whenever a replica exists. The controller
+                // normalizes the adopted factor to 0 on its next tick.
+                options.replication_factor = AlterOptionParameter::Set(0);
             }
             if let Some(size) = &size {
                 options.size = AlterOptionParameter::Set(size.clone());

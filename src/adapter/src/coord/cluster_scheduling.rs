@@ -110,7 +110,17 @@ impl SchedulingDecision {
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     /// Call each scheduling policy.
+    ///
+    /// No-ops when the cluster controller owns the replica set
+    /// ([`ENABLE_CLUSTER_CONTROLLER`]): the controller's `OnRefreshStrategy` is
+    /// then the sole authority over scheduled clusters, so the legacy policy must
+    /// not also toggle their replication factor (two writers of the replica set is
+    /// not allowed). The legacy path remains in place to drive scheduling while the
+    /// gate is off.
     pub(crate) async fn check_scheduling_policies(&self) {
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
         // (So far, we have only this one policy.)
         self.check_refresh_policy();
     }
@@ -283,6 +293,14 @@ impl Coordinator {
         &mut self,
         decisions: Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>,
     ) {
+        // When the cluster controller owns the replica set it is the sole writer
+        // for scheduled clusters. Drop any legacy decisions still in flight from a
+        // background task spawned before the gate flipped on, so the two never
+        // contend. (`check_scheduling_policies` already stops spawning new ones.)
+        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs()) {
+            return;
+        }
+
         let start_time = Instant::now();
 
         // 1. Add the received decisions to `cluster_scheduling_decisions`.
@@ -338,32 +356,6 @@ impl Coordinator {
             // before we turn off a cluster, to avoid spuriously turning off a cluster and possibly
             // losing a hydrated state.
             if POLICIES.iter().all(|policy| decisions.contains_key(policy)) {
-                // A reconfiguration in flight owns the replication-factor
-                // transition, and this path bypasses the sequencer's guard
-                // against racing it, so it defers itself: the decision
-                // reapplies once the record settles. Only while the controller
-                // owns the cluster, though. With the gate off nothing settles
-                // the record, and the legacy write below retains it as
-                // cancelled instead of deferring forever behind an orphan.
-                let controller_owns = ENABLE_CLUSTER_CONTROLLER
-                    .get(self.catalog().system_config().dyncfgs())
-                    && cluster_id.is_user();
-                let reconfiguration_in_flight = self
-                    .get_managed_cluster_config(cluster_id)
-                    .is_some_and(|managed| {
-                        managed
-                            .reconfiguration
-                            .as_ref()
-                            .is_some_and(|record| record.is_in_progress())
-                    });
-                if controller_owns && reconfiguration_in_flight {
-                    debug!(
-                        "handle_scheduling_decisions: deferring cluster {}, \
-                        a graceful reconfiguration is in flight",
-                        cluster_id
-                    );
-                    continue;
-                }
                 // Check whether the cluster's state matches the needed state.
                 // If any policy says On, then we need a replica.
                 let needs_replica = decisions

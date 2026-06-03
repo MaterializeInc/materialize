@@ -23,13 +23,13 @@ use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 
 use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
-    ClusterState, Decision, ObservedReplica, ReconfigurationAudit, ReconfigurationStatus,
-    ReplicaShape, StateWrite,
+    ClusterSchedule, ClusterState, Decision, ObservedReplica, ReconfigurationAudit,
+    ReconfigurationStatus, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
 
@@ -89,7 +89,7 @@ fn foreign(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
     }
 }
 
-/// Builds a managed cluster state with the given realized size,
+/// Builds a MANUAL managed cluster state with the given realized size,
 /// replication factor, and replicas. No reconfiguration or burst in flight and
 /// no autoscaling policy.
 fn state(
@@ -105,6 +105,7 @@ fn state(
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
         arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
@@ -141,6 +142,11 @@ struct FakeCtx {
     /// append. Combined with `witness_check`, this exercises the
     /// `auto_scaling_policy` field of the compare-and-append witness end-to-end.
     concurrent_policy_alter: BTreeMap<ClusterId, Option<AutoScalingPolicy>>,
+    /// As `concurrent_policy_alter`, but for the schedule: each entry's
+    /// `ClusterSchedule` is written onto the stored state, modeling an
+    /// `ALTER ... SET (SCHEDULE = ...)` that lands mid-tick. Exercises the
+    /// `schedule` field of the witness.
+    concurrent_schedule_alter: BTreeMap<ClusterId, ClusterSchedule>,
     /// Replicas the fake reports as hydrated when the controller probes. A
     /// graceful test sets this to drive cut-over.
     hydrated: BTreeSet<ReplicaId>,
@@ -155,6 +161,10 @@ struct FakeCtx {
     /// `has_hydratable_objects` pull, keeping that pull load-bearing for
     /// the seam tests.
     has_hydratable_objects: BTreeMap<ClusterId, bool>,
+    /// Refresh-window inputs the fake returns per cluster when the controller
+    /// probes a scheduled cluster. An on-refresh test sets this to drive the
+    /// window decision.
+    refresh_window: BTreeMap<ClusterId, RefreshWindowInputs>,
 }
 
 impl FakeCtx {
@@ -167,9 +177,11 @@ impl FakeCtx {
             exhaust_next: 0,
             witness_check: false,
             concurrent_policy_alter: BTreeMap::new(),
+            concurrent_schedule_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
             hydration_probes: 0,
             has_hydratable_objects: BTreeMap::new(),
+            refresh_window: BTreeMap::new(),
         }
     }
 
@@ -229,6 +241,13 @@ impl ClusterControllerCtx for FakeCtx {
             .unwrap_or(false)
     }
 
+    async fn refresh_window_inputs(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Option<RefreshWindowInputs> {
+        self.refresh_window.get(&cluster_id).cloned()
+    }
+
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         if self.reject_next > 0 {
             self.reject_next -= 1;
@@ -244,11 +263,16 @@ impl ClusterControllerCtx for FakeCtx {
             return ApplyOutcome::ResourceExhausted;
         }
         // Splice in a concurrent `ALTER` that lands between the controller's read
-        // and this append: rewrite the stored policy before the witness check
+        // and this append: rewrite the stored config before the witness check
         // runs, so a decision derived from the pre-`ALTER` view fails its guard.
         for (cluster_id, policy) in std::mem::take(&mut self.concurrent_policy_alter) {
             if let Some(state) = self.states.get_mut(&cluster_id) {
                 state.auto_scaling_policy = policy;
+            }
+        }
+        for (cluster_id, schedule) in std::mem::take(&mut self.concurrent_schedule_alter) {
+            if let Some(state) = self.states.get_mut(&cluster_id) {
+                state.schedule = schedule;
             }
         }
         if self.witness_check && !self.witness_holds(&decisions) {
@@ -536,6 +560,7 @@ impl Strategy for FixedStrategy {
         (0..self.count)
             .map(|_| DesiredReplica {
                 shape: shape(&self.size),
+                audit_detail: None,
             })
             .collect()
     }
@@ -618,10 +643,67 @@ async fn distinct_shapes_union_and_attribute() {
     let creates = ctx.creates();
     assert_eq!(creates.len(), 1);
     assert!(ctx.drops().is_empty());
-    if let Decision::CreateReplica { shape, reasons, .. } = creates[0] {
+    if let Decision::CreateReplica {
+        shape,
+        reasons,
+        audit_detail,
+        ..
+    } = creates[0]
+    {
         assert_eq!(shape.size, "200cc");
         assert_eq!(reasons, &vec!["extra"]);
         assert!(!reasons.contains(&BASELINE_STRATEGY_NAME));
+        assert!(
+            audit_detail.is_none(),
+            "only on-refresh creates carry a window decision"
+        );
+    }
+}
+
+#[mz_ore::test]
+fn shared_shape_merge_keeps_audit_detail() {
+    use crate::ctx::{AuditDetail, RefreshWindowDecision};
+    use crate::strategy::ON_REFRESH_STRATEGY_NAME;
+
+    // Two strategies desire the same shape, one slot with a window decision and
+    // one without (the order strategies run in puts the detail-less slot
+    // first). The merged create keeps the detail, so a shape shared with
+    // another contributor still explains its on-refresh side.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    let detail = AuditDetail::OnRefresh(RefreshWindowDecision {
+        objects_needing_refresh: vec![GlobalId::User(7)],
+        objects_needing_compaction: Vec::new(),
+        hydration_time_estimate: Duration::ZERO,
+    });
+    let contributions: Vec<(&'static str, Vec<DesiredReplica>)> = vec![
+        (
+            "extra",
+            vec![DesiredReplica {
+                shape: shape("100cc"),
+                audit_detail: None,
+            }],
+        ),
+        (
+            ON_REFRESH_STRATEGY_NAME,
+            vec![DesiredReplica {
+                shape: shape("100cc"),
+                audit_detail: Some(detail.clone()),
+            }],
+        ),
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    if let Decision::CreateReplica {
+        reasons,
+        audit_detail,
+        ..
+    } = &decisions[0]
+    {
+        assert_eq!(reasons, &vec!["extra", ON_REFRESH_STRATEGY_NAME]);
+        assert_eq!(audit_detail.as_ref(), Some(&detail));
+    } else {
+        panic!("expected a CreateReplica");
     }
 }
 
@@ -686,6 +768,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             (0..state.replication_factor)
                 .map(|_| DesiredReplica {
                     shape: shape.clone(),
+                    audit_detail: None,
                 })
                 .collect()
         }
@@ -730,6 +813,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 arrangement_compression: false,
+                schedule: ClusterSchedule::Manual,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -829,6 +913,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 arrangement_compression: false,
+                schedule: ClusterSchedule::Manual,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -1114,6 +1199,7 @@ fn reconfiguring_state(
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
         arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: Some(rec),
         burst: None,
@@ -1553,6 +1639,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         availability_zones: vec!["az1".to_string()],
         logging: ComputeReplicaLogging::default(),
         arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: Some(ReconfigurationRecord {
             target: ReconfigurationTarget {
@@ -1963,6 +2050,558 @@ async fn resource_exhaustion_without_transient_strategy_sheds_nothing() {
     assert_eq!(ctx.applied.len(), 1);
     assert!(matches!(ctx.applied[0][0], Decision::CreateReplica { .. }));
     assert_eq!(ctx.states[&c].replicas.len(), 1, "nothing was applied");
+}
+
+// ----- On-refresh scheduling strategy. -----
+
+use mz_repr::refresh_schedule::RefreshSchedule;
+use timely::progress::Antichain;
+
+use crate::ctx::{AuditDetail, ClusterSchedule as Sched, RefreshMvInfo, RefreshWindowDecision};
+use crate::strategy::{ON_REFRESH_STRATEGY_NAME, OnRefreshStrategy};
+
+/// Unwrap an `AuditDetail` into the on-refresh window decision behind it.
+fn window_decision(detail: &Option<AuditDetail>) -> &RefreshWindowDecision {
+    let Some(AuditDetail::OnRefresh(decision)) = detail else {
+        panic!("expected an on-refresh window decision");
+    };
+    decision
+}
+
+/// A scheduled (`ON REFRESH`) cluster state with the given realized size,
+/// replication factor, replicas, and optional refresh-window inputs.
+fn scheduled_state(
+    cluster_id: ClusterId,
+    size: &str,
+    replication_factor: u32,
+    hydration_time_estimate_ms: u64,
+    replicas: Vec<ObservedReplica>,
+    refresh_window: Option<RefreshWindowInputs>,
+) -> (ClusterState, LiveSignals) {
+    let state = ClusterState {
+        cluster_id,
+        size: size.to_string(),
+        replication_factor,
+        availability_zones: Vec::new(),
+        logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
+        schedule: Sched::Refresh {
+            hydration_time_estimate: Duration::from_millis(hydration_time_estimate_ms),
+        },
+        auto_scaling_policy: None,
+        reconfiguration: None,
+        burst: None,
+        replicas,
+    };
+    let signals = LiveSignals {
+        refresh_window,
+        ..Default::default()
+    };
+    (state, signals)
+}
+
+/// A `REFRESH AT` schedule with a single refresh time.
+fn refresh_at(at: u64) -> RefreshSchedule {
+    RefreshSchedule {
+        everies: Vec::new(),
+        ats: vec![Timestamp::from(at)],
+    }
+}
+
+/// Refresh-window inputs: read ts, compaction estimate, and one MV (id `u1`)
+/// with the given write frontier and schedule. `Some(ts)` is a single-element
+/// write frontier `[ts]`; `None` is the empty (sealed) frontier `[]`.
+fn window_inputs(
+    read_ts: u64,
+    compaction_ms: u64,
+    write_frontier: Option<u64>,
+    schedule: RefreshSchedule,
+) -> RefreshWindowInputs {
+    RefreshWindowInputs {
+        read_ts: Timestamp::from(read_ts),
+        compaction_estimate: Duration::from_millis(compaction_ms),
+        refresh_mvs: vec![refresh_mv(1, write_frontier, schedule)],
+    }
+}
+
+/// One REFRESH MV with id `u<id>`, the given write frontier, and schedule.
+fn refresh_mv(id: u64, write_frontier: Option<u64>, schedule: RefreshSchedule) -> RefreshMvInfo {
+    let write_frontier = match write_frontier {
+        Some(ts) => Antichain::from_elem(Timestamp::from(ts)),
+        None => Antichain::new(),
+    };
+    RefreshMvInfo {
+        id: GlobalId::User(id),
+        write_frontier,
+        refresh_schedule: schedule,
+    }
+}
+
+#[mz_ore::test]
+fn on_refresh_baseline_holds_nothing_on_scheduled() {
+    // Even with a stale non-zero rf, the baseline contributes nothing to a
+    // scheduled cluster. The on-refresh strategy is the sole contributor.
+    let c = cluster(1);
+    let (state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let baseline = crate::strategy::BaselineStrategy;
+    assert!(
+        baseline
+            .desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "baseline must hold nothing on a scheduled cluster"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_normalizes_replication_factor() {
+    // A scheduled cluster carrying a stale non-zero rf is normalized to 0.
+    let c = cluster(1);
+    let (state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let s = OnRefreshStrategy;
+    let write = s.update_state(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(write.new_replication_factor, Some(0));
+
+    // Already 0 (or MANUAL): no write, so steady ticks stay no-ops.
+    let (normalized, normalized_signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    assert!(
+        s.update_state(
+            &normalized,
+            &normalized_signals,
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+    let manual = state_(c, "100cc", 1);
+    assert!(
+        s.update_state(
+            &manual,
+            &LiveSignals::default(),
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+}
+
+/// A MANUAL cluster with no replicas, for the normalization no-op check.
+fn state_(cluster_id: ClusterId, size: &str, rf: u32) -> ClusterState {
+    state(cluster_id, size, rf, Vec::new())
+}
+
+#[mz_ore::test]
+fn on_refresh_in_window_desires_one_replica() {
+    // Read ts 100, MV write frontier 50 (strictly below the read ts), so the MV
+    // still needs a refresh and the cluster is On. One replica at the realized
+    // shape.
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(50), refresh_at(1000));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(desired.len(), 1, "in-window cluster desires one replica");
+    assert_eq!(desired[0].shape.size, "100cc");
+
+    // The slot carries the window decision: the refresh-due MV explains the
+    // open window, and there is no compaction reason.
+    let detail = window_decision(&desired[0].audit_detail);
+    assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+    assert!(detail.objects_needing_compaction.is_empty());
+    assert_eq!(detail.hydration_time_estimate, Duration::ZERO);
+}
+
+#[mz_ore::test]
+fn on_refresh_window_decision_lists_due_mvs() {
+    // Two MVs: u1's frontier (50) is below the read ts (100), u2's (200) is
+    // past it. Only u1 appears in the window decision's refresh list. The
+    // lists name exactly the MVs that explain the open window.
+    let c = cluster(1);
+    let inputs = RefreshWindowInputs {
+        read_ts: Timestamp::from(100u64),
+        compaction_estimate: Duration::ZERO,
+        refresh_mvs: vec![
+            refresh_mv(1, Some(50), refresh_at(1000)),
+            refresh_mv(2, Some(200), refresh_at(1000)),
+        ],
+    };
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(desired.len(), 1);
+    let detail = window_decision(&desired[0].audit_detail);
+    assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+    assert!(detail.objects_needing_compaction.is_empty());
+}
+
+#[mz_ore::test]
+fn on_refresh_caught_up_at_read_ts_is_off() {
+    // Frontier exactly at the read ts (and no hydration lead, no compaction
+    // window): the MV is caught up, so the cluster is Off. The needs-refresh check
+    // is strict (`frontier < read_ts + estimate`), matching the legacy scheduler.
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(100), refresh_at(50));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "a caught-up MV at the read ts leaves the cluster off"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_empty_frontier_needs_no_refresh() {
+    // An empty (sealed) write frontier `[]` is the "complete past every timestamp"
+    // state: `Antichain::less_than` is `false` for every timestamp, so the MV never
+    // reads as needing a refresh on that count, exactly as the legacy refresh
+    // policy decides it with `Antichain::less_than`. The compaction window is also
+    // closed here (read ts 1000 is well past the last `AT 200` plus the compaction
+    // estimate), so the cluster is Off.
+    //
+    // This guards the empty/sealed-frontier arm of the window decision. A
+    // single-input total-order MV's write frontier holds at most one element, so a
+    // multi-element frontier is not reachable and is not exercised here; the
+    // `Antichain` seam keeps the model faithful regardless.
+    let c = cluster(1);
+    let inputs = window_inputs(1000, 100, None, refresh_at(200));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "an empty write frontier needs no refresh and leaves the cluster off"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_hydration_estimate_opens_window_early() {
+    // Write frontier 200 is past the read ts 100, so on its own the MV needs no
+    // refresh. But a hydration-time estimate of 150 adjusts the read ts to 250,
+    // which the frontier (200) is now below, so the cluster turns on early to
+    // rehydrate ahead of the refresh.
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(200), refresh_at(1000));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 150, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert_eq!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .len(),
+        1,
+        "the hydration estimate opens the window early"
+    );
+
+    // With no estimate the same frontier leaves the cluster Off.
+    let (no_estimate, no_estimate_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(100, 0, Some(200), refresh_at(1000))),
+    );
+    assert!(
+        s.desired_replicas(
+            &no_estimate,
+            &no_estimate_signals,
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_compaction_window_keeps_cluster_on() {
+    // The MV's frontier (300) is past the read ts (250), so it needs no refresh.
+    // But its previous refresh was recent: with frontier 300 rounded down past
+    // the `AT 200` schedule, prev_refresh = 200, and 200 + compaction_estimate
+    // (100) = 300 > read ts 250, so the cluster stays on for compaction.
+    let c = cluster(1);
+    let inputs = window_inputs(250, 100, Some(300), refresh_at(200));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(
+        desired.len(),
+        1,
+        "the compaction window keeps the cluster on"
+    );
+
+    // The window decision attributes the open window to compaction, not a
+    // pending refresh.
+    let detail = window_decision(&desired[0].audit_detail);
+    assert!(detail.objects_needing_refresh.is_empty());
+    assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
+
+    // A later read ts past the compaction window turns it off: the frontier (500)
+    // needs no refresh at read ts 400, and prev_refresh 200 + compaction 100 = 300
+    // is not > read ts 400.
+    let (past, past_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(400, 100, Some(500), refresh_at(200))),
+    );
+    assert!(
+        s.desired_replicas(&past, &past_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_creates_in_window_through_seam() {
+    // End-to-end through the ctx seam: a scheduled cluster with a stale rf=1 and
+    // no replicas, inside its refresh window. Phase 1 normalizes rf to 0; phase 2
+    // creates the one in-window replica.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.refresh_window
+        .insert(c, window_inputs(100, 0, Some(50), refresh_at(1000)));
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(
+        ctx.states[&c].replication_factor, 0,
+        "rf normalized to 0 at runtime"
+    );
+    let creates = ctx.creates();
+    assert_eq!(creates.len(), 1, "one in-window replica is created");
+    if let Decision::CreateReplica {
+        reasons,
+        shape,
+        audit_detail,
+        ..
+    } = creates[0]
+    {
+        assert!(reasons.contains(&ON_REFRESH_STRATEGY_NAME));
+        assert_eq!(shape.size, "100cc");
+        // The create carries the window decision through the kernel for the
+        // audit log's `scheduling_policies` detail.
+        let detail = window_decision(audit_detail);
+        assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+        assert!(detail.objects_needing_compaction.is_empty());
+    } else {
+        panic!("expected a CreateReplica");
+    }
+    assert!(ctx.drops().is_empty());
+
+    // A second tick converges: rf is 0 (no write), and the in-window replica
+    // matches the on-refresh desire, so nothing changes.
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.applied.len(), before, "converged inside the window");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_schedule_alter_rejects_in_flight_decision() {
+    // The `schedule` field of the compare-and-append witness is load-bearing: a
+    // concurrent `ALTER ... SET (SCHEDULE = MANUAL)` that lands between the
+    // controller's read and its append must reject the in-flight on-refresh drop,
+    // so the on-refresh strategy never reshapes a cluster the user just handed
+    // back to the baseline. With `witness_check` on, this exercises the real
+    // per-decision compare (not the blunt `reject_next` counter), so dropping
+    // `schedule` from `ExpectedClusterState` would make this test fail.
+    let c = cluster(1);
+    // Scheduled, already-normalized (rf=0), one running replica, outside its
+    // window, so the on-refresh strategy emits a phase-2 drop and no phase-1
+    // write. The drop carries `expected.schedule = Refresh`.
+    let (state, _signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.refresh_window
+        .insert(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.witness_check = true;
+    // The `ALTER` flips only the schedule (rf, size, azs, logging unchanged), so
+    // the rejection is attributable solely to the witness `schedule` field.
+    ctx.concurrent_schedule_alter.insert(c, Sched::Manual);
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    // The drop was attempted but rejected by its compare-and-append guard, so the
+    // replica the user's now-MANUAL cluster owns is left untouched.
+    let drops = ctx.drops();
+    assert_eq!(drops.len(), 1, "the drop was attempted");
+    if let Decision::DropReplica { expected, .. } = drops[0] {
+        assert_eq!(
+            expected.schedule,
+            Sched::Refresh {
+                hydration_time_estimate: Duration::from_millis(0)
+            },
+            "the drop was derived from the pre-ALTER (Refresh) schedule"
+        );
+    } else {
+        panic!("expected a DropReplica");
+    }
+    assert_eq!(
+        ctx.states[&c].replicas.len(),
+        1,
+        "the rejected drop left the replica in place"
+    );
+    assert_eq!(ctx.states[&c].schedule, Sched::Manual);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unchanged_schedule_passes_witness() {
+    // The dual of the rejection test: with the witness check on but no concurrent
+    // `ALTER`, the matching `schedule` lets the same out-of-window drop apply, so
+    // the check is not vacuously rejecting.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.refresh_window
+        .insert(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.witness_check = true;
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.drops().len(), 1, "the out-of-window replica is dropped");
+    assert!(
+        ctx.states[&c].replicas.is_empty(),
+        "the drop applied under a matching witness"
+    );
+}
+
+/// A `REFRESH EVERY` schedule with the given interval in milliseconds, aligned
+/// to timestamp 0.
+fn refresh_every(interval_ms: u64) -> RefreshSchedule {
+    RefreshSchedule {
+        everies: vec![mz_repr::refresh_schedule::RefreshEvery {
+            interval: Duration::from_millis(interval_ms),
+            aligned_to: Timestamp::from(0u64),
+        }],
+        ats: Vec::new(),
+    }
+}
+
+#[mz_ore::test]
+fn on_refresh_compaction_window_with_refresh_every() {
+    // An EVERY schedule exercises the everies arm of the previous-refresh
+    // computation. The MV's frontier (500) sits at the next refresh of an
+    // `EVERY 100ms` schedule, so it needs no refresh at read ts 450, but
+    // rounding the frontier down puts the previous refresh at 400, and
+    // 400 + compaction_estimate (100) = 500 > read ts 450 keeps the cluster on.
+    let c = cluster(1);
+    let inputs = window_inputs(450, 100, Some(500), refresh_every(100));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(
+        desired.len(),
+        1,
+        "the compaction window keeps the cluster on"
+    );
+    let detail = window_decision(&desired[0].audit_detail);
+    assert!(detail.objects_needing_refresh.is_empty());
+    assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
+
+    // A smaller estimate closes the window: 400 + 10 = 410 is not > 450.
+    let (closed, closed_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(450, 10, Some(500), refresh_every(100))),
+    );
+    assert!(
+        s.desired_replicas(&closed, &closed_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+
+    // An EVERY MV with an empty (sealed) frontier has no wall-clock handle on
+    // its last refresh (`last_refresh` is `None` for a periodic schedule), so no
+    // compaction time is scheduled even under a huge estimate.
+    let (sealed, sealed_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(450, 100_000, None, refresh_every(100))),
+    );
+    assert!(
+        s.desired_replicas(&sealed, &sealed_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_skips_rf_normalization_while_reconfiguring() {
+    // While a reconfiguration record is in progress the graceful strategy owns
+    // `new_replication_factor`, so the on-refresh normalization defers to keep
+    // the field single-writer. (The sequencer never writes a record for a
+    // scheduled cluster, so the state is reachable only for a record written
+    // before the cluster acquired its schedule.)
+    let c = cluster(1);
+    let (mut state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    state.reconfiguration = Some(record("200cc", 2, 5000));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.update_state(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "normalization defers to an in-progress reconfiguration"
+    );
+
+    // A settled record no longer owns the field: normalization resumes.
+    let mut settled = record("200cc", 2, 5000);
+    settled.status = ReconfigurationStatus::Finalized;
+    state.reconfiguration = Some(settled);
+    let write = s.update_state(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(write.new_replication_factor, Some(0));
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_graceful_record_settles_then_normalizes() {
+    // A scheduled cluster carrying an in-progress reconfiguration record. The
+    // sequencer refuses both a schedule change mid-record and a new record on a
+    // scheduled cluster, so this state only arises for a record written before
+    // the cluster acquired its schedule (pre-upgrade catalog state). The
+    // graceful strategy owns the record to settlement: its cut-over writes the
+    // target (including rf 2) alone, without contending with the on-refresh
+    // normalization (a dual write of `new_replication_factor` would trip the
+    // merge tripwire's soft panic and fail this test). The next tick sees the
+    // record settled and normalizes rf back to 0.
+    let c = cluster(1);
+    let (mut state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    // The deadline (500) already passed at the fake's now (1000) under COMMIT,
+    // so the first tick cuts over without waiting for hydration.
+    state.reconfiguration = Some(record_on_timeout("200cc", 2, 500, OnTimeout::Commit));
+    let mut ctx = FakeCtx::new(vec![state]);
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    // The cut-over landed alone: the realized config advanced to the target and
+    // the record settled, with rf briefly at the target's value.
+    assert_eq!(ctx.states[&c].size, "200cc");
+    assert_eq!(ctx.states[&c].replication_factor, 2);
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::Finalized)
+    );
+
+    // The next tick normalizes the scheduled cluster's rf back to 0.
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].replication_factor, 0);
 }
 
 mod hydration_burst {
@@ -2437,6 +3076,16 @@ mod hydration_burst {
         assert!(
             matches!(&burst_creates[0], Decision::CreateReplica { reasons, .. } if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME)),
             "the create is attributed to the burst strategy"
+        );
+        assert!(
+            matches!(
+                &burst_creates[0],
+                Decision::CreateReplica {
+                    audit_detail: None,
+                    ..
+                }
+            ),
+            "only on-refresh creates carry a window decision"
         );
         assert!(
             ctx.states[&c].burst.is_some(),

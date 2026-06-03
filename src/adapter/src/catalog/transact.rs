@@ -29,7 +29,8 @@ use mz_audit_log::{
     AlterClusterReconfigurationV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
     ClusterReplicaLoggingV1, CreateOrDropClusterReplicaReasonV1, EventDetails, EventType,
     HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1,
-    SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    RefreshDecisionWithReasonV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2,
+    VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -41,11 +42,13 @@ use mz_catalog::memory::objects::{
     ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
     StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
+use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_types::ShardId;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
@@ -367,6 +370,13 @@ pub enum ReplicaCreateDropReason {
     /// The cluster controller's hydration-burst strategy created the transient burst replica
     /// it runs while a cluster's objects are not yet hydrated.
     HydrationBurst,
+    /// The cluster controller's on-refresh strategy created the replica for a refresh window on
+    /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
+    /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
+    /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
+    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. The controller always supplies
+    /// the decision; a `None` still audits `schedule`, just without the blob.
+    OnRefresh(Option<RefreshWindowDecision>),
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
     /// replication-factor decrease).
@@ -380,11 +390,13 @@ impl ReplicaCreateDropReason {
         CreateOrDropClusterReplicaReasonV1,
         Option<SchedulingDecisionsWithReasonsV2>,
     ) {
-        let (reason, scheduling_policies) = match self {
+        match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
             ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
                 CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(scheduling_decisions),
+                Some(SchedulingDecision::reasons_to_audit_log_reasons(
+                    &scheduling_decisions,
+                )),
             ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
@@ -392,14 +404,45 @@ impl ReplicaCreateDropReason {
             ReplicaCreateDropReason::HydrationBurst => {
                 (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
             }
+            ReplicaCreateDropReason::OnRefresh(decision) => (
+                CreateOrDropClusterReplicaReasonV1::Schedule,
+                decision.map(refresh_window_decision_to_audit_log),
+            ),
             ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
-        };
-        (
-            reason,
-            scheduling_policies
-                .as_ref()
-                .map(SchedulingDecision::reasons_to_audit_log_reasons),
-        )
+        }
+    }
+}
+
+/// Convert the controller's on-refresh window decision into the audit log's
+/// `scheduling_policies` detail, the same shape the legacy scheduler records:
+/// ids as strings and the hydration-time estimate as an interval string.
+fn refresh_window_decision_to_audit_log(
+    decision: RefreshWindowDecision,
+) -> SchedulingDecisionsWithReasonsV2 {
+    let mut hydration_time_estimate_str = String::new();
+    strconv::format_interval(
+        &mut hydration_time_estimate_str,
+        Interval::from_duration(&decision.hydration_time_estimate)
+            .expect("the estimate originated as a planned Interval"),
+    );
+    SchedulingDecisionsWithReasonsV2 {
+        on_refresh: RefreshDecisionWithReasonV2 {
+            // The controller produces a create (and so this detail) only for
+            // an open window; there is no "off" decision to record (a
+            // window-close is a `retired` drop with no detail).
+            decision: SchedulingDecisionV1::On,
+            objects_needing_refresh: decision
+                .objects_needing_refresh
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            objects_needing_compaction: decision
+                .objects_needing_compaction
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            hydration_time_estimate: hydration_time_estimate_str,
+        },
     }
 }
 
@@ -3608,20 +3651,6 @@ mod tests {
     use crate::session::DEFAULT_DATABASE_NAME;
 
     #[mz_ore::test]
-    fn test_replica_create_drop_reason_into_audit_log() {
-        use mz_audit_log::CreateOrDropClusterReplicaReasonV1;
-
-        use crate::catalog::ReplicaCreateDropReason;
-
-        // `Retired` is the uniform word for every controller drop, with no
-        // `scheduling_policies` blob: a drop happens exactly when no strategy
-        // desires the replica, so there is no decision to record.
-        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
-        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
-        assert!(scheduling_policies.is_none());
-    }
-
-    #[mz_ore::test]
     fn test_reconfiguration_audit_details() {
         use std::time::Duration;
 
@@ -3942,6 +3971,50 @@ mod tests {
         );
         assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
         assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+    }
+
+    #[mz_ore::test]
+    fn test_replica_create_drop_reason_into_audit_log() {
+        use std::time::Duration;
+
+        use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, SchedulingDecisionV1};
+        use mz_cluster_controller::ctx::RefreshWindowDecision;
+        use mz_repr::GlobalId;
+
+        use crate::catalog::ReplicaCreateDropReason;
+
+        // `OnRefresh` shares the `schedule` audit word with the legacy
+        // `ClusterScheduling` variant and converts the controller's window
+        // decision into the same `scheduling_policies` detail blob: ids as
+        // strings, the hydration-time estimate as an interval string, and the
+        // decision hardcoded `on` (the controller produces a create, and so
+        // this detail, only for an open window).
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(Some(RefreshWindowDecision {
+                objects_needing_refresh: vec![GlobalId::User(1)],
+                objects_needing_compaction: vec![GlobalId::User(2), GlobalId::User(3)],
+                hydration_time_estimate: Duration::from_secs(995),
+            }))
+            .into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        let blob = scheduling_policies.expect("on-refresh create carries the detail");
+        assert_eq!(blob.on_refresh.decision, SchedulingDecisionV1::On);
+        assert_eq!(blob.on_refresh.objects_needing_refresh, vec!["u1"]);
+        assert_eq!(blob.on_refresh.objects_needing_compaction, vec!["u2", "u3"]);
+        assert_eq!(blob.on_refresh.hydration_time_estimate, "00:16:35");
+
+        // A detail-less on-refresh create still reads `schedule`, just without
+        // the blob.
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(None).into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        assert!(scheduling_policies.is_none());
+
+        // `Retired` is the uniform word for every controller drop, with no
+        // blob.
+        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
+        assert!(scheduling_policies.is_none());
     }
 
     #[mz_ore::test]

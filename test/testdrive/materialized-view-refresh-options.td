@@ -391,10 +391,18 @@ true
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
 
+# The controller owns a scheduled cluster's replica set (the legacy scheduler is
+# inert while the gate is on): it holds the realized `replication_factor` at 0 and
+# toggles a single replica in and out of the refresh window, so on/off is checked
+# by the replica count in `mz_cluster_replicas` rather than `replication_factor`.
+# Drive the controller tick down so those transitions settle quickly.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+
 > CREATE CLUSTER scheduled_cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 # No MV yet, so the cluster should be turned off.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster';
 0
 
 > CREATE MATERIALIZED VIEW mv11
@@ -403,7 +411,7 @@ true
   AS SELECT count(*) FROM t2;
 
 # The cluster should be turned on at some point.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster';
 1
 
 # And then the cluster should compute MV results.
@@ -414,7 +422,7 @@ true
 $ set-max-tries max-tries=5000
 
 # The cluster should be turned off at some point.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster';
 0
 
 # We should have a "drop" in `mz_audit_events`
@@ -430,7 +438,7 @@ true
 > DELETE FROM t2;
 
 # The cluster should be turned on at some point again.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster';
 1
 
 # And then the cluster should compute MV results again.
@@ -460,7 +468,7 @@ true
 ## that the Persist shard's write frontier moves from 0 to the first refresh time.
 
 > CREATE CLUSTER scheduled_cluster_2 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster_2';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster_2';
 0
 
 > CREATE MATERIALIZED VIEW mv12
@@ -476,7 +484,7 @@ true
 true
 
 # But then the cluster should turn off.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster_2';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster_2';
 0
 
 ## Unbilled replicas.
@@ -539,9 +547,9 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
   AS SELECT count(*) FROM t2;
 
 # Should be turned on soon due to the HYDRATION TIME ESTIMATE.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_6';
 1
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_7';
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_7';
 1
 
 # ----------------------------------------

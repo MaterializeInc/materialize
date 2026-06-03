@@ -196,6 +196,11 @@ scale=1,workers=1
 ! ALTER CLUSTER cc_nonshape SET (REPLICATION FACTOR 2)
 contains:cannot change replication factor while a reconfiguration is in progress
 
+# The schedule is refused the same way: it decides which strategy owns the
+# replica set, so it cannot flip under an in-flight record.
+! ALTER CLUSTER cc_nonshape SET (SCHEDULE = ON REFRESH)
+contains:cannot change the cluster schedule while a reconfiguration is in progress
+
 # WORKLOAD CLASS (system-role-only) applies immediately, whether or not the
 # reconfiguration is still in flight.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
@@ -627,6 +632,135 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 3 started true
 4 finalized true
 5 started true
+
+# ----- ON REFRESH scheduling driven by the controller -----
+#
+# With the gate on, the on-refresh strategy (not the legacy scheduling tick) owns
+# a scheduled cluster's replica set: it normalizes the realized replication factor
+# to 0 and brings up a single replica while the cluster is inside a refresh window.
+
+# A scheduled cluster with no bound REFRESH MV is outside any refresh window, so it
+# has no replica and its replication factor reads 0. The large HYDRATION TIME
+# ESTIMATE makes the window deterministically open once a fast-refreshing MV is
+# bound (the cluster must stay on to keep that far ahead of the next refresh).
+> CREATE CLUSTER cc_sched (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+0
+
+# Bind a REFRESH EVERY materialized view: the cluster is now inside a refresh window
+# (it must rehydrate ahead of each refresh), so the controller brings up exactly one
+# replica at the cluster size. The replication factor still reads 0 (it is the
+# controller's domain for a scheduled cluster), and mz_cluster_replicas is
+# authoritative for what is actually running.
+> CREATE TABLE sched_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_mv IN CLUSTER cc_sched WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_t
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+1
+
+# The replica runs at the cluster size, and the MV computes a result on it.
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+scale=1,workers=1
+> SELECT count FROM cc_sched_mv
+0
+
+> DROP MATERIALIZED VIEW cc_sched_mv
+
+# With the MV gone the refresh window closes and the controller retires the replica.
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched'
+0
+
+# The window-open create is audited `schedule` and carries the window decision as
+# the `scheduling_policies` detail, like the legacy scheduler's creates did: the
+# decision is `on`, the hydration-time estimate rides along, and the open window
+# names the REFRESH MV behind it.
+> SELECT event_type, details->>'reason', details->'scheduling_policies'->'on_refresh'->>'decision', details->'scheduling_policies'->'on_refresh'->>'hydration_time_estimate', jsonb_array_length(details->'scheduling_policies'->'on_refresh'->'objects_needing_refresh') > 0 FROM mz_catalog.mz_audit_events WHERE object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_sched' AND event_type = 'create'
+create schedule on 00:01:00 true
+
+# The window-close drop is `retired` with no decision detail. A drop happens
+# exactly when no strategy desires the replica, so there is no decision to record.
+> SELECT event_type, details->>'reason', details->'scheduling_policies' IS NULL FROM mz_catalog.mz_audit_events WHERE object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_sched' AND event_type = 'drop'
+drop retired true
+
+> DROP TABLE sched_t
+> DROP CLUSTER cc_sched
+
+# A config-shape ALTER on a scheduled cluster takes the direct path: no
+# reconfiguration record is written (so no lifecycle transition is audited),
+# the realized size advances immediately, and the controller reconciles the
+# in-window replica to the new shape on its next tick.
+> CREATE CLUSTER cc_sched_resize (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE sched_resize_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_resize_mv IN CLUSTER cc_sched_resize WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_resize_t
+
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_resize'
+scale=1,workers=1
+
+> ALTER CLUSTER cc_sched_resize SET (SIZE 'scale=1,workers=2')
+
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_sched_resize'
+scale=1,workers=2 0
+
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_resize'
+scale=1,workers=2
+
+# No reconfiguration lifecycle event was recorded: the ALTER never wrote a
+# record.
+> SELECT count(*) FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_sched_resize' AND details->>'transition' IS NOT NULL
+0
+
+> DROP MATERIALIZED VIEW cc_sched_resize_mv
+> DROP TABLE sched_resize_t
+> DROP CLUSTER cc_sched_resize
+
+# Round-tripping a scheduled cluster through unmanaged and back works while its
+# in-window replica is running. The MANAGED = true conversion adopts the
+# existing replica (the replication factor derives from the replica count, it
+# is not normalized to 0 at planning), and the controller then takes ownership
+# again: the factor normalizes to 0 on the next tick and the replica stays for
+# the open window.
+> CREATE CLUSTER cc_sched_convert (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+> CREATE TABLE sched_convert_t (x int)
+> CREATE MATERIALIZED VIEW cc_sched_convert_mv IN CLUSTER cc_sched_convert WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM sched_convert_t
+
+# The window is open, so a replica is up.
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_convert'
+1
+
+> ALTER CLUSTER cc_sched_convert SET (MANAGED = false, SCHEDULE = MANUAL)
+> ALTER CLUSTER cc_sched_convert SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
+
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_sched_convert'
+0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_sched_convert'
+1
+> SELECT count FROM cc_sched_convert_mv
+0
+
+> DROP MATERIALIZED VIEW cc_sched_convert_mv
+> DROP TABLE sched_convert_t
+> DROP CLUSTER cc_sched_convert
+
+# A MANUAL cluster is untouched by the on-refresh strategy: its replica set is the
+# user's replication factor, owned by the implicit baseline.
+> CREATE CLUSTER cc_manual (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+1
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_manual'
+1
+
+# Handing the cluster to the scheduler normalizes the replication factor to 0
+# at planning time, exactly like CREATE CLUSTER with a non-MANUAL schedule.
+> ALTER CLUSTER cc_manual SET (SCHEDULE = ON REFRESH)
+> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_manual'
+0
+
+> DROP CLUSTER cc_manual
 
 # ----- Hydration burst: AUTO SCALING STRATEGY SQL surface -----
 

@@ -286,6 +286,9 @@ pub enum AdapterError {
     /// Attempt to change a cluster's replication factor while a graceful
     /// reconfiguration is in progress.
     AlterClusterReplicationFactorWhileReconfiguring,
+    /// Attempt to change a cluster's schedule while a graceful reconfiguration
+    /// is in progress.
+    AlterClusterScheduleWhileReconfiguring,
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
@@ -744,6 +747,11 @@ impl AdapterError {
                 configuration, or wait for it to settle, then change the replication factor."
                     .to_string(),
             ),
+            AdapterError::AlterClusterScheduleWhileReconfiguring => Some(
+                "Cancel the reconfiguration by altering the cluster back to its current \
+                configuration, or wait for it to settle, then change the schedule."
+                    .to_string(),
+            ),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -987,6 +995,7 @@ impl AdapterError {
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
                 SqlState::OBJECT_IN_USE
             }
+            AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
@@ -1448,6 +1457,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot change replication factor while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterScheduleWhileReconfiguring => {
+                write!(
+                    f,
+                    "cannot change the cluster schedule while a reconfiguration is in progress"
                 )
             }
             AdapterError::ReplacementSchemaMismatch(_) => {

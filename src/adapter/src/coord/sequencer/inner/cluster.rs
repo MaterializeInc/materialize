@@ -325,6 +325,18 @@ impl Coordinator {
                 .is_some_and(|record| record.is_in_progress())
         );
 
+        // The schedule decides which strategy owns the cluster's replica set
+        // (the baseline for MANUAL, on-refresh otherwise), and the sequencer
+        // never writes a reconfiguration record for a scheduled cluster (see
+        // the routing below). Refuse flipping the schedule under an in-flight
+        // record rather than let the two ownership regimes overlap mid-flight.
+        if cluster_controller_owns
+            && reconfiguration_in_flight
+            && !matches!(options.schedule, Unchanged)
+        {
+            return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
+        }
+
         // Replication factor is one of the four dimensions the cut-over sets
         // atomically from the record's target (`fold_reconfiguration_target`),
         // so a change applied independently while a reconfiguration is in
@@ -370,7 +382,23 @@ impl Coordinator {
                 } else {
                     new_managed.replica_config_shape() != old_managed.replica_config_shape()
                 };
-                if needs_record {
+                // A scheduled (non-MANUAL) cluster holds its replication factor
+                // at 0 and the on-refresh strategy owns its replica set, so a
+                // graceful hydrate-overlap has nothing meaningful to wait for.
+                // A config-shape `ALTER` on such a cluster takes the direct
+                // path below instead of writing a record: with the controller
+                // owning the cluster the direct path only updates the realized
+                // config, and the controller reconciles any in-window replica
+                // to the new shape on its next tick. The schedule guard above
+                // keeps a schedule change from reaching here mid-record, so a
+                // record on a scheduled cluster can only pre-date the schedule
+                // (written on an older version). For that case the reshape
+                // path stays reachable, so the record can still be retargeted
+                // or cancelled until it settles.
+                let scheduled_direct =
+                    !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
+                        && !reconfiguration_in_flight;
+                if needs_record && !scheduled_direct {
                     return self
                         .reshape_alter_cluster_managed(
                             session,
@@ -2129,8 +2157,10 @@ impl Coordinator {
         // rather than risk a bogus revival if the gate comes back on.
         //
         // NOTE: `handle_scheduling_decisions` also calls this function and
-        // bypasses the sequencer's replication-factor guard. It defers its
-        // flips itself while a reconfiguration is in progress.
+        // bypasses the sequencer's guards. It runs only while the controller
+        // gate is off, where the cancel-carried write below retires any
+        // in-progress record instead of leaving it behind for a controller
+        // that is not running.
         match finalization_needed {
             NeedsFinalization::No => {
                 let mut new_config = new_config;

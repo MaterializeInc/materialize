@@ -89,6 +89,10 @@ pub struct ExpectedClusterState {
     pub availability_zones: AvailabilityZones,
     pub logging: ComputeReplicaLogging,
     pub arrangement_compression: bool,
+    /// The scheduling policy. Part of the witness because it determines which
+    /// policy owns the replica set, so a write conditioned on one schedule must
+    /// not apply under another.
+    pub schedule: ClusterSchedule,
     /// The autoscaling policy. Part of the witness because it determines whether,
     /// and at what size, a burst is warranted.
     pub auto_scaling_policy: Option<AutoScalingPolicy>,
@@ -229,6 +233,21 @@ pub fn burst_record_warranted(
     hydration_size: Option<&str>,
 ) -> bool {
     replication_factor != 0 && hydration_size == Some(record_size)
+}
+
+/// A managed cluster's scheduling policy, mirrored from durable state. A
+/// plain-data mirror of `mz_sql::plan::ClusterSchedule`, free of a dependency on
+/// the SQL layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClusterSchedule {
+    /// The cluster is user-managed: `replication_factor` is the capacity knob
+    /// that sizes the replica set.
+    Manual,
+    /// The cluster is scheduled `ON REFRESH`: `replication_factor` is held at `0`
+    /// and replicas run only around refresh times. `hydration_time_estimate` is
+    /// how far ahead of a refresh the cluster should turn on so it can rehydrate
+    /// before the refresh time.
+    Refresh { hydration_time_estimate: Duration },
 }
 
 /// The user-configured autoscaling policy of a managed cluster, mirrored from
