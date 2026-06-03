@@ -2469,7 +2469,7 @@ class Metrics:
         return values[0]
 
     def get_last_command_received(self, server_name: str) -> float:
-        metrics = self.with_name("mz_grpc_server_last_command_received")
+        metrics = self.with_name("mz_cluster_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
         assert len(values) == 1
         return values[0]
@@ -2589,6 +2589,19 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
         assert metrics.get_last_command_received("compute") >= before_connection_time
+
+        # The metric must stay fresh on a healthy but idle connection, kept current by CTP
+        # keepalives even when no commands are flowing. Otherwise the
+        # `clusterd-not-receiving-commands` alert false-positives on healthy clusters (CLU-103).
+        idle_seconds = 10
+        time.sleep(idle_seconds)
+        metrics = fetch_metrics()
+        for server in ("compute", "storage"):
+            staleness = time.time() - metrics.get_last_command_received(server)
+            assert staleness < idle_seconds, (
+                f"{server} last_command_received is stale ({staleness:.1f}s old) on an idle "
+                "but healthy connection; keepalives should keep it fresh"
+            )
 
         count = metrics.get_compute_collection_count("log", "0")
         assert count == 0, "unexpected number of unhydrated log collections"
