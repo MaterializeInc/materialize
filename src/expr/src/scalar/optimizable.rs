@@ -174,7 +174,7 @@ impl OptimizableExpr for MirScalarExpr {
     where
         F: FnMut(&Self),
     {
-        self.visit_pre(f);
+        MirScalarExpr::visit_pre(self, f);
         Ok(())
     }
 }
