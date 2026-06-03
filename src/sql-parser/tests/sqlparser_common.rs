@@ -394,3 +394,21 @@ fn test_as_keyword_as_identifier_display_roundtrip() {
         assert_display_roundtrips(sql);
     }
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_fetch_forward_cursor_display_roundtrip() {
+    // `FETCH` consumes an optional leading `FORWARD`, so a cursor named
+    // `forward` must stay quoted on display. Regression for the
+    // parse_display_roundtrip `FETCH forward` finding.
+    assert_display_roundtrips("FETCH \"forward\"");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_resolved_item_name_id_display_roundtrip() {
+    // The `[<id> AS <name>]` id is parsed from an identifier token, so an id
+    // with spaces/keywords must be requoted on display. Regression for the
+    // parse_pretty_roundtrip `[<quoted id> AS …]` finding.
+    assert_display_roundtrips("SELECT * FROM [\"a b\" AS foo.bar]");
+}

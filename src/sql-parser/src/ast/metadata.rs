@@ -112,7 +112,19 @@ impl AstDisplay for RawItemName {
         match self {
             RawItemName::Name(o) => f.write_node(o),
             RawItemName::Id(id, o, v) => {
-                f.write_str(format!("[{} AS ", id));
+                // `id` is parsed from an identifier token (`[<id> AS …]`), so a
+                // crafted id with spaces/keywords must be quoted to reparse as a
+                // single identifier. A normal global id like `u1` is printed
+                // bare in every mode — including the stable mode `pg_get_viewdef`
+                // renders in, which would otherwise force-quote it.
+                f.write_str("[");
+                let id = Ident::new_unchecked(id.clone());
+                if id.can_be_printed_bare() {
+                    f.write_str(id.as_str());
+                } else {
+                    f.write_node(&id);
+                }
+                f.write_str(" AS ");
                 f.write_node(o);
                 if let Some(v) = v {
                     f.write_str(" VERSION ");
