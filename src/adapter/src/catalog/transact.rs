@@ -23,8 +23,10 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    AlterClusterReconfigurationV1, ClusterReplicaLoggingV1, CreateOrDropClusterReplicaReasonV1,
+    EventDetails, EventType,
+    IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1,
+    SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -32,8 +34,9 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
+    ReconfigurationState, ReconfigurationTarget, SourceReferences, StateDiff, StateUpdate,
+    StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -407,6 +410,107 @@ enum TransactInnerMode {
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
+    }
+
+    /// Classify the background-reconfiguration lifecycle transition an
+    /// [`Op::UpdateClusterConfig`] represents, comparing the cluster's
+    /// `reconfiguration` record before (`old`) and after (`new`) the change.
+    /// Returns `None` when the record is unchanged (no lifecycle transition).
+    ///
+    /// Only the controller clears a record (an `ALTER` always writes one, never
+    /// clears one), and it does so in exactly two ways: a cut-over, which
+    /// advances the realized config to the target in the same write
+    /// (`finalized`, a hydrated success, or a forced `COMMIT` past the
+    /// deadline; the event carries the cleared record's deadline so a reader
+    /// can tell the two apart against the event's occurrence time), and a
+    /// `ROLLBACK` timeout, which clears the record with the realized config
+    /// untouched (`timed-out`). Whether the realized config advanced to the
+    /// cleared record's target is therefore what classifies a clear; both
+    /// clears are durable, so neither event can re-fire.
+    fn classify_reconfiguration_transition(
+        old: &ClusterConfig,
+        new: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+    ) -> Option<AlterClusterReconfigurationV1> {
+        let reconfiguration = |config: &ClusterConfig| -> Option<ReconfigurationState> {
+            match &config.variant {
+                ClusterVariant::Managed(managed) => managed.reconfiguration.clone(),
+                ClusterVariant::Unmanaged => None,
+            }
+        };
+        // The new config's realized shape, used to recognize an ALTER-back
+        // cancel (a re-target whose target equals the still-realized shape)
+        // and to classify a clear (did the realized config advance to the
+        // cleared record's target?).
+        let new_realized = match &new.variant {
+            ClusterVariant::Managed(managed) => Some(managed.clone()),
+            ClusterVariant::Unmanaged => None,
+        };
+        let realized_matches_target = |target: &ReconfigurationTarget| {
+            new_realized.as_ref().is_some_and(|realized| {
+                realized.size == target.size
+                    && realized.replication_factor == target.replication_factor
+                    && realized.availability_zones == target.availability_zones
+                    && realized.logging == target.logging
+            })
+        };
+        let old = reconfiguration(old);
+        let new = reconfiguration(new);
+
+        let event =
+            |transition, record: &ReconfigurationState, deadline| AlterClusterReconfigurationV1 {
+                cluster_id: cluster_id.to_string(),
+                cluster_name: cluster_name.to_string(),
+                transition,
+                target_size: record.target.size.clone(),
+                target_replication_factor: record.target.replication_factor,
+                target_availability_zones: record.target.availability_zones.clone(),
+                target_logging: ClusterReplicaLoggingV1 {
+                    log_logging: record.target.logging.log_logging,
+                    interval: record.target.logging.interval,
+                },
+                deadline,
+            };
+
+        match (old, new) {
+            (None, Some(record)) => Some(event(
+                ReconfigurationLifecycleV1::Started,
+                &record,
+                Some(record.deadline.into()),
+            )),
+            (Some(old), Some(new)) if old != new => {
+                // A re-target back to the still-realized shape is a cancel (the
+                // controller will just drop the in-flight target replicas); any
+                // other re-target starts converging onto a new target. Compare the
+                // whole target, not just size, so an AZ- or logging-only re-target
+                // back to the realized shape is recognized as a cancel.
+                let is_cancel = realized_matches_target(&new.target);
+                let transition = if is_cancel {
+                    ReconfigurationLifecycleV1::Cancelled
+                } else {
+                    ReconfigurationLifecycleV1::Started
+                };
+                Some(event(transition, &new, Some(new.deadline.into())))
+            }
+            // A clear: a cut-over (the same write advanced the realized config
+            // to the target) finalizes; a clear that left the realized config
+            // short of the target is the `ROLLBACK` timeout firing. The one
+            // shape this cannot tell apart is a rollback whose target equals
+            // the realized config: it would read as a finalize. That needs the
+            // already-running realized set to sit un-hydrated past the whole
+            // deadline (the controller otherwise cuts such a target over as
+            // trivially satisfied), so we accept the marginal mislabel.
+            (Some(old), None) => {
+                let transition = if realized_matches_target(&old.target) {
+                    ReconfigurationLifecycleV1::Finalized
+                } else {
+                    ReconfigurationLifecycleV1::TimedOut
+                };
+                Some(event(transition, &old, Some(old.deadline.into())))
+            }
+            (None, None) | (Some(_), Some(_)) => None,
+        }
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -2607,6 +2711,14 @@ impl Catalog {
             }
             Op::UpdateClusterConfig { id, name, config } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // Classify any background-reconfiguration lifecycle transition
+                // this config change represents (record written/re-targeted, or
+                // cut over) before we overwrite the old config. Emitted in
+                // addition to the generic `IdNameV1` alter event. This is dark by
+                // construction: a `reconfiguration` record only ever moves when
+                // the cluster controller is enabled.
+                let reconfiguration_event =
+                    Self::classify_reconfiguration_transition(&cluster.config, &config, id, &name);
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -2624,6 +2736,19 @@ impl Catalog {
                         name,
                     }),
                 )?;
+
+                if let Some(details) = reconfiguration_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
             }
             Op::UpdateClusterReplicaConfig {
                 replica_id,
@@ -3244,6 +3369,216 @@ mod tests {
         let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
         assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
         assert!(scheduling_policies.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_classify_reconfiguration_transition() {
+        use std::time::Duration;
+
+        use mz_audit_log::ReconfigurationLifecycleV1;
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        // The realized shape of the modeled cluster before any cut-over; an
+        // ALTER-back cancel re-targets a record at this same size.
+        let realized_size = "small";
+        // A config with the realized shape at (`size`, `rf`) and the given
+        // record: a clear that advanced the realized shape to the cleared
+        // record's target is a cut-over, one that left it behind is a rollback.
+        let managed_at =
+            |size: &str, rf: u32, reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+                variant: ClusterVariant::Managed(ClusterVariantManaged {
+                    size: size.into(),
+                    availability_zones: Vec::new(),
+                    logging: logging.clone(),
+                    replication_factor: rf,
+                    optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                    schedule: Default::default(),
+                    auto_scaling_strategy: None,
+                    reconfiguration,
+                    burst: None,
+                }),
+                workload_class: None,
+            };
+        let managed = |reconfiguration: Option<ReconfigurationState>| {
+            managed_at(realized_size, 1, reconfiguration)
+        };
+        let record = |size: &str, deadline: u64, on_timeout: mz_sql::plan::OnTimeoutAction| {
+            ReconfigurationState {
+                target: ReconfigurationTarget {
+                    size: size.into(),
+                    replication_factor: 2,
+                    availability_zones: Vec::new(),
+                    logging: logging.clone(),
+                },
+                deadline: Timestamp::from(deadline),
+                on_timeout,
+            }
+        };
+        use mz_sql::plan::OnTimeoutAction::{Commit, Rollback};
+        let classify = |old: &ClusterConfig, new: &ClusterConfig| {
+            Catalog::classify_reconfiguration_transition(old, new, cluster_id, "c")
+        };
+
+        // none -> some: started, carrying the record's deadline.
+        let started = classify(
+            &managed(None),
+            &managed(Some(record("large", 200, Rollback))),
+        )
+        .expect("a written record is a started transition");
+        assert_eq!(started.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(started.deadline, Some(200));
+        assert_eq!(started.target_size, "large");
+        assert_eq!(started.target_replication_factor, 2);
+
+        // The event records the full target shape, including availability zones
+        // and introspection logging, so an AZ- or logging-only reconfiguration
+        // (which leaves size and rf unchanged) stays legible in the audit log.
+        let full_shape = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: vec!["az1".into(), "az2".into()],
+                logging: ReplicaLogging {
+                    log_logging: true,
+                    interval: Some(Duration::from_secs(5)),
+                },
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: Rollback,
+        };
+        let shaped = classify(&managed(None), &managed(Some(full_shape)))
+            .expect("a written record is a started transition");
+        assert_eq!(
+            shaped.target_availability_zones,
+            vec!["az1".to_string(), "az2".to_string()]
+        );
+        assert_eq!(shaped.target_logging.log_logging, true);
+        assert_eq!(shaped.target_logging.interval, Some(Duration::from_secs(5)));
+
+        // A cut-over clear: the same write advanced the realized shape to the
+        // cleared record's target. Finalized, carrying the cleared record's
+        // deadline (a reader tells an in-time from a late cut-over by comparing
+        // the carried deadline to the event's occurrence time).
+        let finalized = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed_at("large", 2, None),
+        )
+        .expect("a cut-over clear is a finalize");
+        assert_eq!(finalized.transition, ReconfigurationLifecycleV1::Finalized);
+        assert_eq!(finalized.deadline, Some(200));
+
+        // A cut-over clear under COMMIT (a forced cut-over past the deadline
+        // ends up here too): still finalized, deadline kept.
+        let commit_finalized = classify(
+            &managed(Some(record("large", 50, Commit))),
+            &managed_at("large", 2, None),
+        )
+        .expect("clearing a commit record is a finalize");
+        assert_eq!(
+            commit_finalized.transition,
+            ReconfigurationLifecycleV1::Finalized
+        );
+        assert_eq!(commit_finalized.deadline, Some(50));
+
+        // A rollback clear: the record is gone but the realized shape stayed
+        // behind. The rollback timeout fired. Carries the cleared record's
+        // deadline and target so the abandoned shape survives in the history.
+        let timed_out = classify(
+            &managed(Some(record("large", 50, Rollback))),
+            &managed(None),
+        )
+        .expect("a clear short of the target is a timed-out transition");
+        assert_eq!(timed_out.transition, ReconfigurationLifecycleV1::TimedOut);
+        assert_eq!(timed_out.deadline, Some(50));
+        assert_eq!(timed_out.target_size, "large");
+        assert_eq!(timed_out.target_replication_factor, 2);
+
+        // The cancel-converge clear: a cancel record (target == realized shape,
+        // rf included) confirms the current state, so its clear leaves the
+        // realized config in place *and* matching the target, a finalize.
+        let cancel_record = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+            },
+            deadline: Timestamp::from(300u64),
+            on_timeout: Rollback,
+        };
+        let cancel_clear = classify(&managed(Some(cancel_record)), &managed(None))
+            .expect("clearing a cancel record is a finalize");
+        assert_eq!(
+            cancel_clear.transition,
+            ReconfigurationLifecycleV1::Finalized
+        );
+        assert_eq!(cancel_clear.deadline, Some(300));
+
+        // some -> some re-targeting to a *new* shape: started, carrying the new
+        // deadline.
+        let retarget = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(record("xlarge", 300, Rollback))),
+        )
+        .expect("a re-target is a started transition");
+        assert_eq!(retarget.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(retarget.deadline, Some(300));
+        assert_eq!(retarget.target_size, "xlarge");
+
+        // some -> some re-targeting *back* to the realized shape in every
+        // dimension (rf included): a cancel, carrying the cancel record's
+        // deadline.
+        let back_to_realized = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+            },
+            deadline: Timestamp::from(300u64),
+            on_timeout: Rollback,
+        };
+        let cancelled = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(back_to_realized)),
+        )
+        .expect("an ALTER-back to the realized shape is a cancel transition");
+        assert_eq!(cancelled.transition, ReconfigurationLifecycleV1::Cancelled);
+        assert_eq!(cancelled.deadline, Some(300));
+        assert_eq!(cancelled.target_size, realized_size);
+
+        // some -> some re-targeting size back to realized but with an rf that
+        // still diverges from the realized shape: still converging, so a
+        // started, not a cancel. (`record` targets rf 2 while the realized rf is
+        // 1; a size-only cancel check would mislabel this as cancelled.)
+        let rf_diverges = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(record(realized_size, 300, Rollback))),
+        )
+        .expect("a re-target whose rf still diverges is a started transition");
+        assert_eq!(rf_diverges.transition, ReconfigurationLifecycleV1::Started);
+
+        // No transition: identical record, or no record on either side.
+        assert!(
+            classify(
+                &managed(Some(record("large", 200, Rollback))),
+                &managed(Some(record("large", 200, Rollback))),
+            )
+            .is_none()
+        );
+        assert!(classify(&managed(None), &managed(None)).is_none());
     }
 
     #[mz_ore::test]

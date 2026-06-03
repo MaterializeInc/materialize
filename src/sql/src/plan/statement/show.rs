@@ -757,13 +757,14 @@ pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name, replicas, comment FROM mz_internal.mz_show_clusters".to_string();
+    let query =
+        "SELECT name, replicas, activity, comment FROM mz_internal.mz_show_clusters".to_string();
     ShowSelect::new(
         scx,
         query,
         filter,
         None,
-        Some(&["name", "replicas", "comment"]),
+        Some(&["name", "replicas", "activity", "comment"]),
     )
 }
 

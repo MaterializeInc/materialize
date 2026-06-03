@@ -13,8 +13,10 @@
 
 > SET cluster=cluster1;
 
+# SHOW CLUSTERS gained a single `activity` column summarizing any in-flight
+# reconfiguration or autoscaling action; an idle cluster has none.
 > SHOW CLUSTERS LIKE 'cluster1';
-cluster1 "replica1 (3xsmall), replica2 (3xsmall)" ""
+cluster1 "replica1 (3xsmall), replica2 (3xsmall)" <null> ""
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'cluster1';
 cluster1 replica1 3xsmall true ""

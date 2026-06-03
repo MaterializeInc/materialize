@@ -286,7 +286,27 @@ impl Coordinator {
             Unchanged => {}
         }
 
-        if new_config == config {
+        // A no-op `ALTER` short-circuits, but only when no reconfiguration is in
+        // flight. When the controller owns an in-flight reconfiguration, an `ALTER`
+        // that leaves the realized config unchanged is not a no-op: it re-targets
+        // (folds onto) the in-flight record. This is how an `ALTER` back to the
+        // realized shape cancels an in-flight reconfiguration, so it must reach the
+        // reshape path below rather than early-returning here. (`config` carries the
+        // in-flight record, so `new_config == config` holds for such an `ALTER`.)
+        // The controller owns only *user* managed clusters (see `ManagedClusterIds`
+        // in cluster_controller.rs and `controller_owns` in the managed-to-managed
+        // path below). A system/builtin cluster is never converged by the
+        // controller, so it must not be reshaped into a durable reconfiguration
+        // record nobody would cut over. It takes the direct realized-config path
+        // below, exactly as it does with the controller off.
+        let cluster_controller_owns = ENABLE_CLUSTER_CONTROLLER
+            .get(self.catalog().system_config().dyncfgs())
+            && cluster_id.is_user();
+        let reconfiguration_in_flight = matches!(
+            &config.variant,
+            Managed(managed) if managed.reconfiguration.is_some()
+        );
+        if new_config == config && !(cluster_controller_owns && reconfiguration_in_flight) {
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
             )));
@@ -297,16 +317,7 @@ impl Coordinator {
         // into a durable `reconfiguration` record rather than driven by the legacy
         // 3-stage machine; the controller converges on it. Non-shape changes with
         // no record in flight fall through to the realized-config update below.
-        //
-        // The controller owns only *user* managed clusters (see `ManagedClusterIds`
-        // in cluster_controller.rs and `controller_owns` in the managed-to-managed
-        // path below). A system/builtin cluster is never converged by the
-        // controller, so it must not be reshaped into a durable reconfiguration
-        // record nobody would cut over. It takes the direct realized-config path
-        // below, exactly as it does with the controller off.
-        if ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs())
-            && cluster_id.is_user()
-        {
+        if cluster_controller_owns {
             if let (Managed(old_managed), Managed(new_managed)) =
                 (&config.variant, &new_config.variant)
             {
