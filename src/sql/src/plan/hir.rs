@@ -384,24 +384,16 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
 
     fn children(&self) -> Vec<&HirScalarExpr> {
         let mut v = self.func.children();
-        for c in self.partition_by.iter() {
-            v.append(&mut c.children())
-        }
-        for c in self.order_by.iter() {
-            v.append(&mut c.children());
-        }
+        v.extend(self.partition_by.iter());
+        v.extend(self.order_by.iter());
 
         v
     }
 
     fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
         let mut v = self.func.children_mut();
-        for c in self.partition_by.iter_mut() {
-            v.append(&mut c.children_mut())
-        }
-        for c in self.order_by.iter_mut() {
-            v.append(&mut c.children_mut());
-        }
+        v.extend(self.partition_by.iter_mut());
+        v.extend(self.order_by.iter_mut());
 
         v
     }
