@@ -25,17 +25,25 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mz_compute_types::dataflows::ChangelogMode;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
 };
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::visit::Visit;
+use mz_expr::{
+    Eval, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, UnmaterializableFunc,
+};
+use mz_repr::adt::interval::Interval;
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{ColumnName, GlobalId, RelationDesc, SqlRelationType};
+use mz_repr::{
+    ColumnName, Datum, GlobalId, RelationDesc, ReprScalarType, RowArena, SqlRelationType, Timestamp,
+};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
@@ -262,6 +270,102 @@ impl Optimize<LocalMirPlan> for Optimizer {
         };
         df_desc.export_sink(self.sink_id, sink_description);
 
+        // `CHANGES`: mark changelog reads in the dataflow so their source
+        // imports are read as maintained changelogs (snapshot skipped, deltas
+        // replayed from a coordinator-chosen start; see `ChangelogMode`).
+        // Unlike the peek path there is no query time to resolve the bound
+        // against; instead we extract the window lag `i` from the
+        // `mz_now()`-relative bound, and the read start is resolved later,
+        // wherever the dataflow `as_of` is decided (the sequencer at creation,
+        // as-of selection at bootstrap, command-history reduction on replica
+        // reconnect).
+        //
+        // Because the window slides forever, each changelog read is wrapped in
+        // the temporal filter `mz_now() < mz_timestamp + i`, which retracts
+        // changes once they age past the window's trailing edge. This is what
+        // bounds the MV's state and keeps aggregations over it correct, and
+        // its strictness (`<`) aligns the retained window with the open delta
+        // replay interval `(start, now]`, making a restart reproduce the
+        // persisted contents exactly. The predicate is spelled in the
+        // `mz_now() BINOP <non-temporal>` normal form the temporal MFP
+        // machinery requires, with the interval arithmetic on the column side
+        // (`mz_timestamp` itself deliberately supports no arithmetic).
+        let mut changelog_windows = BTreeMap::new();
+        for build in df_desc.objects_to_build.iter_mut() {
+            let mut result = Ok(());
+            build.plan.as_inner_mut().visit_mut_post(&mut |e| {
+                if let MirRelationExpr::Changes { id, bound, typ, .. } = e {
+                    if self.refresh_schedule.is_some() {
+                        // REFRESH rounds the dataflow `as_of` and `until` in
+                        // ways the sliding changelog start does not compose
+                        // with yet.
+                        result = Err(OptimizerError::UnsupportedTemporalExpression(
+                            "CHANGES is not supported in materialized views with a refresh \
+                             schedule"
+                                .to_string(),
+                        ));
+                        return;
+                    }
+                    let window = match changelog_window(bound) {
+                        Ok(window) => window,
+                        Err(err) => {
+                            result = Err(err);
+                            return;
+                        }
+                    };
+                    // Multiple reads of the same input use the widest window
+                    // for the import's read hold and start; each read's own
+                    // filter still enforces its own window.
+                    changelog_windows
+                        .entry(*id)
+                        .and_modify(|w| *w = std::cmp::max(*w, window))
+                        .or_insert(window);
+
+                    // The `mz_timestamp` column precedes `mz_diff` at the end.
+                    let ts_col = typ.arity() - 2;
+                    let micros = u64::from(window)
+                        .checked_mul(1000)
+                        .and_then(|m| i64::try_from(m).ok());
+                    let Some(micros) = micros else {
+                        result = Err(OptimizerError::UnsupportedTemporalExpression(
+                            "the AS OF bound of CHANGES in a materialized view trails mz_now() \
+                             by too large an amount"
+                                .to_string(),
+                        ));
+                        return;
+                    };
+                    let lag = Interval::new(0, 0, micros);
+                    let predicate =
+                        MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+                            .call_binary(
+                                MirScalarExpr::column(ts_col)
+                                    .call_unary(mz_expr::func::CastMzTimestampToTimestampTz)
+                                    .call_binary(
+                                        MirScalarExpr::literal_ok(
+                                            Datum::Interval(lag),
+                                            ReprScalarType::Interval,
+                                        ),
+                                        mz_expr::func::AddTimestampTzInterval,
+                                    )
+                                    .call_unary(mz_expr::func::CastTimestampTzToMzTimestamp),
+                                mz_expr::func::Lt,
+                            );
+                    let input = e.take_dangerous();
+                    *e = input.filter(vec![predicate]);
+                }
+            })?;
+            result?;
+        }
+        for (id, window) in changelog_windows {
+            df_desc.set_source_changelog(
+                &id,
+                ChangelogMode::Maintained {
+                    window,
+                    start: None,
+                },
+            );
+        }
+
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepMaintained;
         df_desc.visit_children(
@@ -330,5 +434,51 @@ impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
+    }
+}
+
+/// Extracts the sliding-window lag `i` from an `mz_now()`-relative `CHANGES`
+/// bound, defined by `bound(t) = t - i`.
+///
+/// The bound is evaluated at two reference times; anything whose lag is not a
+/// constant shift of `mz_now()` is rejected, since the maintained changelog
+/// machinery (a constant-lag read hold and a constant-lag read start) cannot
+/// represent it.
+fn changelog_window(bound: &MirScalarExpr) -> Result<Timestamp, OptimizerError> {
+    let eval_at = |t: Timestamp| -> Result<Timestamp, OptimizerError> {
+        let mut expr = bound.clone();
+        expr.visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
+                *e = MirScalarExpr::literal_ok(Datum::MzTimestamp(t), ReprScalarType::MzTimestamp);
+            }
+        })?;
+        let arena = RowArena::new();
+        match expr.eval(&[], &arena)? {
+            Datum::MzTimestamp(ts) => Ok(ts),
+            other => Err(OptimizerError::Internal(format!(
+                "CHANGES bound did not evaluate to an mz_timestamp: {other:?}"
+            ))),
+        }
+    };
+
+    // Two reference times chosen so that calendar-dependent shifts produce
+    // different lags: subtracting a month interval from 2020-03-15 spans
+    // February (29 days in 2020) while subtracting it from 2020-04-15 spans
+    // March (31 days), so month intervals — whose millisecond lag varies with
+    // the calendar — are detected and rejected. Fixed intervals (days and
+    // smaller) shift both times by the same amount.
+    let t1 = Timestamp::from(1_584_230_400_000u64); // 2020-03-15 00:00:00 UTC
+    let t2 = Timestamp::from(1_586_908_800_000u64); // 2020-04-15 00:00:00 UTC
+    let lag = |t: Timestamp, b: Timestamp| u64::from(t).checked_sub(u64::from(b));
+    let lag1 = lag(t1, eval_at(t1)?);
+    let lag2 = lag(t2, eval_at(t2)?);
+    match (lag1, lag2) {
+        (Some(lag1), Some(lag2)) if lag1 == lag2 => Ok(Timestamp::from(lag1)),
+        _ => Err(OptimizerError::UnsupportedTemporalExpression(
+            "the AS OF bound of CHANGES in a materialized view must trail mz_now() by a \
+             constant amount, e.g. mz_now() - INTERVAL '30 minutes' (month intervals vary \
+             with the calendar and are not supported)"
+                .to_string(),
+        )),
     }
 }

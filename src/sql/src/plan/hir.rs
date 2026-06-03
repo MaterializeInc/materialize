@@ -3546,9 +3546,9 @@ impl HirScalarExpr {
         true
     }
 
-    pub fn call_unary(self, func: UnaryFunc) -> Self {
+    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
         HirScalarExpr::CallUnary {
-            func,
+            func: func.into(),
             expr: Box::new(self),
             name: NameMetadata::default(),
         }

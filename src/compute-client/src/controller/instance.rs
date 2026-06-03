@@ -15,9 +15,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, ChangelogMode, DataflowDescription};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
@@ -279,6 +280,7 @@ impl Instance {
         shared: SharedCollectionState,
         storage_dependencies: BTreeMap<GlobalId, ReadHold>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold>,
+        changelog_windows: BTreeMap<GlobalId, Timestamp>,
         replica_input_read_holds: Vec<ReadHold>,
         write_only: bool,
         storage_sink: bool,
@@ -307,6 +309,7 @@ impl Instance {
             shared,
             storage_dependencies,
             compute_dependencies,
+            changelog_windows,
             Arc::clone(&self.read_hold_tx),
             introspection,
         );
@@ -1297,6 +1300,12 @@ impl Instance {
         let mut storage_dependencies = BTreeMap::new();
         let mut compute_dependencies = BTreeMap::new();
 
+        // Maintained changelog imports (`CHANGES`) read their input from a
+        // `start` below the `as_of` and must be able to re-read their sliding
+        // window on restart, so their read holds are kept lagging behind by
+        // the window (see `apply_read_hold_change`).
+        let mut changelog_windows = BTreeMap::new();
+
         // When we install per-replica input read holds, we cannot use the `as_of` because of
         // reconciliation: Existing slow replicas might be reading from the inputs at times before
         // the `as_of` and we would rather not crash them by allowing their inputs to compact too
@@ -1306,12 +1315,32 @@ impl Instance {
         let mut import_read_holds: BTreeMap<_, _> =
             import_read_holds.into_iter().map(|r| (r.id(), r)).collect();
 
-        for &id in dataflow.source_imports.keys() {
+        for (&id, import) in dataflow.source_imports.iter() {
             let mut read_hold = import_read_holds.remove(&id).ok_or(ReadHoldMissing(id))?;
             replica_input_read_holds.push(read_hold.clone());
 
+            let target = match &import.changelog {
+                Some(ChangelogMode::Maintained { window, start }) => {
+                    changelog_windows.insert(id, *window);
+                    match start {
+                        Some(start) => start.clone(),
+                        None => {
+                            // The start must be resolved coordinator-side
+                            // before the dataflow ships. Degrade to the
+                            // `as_of` (an empty window that ages in).
+                            soft_panic_or_log!(
+                                "maintained changelog import without a resolved start \
+                                 (id={id}, as_of={:?})",
+                                as_of.elements(),
+                            );
+                            as_of.clone()
+                        }
+                    }
+                }
+                _ => as_of.clone(),
+            };
             read_hold
-                .try_downgrade(as_of.clone())
+                .try_downgrade(target)
                 .map_err(|_| ReadHoldInsufficient(id))?;
             storage_dependencies.insert(id, read_hold);
         }
@@ -1344,6 +1373,7 @@ impl Instance {
                 shared,
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
+                changelog_windows.clone(),
                 replica_input_read_holds.clone(),
                 write_only,
                 storage_sink,
@@ -1396,7 +1426,7 @@ impl Instance {
                     monotonic: import.monotonic,
                     with_snapshot: import.with_snapshot,
                     upper: frontiers.write_frontier,
-                    read_as_changelog: import.read_as_changelog,
+                    changelog: import.changelog.clone(),
                 },
             );
         }
@@ -1842,9 +1872,26 @@ impl Instance {
                 .try_downgrade(new_since.clone())
                 .expect("frontiers don't regress");
         }
-        for read_hold in collection.storage_dependencies.values_mut() {
+        for (dep_id, read_hold) in collection.storage_dependencies.iter_mut() {
+            let target = match collection.changelog_windows.get(dep_id) {
+                Some(window) => {
+                    // A maintained changelog import (`CHANGES`) must be able
+                    // to re-read its window of input history on restart, so
+                    // its hold lags the collection's read frontier by the
+                    // window. Joining with the hold's current since prevents
+                    // a regression while the lagged target is still below the
+                    // hold (e.g. right after creation, while the window ages
+                    // in).
+                    let lagged: Antichain<_> = new_since
+                        .iter()
+                        .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window))))
+                        .collect();
+                    lagged.join(read_hold.since())
+                }
+                None => new_since.clone(),
+            };
             read_hold
-                .try_downgrade(new_since.clone())
+                .try_downgrade(target)
                 .expect("frontiers don't regress");
         }
 
@@ -2408,6 +2455,13 @@ struct CollectionState {
     /// Compute identifiers on which this collection depends, and read holds this collection
     /// requires on them.
     compute_dependencies: BTreeMap<GlobalId, ReadHold>,
+    /// Storage dependencies read as maintained changelogs (`CHANGES`), and
+    /// their sliding-window lags.
+    ///
+    /// The read holds on these dependencies are downgraded lagging the
+    /// collection's read frontier by the window, so that a restarted dataflow
+    /// can re-read its window of input history (see `apply_read_hold_change`).
+    changelog_windows: BTreeMap<GlobalId, Timestamp>,
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection,
@@ -2438,6 +2492,7 @@ impl CollectionState {
         shared: SharedCollectionState,
         storage_dependencies: BTreeMap<GlobalId, ReadHold>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold>,
+        changelog_windows: BTreeMap<GlobalId, Timestamp>,
         read_hold_tx: read_holds::ChangeTx,
         introspection: CollectionIntrospection,
     ) -> Self {
@@ -2482,6 +2537,7 @@ impl CollectionState {
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
+            changelog_windows,
             introspection,
             wallclock_lag_histogram_stash,
         }
@@ -2508,6 +2564,7 @@ impl CollectionState {
             id,
             since,
             shared,
+            Default::default(),
             Default::default(),
             Default::default(),
             read_hold_tx,

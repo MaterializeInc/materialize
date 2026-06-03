@@ -120,7 +120,7 @@ use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
-use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{ChangelogMode, DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
@@ -271,17 +271,37 @@ pub fn build_compute_dataflow(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
-                    {
-                        SnapshotMode::Include
-                    } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
-                        SnapshotMode::Exclude
+                    // `CHANGES`: a maintained changelog import reads the input
+                    // from its resolved `start` — *below* the dataflow
+                    // `as_of` — with the snapshot excluded, so the deltas of
+                    // the sliding window can be replayed at their true
+                    // timestamps; the reinterpretation below advances the
+                    // differential times to the `as_of`. All other imports
+                    // (including one-off changelog reads) read at the
+                    // dataflow `as_of`.
+                    let (source_as_of, snapshot_mode) = match &import.changelog {
+                        Some(ChangelogMode::Maintained { start, .. }) => {
+                            let start = start.clone().or_else(|| dataflow.as_of.clone());
+                            (start, SnapshotMode::Exclude)
+                        }
+                        _ => {
+                            let snapshot_mode =
+                                if import.with_snapshot || !subscribe_snapshot_optimization {
+                                    SnapshotMode::Include
+                                } else {
+                                    compute_state.metrics.inc_subscribe_snapshot_optimization();
+                                    SnapshotMode::Exclude
+                                };
+                            (dataflow.as_of.clone(), snapshot_mode)
+                        }
                     };
                     let suppress_early_progress_as_of = dataflow.as_of.clone();
 
                     // Note: For correctness, we require that sources only emit times advanced by
-                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee
+                    // for reads at the dataflow `as_of`; a maintained changelog import reads
+                    // below it, and the changelog reinterpretation below restores the guarantee
+                    // by advancing the emitted times.
                     let (mut ok_stream, err_stream, token) =
                         persist_source::persist_source::<DataflowErrorSer>(
                             inner,
@@ -290,7 +310,7 @@ pub fn build_compute_dataflow(
                             &compute_state.txns_ctx,
                             import.desc.storage_metadata.clone(),
                             read_schema,
-                            dataflow.as_of.clone(),
+                            source_as_of,
                             snapshot_mode,
                             until.clone(),
                             mfp.as_mut(),
@@ -339,7 +359,7 @@ pub fn build_compute_dataflow(
                         .as_collection()
                         .leave_region(region)
                         .leave_region(scope);
-                    let errs = err_stream
+                    let mut errs = err_stream
                         .as_collection()
                         .leave_region(region)
                         .leave_region(scope);
@@ -350,7 +370,16 @@ pub fn build_compute_dataflow(
                     // column; packing first would prevent that collapse, since
                     // identical extended rows would merge by multiplicity instead
                     // of netting the snapshot's diffs.
-                    if import.read_as_changelog {
+                    //
+                    // The `mz_timestamp` column records the update's true time,
+                    // while the differential time is advanced to the dataflow
+                    // `as_of`. For a one-off read this is a no-op (the source
+                    // is read at the `as_of`); for a maintained read it
+                    // restores the times-advanced-by-`as_of` guarantee for the
+                    // window deltas read from below the `as_of`.
+                    if import.read_as_changelog() {
+                        let as_of = dataflow.as_of.clone().unwrap_or_default();
+                        let as_of_errs = as_of.clone();
                         oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
                             oks,
                             "ChangelogConsolidate",
@@ -361,9 +390,11 @@ pub fn build_compute_dataflow(
                                 input.for_each(|cap, data| {
                                     let mut session = output.session(&cap);
                                     for (row, time, diff) in data.drain(..) {
+                                        let mut emit_time = time;
+                                        emit_time.advance_by(as_of.borrow());
                                         session.give((
                                             pack_changelog_row(&row, time, diff),
-                                            time,
+                                            emit_time,
                                             Diff::ONE,
                                         ));
                                     }
@@ -371,6 +402,11 @@ pub fn build_compute_dataflow(
                             }
                         })
                         .as_collection();
+                        errs = errs.delay(move |time| {
+                            let mut time = *time;
+                            time.advance_by(as_of_errs.borrow());
+                            time
+                        });
                     }
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));

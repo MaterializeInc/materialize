@@ -368,7 +368,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
         // into the extended changelog rows during rendering; predicates must not
         // be pushed below that reinterpretation (they stay on the `Get`). See the
         // matching guard in `Plan::refine_source_mfps`.
-        if source_import.read_as_changelog {
+        if source_import.read_as_changelog() {
             continue;
         }
         let source = &mut source_import.desc;

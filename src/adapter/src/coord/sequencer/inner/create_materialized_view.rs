@@ -13,6 +13,7 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+use mz_compute_types::dataflows::ChangelogMode;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
@@ -21,7 +22,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, Timestamp, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -637,6 +638,24 @@ impl Coordinator {
             "materialized view timestamp selection",
         );
 
+        // `CHANGES`: resolve each maintained changelog import's read start,
+        // `join(since, as_of - window)`. At creation the input's `since` is
+        // typically recent, so the window ages in from there rather than
+        // looking back (`CHANGES` cannot manufacture history the input did not
+        // retain). The read holds acquired above keep the start readable until
+        // the dataflow ships and the controller installs its own holds.
+        let mut changelog_starts = Vec::new();
+        for (id, import) in global_lir_plan.df_desc().source_imports.iter() {
+            if let Some(ChangelogMode::Maintained { window, .. }) = &import.changelog {
+                let lagged = dataflow_as_of
+                    .iter()
+                    .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window))))
+                    .collect::<Antichain<_>>();
+                let start = lagged.join(&read_holds.since(id));
+                changelog_starts.push((*id, start));
+            }
+        }
+
         let initial_as_of = storage_as_of.clone();
 
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
@@ -769,6 +788,9 @@ impl Coordinator {
                     df_desc.set_as_of(dataflow_as_of.clone());
                     df_desc.set_initial_as_of(initial_as_of);
                     df_desc.until = until;
+                    for (id, start) in changelog_starts {
+                        df_desc.set_changelog_start(&id, start);
+                    }
 
                     let storage_metadata = coord.catalog.state().storage_metadata();
 

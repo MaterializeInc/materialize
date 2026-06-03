@@ -143,3 +143,42 @@ SELECT mz_now()::text
 20 1
 
 > DROP TABLE h
+
+# A maintained materialized view over CHANGES with a sliding bound. The window
+# trails mz_now() by the lag; the changelog ages in from creation (the input's
+# `since`), so creating the MV over an empty table makes the contents
+# deterministic: exactly the changes made after creation (all within the
+# generous 1-hour window for the duration of this test).
+> CREATE TABLE w (a int)
+
+> CREATE MATERIALIZED VIEW w_changes AS
+  SELECT a, mz_diff FROM CHANGES (w AS OF AT LEAST mz_now() - INTERVAL '1 hour')
+
+# The window ages in empty: no changes yet.
+> SELECT count(*) FROM w_changes
+0
+
+> INSERT INTO w VALUES (1), (2)
+
+> INSERT INTO w VALUES (3)
+
+> DELETE FROM w WHERE a = 1
+
+# Every change since creation is materialized as an append: the deletion of 1
+# shows up as a row with mz_diff = -1.
+> SELECT a, mz_diff FROM w_changes ORDER BY a, mz_diff
+1 -1
+1 1
+2 1
+3 1
+
+# Aggregations over the maintained changelog are bounded by the window and
+# correct: the net change per key is the table's current contents.
+> SELECT a, sum(mz_diff) FROM w_changes GROUP BY a ORDER BY a
+1 0
+2 1
+3 1
+
+> DROP MATERIALIZED VIEW w_changes
+
+> DROP TABLE w

@@ -100,6 +100,46 @@ CREATE MATERIALIZED VIEW mv AS SELECT * FROM CHANGES (t AS OF 0)
 statement error CHANGES in a materialized view or index requires a sliding bound
 CREATE VIEW changes_view AS SELECT * FROM CHANGES (t AS OF 0)
 
+# A maintained materialized view supports a sliding, advisory bound: the window
+# trails mz_now() by the lag, retracting changes at the trailing edge.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv
+
+# The strict sliding form is deferred: at creation it would have to error
+# unless the input already retains a full window of history.
+statement error CHANGES with a strict AS OF bound in a materialized view
+CREATE MATERIALIZED VIEW changes_mv_strict AS
+  SELECT * FROM CHANGES (t AS OF mz_now() - INTERVAL '30 minutes')
+
+# Only the `mz_now() - <interval>` shape is blessed as a sliding bound;
+# anything else falls through to ordinary planning, where mz_timestamp
+# supports no arithmetic.
+statement error operator does not exist: mz_timestamp \+ interval
+CREATE MATERIALIZED VIEW changes_mv_lag AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() + INTERVAL '1 day')
+
+# A month interval's millisecond lag varies with the calendar; the maintained
+# window machinery requires a constant lag.
+statement error must trail mz_now\(\) by a constant amount
+CREATE MATERIALIZED VIEW changes_mv_month AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1 month')
+
+# REFRESH materialized views do not compose with the sliding window yet.
+statement error CHANGES is not supported in materialized views with a refresh schedule
+CREATE MATERIALIZED VIEW changes_mv_refresh
+  WITH (REFRESH EVERY '1 day')
+  AS SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+# Other maintained contexts (a view, an index) are not wired up, even with a
+# sliding bound.
+statement error CHANGES outside a one-off SELECT or a materialized view
+CREATE VIEW changes_view_sliding AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
 statement ok
 DROP VIEW v
 

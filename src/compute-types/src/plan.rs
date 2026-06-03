@@ -639,7 +639,7 @@ impl Plan {
             // `mz_timestamp`/`mz_diff` columns) to the raw, narrower rows and
             // index out of bounds. The MFP stays on the `Get`, where rendering
             // applies it to the reinterpreted, extended collection.
-            if source_import.read_as_changelog {
+            if source_import.read_as_changelog() {
                 continue;
             }
             let source = &mut source_import.desc;

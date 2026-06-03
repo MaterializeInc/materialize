@@ -347,15 +347,10 @@ impl<'a> DataflowBuilder<'a> {
                 // Note that the following match should be kept in sync with `sufficient_collections`.
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(
-                            *id,
-                            table.desc_for(id).into_typ(),
-                            monotonic,
-                            false,
-                        );
+                        dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic, None);
                     }
                     CatalogItem::Source(source) => {
-                        dataflow.import_source(*id, source.desc.typ().clone(), monotonic, false);
+                        dataflow.import_source(*id, source.desc.typ().clone(), monotonic, None);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.locally_optimized_expr.as_ref();
@@ -367,19 +362,14 @@ impl<'a> DataflowBuilder<'a> {
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(
-                            *id,
-                            mview.desc_for(id).into_typ(),
-                            monotonic,
-                            false,
-                        );
+                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic, None);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(
                             *id,
                             log.variant.desc().typ().clone(),
                             monotonic,
-                            false,
+                            None,
                         );
                     }
                     CatalogItem::Sink(_)

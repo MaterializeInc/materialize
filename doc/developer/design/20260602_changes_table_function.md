@@ -97,6 +97,13 @@ The lower bound is spelled as an `AS OF` clause immediately after the relation �
 
 We deliberately reuse `AS OF` despite the streaming-SQL committee's caution that it collides with SQL:2011's value-time-travel `AS OF`: Materialize's `AS OF` already means "read hold at a logical time" (in `SELECT`/`SUBSCRIBE`), which is *exactly* `CHANGES`'s lower bound, and Materialize does not implement SQL:2011's `AS OF` at all, so there is nothing to collide with. Inventing `START AT`/`FROM <time>` would be less consistent than reusing the spelling users already know. This resolves the "parameter keyword" open question.
 
+#### The sliding bound is special syntax, not an expression
+
+`mz_timestamp` deliberately supports no arithmetic — in temporal filters, `mz_now()` must be directly compared to a non-temporal expression (see `as_mut_temporal_filter`), and the missing `mz_timestamp ± interval` operators are what steer users to that normal form.
+Consequently the canonical sliding bound `mz_now() - INTERVAL '30 minutes'` is not a plannable expression in general contexts.
+Rather than introducing `mz_timestamp` arithmetic operators (and reopening that design decision), `CHANGES` blesses exactly the top-level shape `mz_now() - <interval>` as special syntax of the `AS OF` clause: it plans as `(mz_now()::timestamptz - <interval>)::mz_timestamp` using existing casts and `timestamptz` arithmetic.
+The bound never becomes a dataflow predicate (the coordinator or the MV optimizer evaluates it), so this widens nothing about what temporal filters accept.
+
 #### The relation argument: name or subquery
 
 Naming a relation directly in a function-argument slot (`CHANGES(t ...)`) is not strictly idiomatic SQL — function arguments are value expressions, and relations are named in `FROM`, as subqueries, or (SQL:2016 PTFs) via an explicit `TABLE` keyword. The relevant idiom here is local consistency with `SUBSCRIBE`, which accepts *either* a bare name *or* a parenthesized subquery. So `CHANGES` mirrors it:
@@ -161,7 +168,7 @@ The maintained design has the following parts:
 3. **Restart-exact rendering: skip the snapshot, read below the `as_of`.** A naive restart (read the input snapshot at `as_of`, clamp to `as_of`, as the one-off path does) is wrong for a maintained MV: the desired output at `as_of` would be the input's *accumulated state* clamped to `as_of`, while the persisted output holds the *window* `(as_of - i, as_of]` at true timestamps. The persist sink's reconciliation would retract the entire window and emit a giant clamped snapshot that then ages out — a correction storm and an output discontinuity on every restart. Instead, the maintained rendering:
    * reads the input from `as_of - i`, *below* the dataflow `as_of`,
    * skips the snapshot entirely, emitting only the deltas at their true timestamps (the `SUBSCRIBE ... WITH (SNAPSHOT = false)` shape),
-   * installs the strict output temporal filter `mz_timestamp > mz_now() - i` (existing temporal-filter machinery; the `mz_timestamp` column being `MzTimestamp`-typed is what makes it recognizable).
+   * installs the strict output temporal filter, spelled `mz_now() < mz_timestamp + i` — the `mz_now() BINOP <non-temporal>` normal form the temporal MFP machinery requires (`as_mut_temporal_filter`), with the interval arithmetic on the column side. The MV optimizer constructs it at MIR level once it has extracted the constant lag `i` from the bound; month intervals, whose millisecond lag varies with the calendar, are rejected.
 
    The desired output at `as_of` is then exactly the persisted contents, and reconciliation is a no-op.
    Creation needs no special case: the input's `since` is recent, so the window simply ages in from there.

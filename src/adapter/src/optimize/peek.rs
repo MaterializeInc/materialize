@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::IndexDesc;
+use mz_compute_types::dataflows::{ChangelogMode, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{Eval, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
@@ -353,7 +353,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             }
         }
         for id in &changelog_ids {
-            df_desc.set_source_read_as_changelog(id);
+            df_desc.set_source_changelog(id, ChangelogMode::OneShot);
         }
 
         // Set the `as_of` and `until` timestamps for the dataflow.

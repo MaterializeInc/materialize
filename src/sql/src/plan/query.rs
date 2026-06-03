@@ -53,7 +53,7 @@ use mz_expr::func::variadic::{
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
     Eval, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME,
-    RowSetFinishing, TableFunc, func as expr_func,
+    RowSetFinishing, TableFunc, UnmaterializableFunc, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -80,9 +80,9 @@ use mz_sql_parser::ast::{
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
-    MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName,
-    SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    MutRecBlockOptionName, Op, OrderByExpr, Query, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowSpec, visit,
 };
 use mz_sql_parser::ident;
@@ -3073,18 +3073,33 @@ fn plan_changes(
     let bound_hir = plan_changes_bound(qcx.scx, bound_ast.clone())?;
     let sliding = bound_hir.contains_temporal();
 
-    // Execution is currently wired up only for one-off `SELECT`s (the peek
-    // path). Gate everything else:
+    // Execution is wired up for one-off `SELECT`s (the peek path) and for
+    // materialized views with a sliding, advisory bound (the maintained path).
+    // Gate everything else:
     //   * A durable maintained object (materialized view, index) with a fixed
     //     bound would pin the input's `since` open indefinitely, the retained
     //     history growing without bound — rejected with a targeted message.
-    //   * Any other non-`SELECT` use (a sliding bound in a maintained object,
-    //     SUBSCRIBE, ...) is structurally fine but not yet wired up.
-    if !matches!(qcx.lifetime, QueryLifetime::OneShot) {
-        if qcx.lifetime.is_maintained() && !sliding {
-            return Err(PlanError::ChangesRequiresSlidingBound);
+    //   * A maintained materialized view with a *strict* sliding bound would
+    //     have to error at creation unless the input already retains a full
+    //     window of history; deferred, only the advisory (`AS OF AT LEAST`)
+    //     form is wired up.
+    //   * Any other non-`SELECT` use (a sliding bound in an index, SUBSCRIBE,
+    //     a view, ...) is structurally fine but not yet wired up.
+    match qcx.lifetime {
+        QueryLifetime::OneShot => {}
+        QueryLifetime::MaterializedView if sliding && !strict => {}
+        QueryLifetime::MaterializedView if sliding && strict => {
+            bail_unsupported!(
+                "CHANGES with a strict AS OF bound in a materialized view \
+                 (use AS OF AT LEAST)"
+            );
         }
-        bail_unsupported!("CHANGES outside a one-off SELECT");
+        lifetime => {
+            if lifetime.is_maintained() && !sliding {
+                return Err(PlanError::ChangesRequiresSlidingBound);
+            }
+            bail_unsupported!("CHANGES outside a one-off SELECT or a materialized view");
+        }
     }
 
     // The bound is carried as an already-lowered `mz_timestamp`-typed scalar that
@@ -3104,12 +3119,20 @@ fn plan_changes(
         .with_column("mz_diff", SqlScalarType::Int64.nullable(false))
         .finish();
 
+    // NOTE: In a maintained materialized view the window slides forever, so
+    // the changelog must *retract* changes once they age past the bound. The
+    // MV optimizer installs the corresponding temporal filter over the
+    // changelog output (in the `mz_now() < <expr>` normal form the temporal
+    // MFP machinery requires), once it has extracted the constant window lag
+    // from the bound. (A one-off read needs no filter: the peek time is the
+    // window's upper edge and the bound is its lower edge by construction.)
     let expr = HirRelationExpr::Changes {
         id: global_id,
         typ: changes_desc.typ().clone(),
         bound,
         strict,
     };
+
     let scope = Scope::from_source(
         Some(Into::<PartialItemName>::into(full_name)),
         changes_desc.iter_names().cloned(),
@@ -3208,6 +3231,16 @@ fn changes_reduce_to_get(expr: &HirRelationExpr) -> Option<mz_repr::GlobalId> {
 /// literal. The caller inspects it for `mz_now()` (a sliding, window-trailing
 /// bound) via [`HirScalarExpr::contains_temporal`] and lowers it for the
 /// coordinator to evaluate at the query time.
+///
+/// `mz_timestamp` deliberately supports no arithmetic (`mz_now()` must be
+/// directly compared in temporal filters), so the sliding form
+/// `mz_now() - <interval>` is not otherwise a plannable expression. `CHANGES`
+/// blesses exactly this shape as special syntax: it plans as
+/// `(mz_now()::timestamptz - <interval>)::mz_timestamp`, reusing the existing
+/// casts and `timestamptz - interval` arithmetic rather than introducing new
+/// operators on `mz_timestamp`. The bound never becomes a dataflow predicate
+/// (the coordinator or the MV optimizer evaluates it), so this does not widen
+/// what temporal filters accept.
 fn plan_changes_bound(
     scx: &StatementContext,
     mut bound: Expr<Aug>,
@@ -3226,6 +3259,38 @@ fn plan_changes_bound(
         allow_parameters: false,
         allow_windows: false,
     };
+
+    // The blessed sliding shape: a top-level `<lhs> - <rhs>` where `<lhs>`
+    // plans to exactly `mz_now()` and `<rhs>` to an interval.
+    if let Expr::Op {
+        op: Op {
+            namespace: None,
+            op,
+        },
+        expr1,
+        expr2: Some(expr2),
+    } = &bound
+    {
+        if op == "-" {
+            let lhs = plan_expr(ecx, expr1)?.type_as_any(ecx)?;
+            if matches!(
+                lhs,
+                HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow, _)
+            ) {
+                let rhs = plan_expr(ecx, expr2)?.cast_to(
+                    ecx,
+                    CastContext::Implicit,
+                    &SqlScalarType::Interval,
+                )?;
+                let hir = lhs
+                    .call_unary(expr_func::CastMzTimestampToTimestampTz)
+                    .call_binary(rhs, expr_func::SubTimestampTzInterval)
+                    .call_unary(expr_func::CastTimestampTzToMzTimestamp);
+                return Ok(hir);
+            }
+        }
+    }
+
     let hir = plan_expr(ecx, &bound)?.cast_to(
         ecx,
         CastContext::Assignment,
