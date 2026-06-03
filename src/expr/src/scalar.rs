@@ -1380,12 +1380,18 @@ impl VisitChildren<Self> for MirScalarExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&Self> {
-        self.children().collect()
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self>
+    where
+        Self: 'a,
+    {
+        self.children()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut Self> {
-        self.children_mut().collect()
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut Self>
+    where
+        Self: 'a,
+    {
+        self.children_mut()
     }
 }
 

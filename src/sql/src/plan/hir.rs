@@ -382,20 +382,24 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&HirScalarExpr> {
-        let mut v = self.func.children();
-        v.extend(self.partition_by.iter());
-        v.extend(self.order_by.iter());
-
-        v
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        self.func
+            .children()
+            .chain(self.partition_by.iter())
+            .chain(self.order_by.iter())
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
-        let mut v = self.func.children_mut();
-        v.extend(self.partition_by.iter_mut());
-        v.extend(self.order_by.iter_mut());
-
-        v
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        self.func
+            .children_mut()
+            .chain(self.partition_by.iter_mut())
+            .chain(self.order_by.iter_mut())
     }
 }
 
@@ -520,20 +524,28 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
         }
     }
 
-    fn children(&self) -> Vec<&HirScalarExpr> {
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
         match self {
             Self::Scalar(_) => vec![],
-            Self::Value(expr) => expr.children(),
-            Self::Aggregate(expr) => expr.children(),
+            Self::Value(expr) => expr.children().collect(),
+            Self::Aggregate(expr) => expr.children().collect(),
         }
+        .into_iter()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
         match self {
             Self::Scalar(_) => vec![],
-            Self::Value(expr) => expr.children_mut(),
-            Self::Aggregate(expr) => expr.children_mut(),
+            Self::Value(expr) => expr.children_mut().collect(),
+            Self::Aggregate(expr) => expr.children_mut().collect(),
         }
+        .into_iter()
     }
 }
 
@@ -747,12 +759,18 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
         f(&mut self.args)
     }
 
-    fn children(&self) -> Vec<&HirScalarExpr> {
-        self.args.children()
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        VisitChildren::<HirScalarExpr>::children(&*self.args)
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
-        self.args.children_mut()
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        VisitChildren::<HirScalarExpr>::children_mut(&mut *self.args)
     }
 }
 
@@ -941,12 +959,18 @@ impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
         f(&mut self.aggregate_expr.expr)
     }
 
-    fn children(&self) -> Vec<&HirScalarExpr> {
-        self.aggregate_expr.expr.children()
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        VisitChildren::<HirScalarExpr>::children(&*self.aggregate_expr.expr)
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
-        self.aggregate_expr.expr.children_mut()
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
+        VisitChildren::<HirScalarExpr>::children_mut(&mut *self.aggregate_expr.expr)
     }
 }
 
@@ -2906,7 +2930,10 @@ impl VisitChildren<Self> for HirRelationExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&Self> {
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self>
+    where
+        Self: 'a,
+    {
         // we visit subqueries _first_, then the input
         let mut v: Vec<&HirRelationExpr> = vec![];
         use HirRelationExpr::*;
@@ -2990,10 +3017,13 @@ impl VisitChildren<Self> for HirRelationExpr {
             }
         }
 
-        v
+        v.into_iter()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut Self> {
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut Self>
+    where
+        Self: 'a,
+    {
         // we visit subqueries _first_, then the input
         let mut v = vec![];
         use HirRelationExpr::*;
@@ -3077,7 +3107,7 @@ impl VisitChildren<Self> for HirRelationExpr {
             }
         }
 
-        v
+        v.into_iter()
     }
 }
 
@@ -3395,7 +3425,10 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&HirScalarExpr> {
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
@@ -3449,9 +3482,13 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 expected_group_size: _,
             } => limit.iter().chain(std::iter::once(offset)).collect(),
         }
+        .into_iter()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirScalarExpr> {
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
+    where
+        HirScalarExpr: 'a,
+    {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
@@ -3505,6 +3542,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 expected_group_size: _,
             } => limit.iter_mut().chain(std::iter::once(offset)).collect(),
         }
+        .into_iter()
     }
 }
 
@@ -4527,9 +4565,12 @@ impl VisitChildren<Self> for HirScalarExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&Self> {
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self>
+    where
+        Self: 'a,
+    {
         use HirScalarExpr::*;
-        match self {
+        let v: Vec<&Self> = match self {
             Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => vec![],
             CallUnary { expr, .. } => vec![&*expr],
             CallBinary { expr1, expr2, .. } => {
@@ -4545,13 +4586,17 @@ impl VisitChildren<Self> for HirScalarExpr {
                 vec![&*cond, &*then, &*els]
             }
             Exists(..) | Select(..) => vec![],
-            Windowing(expr, _name) => expr.children(),
-        }
+            Windowing(expr, _name) => expr.children().collect(),
+        };
+        v.into_iter()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut Self> {
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut Self>
+    where
+        Self: 'a,
+    {
         use HirScalarExpr::*;
-        match self {
+        let v: Vec<&mut Self> = match self {
             Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => vec![],
             CallUnary { expr, .. } => vec![&mut **expr],
             CallBinary { expr1, expr2, .. } => {
@@ -4567,8 +4612,9 @@ impl VisitChildren<Self> for HirScalarExpr {
                 vec![&mut **cond, &mut **then, &mut **els]
             }
             Exists(..) | Select(..) => vec![],
-            Windowing(expr, _name) => expr.children_mut(),
-        }
+            Windowing(expr, _name) => expr.children_mut().collect(),
+        };
+        v.into_iter()
     }
 }
 
@@ -4653,7 +4699,11 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
         Ok(())
     }
 
-    fn children(&self) -> Vec<&HirRelationExpr> {
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirRelationExpr>
+    where
+        HirRelationExpr: 'a,
+    {
+        let mut child: Option<&HirRelationExpr> = None;
         use HirScalarExpr::*;
         match self {
             Column(..)
@@ -4664,12 +4714,18 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
             | CallBinary { .. }
             | CallVariadic { .. }
             | If { .. }
-            | Windowing(..) => vec![],
-            Exists(expr, _name) | Select(expr, _name) => vec![&*expr],
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => child = Some(&*expr),
         }
+
+        child.into_iter()
     }
 
-    fn children_mut(&mut self) -> Vec<&mut HirRelationExpr> {
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirRelationExpr>
+    where
+        HirRelationExpr: 'a,
+    {
+        let mut child: Option<&mut HirRelationExpr> = None;
         use HirScalarExpr::*;
         match self {
             Column(..)
@@ -4680,9 +4736,11 @@ impl VisitChildren<HirRelationExpr> for HirScalarExpr {
             | CallBinary { .. }
             | CallVariadic { .. }
             | If { .. }
-            | Windowing(..) => vec![],
-            Exists(expr, _name) | Select(expr, _name) => vec![&mut **expr],
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => child = Some(&mut **expr),
         }
+
+        child.into_iter()
     }
 }
 

@@ -71,11 +71,6 @@ pub trait VisitChildren<T> {
     }
 
     /// Apply a fallible immutable function `f` to each direct child.
-    ///
-    /// For mutually recursive implementations (say consisting of two
-    /// types `A` and `B`), recursing through `B` in order to find all
-    /// `A`-children of a node of type `A` might cause lead to a
-    /// [`RecursionLimitError`], hence the bound on `E`.
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&T) -> Result<(), E>,
@@ -88,11 +83,6 @@ pub trait VisitChildren<T> {
     }
 
     /// Apply a fallible mutable function `f` to each direct child.
-    ///
-    /// For mutually recursive implementations (say consisting of two
-    /// types `A` and `B`), recursing through `B` in order to find all
-    /// `A`-children of a node of type `A` might cause lead to a
-    /// [`RecursionLimitError`], hence the bound on `E`.
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut T) -> Result<(), E>,
@@ -105,13 +95,17 @@ pub trait VisitChildren<T> {
     }
 
     /// The `T`-typed children of this element.
-    fn children(&self) -> Vec<&T>;
+    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a T>
+    where
+        T: 'a;
 
     /// The `&mut T`-typed children of this element.
     ///
     /// It is critical for the safety of mutable post-order traversals that this
     /// function be written using safe code.
-    fn children_mut(&mut self) -> Vec<&mut T>;
+    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut T>
+    where
+        T: 'a;
 }
 
 /// A trait for types that can recursively visit their children of the
@@ -502,7 +496,7 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(elt) = stack.pop() {
             f(elt);
             // Push children in reverse so they pop (and are visited) left-to-right.
-            stack.extend(elt.children_mut().into_iter().rev());
+            stack.extend(elt.children_mut().into_iter().rev())
         }
 
         Ok(())
@@ -552,10 +546,15 @@ impl<T: VisitChildren<T>> Visit for T {
         while let Some(action) = stack.pop() {
             match action {
                 Enter(elt) => {
-                    let children = pre(elt).unwrap_or_else(|| elt.children());
                     stack.push(Leave(elt));
-                    for child in children.into_iter().rev() {
-                        stack.push(Enter(child));
+                    if let Some(children) = pre(elt) {
+                        for child in children.into_iter().rev() {
+                            stack.push(Enter(child));
+                        }
+                    } else {
+                        for child in elt.children().into_iter().rev() {
+                            stack.push(Enter(child));
+                        }
                     }
                 }
                 Leave(elt) => {
@@ -600,16 +599,17 @@ impl<T: VisitChildren<T>> Visit for T {
             match action {
                 Enter(ptr) => {
                     let elt = unsafe { &mut *ptr };
-                    let children: Vec<&mut T> = match pre(elt) {
-                        Some(explicit) => explicit,
-                        None => {
-                            let elt = unsafe { &mut *ptr };
-                            elt.children_mut()
-                        }
-                    };
                     stack.push(Leave(ptr));
-                    for child in children.into_iter().rev() {
-                        stack.push(Enter(child));
+
+                    if let Some(children) = pre(elt) {
+                        for child in children.into_iter().rev() {
+                            stack.push(Enter(child));
+                        }
+                    } else {
+                        let elt = unsafe { &mut *ptr };
+                        for child in elt.children_mut().rev() {
+                            stack.push(Enter(child));
+                        }
                     }
                 }
                 Leave(ptr) => {
@@ -913,9 +913,11 @@ mod tests {
             Ok(())
         }
 
-        fn children(&self) -> Vec<&A> {
+        fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a A>
+        where
+            A: 'a,
+        {
             let mut v: Vec<&A> = vec![];
-
             match self {
                 A::Add(lhs, rhs) => {
                     v.push(&*lhs);
@@ -927,10 +929,13 @@ mod tests {
                 }
             }
 
-            v
+            v.into_iter()
         }
 
-        fn children_mut(&mut self) -> Vec<&mut A> {
+        fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut A>
+        where
+            A: 'a,
+        {
             let mut v: Vec<&mut A> = vec![];
 
             match self {
@@ -944,7 +949,7 @@ mod tests {
                 }
             }
 
-            v
+            v.into_iter()
         }
     }
 
@@ -993,18 +998,28 @@ mod tests {
             }
         }
 
-        fn children(&self) -> Vec<&B> {
+        fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a B>
+        where
+            B: 'a,
+        {
+            let mut child: Option<&B> = None;
             match self {
-                A::Add(_, _) | A::Lit(_) => vec![],
-                A::FrB(b) => vec![&*b],
+                A::Add(_, _) | A::Lit(_) => (),
+                A::FrB(b) => child = Some(&*b),
             }
+            child.into_iter()
         }
 
-        fn children_mut(&mut self) -> Vec<&mut B> {
+        fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut B>
+        where
+            B: 'a,
+        {
+            let mut child: Option<&mut B> = None;
             match self {
-                A::Add(_, _) | A::Lit(_) => vec![],
-                A::FrB(b) => vec![&mut **b],
+                A::Add(_, _) | A::Lit(_) => (),
+                A::FrB(b) => child = Some(&mut **b),
             }
+            child.into_iter()
         }
     }
 
@@ -1097,7 +1112,10 @@ mod tests {
             Ok(())
         }
 
-        fn children(&self) -> Vec<&B> {
+        fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a B>
+        where
+            B: 'a,
+        {
             let mut v: Vec<&B> = vec![];
             match self {
                 B::Mul(lhs, rhs) => {
@@ -1107,10 +1125,13 @@ mod tests {
                 B::Lit(_) => (),
                 B::FrA(a) => v.append(&mut a.direct_sub_b()),
             }
-            v
+            v.into_iter()
         }
 
-        fn children_mut(&mut self) -> Vec<&mut B> {
+        fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut B>
+        where
+            B: 'a,
+        {
             let mut v: Vec<&mut B> = vec![];
             match self {
                 B::Mul(lhs, rhs) => {
@@ -1120,7 +1141,7 @@ mod tests {
                 B::Lit(_) => (),
                 B::FrA(a) => v.append(&mut a.direct_sub_b_mut()),
             }
-            v
+            v.into_iter()
         }
     }
 
@@ -1169,18 +1190,28 @@ mod tests {
             }
         }
 
-        fn children(&self) -> Vec<&A> {
+        fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a A>
+        where
+            A: 'a,
+        {
+            let mut child: Option<&A> = None;
             match self {
-                B::Mul(_, _) | B::Lit(_) => vec![],
-                B::FrA(a) => vec![&*a],
+                B::Mul(_, _) | B::Lit(_) => (),
+                B::FrA(a) => child = Some(&*a),
             }
+            child.into_iter()
         }
 
-        fn children_mut(&mut self) -> Vec<&mut A> {
+        fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut A>
+        where
+            A: 'a,
+        {
+            let mut child: Option<&mut A> = None;
             match self {
-                B::Mul(_, _) | B::Lit(_) => vec![],
-                B::FrA(a) => vec![&mut **a],
+                B::Mul(_, _) | B::Lit(_) => (),
+                B::FrA(a) => child = Some(&mut **a),
             }
+            child.into_iter()
         }
     }
 
