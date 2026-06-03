@@ -1903,6 +1903,8 @@ class FlipFlagsAction(Action):
             "cluster_controller_tick_interval",
             "enable_background_alter_cluster",
             "default_cluster_reconfiguration_timeout",
+            "enable_hydration_burst",
+            "default_hydration_burst_linger",
         ]
 
     def run(self, exe: Executor) -> bool:
