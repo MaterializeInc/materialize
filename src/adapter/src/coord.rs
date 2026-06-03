@@ -4613,10 +4613,31 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.into_iter().collect();
+                    new_builtin_collections.iter().copied().collect();
 
-                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
-                // transitive dependents.
+                // A collection that can't advance its write frontier in read-only mode also
+                // stalls everything that transitively reads from it, so those dependents must be
+                // excluded from the caught-up check as well. Two kinds of source can't advance
+                // while read-only:
+                //
+                //   * Migrated MVs: their dataflows don't write in read-only mode.
+                //   * New builtin MVs: their freshly-created shard has no writer until this
+                //     deployment promotes, so the leader never advances it on our behalf.
+                //
+                // New builtin collections are themselves excluded above, but their dependents are
+                // not, so also seed the walk from new builtin MVs. This only bites when an
+                // already-existing, hydration-gating builtin (e.g. an indexed builtin view) is
+                // pointed at a new builtin MV in the same release.
+                //
+                // Excluding the dependents is intended steady-state behavior, with a known
+                // tradeoff: an excluded dependent is not guaranteed caught up at promotion, so a
+                // hydration-gating dependent (e.g. an indexed builtin view) can still be hydrating
+                // right after we cut over to read-write — a brief blip of unavailability for that
+                // view. We accept it because these builtin MVs are small: once we cut over the new
+                // MV gets a writer and the dependent hydrates quickly, so the blip is short and
+                // self-resolving. Staging the rollout — shipping a new builtin MV one release
+                // before anything depends on it, so the upgrade base already writes its shard —
+                // would avoid even the blip, but we prefer the exclusion as the simpler behavior.
                 //
                 // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
                 //       would allow them to make progress even in read-only mode. This doesn't
@@ -4624,12 +4645,15 @@ pub fn serve(
                 //       than v26.17, since before that version the catalog shard's frontier wasn't
                 //       kept up-to-date with the current time. So this workaround has to remain in
                 //       place upgrades from a version less than v26.17 are no longer supported.
+                let new_builtin_mvs = new_builtin_collections.iter().filter_map(|global_id| {
+                    let entry = catalog.state().try_get_entry_by_global_id(global_id)?;
+                    entry.is_materialized_view().then(|| entry.id())
+                });
                 let mut todo: Vec<_> = migrated_storage_collections_0dt
                     .iter()
-                    .filter(|id| {
-                        catalog.state().get_entry(id).is_materialized_view()
-                    })
                     .copied()
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
+                    .chain(new_builtin_mvs)
                     .collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);

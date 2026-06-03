@@ -1319,6 +1319,36 @@ pub mod audit_log_event_v1 {
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
     #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+    pub struct AlterClusterReconfigurationV1 {
+        pub cluster_id: String,
+        pub cluster_name: String,
+        pub transition: ReconfigurationLifecycleV1,
+        pub target_size: String,
+        pub target_replication_factor: u32,
+        pub deadline: Option<u64>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+    pub struct ReconfigurationLifecycleV1 {
+        pub transition: reconfiguration_lifecycle_v1::Transition,
+    }
+
+    pub mod reconfiguration_lifecycle_v1 {
+        use super::*;
+
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+        pub enum Transition {
+            Started(Empty),
+            Finalized(Empty),
+            TimedOut(Empty),
+            Cancelled(Empty),
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RenameItemV1 {
         pub id: String,
         pub old_name: FullNameV1,
@@ -1818,6 +1848,7 @@ pub mod audit_log_event_v1 {
         CreateRoleV1(CreateRoleV1),
         AlterAddColumnV1(AlterAddColumnV1),
         AlterSourceTimestampIntervalV1(AlterSourceTimestampIntervalV1),
+        AlterClusterReconfigurationV1(AlterClusterReconfigurationV1),
     }
 }
 

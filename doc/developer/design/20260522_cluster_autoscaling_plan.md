@@ -415,7 +415,20 @@ Reopened by the 2026-06-02 design refinement (the durable `on_timeout` knob):
 
 ## PR 4 — Observability: introspection view + `SHOW CLUSTERS` + audit
 
-**Status:** ⬜ Not started
+**Status:** 👀 In review — implementation + review follow-up landed on `cluster-autoscaling`.
+Introspection table + `SHOW CLUSTERS` extension + reconfiguration audit lifecycle, all dark
+(records stay `None` until the controller is enabled). The review follow-up adds the `cancelled`
+lifecycle transition (ALTER-back to the realized shape), corrects the `finalized`-vs-`timed-out`
+classification (a `ROLLBACK` record only ever clears on a hydrated success, so it is never
+mislabeled `timed-out`; the residual `COMMIT`-late-success imprecision is documented), fixes the
+`belongs_to_cluster` ontology cardinality to one-to-one, regenerates the unshipped-`v86` proto
+snapshot so the new audit variant round-trips, and updates the `canary-clusters.td` `SHOW CLUSTERS`
+row for the new columns. The `ROLLBACK`-timeout audit event remains deferred with a reason (see
+Deferred); the other lifecycle transitions are covered. A later follow-up (2026-06-03, same
+branch) reworked the introspection relation from the imperatively-packed `BuiltinTable` into a
+`BuiltinMaterializedView` over `mz_internal.mz_catalog_raw` (plus a `mz_catalog_server` index),
+following the move off imperative builtin-table packing for catalog-derived relations — schema,
+ontology, and dark behavior unchanged. See the Progress Log.
 
 **Goal.** Make in-flight reconfigurations observable in SQL, so background `ALTER` (PR 3) is
 usable and validatable.
@@ -444,11 +457,37 @@ need no migration; ordering test passes).
 the lifecycle.
 
 **Checklist.**
-- [ ] Add the introspection table/view; catalog-populate from the durable records.
-- [ ] Extend `MZ_SHOW_CLUSTERS` SQL; keep `show.rs` template pointing at the view.
-- [ ] Reconfiguration audit lifecycle events (with deadline on start/timeout).
-- [ ] Testdrive + audit assertions.
-- [ ] `cargo fmt`/`check` clean; update tracker.
+- [x] Add the introspection relation; derive it from the durable records. (`mz_internal.mz_cluster_reconfigurations`: realized vs. target size/rf/AZ list, in-flight flag, active deadline, placeholder `burst_size`. New builtin → no migration. No separate user view added — the relation is the introspection surface and `SHOW CLUSTERS` is the friendly shape. **Reworked 2026-06-03** from an imperatively-packed `BuiltinTable` into a `BuiltinMaterializedView` over `mz_internal.mz_catalog_raw` (with a companion `mz_catalog_server` index), matching the convention of moving catalog-derived relations off imperative builtin-table packing onto views over the raw catalog — schema/ontology unchanged, dark behavior preserved. See the Progress Log.)
+- [x] Extend `MZ_SHOW_CLUSTERS` SQL; keep `show.rs` template pointing at the view. (LEFT JOINs the new table to add `current_size`, `target_size`, `reconfiguration_in_flight`; `show.rs` projects the new columns. The view stays **non-temporal** — the indexed `mz_show_clusters` cannot use `mz_now()`, so the timed-out-vs-in-progress split is read from `mz_cluster_reconfigurations.reconfiguration_deadline`, not computed in the view.)
+- [x] Reconfiguration audit lifecycle events (with deadline on start/timeout/cancel). (New `EventDetails::AlterClusterReconfigurationV1` with a `started`/`finalized`/`timed-out`/`cancelled` transition + target size/rf + optional deadline; proto variant added in place to the unshipped v86 (`objects.rs` + `objects_v86.rs`, hashes regenerated, `v86` snapshot regenerated) with `RustType` conversions. Emitted from the `Op::UpdateClusterConfig` durable transition, classified purely from the before/after `reconfiguration` record + the realized shape + the write timestamp vs. the deadline — covers record-write/re-target (`started`, with deadline), re-target *back* to the realized shape (`cancelled`, with deadline), success cut-over (`finalized`), and `COMMIT`-on-timeout cut-over (`timed-out`, with deadline). A `ROLLBACK` record only ever clears on a hydrated success (rollback never clears on a timeout), so it is classified `finalized` regardless of the deadline; only a `COMMIT` clear past the deadline is `timed-out`. The deadline is a heuristic under `COMMIT`: a hydrated-late `COMMIT` success is indistinguishable from a timeout-committed un-hydrated target at the agnostic apply site and surfaces as `timed-out` (documented on the event variants and asserted in the unit test). Replica create/drop attribution (`Reconfiguration`) already lands from PR 3. The `ROLLBACK`-timeout event is deferred, see below.)
+- [x] Testdrive + audit assertions. (Authored for CI: `cluster_controller.slt` gains an observability section asserting the introspection table + `SHOW CLUSTERS` shape on a steady and a reconfigured cluster, the audit lifecycle rows for a success (`started`+deadline, `finalized`) and for an ALTER-back cancel (`started`, `cancelled`, `finalized`); `show_clusters.slt` asserts the new gate-off columns are benign; `canary-clusters.td` updated for the new `SHOW CLUSTERS` columns. A `classify_reconfiguration_transition` unit test in `mz-adapter` covers started/finalized/timed-out/cancelled/re-target/no-op deterministically, including the `ROLLBACK`-late-success and the documented `COMMIT`-late-success imprecision.)
+- [x] `cargo fmt`/`check` clean; update tracker.
+
+**Deferred (with reasons).**
+- **`ROLLBACK`-timeout audit event.** The lifecycle events are emitted by classifying the durable
+  `reconfiguration` before/after at the single `Op::UpdateClusterConfig` write site. A `ROLLBACK`
+  timeout performs **no config write** — the strategy's `update_state` returns
+  `StateWrite::default()`, the record is retained as a tombstone unchanged, and only the in-flight
+  target replicas are dropped (none-desired). With no config transition to hang the event off, a
+  dedicated `timed-out (rollback)` event would need either a fire-once signal threaded through the
+  controller `StateWrite` seam (widening the agnostic interface with audit-only vocabulary) or a
+  durable tombstone-stamp on the record (a PR-1 schema change). Both are larger than PR 4's
+  observability scope. The rollback is already observable: the tombstoned record (past deadline,
+  `reconfiguration_in_flight = true`) surfaces in `mz_cluster_reconfigurations` and `SHOW CLUSTERS`,
+  and the target-set drops carry the none-desired reason. Lands with the burst lifecycle (PR 6) or
+  a focused follow-up once the seam shape for it is settled.
+- **Live `mz_now()`-based timed-out indicator in `SHOW CLUSTERS`.** The `mz_show_clusters` view is
+  indexed in `mz_catalog_server`, and an index cannot be built over a relation that uses `mz_now()`,
+  so the view exposes only a boolean `reconfiguration_in_flight`. The deadline needed to split
+  in-progress from timed-out lives on `mz_cluster_reconfigurations.reconfiguration_deadline`; a user
+  compares it to `mz_now()` there. Surfacing a derived status in `SHOW CLUSTERS` would require
+  dropping the index or a non-indexed companion view; not pursued in this PR.
+- **Autogenerated catalog-doc / index-accounting snapshots.** The slt snapshots that enumerate every
+  builtin and the catalog-server index dependency columns (`autogenerated/mz_internal.slt`,
+  `mz_catalog_server_index_accounting.slt`, `information_schema_tables.slt`, `oid.slt`, `catalog.td`)
+  were hand-updated to include the new table/columns and the bumped table count, matching the
+  generators' format; they are authoritative only after the live-server regen steps in CI confirm
+  byte-equality. Not runnable locally without a full environmentd.
 
 ---
 
@@ -610,6 +649,114 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-03_ — **PR 4 follow-up: reconfiguration relation reworked into a materialized view**
+  (fixup against PR 4's observability commit, same branch). The team has moved away from
+  imperatively-populated builtin relations for catalog-derived data; PR 4 had introduced
+  `mz_internal.mz_cluster_reconfigurations` as a catalog-populated `BuiltinTable` packed in
+  `pack_cluster_update`. It is now a `BuiltinMaterializedView` over the builtin source
+  `mz_internal.mz_catalog_raw`, mirroring `MZ_CLUSTER_WORKLOAD_CLASSES` (its companion
+  `MZ_CLUSTER_RECONFIGURATIONS_IND` in `mz_catalog_server` is mirrored too). The MV reads the
+  managed variant straight from the durable `Cluster` record: realized config from
+  `data->'value'->'config'->'variant'->'Managed'` (`size`, `replication_factor`,
+  `availability_zones`), the in-flight target from `…->'Managed'->'reconfiguration'->'target'`,
+  the deadline from `…->'reconfiguration'->'deadline'`, and `burst_size` from
+  `…->'Managed'->'burst'`. Externally-tagged variant ⇒ `->'Managed' IS NOT NULL` selects only
+  managed clusters; an absent `Option` serializes to JSON `null`, so in-flight presence is
+  `reconfiguration != 'null'`. `target_*` COALESCE onto the realized config when no record is in
+  flight, so with the controller dark the row is identical to what the table produced
+  (current==target, not-in-flight, NULL deadline/burst). AZ pools are rebuilt as ordered
+  `text list`s via `jsonb_array_elements_text(...) AS az WITH ORDINALITY` + `list_agg(az.value
+  ORDER BY az.ordinality)` (`jsonb_array_elements_text` is a `CallTable` table func, so the
+  non-legacy `WITH ORDINALITY` path applies), with an unpinned pool COALESCEd to the empty list.
+  The output `RelationDesc` (columns/types/nullability/key), `column_comments`, and the
+  one-to-one `belongs_to_cluster` ontology are byte-for-byte unchanged, so `mz_show_clusters`
+  (LEFT JOIN, indexed) and `show.rs` are untouched. Removed the imperative path
+  (`pack_cluster_reconfiguration_row` + its `pack_cluster_update` call site and the now-unused
+  `MZ_CLUSTER_RECONFIGURATIONS` / `ClusterVariantManaged` imports in
+  `builtin_table_updates.rs`); rewired `BUILTINS_STATIC` (Table → MaterializedView, plus the
+  Index registered next to `MZ_CLUSTERS_IND`); renamed the OID
+  `TABLE_MZ_CLUSTER_RECONFIGURATIONS_OID` → `MV_MZ_CLUSTER_RECONFIGURATIONS_OID` (value 17088
+  kept) and added `INDEX_MZ_CLUSTER_RECONFIGURATIONS_IND_OID = 17089`. **No
+  `builtin_schema_migration` entry** — the relation is unshipped (introduced on this branch in
+  PR 4, never in a released version), so it is defined correctly in place, not migrated; the
+  migration machinery is only for version upgrades of already-shipped persisted builtins.
+  **Cheap checks run:** `cargo fmt`; `cargo check -p mz-catalog -p mz-adapter -p
+  mz-pgrepr-consts` clean; `bin/lint-cargo` clean; `mz-catalog` `builtin::tests` green (incl.
+  `test_builtins_static_dependency_order`, `test_ontology_consistency`,
+  `test_mz_sources_fingerprint_changes_with_new_builtin_source`). **Authored for CI (not run —
+  needs environmentd):** hand-updated the catalog snapshots — `information_schema_tables.slt`
+  (BASE TABLE → MATERIALIZED VIEW), `catalog.td` (moved to the materialized-views section, table
+  count 54→53, index count 267→268), `oid.slt` (added the index OID row), and a new index row in
+  `mz_catalog_server_index_accounting.slt` (its per-column block + the `mz_show_clusters` column
+  dependencies are unchanged because the schema is identical; the `sNNN` global-IDs across that
+  file shift and are authoritative only after CI live-server `--rewrite-results`). The dark
+  behavior assertions in `cluster_controller.slt` / `show_clusters.slt` / `canary-clusters.td`
+  need no edits — the MV yields the same rows. Did **not** run the slt/testdrive suites or a full
+  optimized build.
+
+- _2026-06-03_ — **PR 4 follow-up review addressed** (fixup on `cluster-autoscaling`). Adversarial
+  review of the Table → MaterializedView conversion returned **approve, no must-fix**. Re-verified
+  the high-risk dimensions against the live tree: the JSON paths match the catalog-protos
+  serialization (`StateUpdateKind` internally tagged on `kind`; `ClusterVariant` externally tagged
+  ⇒ `…->'variant'->'Managed'`; `ManagedCluster` / `ReconfigurationState` / `ReconfigurationTarget` /
+  `BurstState` field names all match), `jsonb_array_elements_text` yields a text column named
+  `value` so the `list_agg(... ORDER BY ordinality)` rebuilds a `text list`, and the per-column
+  block in `autogenerated/mz_internal.slt` needs no edit (schema identical; indexes do not appear
+  in its `objects` listing). The two review findings are **deferred, not fixed**, with reasoning:
+  (1) the `sNNN` system-item global IDs in `mz_catalog_server_index_accounting.slt` shift because
+  registering the new index in `BUILTINS_STATIC` bumps every item allocated after it (e.g.
+  `mz_recent_storage_usage` s806→s807) and the new index's relation reference is a placeholder —
+  these IDs are positional and authoritative only after CI live-server `--rewrite-results`; a
+  partial hand-edit cannot make the file self-consistent (the relation's true global ID is not
+  knowable without booting `environmentd`, which the operating rules say not to block on), so the
+  whole file is left for CI regen. (2) the sibling template's companion index
+  `MZ_CLUSTER_WORKLOAD_CLASSES_IND` is defined but unregistered in `BUILTINS_STATIC` (inert) — a
+  pre-existing condition out of scope for this correction; whether to register it (and add it to
+  the index-accounting snapshot) is tracked separately.
+
+- _2026-06-03_ — **PR 4 implemented** (observability: introspection table + `SHOW CLUSTERS` +
+  reconfiguration audit lifecycle, all dark). **Introspection table:** new catalog-populated builtin
+  `mz_internal.mz_cluster_reconfigurations` (OID 17088), one row per managed cluster, packed in
+  `pack_cluster_update` from the realized config plus the durable `reconfiguration`/`burst` records —
+  `current_*` (size / rf / AZ list), `target_*` (the record's target when in flight, else the realized
+  config), `reconfiguration_in_flight`, `reconfiguration_deadline` (`mz_timestamp`, NULL when none),
+  and a placeholder `burst_size` for PR 6. New builtin → **no migration**; with the controller dark
+  the records stay `None`, so `current == target` and nothing is in flight. **`SHOW CLUSTERS`:**
+  `mz_show_clusters` now LEFT JOINs the new table and exposes `current_size`, `target_size`,
+  `reconfiguration_in_flight`; `show.rs` projects them. The view is **indexed**, so it stays
+  non-temporal (no `mz_now()`); the timed-out-vs-in-progress split is read from the table's deadline.
+  **Audit lifecycle:** new `mz_audit_log::EventDetails::AlterClusterReconfigurationV1`
+  (`started`/`finalized`/`timed-out` transition + target size/rf + optional deadline), with the proto
+  variant added in place to the unshipped v86 (`objects.rs` + `objects_v86.rs`, both
+  `objects_hashes.json` entries regenerated to `11a6859ce52f01809ed4a317ec1735aa`) and `RustType`
+  conversions in `catalog-protos/audit_log.rs`. Emitted from the `Op::UpdateClusterConfig` durable
+  write site via `Catalog::classify_reconfiguration_transition`, classified purely from the
+  before/after `reconfiguration` record and the write timestamp vs. the deadline: record write /
+  re-target → `started` (with deadline), success cut-over → `finalized`, `COMMIT`-on-timeout cut-over
+  → `timed-out` (with deadline). The replica create/drop attribution (`Reconfiguration`) already lands
+  from PR 3. Dark by construction — a record only ever moves under the master gate. **Tests:**
+  `cluster_controller.slt` gained an observability section (steady-state introspection row =
+  current==target/not-in-flight, `SHOW CLUSTERS` new columns, post-reconfiguration current==target,
+  and the `started`+deadline / `finalized` audit rows) and `show_clusters.slt` asserts the new
+  gate-off columns are benign (current==target, NULL for unmanaged) — both authored for CI. A
+  `classify_reconfiguration_transition` unit test (`mz-adapter`) covers started/finalized/timed-out/
+  re-target/no-op deterministically and passes. Updated the hand-maintained catalog snapshots for the
+  new table/columns + bumped system-table count (`autogenerated/mz_internal.slt` query block + the
+  DISTINCT-object list, `mz_catalog_server_index_accounting.slt` column blocks,
+  `information_schema_tables.slt`, `oid.slt`, `catalog.td`) and added the `mz_cluster_reconfigurations`
+  doc block to `doc/.../system-catalog/mz_internal.md`. **Cheap checks:** `cargo fmt` + `cargo
+  check`/`clippy` clean on `mz-adapter`/`mz-catalog`/`mz-catalog-protos`/`mz-audit-log`/`mz-sql`/
+  `mz-pgrepr-consts`; `bin/lint-cargo` clean; `Cargo.lock` unchanged (no new deps); catalog
+  `test_proto_serialization_stability`, `durable::upgrade::tests`, and `builtin::` (incl.
+  `test_builtins_static_dependency_order`, `test_ontology_consistency`) green; catalog-protos +
+  audit-log unit tests green. Did **not** run the slt/testdrive suites or the live-server catalog-doc
+  regen (needs a full environmentd). **Deferred (see the PR-4 section):** the dedicated
+  `ROLLBACK`-timeout audit event (no config write to hang it off; needs a seam signal or a durable
+  tombstone-stamp — larger than PR 4's scope; the rollback is already visible via the tombstoned
+  record + none-desired drops); a live `mz_now()` timed-out indicator in `SHOW CLUSTERS` (the view is
+  indexed); and the live-server regen of the autogenerated catalog snapshots (hand-updated here to
+  match the generators).
 
 - _2026-06-02_ — **PR 3 review follow-up (on-timeout knob; fixup commit, same branch)** — addresses
   the adversarial review of the durable, controller-honored `ON TIMEOUT` work. **Doc correctness

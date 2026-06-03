@@ -13,8 +13,10 @@
 
 > SET cluster=cluster1;
 
+# SHOW CLUSTERS gained current_size/target_size/reconfiguration_in_flight
+# columns; unmanaged clusters have no reconfiguration row, so all three are NULL.
 > SHOW CLUSTERS LIKE 'cluster1';
-cluster1 "replica1 (3xsmall), replica2 (3xsmall)" ""
+cluster1 "replica1 (3xsmall), replica2 (3xsmall)" <null> <null> <null> ""
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'cluster1';
 cluster1 replica1 3xsmall true ""
