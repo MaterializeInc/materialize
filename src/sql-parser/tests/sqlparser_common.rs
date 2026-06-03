@@ -318,6 +318,41 @@ fn test_negated_cast_display_roundtrip() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_special_keyword_function_name_display_roundtrip() {
+    // A keyword the parser dispatches to a special grammar — a `parse_prefix`
+    // special form, or the `ANY`/`ALL`/`SOME` quantifier suffix of a comparison
+    // operator — used as a *function name* must print quoted, or it reparses as
+    // the special grammar instead of a function call. Check both a bare primary
+    // position and an operator right-hand side (where the quantifiers bite).
+    // Regression for the parse_pretty/parse_display fuzz findings.
+    let special = [
+        "array",
+        "coalesce",
+        "exists",
+        "extract",
+        "greatest",
+        "least",
+        "list",
+        "map",
+        "normalize",
+        "nullif",
+        "position",
+        "row",
+        "substring",
+        "trim",
+        "case",
+        "any",
+        "all",
+        "some",
+    ];
+    for kw in special {
+        assert_display_roundtrips(&format!(r#"SELECT "{kw}"(1)"#));
+        assert_display_roundtrips(&format!(r#"SELECT 0 = "{kw}"(1)"#));
+    }
+}
+
 /// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
 /// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
 fn assert_display_roundtrips(sql: &str) {
