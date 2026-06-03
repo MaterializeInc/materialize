@@ -341,6 +341,19 @@ export const mergeEnvironmentsWithHealth = atom(
   },
 );
 
+// Interval used while bootstrapping, before any environment is healthy.
+const BOOTSTRAP_POLL_INTERVAL_MS = 5_000;
+
+/** True once every enabled environment is healthy. */
+const allEnvironmentsHealthy = (environments?: EnvironmentsWithHealth) => {
+  const enabled = [...(environments?.values() ?? [])].filter(
+    (env): env is EnabledEnvironment => env.state === "enabled",
+  );
+  return (
+    enabled.length > 0 && enabled.every((e) => e.status.health === "healthy")
+  );
+};
+
 /**
  * Polls for region information and environment health.
  */
@@ -357,7 +370,13 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   useSuspenseQuery({
     queryKey: [...environmentQueryKeys.environmentHealth(cloudRegions)],
-    refetchInterval: options.intervalMs,
+    // Back off to the slower interval once healthy; a steady environment is
+    // already proven reachable, so frequent health checks just burn connection
+    // slots. Poll fast until then so bootstrap transitions surface promptly.
+    refetchInterval: (query) =>
+      allEnvironmentsHealthy(query.state.data)
+        ? options.intervalMs
+        : BOOTSTRAP_POLL_INTERVAL_MS,
     queryFn: async () => {
       return Sentry.startSpan(
         {
