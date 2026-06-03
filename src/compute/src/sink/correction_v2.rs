@@ -1041,19 +1041,8 @@ impl<D: Data> Cursor<D> {
 ///
 /// Chunks are immutable once created. They are produced by [`ChunkBuilder`], which mints a
 /// new chunk whenever its in-progress columnar container reaches a fixed serialized byte
-/// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase). This
-/// means each chunk corresponds to a single, predictable allocation; the previous
-/// columnation-backed `Vec<T>`-plus-region representation had no convenient way to pre-size
-/// the storage.
-///
-/// The chunk holds a [`Column`] directly. `Column` became `Send + Sync` in
-/// `timely_bytes` 0.30, which lets [`CorrectionV2::updates_before`] return a `+ Send`
-/// iterator that captures `&self`. Paging chunks out via
-/// [`mz_timely_util::column_pager::ColumnPager`] (introduced in #36552) would need a deeper
-/// rework of the cursor sharing model — `Cursor` holds `Rc<Chunk<D>>` and accesses chunk data
-/// through `&self`, while `pager.take` consumes its `PagedColumn`. Picking that up should
-/// happen at the `Chain` boundary (chains carry `Vec<PagedColumn>`, with chunks materialized
-/// at `into_cursor` time) and is out of scope for the spilling-correctness fix here.
+/// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
+/// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
     /// The contained updates.
     data: Column<(D, Timestamp, Diff)>,
@@ -1459,7 +1448,7 @@ impl<D: Data> Ord for MergeCursor<D> {
 mod tests {
     use mz_repr::{Diff, Timestamp};
 
-    use super::{ChainBuilder, ChunkData};
+    use super::ChainBuilder;
 
     #[mz_ore::test]
     fn chain_builder_update_count_matches_items() {
@@ -1490,12 +1479,12 @@ mod tests {
         }
         let chain = builder.finish();
 
-        // At least one chunk must have been minted into `Align` form, otherwise the spill
-        // path wouldn't be exercised.
+        // At least one chunk must have been minted into `Column::Align` form, otherwise the
+        // spill path wouldn't be exercised.
         let align_chunks = chain
             .chunks
             .iter()
-            .filter(|c| matches!(c.data, ChunkData::Align(_)))
+            .filter(|c| matches!(c.data, mz_timely_util::columnar::Column::Align(_)))
             .count();
         assert!(
             align_chunks > 0,
