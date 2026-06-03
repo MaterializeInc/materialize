@@ -377,6 +377,46 @@ fn test_quantifier_keyword_bare_identifier_display_roundtrip() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_cast_over_low_precedence_display_roundtrip() {
+    // `CAST(X AS t)` prints as the Postgres `X::t` form, so a low-precedence `X`
+    // (a comparison, a quantified comparison) must be parenthesized or the `::`
+    // re-associates. Crucially, a `CAST`/`COLLATE` wrapping such an `X` (parsed
+    // as `Cast(inner)`) is itself unsafe to print before a `::`, so the parser
+    // must wrap recursively — `CAST(a = ANY (...)::t AS u)` parses to
+    // `Cast(Cast(AnySubquery))` and, unwrapped, would lose the grouping when it
+    // appears as a `BETWEEN` bound. Regression for the grammar_roundtrip finding.
+    for sql in [
+        "SELECT CAST(a = b AS int4)",
+        "SELECT CAST(a = ANY (VALUES (1)) AS int4[])",
+        "SELECT CAST(a = ANY (VALUES (1))::int4[] AS int4[])",
+        "SELECT x BETWEEN y AND CAST(a = ANY (VALUES (1))::int4[] AS int4[])",
+        "SELECT CAST(CAST(a = b AS int4) AS int8)",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_role_password_display_roundtrip() {
+    // `RoleAttribute::Password` redacts the secret in `AstDisplay` (in every
+    // mode), but the output must stay parseable: a bare `PASSWORD` fails to
+    // reparse because the grammar requires `NULL` or a string literal after it.
+    // `PASSWORD NULL` carries no secret and prints verbatim; a set password
+    // prints a redacted placeholder string. Regression for the
+    // parse_display_roundtrip finding `ALTER ROLE x PASSWORD NULL`.
+    for sql in [
+        "ALTER ROLE r PASSWORD NULL",
+        "ALTER ROLE r PASSWORD 'secret'",
+        "CREATE ROLE r PASSWORD 'secret'",
+        "CREATE ROLE r PASSWORD NULL",
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
 /// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
 /// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
 fn assert_display_roundtrips(sql: &str) {
