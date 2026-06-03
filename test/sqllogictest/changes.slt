@@ -42,18 +42,19 @@ query error CHANGES requires a persisted collection, but got a common table expr
 WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c AS OF 0)
 
 # The relation may be a parenthesized subquery (mirroring SUBSCRIBE), as long as
-# it reduces to a bare read of a persist-backed object. Unlike the name form
-# (which rejects a view), a subquery transparently reads through a view to its
-# underlying persist collection: `(SELECT * FROM v)` inlines to a read of `t`.
+# it reduces to a bare read of a persist-backed object: `(SELECT * FROM t)`
+# behaves exactly like naming `t`.
 query I
 SELECT count(*) FROM CHANGES ((SELECT * FROM t) AS OF mz_now())
 ----
 0
 
-query I
+# A view is rejected through a subquery just as it is by name. The subquery
+# reduces to a bare read of `v` itself (a non-materialized view is not inlined
+# at this stage), and a view is not a persist-backed collection; reading through
+# it to an underlying shard is the (deferred) arbitrary-expression case.
+query error CHANGES requires a table, source, or materialized view, but materialize\.public\.v is a view
 SELECT count(*) FROM CHANGES ((SELECT * FROM v) AS OF mz_now())
-----
-0
 
 # A subquery that filters or transforms (i.e. is not a bare read) is the
 # not-yet-supported arbitrary-expression case.
