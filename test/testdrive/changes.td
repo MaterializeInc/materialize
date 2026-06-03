@@ -99,3 +99,47 @@ SELECT mz_now()::text
 > DROP MATERIALIZED VIEW mv
 
 > DROP TABLE base
+
+# Strict `AS OF <past>` reading back into retained history. A generous
+# RETAIN HISTORY window keeps the input's `since` far behind its `upper`, so the
+# fixed past bound is read exactly as written: neither clamped up to `since` (as
+# an advisory `AS OF AT LEAST` bound would be) nor rejected (as a strict bound
+# would be once compaction advanced `since` past it on a default-retention
+# collection). This makes the look-back deterministic rather than racing
+# compaction.
+> CREATE TABLE h (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> INSERT INTO h VALUES (1), (2)
+
+# Capture a strict changelog start at which `h` holds {1, 2}.
+$ set-from-sql var=h-as-of
+SELECT mz_now()::text
+
+# A burst of changes strictly after the captured bound, including an UPDATE
+# (which is a retraction of the old row plus an insert of the new one).
+> INSERT INTO h VALUES (3)
+
+> DELETE FROM h WHERE a = 1
+
+> UPDATE h SET a = 20 WHERE a = 2
+
+# The strict changelog from the past bound: the {1, 2} snapshot collapsed to the
+# bound, then every later change as an append. The 7-day retention guarantees
+# `since` is still behind the bound, so this returns history rather than erroring.
+> SELECT a, mz_diff FROM CHANGES (h AS OF ${h-as-of}) ORDER BY a, mz_diff
+1 -1
+1 1
+2 -1
+2 1
+3 1
+20 1
+
+# Net change per key over the retained window: 1 and 2 churn to zero, 3 and 20
+# remain — i.e. the current contents {3, 20}.
+> SELECT a, sum(mz_diff) FROM CHANGES (h AS OF ${h-as-of}) GROUP BY a ORDER BY a
+1 0
+2 0
+3 1
+20 1
+
+> DROP TABLE h
