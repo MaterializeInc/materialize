@@ -412,3 +412,13 @@ fn test_resolved_item_name_id_display_roundtrip() {
     // parse_pretty_roundtrip `[<quoted id> AS …]` finding.
     assert_display_roundtrips("SELECT * FROM [\"a b\" AS foo.bar]");
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_set_operation_leading_show_display_roundtrip() {
+    // A set operation whose leftmost operand is a `SHOW` must be parenthesized
+    // on display: a bare leading `SHOW` is dispatched as a SHOW statement and
+    // rejects the following set operator. Regression for the
+    // parse_pretty_roundtrip `(SHOW … EXCEPT SELECT …)` finding.
+    assert_display_roundtrips("(SHOW foo EXCEPT SELECT 1)");
+}
