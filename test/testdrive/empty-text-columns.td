@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Regression test for ss-159: an empty `TEXT COLUMNS = ()` on a
+# `CREATE TABLE .. FROM SOURCE` statement used to trip a soft-panic during
+# purification.
+
 # Test Postgres version
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -16,7 +20,6 @@ DROP PUBLICATION IF EXISTS mz_source;
 CREATE SCHEMA public;
 CREATE TABLE foo (id INT PRIMARY KEY, name TEXT);
 ALTER TABLE foo REPLICA IDENTITY FULL;
-INSERT INTO foo VALUES (1, 'hello');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SECRET pgpass AS 'postgres'
