@@ -226,6 +226,7 @@ pub enum EventDetails {
     RenameClusterV1(RenameClusterV1),
     RenameClusterReplicaV1(RenameClusterReplicaV1),
     AlterClusterReconfigurationV1(AlterClusterReconfigurationV1),
+    ClusterHydrationBurstV1(ClusterHydrationBurstV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
@@ -421,6 +422,56 @@ pub struct CreateRoleV1 {
     pub id: String,
     pub name: String,
     pub auto_provision_source: Option<String>,
+}
+
+/// A transition in the lifecycle of a hydration burst (a `burst` record on a
+/// managed cluster), recorded so an operator can trace a controller-initiated
+/// burst from start to teardown.
+///
+/// The burst replica's create and drop are recorded separately, carrying
+/// [`CreateOrDropClusterReplicaReasonV1::HydrationBurst`]; this event family
+/// records the cluster-level transitions those replica lifecycle events hang off.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum HydrationBurstLifecycleV1 {
+    /// A `burst` record was written: the controller is now running a burst
+    /// replica to accelerate hydration.
+    Started,
+    /// The `burst` record was cleared: the burst replica is torn down (its linger
+    /// elapsed after the steady set hydrated, or the burst is no longer warranted).
+    Finished,
+}
+
+/// A cluster-level transition in a hydration burst's lifecycle.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct ClusterHydrationBurstV1 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub transition: HydrationBurstLifecycleV1,
+    /// The size of the burst replica the record runs.
+    pub burst_size: String,
 }
 
 #[derive(
@@ -666,6 +717,10 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
     /// replica while converging a cluster onto an in-flight `reconfiguration`
     /// target (a background `ALTER CLUSTER`).
     Reconfiguration,
+    /// The cluster controller's hydration-burst strategy created the
+    /// transient burst replica it runs while a cluster's objects are not yet
+    /// hydrated.
+    HydrationBurst,
     /// The cluster controller dropped the replica because the cluster's
     /// configuration no longer calls for it. NOTE: a replication-factor
     /// decrease drop reads `retired` even though the config change itself was
@@ -1286,6 +1341,9 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::AlterClusterReconfigurationV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::ClusterHydrationBurstV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),

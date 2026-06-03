@@ -4390,6 +4390,7 @@ impl<'a> Parser<'a> {
 
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
+            AUTO,
             AVAILABILITY,
             DISK,
             INTROSPECTION,
@@ -4401,6 +4402,10 @@ impl<'a> Parser<'a> {
             WORKLOAD,
         ])?;
         let name = match option {
+            AUTO => {
+                self.expect_keywords(&[SCALING, STRATEGY])?;
+                ClusterOptionName::AutoScalingStrategy
+            }
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
@@ -4434,6 +4439,9 @@ impl<'a> Parser<'a> {
         match name {
             ClusterOptionName::Replicas => self.parse_cluster_option_replicas(),
             ClusterOptionName::Schedule => self.parse_cluster_option_schedule(),
+            ClusterOptionName::AutoScalingStrategy => {
+                self.parse_cluster_option_auto_scaling_strategy()
+            }
             _ => {
                 let value = self.parse_optional_option_value()?;
                 Ok(ClusterOption { name, value })
@@ -4533,6 +4541,60 @@ impl<'a> Parser<'a> {
         Ok(ClusterOption {
             name: ClusterOptionName::Schedule,
             value: Some(WithOptionValue::ClusterScheduleOptionValue(value)),
+        })
+    }
+
+    /// Parse the value of the `AUTO SCALING STRATEGY` cluster option: a
+    /// paren-enclosed list of strategy sub-policies. v1 supports only
+    /// `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An
+    /// empty list `()` disables autoscaling.
+    fn parse_cluster_option_auto_scaling_strategy(
+        &mut self,
+    ) -> Result<ClusterOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        self.expect_token(&Token::LParen)?;
+        let mut value = ClusterAutoScalingStrategyOptionValue { on_hydration: None };
+        if !self.consume_token(&Token::RParen) {
+            // The list is a comma-separated set of strategy sub-policies, each
+            // named by a leading keyword. Only `ON HYDRATION` exists in v1.
+            loop {
+                self.expect_keywords(&[ON, HYDRATION])?;
+                self.expect_token(&Token::LParen)?;
+                self.expect_keywords(&[HYDRATION, SIZE])?;
+                let _ = self.consume_token(&Token::Eq);
+                let hydration_size = self.parse_value()?;
+                let linger_duration = if self.consume_token(&Token::Comma) {
+                    self.expect_keywords(&[LINGER, DURATION])?;
+                    let _ = self.consume_token(&Token::Eq);
+                    Some(self.parse_value()?)
+                } else {
+                    None
+                };
+                self.expect_token(&Token::RParen)?;
+                // Each sub-policy may appear at most once; a repeated entry would
+                // otherwise silently keep only the last.
+                if value.on_hydration.is_some() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "ON HYDRATION specified more than once"
+                    );
+                }
+                value.on_hydration = Some(OnHydrationOptionValue {
+                    hydration_size,
+                    linger_duration,
+                });
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect_token(&Token::RParen)?;
+        }
+        Ok(ClusterOption {
+            name: ClusterOptionName::AutoScalingStrategy,
+            value: Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(
+                value,
+            )),
         })
     }
 

@@ -22,9 +22,10 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
-    AlterClusterReconfigurationV1, CreateOrDropClusterReplicaReasonV1, EventDetails, EventType,
-    IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1, RefreshDecisionWithReasonV2,
-    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    AlterClusterReconfigurationV1, ClusterHydrationBurstV1, CreateOrDropClusterReplicaReasonV1,
+    EventDetails, EventType, HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1, ObjectType,
+    ReconfigurationLifecycleV1, RefreshDecisionWithReasonV2, SchedulingDecisionV1,
+    SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -32,8 +33,9 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
-    ReconfigurationState, SourceReferences, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    BurstState, CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc,
+    DefaultPrivileges, ReconfigurationState, SourceReferences, StateDiff, StateUpdate,
+    StateUpdateKind, TemporaryItem,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -324,6 +326,9 @@ pub enum ReplicaCreateDropReason {
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
     GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
     /// The cluster controller's on-refresh strategy created the replica for a refresh window on
     /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
@@ -354,6 +359,9 @@ impl ReplicaCreateDropReason {
             ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
             }
             ReplicaCreateDropReason::OnRefresh(decision) => (
                 CreateOrDropClusterReplicaReasonV1::Schedule,
@@ -513,6 +521,52 @@ impl Catalog {
                     _ => None,
                 };
                 Some(event(transition, &old, deadline))
+            }
+            (None, None) | (Some(_), Some(_)) => None,
+        }
+    }
+
+    /// Classify the hydration-burst lifecycle transition an [`Op::UpdateClusterConfig`]
+    /// represents, comparing the cluster's `burst` record before and after.
+    ///
+    /// A burst is controller-initiated, so its record is written and cleared by the
+    /// controller's `update_state` rather than by an `ALTER`. A record written →
+    /// `started`; cleared → `finished`. A record whose `burst_size` changes (a
+    /// re-armed burst at a new size, after a `HYDRATION SIZE` change) is reported as
+    /// a fresh `started`. Returns `None` when the record is unchanged.
+    ///
+    /// Dark by construction: a `burst` record only ever moves when the cluster
+    /// controller is enabled.
+    fn classify_burst_transition(
+        old: &ClusterConfig,
+        new: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+    ) -> Option<ClusterHydrationBurstV1> {
+        let burst = |config: &ClusterConfig| -> Option<BurstState> {
+            match &config.variant {
+                ClusterVariant::Managed(managed) => managed.burst.clone(),
+                ClusterVariant::Unmanaged => None,
+            }
+        };
+        let old = burst(old);
+        let new = burst(new);
+
+        let event = |transition, record: &BurstState| ClusterHydrationBurstV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            burst_size: record.burst_size.clone(),
+        };
+
+        match (old, new) {
+            (None, Some(record)) => Some(event(HydrationBurstLifecycleV1::Started, &record)),
+            (Some(old), None) => Some(event(HydrationBurstLifecycleV1::Finished, &old)),
+            // A re-arm at a new size (a `HYDRATION SIZE` change) restarts the burst.
+            // A same-size record change (e.g. the `steady_hydrated_at` stamp) is not
+            // a lifecycle transition.
+            (Some(old), Some(new)) if old.burst_size != new.burst_size => {
+                Some(event(HydrationBurstLifecycleV1::Started, &new))
             }
             (None, None) | (Some(_), Some(_)) => None,
         }
@@ -2707,6 +2761,8 @@ impl Catalog {
                     id,
                     &name,
                 );
+                let burst_event =
+                    Self::classify_burst_transition(&cluster.config, &config, id, &name);
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -2735,6 +2791,19 @@ impl Catalog {
                         EventType::Alter,
                         ObjectType::Cluster,
                         EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
+
+                if let Some(details) = burst_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
                     )?;
                 }
             }
@@ -3409,6 +3478,86 @@ mod tests {
             )
             .is_none()
         );
+        assert!(classify(&managed(None), &managed(None)).is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_classify_burst_transition() {
+        use mz_audit_log::HydrationBurstLifecycleV1;
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use std::time::Duration;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        // A burst record at the given size, before the steady set has hydrated.
+        let record = |size: &str| BurstState {
+            burst_size: size.into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+        let classify = |old: &ClusterConfig, new: &ClusterConfig| {
+            Catalog::classify_burst_transition(old, new, cluster_id, "c")
+        };
+
+        // none -> some: the burst started, carrying the record's size.
+        let started = classify(&managed(None), &managed(Some(record("large"))))
+            .expect("a written burst record is a started transition");
+        assert_eq!(started.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(started.burst_size, "large");
+
+        // some -> none: the burst finished (the linger elapsed, record cleared).
+        let finished = classify(&managed(Some(record("large"))), &managed(None))
+            .expect("clearing a burst record is a finished transition");
+        assert_eq!(finished.transition, HydrationBurstLifecycleV1::Finished);
+        assert_eq!(finished.burst_size, "large");
+
+        // some -> some at a *new* size (a re-arm after a HYDRATION SIZE change):
+        // reported as a fresh started, carrying the new size.
+        let rearmed = classify(
+            &managed(Some(record("large"))),
+            &managed(Some(record("xlarge"))),
+        )
+        .expect("a burst re-arm at a new size is a started transition");
+        assert_eq!(rearmed.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(rearmed.burst_size, "xlarge");
+
+        // some -> some at the *same* size: not a lifecycle transition. This is the
+        // load-bearing case: the controller stamps `steady_hydrated_at` (the linger
+        // clock) on an existing record without changing its size, and that in-place
+        // update must not emit a spurious burst event.
+        let stamped = BurstState {
+            steady_hydrated_at: Some(Timestamp::from(42u64)),
+            ..record("large")
+        };
+        assert!(
+            classify(&managed(Some(record("large"))), &managed(Some(stamped))).is_none(),
+            "stamping steady_hydrated_at on a same-size record is not a transition"
+        );
+
+        // No record on either side is not a transition.
         assert!(classify(&managed(None), &managed(None)).is_none());
     }
 

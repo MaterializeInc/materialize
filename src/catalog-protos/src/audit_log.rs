@@ -16,17 +16,17 @@
 use mz_audit_log::{
     AlterAddColumnV1, AlterApplyReplacementV1, AlterClusterReconfigurationV1,
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    AlterSourceTimestampIntervalV1, CreateClusterReplicaV1, CreateClusterReplicaV2,
-    CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
-    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
-    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
-    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
-    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, ReconfigurationLifecycleV1,
-    RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2, RenameClusterReplicaV1,
-    RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1,
-    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2,
-    SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
-    VersionedEvent,
+    AlterSourceTimestampIntervalV1, ClusterHydrationBurstV1, CreateClusterReplicaV1,
+    CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1,
+    CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1,
+    CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1,
+    DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1,
+    FullNameV1, GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1,
+    ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
+    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -365,6 +365,53 @@ impl RustType<crate::objects::audit_log_event_v1::AlterClusterReconfigurationV1>
     }
 }
 
+impl RustType<crate::objects::audit_log_event_v1::HydrationBurstLifecycleV1>
+    for HydrationBurstLifecycleV1
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::HydrationBurstLifecycleV1 {
+        use crate::objects::audit_log_event_v1::hydration_burst_lifecycle_v1::Transition;
+        let transition = match self {
+            HydrationBurstLifecycleV1::Started => Transition::Started(Empty {}),
+            HydrationBurstLifecycleV1::Finished => Transition::Finished(Empty {}),
+        };
+        crate::objects::audit_log_event_v1::HydrationBurstLifecycleV1 { transition }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::HydrationBurstLifecycleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        use crate::objects::audit_log_event_v1::hydration_burst_lifecycle_v1::Transition;
+        Ok(match proto.transition {
+            Transition::Started(_) => HydrationBurstLifecycleV1::Started,
+            Transition::Finished(_) => HydrationBurstLifecycleV1::Finished,
+        })
+    }
+}
+
+impl RustType<crate::objects::audit_log_event_v1::ClusterHydrationBurstV1>
+    for ClusterHydrationBurstV1
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::ClusterHydrationBurstV1 {
+        crate::objects::audit_log_event_v1::ClusterHydrationBurstV1 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            transition: self.transition.into_proto(),
+            burst_size: self.burst_size.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::ClusterHydrationBurstV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterHydrationBurstV1 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            transition: proto.transition.into_rust()?,
+            burst_size: proto.burst_size,
+        })
+    }
+}
+
 impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV1> for DropClusterReplicaV1 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::DropClusterReplicaV1 {
         crate::objects::audit_log_event_v1::DropClusterReplicaV1 {
@@ -641,6 +688,12 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
                     reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Reconfiguration(Empty {}),
                 }
             }
+            CreateOrDropClusterReplicaReasonV1::HydrationBurst => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::HydrationBurst(Empty {}),
+                }
+            }
             CreateOrDropClusterReplicaReasonV1::Retired => {
                 use crate::objects::audit_log_event_v1 as ev;
                 ev::CreateOrDropClusterReplicaReasonV1 {
@@ -660,6 +713,9 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
             Reason::System(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::System),
             Reason::Reconfiguration(Empty {}) => {
                 Ok(CreateOrDropClusterReplicaReasonV1::Reconfiguration)
+            }
+            Reason::HydrationBurst(Empty {}) => {
+                Ok(CreateOrDropClusterReplicaReasonV1::HydrationBurst)
             }
             Reason::Retired(Empty {}) => Ok(CreateOrDropClusterReplicaReasonV1::Retired),
         }
@@ -1461,6 +1517,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::AlterClusterReconfigurationV1(details) => {
                 AlterClusterReconfigurationV1(details.into_proto())
             }
+            EventDetails::ClusterHydrationBurstV1(details) => {
+                ClusterHydrationBurstV1(details.into_proto())
+            }
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
             EventDetails::SetV1(details) => SetV1(details.into_proto()),
@@ -1554,6 +1613,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             AlterClusterReconfigurationV1(details) => Ok(
                 EventDetails::AlterClusterReconfigurationV1(details.into_rust()?),
             ),
+            ClusterHydrationBurstV1(details) => {
+                Ok(EventDetails::ClusterHydrationBurstV1(details.into_rust()?))
+            }
         }
     }
 }

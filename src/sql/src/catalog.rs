@@ -53,7 +53,9 @@ use crate::names::{
 };
 use crate::plan::statement::StatementDesc;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
-use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
+use crate::plan::{
+    AutoScalingStrategy, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query,
+};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -773,6 +775,10 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the schedule of the cluster, if the cluster is a managed cluster.
     fn schedule(&self) -> Option<&ClusterSchedule>;
+
+    /// Returns the user-configured autoscaling strategy of the cluster, if the
+    /// cluster is managed and has one set.
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy>;
 
     /// Try to convert this cluster into a [`CreateClusterPlan`].
     // TODO(jkosh44) Make this infallible and convert to `to_plan`.

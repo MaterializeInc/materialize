@@ -622,6 +622,7 @@ mz_show_cluster_replicas  ready
 mz_show_cluster_replicas  replica
 mz_show_cluster_replicas  replica_id
 mz_show_cluster_replicas  size
+mz_show_clusters  burst_size
 mz_show_clusters  comment
 mz_show_clusters  current_size
 mz_show_clusters  name

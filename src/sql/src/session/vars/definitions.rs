@@ -2069,6 +2069,17 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_auto_scaling_strategy,
+        // `enable_for_item_parsing: true` is required: stored `CREATE CLUSTER`
+        // statements carrying `AUTO SCALING STRATEGY` are re-parsed at catalog
+        // rehydration, where dyncfgs are not consulted. A `feature_flags!` gate
+        // holds there, so a stored statement does not fail to re-parse after the
+        // flag is turned off.
+        desc: "`AUTO SCALING STRATEGY` cluster option",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
         default: true,

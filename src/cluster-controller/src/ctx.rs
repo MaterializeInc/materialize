@@ -126,6 +126,28 @@ pub struct BurstRecord {
     pub steady_hydrated_at: Option<Timestamp>,
 }
 
+/// The user-configured autoscaling policy of a managed cluster, mirrored from
+/// durable state. The controller's own mirror of `mz_sql::plan::AutoScalingStrategy`,
+/// kept here so the pure crate need not depend on the SQL layer.
+///
+/// Extensible: future strategies are additional optional sub-policies. v1 carries
+/// only the `ON HYDRATION` burst policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoScalingPolicy {
+    pub on_hydration: Option<OnHydrationPolicy>,
+}
+
+/// The `ON HYDRATION` burst sub-policy: while a steady replica is not yet hydrated,
+/// run one extra replica at `hydration_size` to accelerate hydration, lingering for
+/// `linger_duration` after the steady set hydrates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnHydrationPolicy {
+    pub hydration_size: String,
+    /// `None` falls back to the system default linger when the burst strategy
+    /// writes its record.
+    pub linger_duration: Option<Duration>,
+}
+
 /// A managed cluster's scheduling policy, mirrored from durable state. The
 /// controller's own mirror of `mz_sql::plan::ClusterSchedule`, kept here so the
 /// pure crate need not depend on the SQL layer.
@@ -225,10 +247,22 @@ pub struct ClusterState {
     /// The cluster's scheduling policy. Drives whether the implicit baseline owns
     /// the replica set (MANUAL) or the on-refresh strategy does (REFRESH).
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, if any. Drives the hydration-burst
+    /// strategy.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     /// In-flight graceful reconfiguration, if any.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
+    /// Whether the hydration-burst strategy is enabled environment-wide (the
+    /// break-glass flag). A **config signal**, not durable cluster state, so it is
+    /// excluded from [`ClusterState::expected`]: the controller derives it fresh
+    /// each tick and a flip does not need to reject an in-flight decision.
+    pub burst_enabled: bool,
+    /// The system-default burst linger duration, written into a new `burst` record
+    /// when the policy's `linger_duration` is omitted. A config signal, excluded
+    /// from the witness for the same reason as `burst_enabled`.
+    pub default_burst_linger: Duration,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
     /// The refresh-window live signals, populated only for scheduled clusters
@@ -263,6 +297,7 @@ impl ClusterState {
             availability_zones: self.availability_zones.clone(),
             logging: self.logging.clone(),
             schedule: self.schedule,
+            auto_scaling_policy: self.auto_scaling_policy.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
@@ -283,6 +318,11 @@ pub struct ExpectedClusterState {
     /// which strategy owns the replica set, so it is part of the witness: a
     /// scheduled→MANUAL change must reject an in-flight on-refresh decision.
     pub schedule: ClusterSchedule,
+    /// The autoscaling policy. A concurrent `ALTER ... SET/RESET (AUTO SCALING
+    /// STRATEGY ...)` changes whether (and at what size) a burst is warranted, so
+    /// it is part of the witness: disabling burst, or changing its `HYDRATION
+    /// SIZE`, must reject an in-flight burst decision.
+    pub auto_scaling_policy: Option<AutoScalingPolicy>,
     pub reconfiguration: Option<ReconfigurationRecord>,
     pub burst: Option<BurstRecord>,
 }

@@ -28,16 +28,20 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::{
+    CLUSTER_CONTROLLER_TICK_INTERVAL, DEFAULT_HYDRATION_BURST_LINGER, ENABLE_CLUSTER_CONTROLLER,
+    ENABLE_HYDRATION_BURST,
+};
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
-    ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationTarget,
-    RefreshMvInfo, RefreshWindowDecision, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ApplyOutcome, AutoScalingPolicy, ClusterControllerCtx, ClusterSchedule, ClusterState, Decision,
+    ExpectedClusterState, ObservedReplica, OnHydrationPolicy, OnTimeout, ReconfigurationRecord,
+    ReconfigurationTarget, RefreshMvInfo, RefreshWindowDecision, RefreshWindowInputs, ReplicaShape,
+    StateWrite,
 };
 use mz_cluster_controller::strategy::{
-    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME,
+    GRACEFUL_RECONFIGURATION_STRATEGY_NAME, HYDRATION_BURST_STRATEGY_NAME, ON_REFRESH_STRATEGY_NAME,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -327,7 +331,7 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule,
-            auto_scaling_strategy: _,
+            auto_scaling_strategy,
             reconfiguration,
             burst,
         } = managed;
@@ -356,6 +360,10 @@ impl Coordinator {
             })
             .collect();
 
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let burst_enabled = ENABLE_HYDRATION_BURST.get(dyncfgs);
+        let default_burst_linger = DEFAULT_HYDRATION_BURST_LINGER.get(dyncfgs);
+
         Some(ClusterState {
             cluster_id,
             size: size.clone(),
@@ -363,8 +371,13 @@ impl Coordinator {
             availability_zones: availability_zones.clone(),
             logging: logging.clone(),
             schedule: schedule_to_controller(schedule),
+            auto_scaling_policy: auto_scaling_strategy
+                .as_ref()
+                .map(auto_scaling_policy_to_controller),
             reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
             burst: burst.as_ref().map(burst_record),
+            burst_enabled,
+            default_burst_linger,
             replicas,
             // Live signals the controller pulls separately (via `hydrated_replicas`
             // / `refresh_window_inputs`) only when a strategy needs them.
@@ -715,6 +728,11 @@ impl Coordinator {
             && managed.availability_zones == expected.availability_zones
             && managed.logging == expected.logging
             && schedule_to_controller(&managed.schedule) == expected.schedule
+            && managed
+                .auto_scaling_strategy
+                .as_ref()
+                .map(auto_scaling_policy_to_controller)
+                == expected.auto_scaling_policy
             && managed.reconfiguration.as_ref().map(reconfiguration_record)
                 == expected.reconfiguration
             && managed.burst.as_ref().map(burst_record) == expected.burst
@@ -722,11 +740,11 @@ impl Coordinator {
 }
 
 /// Map a create decision's strategy-attribution to the audit reason carried on
-/// the create event. Graceful wins when several strategies desired a shape (a
-/// stable tie-break); on-refresh maps to the `schedule` reason, carrying the
-/// create's window decision as the `scheduling_policies` detail; a
-/// baseline-held replica is `Manual`, the tag for replicas the user's own
-/// config calls for.
+/// the create event. Graceful wins over burst when both desired a shape (their
+/// shapes differ in practice, so this is a stable tie-break); on-refresh maps to
+/// the `schedule` reason, carrying the create's window decision as the
+/// `scheduling_policies` detail; a baseline-held replica is `Manual`, the tag
+/// for replicas the user's own config calls for.
 ///
 /// The detail is attached only when on-refresh wins the precedence, so the blob
 /// appears iff the audited reason is `schedule` — the same invariant the legacy
@@ -743,6 +761,8 @@ fn reason_from_strategies(
 ) -> ReplicaCreateDropReason {
     if reasons.contains(&GRACEFUL_RECONFIGURATION_STRATEGY_NAME) {
         ReplicaCreateDropReason::GracefulReconfiguration
+    } else if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME) {
+        ReplicaCreateDropReason::HydrationBurst
     } else if reasons.contains(&ON_REFRESH_STRATEGY_NAME) {
         ReplicaCreateDropReason::OnRefresh(audit_detail)
     } else {
@@ -801,6 +821,20 @@ fn on_timeout_from_controller(action: OnTimeout) -> mz_sql::plan::OnTimeoutActio
     match action {
         OnTimeout::Commit => mz_sql::plan::OnTimeoutAction::Commit,
         OnTimeout::Rollback => mz_sql::plan::OnTimeoutAction::Rollback,
+    }
+}
+
+fn auto_scaling_policy_to_controller(
+    strategy: &mz_sql::plan::AutoScalingStrategy,
+) -> AutoScalingPolicy {
+    AutoScalingPolicy {
+        on_hydration: strategy
+            .on_hydration
+            .as_ref()
+            .map(|on_hydration| OnHydrationPolicy {
+                hydration_size: on_hydration.hydration_size.clone(),
+                linger_duration: on_hydration.linger_duration,
+            }),
     }
 }
 
@@ -868,6 +902,10 @@ mod tests {
             reason_from_strategies(&[GRACEFUL_RECONFIGURATION_STRATEGY_NAME], None),
             Reason::GracefulReconfiguration
         ));
+        assert!(matches!(
+            reason_from_strategies(&[HYDRATION_BURST_STRATEGY_NAME], None),
+            Reason::HydrationBurst
+        ));
         // The on-refresh reason carries the create's window decision through to
         // the audit detail.
         assert!(matches!(
@@ -884,6 +922,7 @@ mod tests {
             reason_from_strategies(
                 &[
                     BASELINE_STRATEGY_NAME,
+                    HYDRATION_BURST_STRATEGY_NAME,
                     ON_REFRESH_STRATEGY_NAME,
                     GRACEFUL_RECONFIGURATION_STRATEGY_NAME,
                 ],
