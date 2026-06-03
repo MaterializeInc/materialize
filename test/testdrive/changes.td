@@ -170,6 +170,69 @@ SELECT mz_now()::text
 
 > DROP TABLE h
 
+# Reading a collection both directly and via CHANGES in one query: the
+# changelog import binds the raw stream; the direct read advances it to the
+# query time (yielding the current contents), while the changelog read nets
+# and packs it at its own site. (Regression: the direct read used to consume
+# packed changelog rows, returning the changelog count for both.)
+> CREATE TABLE mr (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> INSERT INTO mr VALUES (1), (2)
+
+$ set-from-sql var=mr-as-of
+SELECT mz_now()::text
+
+> DELETE FROM mr WHERE a = 1
+
+# Direct count: current contents {2}. Changelog count: snapshot {1, 2} plus
+# the deletion of 1.
+> SELECT (SELECT count(*) FROM mr), (SELECT count(*) FROM CHANGES (mr AS OF ${mr-as-of}))
+1 3
+
+# The direct read also joins against the changelog read of the same input.
+> SELECT u.a, c.a, c.mz_diff
+  FROM mr AS u, CHANGES (mr AS OF ${mr-as-of}) c
+  ORDER BY c.a, c.mz_diff
+2 1 -1
+2 1 1
+2 2 1
+
+> DROP TABLE mr
+
+# Multiple CHANGES with distinct bounds on the *same* input in one query: each
+# read resolves and collapses its own snapshot at its own start (per-read
+# starts in the changelog Get; the import reads from the earliest).
+> CREATE TABLE s (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> INSERT INTO s VALUES (1)
+
+# First bound: s holds {1}.
+$ set-from-sql var=s-as-of-1
+SELECT mz_now()::text
+
+> INSERT INTO s VALUES (2)
+
+# Second, later bound: s holds {1, 2}.
+$ set-from-sql var=s-as-of-2
+SELECT mz_now()::text
+
+> INSERT INTO s VALUES (3)
+
+# Both changelogs of `s` in one query (one dataflow, one import). The later
+# read's snapshot collapses to *its* bound — 1 and 2 sit exactly at it, only 3
+# is a later append — while the earlier read counts the {1} snapshot plus the
+# appends of 2 and 3. If both reads shared the import's earlier start, 2 would
+# sit strictly between the bounds rather than at the second one.
+> SELECT a, mz_timestamp = ${s-as-of-2} AS at_bound
+  FROM CHANGES (s AS OF ${s-as-of-2})
+  WHERE (SELECT count(*) FROM CHANGES (s AS OF ${s-as-of-1})) = 3
+  ORDER BY a
+1 true
+2 true
+3 false
+
+> DROP TABLE s
+
 # Multiple CHANGES with distinct bounds on distinct inputs in one query: each
 # import carries its own changelog start. RETAIN HISTORY keeps both strict
 # bounds deterministically readable.
@@ -297,4 +360,51 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 > DROP MATERIALIZED VIEW ws_changes_lookback
 
+# A maintained view mixing a *direct* read with a changelog read of the same
+# input. The strict 1-second window puts the pre-existing insert of 1 below
+# the changelog start, so the shared raw import must include the snapshot for
+# the direct read (the changelog read drops its part itself): the direct side
+# sees {1} from the start. The changelog branch is filtered empty (a < 0) so
+# the result is the direct side alone, deterministically.
+> CREATE MATERIALIZED VIEW ws_mixed AS
+  SELECT a FROM ws
+  UNION ALL
+  SELECT a FROM CHANGES (ws AS OF mz_now() - INTERVAL '1 second') WHERE a < 0
+
+> SELECT a FROM ws_mixed
+1
+
+> INSERT INTO ws VALUES (2)
+
+> SELECT a FROM ws_mixed ORDER BY a
+1
+2
+
+> DROP MATERIALIZED VIEW ws_mixed
+
 > DROP TABLE ws
+
+# A maintained view joining a direct read with a changelog read of the same
+# input, created over an empty table with a generous window: the direct side
+# tracks the contents, the changelog side accumulates every change since
+# creation.
+> CREATE TABLE mw (a int)
+
+> CREATE MATERIALIZED VIEW mw_mixed AS
+  SELECT u.a AS ua, c.a AS ca, c.mz_diff
+  FROM mw AS u, CHANGES (mw AS OF AT LEAST mz_now() - INTERVAL '1 hour') c
+
+> INSERT INTO mw VALUES (1), (2)
+
+> DELETE FROM mw WHERE a = 1
+
+# Direct side: current contents {2}. Changelog side: 1's insert and deletion,
+# 2's insert.
+> SELECT ua, ca, mz_diff FROM mw_mixed ORDER BY ca, mz_diff
+2 1 -1
+2 1 1
+2 2 1
+
+> DROP MATERIALIZED VIEW mw_mixed
+
+> DROP TABLE mw

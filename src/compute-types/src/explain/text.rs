@@ -155,6 +155,19 @@ impl Plan {
 
                         writeln!(f, "{}→Read {id}{annotations}", ctx.indent)?;
                     }
+                    GetPlan::Changelog { start, mfp } => {
+                        if !mfp.is_identity() {
+                            writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
+                            ctx.indent += 1;
+                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            ctx.indent += 1;
+                        }
+
+                        // The resolved start is query-time-dependent; omit it
+                        // for deterministic EXPLAIN output.
+                        let _ = start;
+                        writeln!(f, "{}→Read Changelog {id}{annotations}", ctx.indent)?;
+                    }
                 }
                 ctx.indent.reset(); // reset the original indent level
             }
@@ -675,6 +688,14 @@ impl Plan {
                     }
                     GetPlan::Collection(mfp) => {
                         writeln!(f, "{}Get::Collection {}{}", ctx.indent, id, annotations)?;
+                        ctx.indent += 1;
+                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                    }
+                    GetPlan::Changelog { start, mfp } => {
+                        // The resolved start is query-time-dependent; omit it
+                        // for deterministic EXPLAIN output.
+                        let _ = start;
+                        writeln!(f, "{}Get::Changelog {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
                         mode.expr(mfp, None).fmt_text(f, ctx)?;
                     }

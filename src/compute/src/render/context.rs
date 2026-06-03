@@ -81,6 +81,14 @@ pub struct Context<'scope, T: RenderTimestamp> {
     pub until: Antichain<mz_repr::Timestamp>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<'scope, T>>,
+    /// The changelog modes of the dataflow's changelog source imports, by id.
+    ///
+    /// A changelog import's binding is the *raw* stream, read from the import's
+    /// changelog start; consumers reinterpret it. A changelog (`CHANGES`) read
+    /// nets, packs, and advances at its `Get` site, while a direct read advances
+    /// the raw event times to the dataflow `as_of` (the binding does not provide
+    /// the usual times-advanced-by-`as_of` guarantee).
+    pub changelog_imports: BTreeMap<GlobalId, mz_compute_types::dataflows::ChangelogMode>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
@@ -127,6 +135,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
+            changelog_imports: dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, import)| Some((*id, import.changelog.clone()?)))
+                .collect(),
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
@@ -204,6 +217,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
+            changelog_imports: self.changelog_imports.clone(),
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
         }

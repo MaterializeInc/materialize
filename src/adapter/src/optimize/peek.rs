@@ -9,7 +9,7 @@
 
 //! Optimizer implementation for `SELECT` statements.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,9 +17,8 @@ use std::time::{Duration, Instant};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{ChangelogMode, IndexDesc};
 use mz_compute_types::plan::Plan;
-use mz_expr::{
-    Eval, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
-};
+use mz_expr::visit::Visit;
+use mz_expr::{Eval, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
@@ -304,40 +303,21 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // trails the query time by its lag, while a fixed bound ignores it. So a
         // one-off `SELECT * FROM CHANGES(c AS OF mz_now() - INTERVAL '30m')`
         // reads the window `[query_time - 30m, query_time]`.
-        let mut changelog_bounds: Vec<(GlobalId, MirScalarExpr, bool)> = Vec::new();
-        let mut plain_reads: BTreeSet<GlobalId> = BTreeSet::new();
+        // `CHANGES`: resolve each changelog read's bound at the query time and
+        // rewrite it in place to the resolved literal. Lowering carries the
+        // per-read start into `GetPlan::Changelog`, so each read collapses its
+        // *own* snapshot at its own start. The import-level start (the minimum
+        // over the reads) sizes the persist read and the read holds.
+        let mut changelog_starts: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
+        let mut has_changelog_reads = false;
         for build in &df_desc.objects_to_build {
-            build.plan.as_inner().visit_pre(|e| match e {
-                MirRelationExpr::Changes {
-                    id, bound, strict, ..
-                } => {
-                    changelog_bounds.push((*id, bound.clone(), *strict));
+            build.plan.as_inner().visit_pre(|e| {
+                if let MirRelationExpr::Changes { .. } = e {
+                    has_changelog_reads = true;
                 }
-                MirRelationExpr::Get {
-                    id: Id::Global(id), ..
-                } => {
-                    plain_reads.insert(*id);
-                }
-                _ => {}
             });
         }
-        // A collection read both directly and via `CHANGES` would share its
-        // single source import, which carries one read mode: rendering would
-        // reinterpret it as a changelog and the direct read would consume
-        // changelog rows. Reject the combination (regardless of the direct
-        // read's access path: an index-mediated read binds the same id in the
-        // render context). Lifting this requires per-read-site imports.
-        if let Some((id, _, _)) = changelog_bounds
-            .iter()
-            .find(|(id, _, _)| plain_reads.contains(id))
-        {
-            let state = self.catalog.state();
-            let entry = state.get_entry_by_global_id(id);
-            let name = state.resolve_full_name(entry.name(), None).to_string();
-            return Err(OptimizerError::ChangesMixedRead { name });
-        }
-        let mut changelog_starts: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
-        if !changelog_bounds.is_empty() {
+        if has_changelog_reads {
             let prep = ExprPrepOneShot {
                 logical_time: match timestamp_ctx.timestamp() {
                     Some(t) => EvalTime::Time(*t),
@@ -350,38 +330,65 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // The dataflow `as_of` cannot precede the inputs' read frontier
             // (`since`); the existing peek read holds pin it there for the query.
             let since = since.as_option().copied();
-            for (id, mut bound, strict) in changelog_bounds {
-                // Resolve `mz_now()` to the query time, then fold to a constant.
-                prep.prep_scalar_expr(&mut bound)?;
-                let start = match bound.eval(&[], &temp_storage)? {
-                    mz_repr::Datum::MzTimestamp(ts) => ts,
-                    other => {
-                        return Err(OptimizerError::Internal(format!(
-                            "CHANGES bound did not evaluate to an mz_timestamp: {other:?}"
-                        )));
+            for build in df_desc.objects_to_build.iter_mut() {
+                let mut result = Ok(());
+                build.plan.as_inner_mut().visit_mut_post(&mut |e| {
+                    if let MirRelationExpr::Changes {
+                        id,
+                        bound,
+                        strict,
+                        resolved_start,
+                        ..
+                    } = e
+                    {
+                        if result.is_err() {
+                            return;
+                        }
+                        result = (|| {
+                            // Resolve `mz_now()` to the query time, then fold to
+                            // a constant. Work on a copy: the bound stays as
+                            // written, for stable EXPLAIN output, and the
+                            // resolved start travels in `resolved_start`.
+                            let mut bound = bound.clone();
+                            prep.prep_scalar_expr(&mut bound)?;
+                            let start = match bound.eval(&[], &temp_storage)? {
+                                mz_repr::Datum::MzTimestamp(ts) => ts,
+                                other => {
+                                    return Err(OptimizerError::Internal(format!(
+                                        "CHANGES bound did not evaluate to an mz_timestamp:                                          {other:?}"
+                                    )));
+                                }
+                            };
+                            // An advisory (`AS OF AT LEAST`) bound ages in: clamp
+                            // it up to `since`, so the changelog starts at the
+                            // earliest available history rather than erroring. A
+                            // strict (`AS OF`) bound is pinned as written; if it
+                            // precedes `since` the requested history is
+                            // unavailable, which is an error. (The controller
+                            // re-validates the import-level start against the
+                            // read hold at dataflow creation, as a backstop.)
+                            let start = match since {
+                                Some(since) if !*strict => start.max(since),
+                                Some(since) if start < since => {
+                                    return Err(OptimizerError::ChangesHistoryUnavailable {
+                                        start,
+                                        since,
+                                    });
+                                }
+                                _ => start,
+                            };
+                            // Record this read's resolved start, for lowering
+                            // to carry into the LIR changelog read.
+                            *resolved_start = Some(start);
+                            changelog_starts
+                                .entry(*id)
+                                .and_modify(|existing| *existing = (*existing).min(start))
+                                .or_insert(start);
+                            Ok(())
+                        })();
                     }
-                };
-                // An advisory (`AS OF AT LEAST`) bound ages in: clamp it up to
-                // `since`, so the changelog starts at the earliest available
-                // history rather than erroring. A strict (`AS OF`) bound is
-                // pinned as written; if it precedes `since` the requested
-                // history is unavailable, which is an error. (The controller
-                // re-validates the start against the import's read hold at
-                // dataflow creation, as a backstop.)
-                let start = match since {
-                    Some(since) if !strict => start.max(since),
-                    Some(since) if start < since => {
-                        return Err(OptimizerError::ChangesHistoryUnavailable { start, since });
-                    }
-                    _ => start,
-                };
-                // Multiple changelog reads of the same input share one source
-                // import, so they share the *earliest* start; the snapshot
-                // collapse happens once, at that start, for all of them.
-                changelog_starts
-                    .entry(id)
-                    .and_modify(|existing| *existing = (*existing).min(start))
-                    .or_insert(start);
+                })?;
+                result?;
             }
         }
         for (id, start) in changelog_starts {

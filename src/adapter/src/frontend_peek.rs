@@ -1158,9 +1158,6 @@ impl PeekClient {
                         err @ crate::optimize::OptimizerError::ChangesHistoryUnavailable {
                             ..
                         } => AdapterError::Optimizer(err),
-                        err @ crate::optimize::OptimizerError::ChangesMixedRead { .. } => {
-                            AdapterError::Optimizer(err)
-                        }
                         err => {
                             AdapterError::Internal(format!("internal error in optimizer: {}", err))
                         }

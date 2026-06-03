@@ -346,6 +346,9 @@ impl HirRelationExpr {
                         typ: ReprRelationType::from(&typ),
                         bound,
                         strict,
+                        // Filled in by the peek optimizer at timestamp
+                        // resolution; maintained reads resolve on the import.
+                        resolved_start: None,
                     })
                 }
                 Let {

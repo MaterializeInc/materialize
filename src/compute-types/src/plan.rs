@@ -534,6 +534,23 @@ pub enum GetPlan {
     Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MapFilterProject),
+    /// Read the input collection — a *raw* changelog import — as an append-only
+    /// changelog (`CHANGES`), then apply the MFP to the extended
+    /// `(input.., mz_timestamp, mz_diff)` rows.
+    ///
+    /// Rendering advances the raw updates' event times to the read's start
+    /// (collapsing this read's snapshot), nets them per `(row, time)` through an
+    /// arrangement, packs each netted update `(row, time, diff)` into an extended
+    /// row emitted with diff `+1`, and advances the emission times to the
+    /// dataflow `as_of`.
+    Changelog {
+        /// This read's resolved changelog start (a one-off read's evaluated
+        /// bound). `None` for maintained reads, which replay deltas strictly
+        /// after the import-level start and need no per-read collapse.
+        start: Option<mz_repr::Timestamp>,
+        /// The MFP to apply to the packed changelog rows.
+        mfp: MapFilterProject,
+    },
 }
 
 impl Plan {
@@ -657,6 +674,11 @@ impl Plan {
                             match plan {
                                 GetPlan::Collection(mfp) => mfps.push(mfp),
                                 GetPlan::PassArrangements => {
+                                    identity_present = true;
+                                }
+                                // Unreachable: changelog imports are skipped above. Treat as
+                                // identity to block hoisting defensively.
+                                GetPlan::Changelog { .. } => {
                                     identity_present = true;
                                 }
                                 GetPlan::Arrangement(..) => {

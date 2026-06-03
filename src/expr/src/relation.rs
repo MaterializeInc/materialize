@@ -160,6 +160,16 @@ pub enum MirRelationExpr {
         /// is an error); an advisory bound ages in, clamping up to `since`.
         #[mzreflect(ignore)]
         strict: bool,
+        /// This read's resolved changelog start. The peek optimizer fills it in
+        /// at timestamp resolution (evaluating `bound` at the query time and
+        /// clamping an advisory bound up to the input's `since`), and lowering
+        /// carries it into the LIR changelog read. `None` until then, and for
+        /// maintained reads, whose start is resolved on the source import
+        /// instead. Not displayed by EXPLAIN — the resolved value is
+        /// query-time-dependent — and deliberately part of equality: reads with
+        /// equal resolved starts are interchangeable.
+        #[mzreflect(ignore)]
+        resolved_start: Option<mz_repr::Timestamp>,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -4178,6 +4188,7 @@ mod tests {
                 mz_repr::ReprScalarType::MzTimestamp,
             ),
             strict: true,
+            resolved_start: None,
         };
         let other = changes.clone();
         // `eq` soft-asserts internally that it agrees with `cmp`; this would
@@ -4535,16 +4546,23 @@ mod structured_diff {
                             typ: typ1,
                             bound: bound1,
                             strict: strict1,
+                            resolved_start: resolved_start1,
                         },
                         MirRelationExpr::Changes {
                             id: id2,
                             typ: typ2,
                             bound: bound2,
                             strict: strict2,
+                            resolved_start: resolved_start2,
                         },
                     ) => {
                         // A leaf, like `Get`: no child relations to recurse into.
-                        if id1 != id2 || typ1 != typ2 || bound1 != bound2 || strict1 != strict2 {
+                        if id1 != id2
+                            || typ1 != typ2
+                            || bound1 != bound2
+                            || strict1 != strict2
+                            || resolved_start1 != resolved_start2
+                        {
                             return Some((expr1, expr2));
                         }
                     }

@@ -295,10 +295,9 @@ impl Optimize<LocalMirPlan> for Optimizer {
         // The sequencer errors at creation unless the input retains that much
         // history; advisory reads age in instead.
         let mut strict_windows: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
-        // Collections also read directly (any access path): a collection's
-        // single source import carries one read mode, so a direct read of a
-        // changelog-read collection would consume changelog rows. Rejected
-        // below; lifting this requires per-read-site imports.
+        // Collections also read *directly* (any access path) need the snapshot
+        // at the shared raw import; maintained changelog reads exclude their
+        // part themselves.
         let mut plain_reads: BTreeSet<GlobalId> = BTreeSet::new();
         for build in df_desc.objects_to_build.iter_mut() {
             let mut result = Ok(());
@@ -385,14 +384,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
             })?;
             result?;
         }
-        if let Some(id) = changelog_windows.keys().find(|id| plain_reads.contains(id)) {
-            let entry = self.catalog.get_entry(id);
-            let name = self
-                .catalog
-                .resolve_full_name(entry.name(), None)
-                .to_string();
-            return Err(OptimizerError::ChangesMixedRead { name });
-        }
         for (id, window) in changelog_windows {
             df_desc.set_source_changelog(
                 &id,
@@ -400,6 +391,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
                     window,
                     start: None,
                     strict_window: strict_windows.get(&id).copied(),
+                    snapshot_for_direct_reads: plain_reads.contains(&id),
                 },
             );
         }

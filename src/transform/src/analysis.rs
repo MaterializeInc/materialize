@@ -2036,6 +2036,7 @@ mod tests {
                 ReprScalarType::MzTimestamp,
             ),
             strict: true,
+            resolved_start: None,
         };
         // Wrap in a `Project` so the leaf is at post-order index 0 and the
         // parent's `NonNegative` reads `results[index - 1]` (the leaf's value).

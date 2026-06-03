@@ -1441,6 +1441,7 @@ mod tests {
             window: window.into(),
             start: None,
             strict_window: None,
+            snapshot_for_direct_reads: false,
         });
 
         let mut dataflows = [df];

@@ -716,6 +716,13 @@ pub enum ChangelogMode {
         /// May be narrower than `window` (the max over *all* reads, which
         /// sizes the hold) when strict and advisory reads of one input mix.
         strict_window: Option<Timestamp>,
+        /// Whether the dataflow also reads this import *directly* (not via
+        /// `CHANGES`). A direct read needs the snapshot — its accumulation at
+        /// the `as_of` must be the input's contents — so the persist read
+        /// includes it; the maintained changelog reads then drop times at or
+        /// below `start` themselves (which they do unconditionally: under
+        /// `SnapshotMode::Exclude` nothing at or below `start` arrives).
+        snapshot_for_direct_reads: bool,
     },
 }
 
