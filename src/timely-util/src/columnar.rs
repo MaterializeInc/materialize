@@ -41,9 +41,8 @@ use crate::columnation::ColInternalMerger;
 
 /// A batcher for columnar storage.
 ///
-/// Since differential-dataflow 0.24 the chunker is supplied to the arrange
-/// operator separately rather than being part of the batcher type. Callers pass
-/// the chunker explicitly: [`ColumnationChunker`](crate::columnation::ColumnationChunker)
+/// The chunker is supplied to the arrange operator separately. Callers pass
+/// it explicitly: [`ColumnationChunker`](crate::columnation::ColumnationChunker)
 /// for `Vec<_>` input, or [`batcher::Chunker`] (over a `ColumnationStack<_>`) for
 /// [`Column`] input.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<ColInternalMerger<(K, V), T, R>>;

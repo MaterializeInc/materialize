@@ -153,8 +153,8 @@ mod tests {
         mut tuples: Vec<((String, String), u64, Diff)>,
         upper: u64,
     ) -> <ValBuilder<String, String, u64, Diff> as Builder>::Output {
-        // Since differential-dataflow 0.24 the batcher consumes already-chunked
-        // input via `PushInto` and chunking is the caller's responsibility.
+        // The batcher consumes already-chunked input via `PushInto`; chunking
+        // is the caller's responsibility.
         let mut batcher = ValBatcher::<String, String, u64, Diff>::new(None, 0);
         let mut chunker = ContainerChunker::<Vec<((String, String), u64, Diff)>>::default();
         chunker.push_into(&mut tuples);

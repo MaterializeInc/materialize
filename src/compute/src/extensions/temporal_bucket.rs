@@ -168,9 +168,9 @@ where
 
 /// A wrapper around `MergeBatcher` that implements the `Storage` trait for bucketing.
 ///
-/// Since differential-dataflow 0.24 the merge batcher no longer chunks its own
-/// input, so this wrapper carries a [`ColumnationChunker`] that consolidates the
-/// `Vec` input into the [`ColumnationStack`] chunks the batcher consumes.
+/// The merge batcher consumes pre-chunked input, so this wrapper carries a
+/// [`ColumnationChunker`] that consolidates the `Vec` input into the
+/// [`ColumnationStack`] chunks the batcher consumes.
 struct MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone,

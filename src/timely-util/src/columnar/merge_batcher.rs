@@ -21,10 +21,10 @@
 //!
 //! Reuses the resident building blocks from [`super::batcher`]: the inherent
 //! `Column::merge_from` / `Column::extract` methods (per-chunk merge / split).
-//! Input consolidation happens upstream: since differential-dataflow 0.24 the
-//! chunker ([`super::batcher::ColumnChunker`]) is supplied to the arrange
-//! operator separately, so this batcher receives already-consolidated
-//! [`Column`] chunks via [`PushInto`].
+//! Input consolidation happens upstream: the chunker
+//! ([`super::batcher::ColumnChunker`]) is supplied to the arrange operator
+//! separately, so this batcher receives already-consolidated [`Column`] chunks
+//! via [`PushInto`].
 //!
 //! [`differential_dataflow`]: differential_dataflow::trace::implementations::merge_batcher
 
@@ -938,8 +938,8 @@ mod tests {
         let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
             differential_dataflow::trace::Batcher::new(None, 0);
         // Two pushes; second has an equal-key collision with the first.
-        // Inputs arrive pre-consolidated chunk-by-chunk since the chunker
-        // moved out of the batcher in differential 0.24.
+        // Inputs arrive pre-consolidated chunk-by-chunk, as from the upstream
+        // chunker.
         let input1 = col(&[((1, 1), 0, 1), ((2, 0), 0, 1), ((3, 0), 0, 1)]);
         let input2 = col(&[((2, 0), 0, 2), ((4, 0), 0, 1)]);
         b.push_into(input1);

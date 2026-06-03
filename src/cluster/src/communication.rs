@@ -164,7 +164,7 @@ where
     }
 
     // Choose the intra-process allocator flavor up front.
-    // TODO(CLU-99): wire our zero-copy pager into the timely 0.30 spill policy
+    // TODO(CLU-99): wire our zero-copy pager into the timely spill policy
     // instead of passing `None` here.
     let process_allocators = if enable_zero_copy_binary {
         ProcessBuilder::new_bytes_vector(workers, refill.clone(), None)
@@ -172,9 +172,9 @@ where
         ProcessBuilder::new_typed_vector(workers, refill.clone(), None)
     };
 
-    // Since timely 0.30 the refill, spill policy, and per-thread logger hook are
-    // bundled into `Hooks`. We don't install a comm logger, and the spill policy
-    // is left unset pending CLU-99.
+    // Timely bundles the refill, spill policy, and per-thread logger hook into
+    // `Hooks`. We don't install a comm logger, and the spill policy is left
+    // unset pending CLU-99.
     let hooks = Hooks {
         log_fn: Arc::new(|_| None),
         refill,

@@ -133,8 +133,7 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
 type UpsertBatcher<T, FromTime> = MergeBatcher<VecMerger<UpsertKey, T, UpsertDiff<FromTime>>>;
 
 /// The chunker that consolidates raw `Vec` input into the chunks
-/// [`UpsertBatcher`] consumes. Since differential-dataflow 0.24 the chunker
-/// lives outside the batcher.
+/// [`UpsertBatcher`] consumes.
 type UpsertChunker<T, FromTime> = ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>;
 
 // The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
@@ -314,8 +313,7 @@ where
         // UpsertDiff Semigroup as data is pushed in, bounding memory to
         // O(unique key-time pairs) even during large initial snapshots.
         let mut batcher: UpsertBatcher<T, FromTime> = Batcher::new(None, 0);
-        // Since differential-dataflow 0.24 the batcher no longer chunks its own
-        // input; this chunker consolidates raw `Vec` input into the chunks the
+        // The chunker consolidates raw `Vec` input into the chunks the
         // batcher consumes.
         let mut chunker: UpsertChunker<T, FromTime> = Default::default();
         // Scratch buffer for accumulating source events before flushing to

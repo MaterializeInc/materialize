@@ -560,9 +560,8 @@ where
         // Acquire a logger for arrange events.
 
         let mut batcher = Ba::new(logger, info.global_id);
-        // The chunker consolidates raw input containers into the batcher's
-        // output chunks. Since differential-dataflow 0.24 this lives in the
-        // operator rather than inside the batcher.
+        // The chunker consolidates raw input containers into the chunks the
+        // batcher consumes.
         let mut chunker = Chu::default();
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Ba::Time>>::new();

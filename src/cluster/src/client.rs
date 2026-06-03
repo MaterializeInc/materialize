@@ -328,8 +328,8 @@ mod alloc {
     // SAFETY: `LgallocHandle` exclusively owns its allocation (either an
     // lgalloc handle or a leaked `Vec`), and the `NonNull<u8>` is just a pointer
     // into that owned memory. Transferring the handle transfers ownership, so it
-    // is safe to send across threads. Required because timely 0.30's
-    // `BytesRefill` produces `Box<dyn DerefMut<Target=[u8]> + Send>`.
+    // is safe to send across threads. Required because timely's `BytesRefill`
+    // produces `Box<dyn DerefMut<Target=[u8]> + Send>`.
     unsafe impl Send for LgallocHandle {}
 
     impl std::ops::Deref for LgallocHandle {

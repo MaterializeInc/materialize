@@ -180,9 +180,7 @@ pub use join::LinearJoinSpec;
 
 /// Guard that presses a differential [`ShutdownButton`] when dropped.
 ///
-/// differential-dataflow 0.24 removed `ShutdownButton::press_on_drop`, so we
-/// reconstruct the press-on-drop behavior locally: dropping this guard releases
-/// the imported trace's capabilities.
+/// Dropping this guard releases the imported trace's capabilities.
 struct PressOnDrop<T>(ShutdownButton<T>);
 
 impl<T> Drop for PressOnDrop<T> {
