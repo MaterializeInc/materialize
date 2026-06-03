@@ -2121,7 +2121,21 @@ impl RowPacker<'_> {
                 .map_err(|err| err.to_string())?
             }
             Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
+                let mut prev_key: Option<&str> = None;
                 for e in x.elements.iter() {
+                    // Map keys must be unique and strictly ascending; iterating a
+                    // map that violates this trips a debug_assert. A crafted
+                    // proto can, so reject it as a decode error here instead.
+                    if let Some(prev) = prev_key {
+                        if e.key.as_str() <= prev {
+                            return Err(format!(
+                                "dict keys must be unique and in ascending order, \
+                                 but {:?} came after {:?}",
+                                e.key, prev,
+                            ));
+                        }
+                    }
+                    prev_key = Some(e.key.as_str());
                     row.push(Datum::from(e.key.as_str()));
                     let val = e
                         .val
@@ -2280,6 +2294,24 @@ mod tests {
             0x00, 0x00, 0xaa, 0x01, 0x00, 0x0a, 0x13, 0xf8, 0x01, 0x08, 0xaa, 0x0a, 0x03, 0xba,
             0x01, 0x00, 0x22, 0x03, 0xba, 0x01, 0x00, 0x12, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03,
             0xaa, 0x01, 0x00,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    fn proto_row_unordered_dict_keys_is_error() {
+        // A ProtoRow with a dict whose keys are duplicated or not in ascending
+        // order must decode to an error, not panic — iterating such a map trips
+        // a debug_assert. Regression for the row_proto_roundtrip cargo-fuzz
+        // finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x32, 0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x10, 0x10, 0x99, 0x68, 0x0a, 0x18,
+            0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x5b, 0x18, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x18, 0x10,
         ];
         let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
         let result: Result<Row, _> = proto.into_rust();
