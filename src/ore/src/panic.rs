@@ -54,25 +54,32 @@ thread_local! {
     static CAUGHT_PANIC_DETAILS: RefCell<Option<PanicDetails>> = const { RefCell::new(None) };
 }
 
-/// Details about a caught panic, captured at the panic site by the enhanced
-/// panic handler. See [`catch_unwind_with_details`].
-#[derive(Clone, Debug, Default)]
-pub struct PanicDetails {
+/// Details about a caught panic, recorded at the panic site by the enhanced
+/// panic handler and consumed by [`catch_unwind_with_details`]. Internal: the
+/// public-facing type is [`CaughtPanic`].
+#[derive(Clone, Debug)]
+struct PanicDetails {
     /// The source code location at which the panic occurred, if known.
-    pub location: Option<String>,
-    /// A backtrace captured at the panic site, if one was captured.
-    pub backtrace: Option<String>,
+    location: Option<String>,
+    /// A backtrace captured at the panic site. Always populated by the handler.
+    backtrace: String,
 }
 
 /// A panic recovered by [`catch_unwind_with_details`], bundling the panic
 /// message with the location and backtrace captured at the panic site.
+///
+/// Marked `#[non_exhaustive]` because it is likely to grow more context (e.g.
+/// thread name) over time; construct it only via [`catch_unwind_with_details`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct CaughtPanic {
     /// The panic message.
     pub message: Cow<'static, str>,
     /// The source code location at which the panic occurred, if known.
     pub location: Option<String>,
-    /// A backtrace captured at the panic site, if one was captured.
+    /// A backtrace captured at the panic site, if one was captured. Absent if
+    /// the enhanced panic handler (see [`install_enhanced_handler`]) was not
+    /// installed.
     pub backtrace: Option<String>,
 }
 
@@ -80,7 +87,7 @@ impl fmt::Display for CaughtPanic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)?;
         if let Some(location) = &self.location {
-            write!(f, ", at {location}")?;
+            write!(f, " (at {location})")?;
         }
         Ok(())
     }
@@ -152,7 +159,7 @@ pub fn install_enhanced_handler() {
                 CAUGHT_PANIC_DETAILS.with(|details| {
                     *details.borrow_mut() = Some(PanicDetails {
                         location,
-                        backtrace: Some(backtrace),
+                        backtrace,
                     });
                 });
             }
@@ -291,23 +298,29 @@ where
     })
 }
 
-/// Like [`crate::panic::catch_unwind`], but downcasts the returned `Box<dyn Any>` error to a
-/// string which is almost always is.
+/// Downcasts an opaque panic payload (as returned by [`catch_unwind`]) to its
+/// message string, which it almost always is.
 ///
 /// See: <https://doc.rust-lang.org/stable/std/panic/struct.PanicHookInfo.html#method.payload>
+fn downcast_panic_message(payload: &(dyn Any + Send)) -> Cow<'static, str> {
+    match payload.downcast_ref::<&'static str>() {
+        Some(s) => Cow::Borrowed(*s),
+        None => match payload.downcast_ref::<String>() {
+            Some(s) => Cow::Owned(s.to_owned()),
+            None => Cow::Borrowed("Box<Any>"),
+        },
+    }
+}
+
+/// Like [`crate::panic::catch_unwind`], but downcasts the returned `Box<dyn Any>` error to a
+/// string which is almost always is.
 pub fn catch_unwind_str<F, R>(f: F) -> Result<R, Cow<'static, str>>
 where
     F: FnOnce() -> R + UnwindSafe,
 {
     match crate::panic::catch_unwind(f) {
         Ok(res) => Ok(res),
-        Err(opaque) => match opaque.downcast_ref::<&'static str>() {
-            Some(s) => Err(Cow::Borrowed(*s)),
-            None => match opaque.downcast_ref::<String>() {
-                Some(s) => Err(Cow::Owned(s.to_owned())),
-                None => Err(Cow::Borrowed("Box<Any>")),
-            },
-        },
+        Err(opaque) => Err(downcast_panic_message(&*opaque)),
     }
 }
 
@@ -326,6 +339,11 @@ where
 /// with extra context. If [`install_enhanced_handler`] has not been installed,
 /// the `location` and `backtrace` fields will be absent, but the `message` is
 /// still recovered.
+///
+/// Note that the captured backtrace is always a full backtrace
+/// ([`Backtrace::force_capture`]); unlike the aborting path in
+/// [`install_enhanced_handler`], it does not honor `RUST_BACKTRACE`, since these
+/// caught panics are rare and the extra context is worth the verbosity.
 pub fn catch_unwind_with_details<F, R>(f: F) -> Result<R, CaughtPanic>
 where
     F: FnOnce() -> R + UnwindSafe,
@@ -337,20 +355,16 @@ where
     match res {
         Ok(res) => Ok(res),
         Err(opaque) => {
-            let message = match opaque.downcast_ref::<&'static str>() {
-                Some(s) => Cow::Borrowed(*s),
-                None => match opaque.downcast_ref::<String>() {
-                    Some(s) => Cow::Owned(s.to_owned()),
-                    None => Cow::Borrowed("Box<Any>"),
-                },
+            let message = downcast_panic_message(&*opaque);
+            let details = CAUGHT_PANIC_DETAILS.with(|details| details.borrow_mut().take());
+            let (location, backtrace) = match details {
+                Some(details) => (details.location, Some(details.backtrace)),
+                None => (None, None),
             };
-            let details = CAUGHT_PANIC_DETAILS
-                .with(|details| details.borrow_mut().take())
-                .unwrap_or_default();
             Err(CaughtPanic {
                 message,
-                location: details.location,
-                backtrace: details.backtrace,
+                location,
+                backtrace,
             })
         }
     }

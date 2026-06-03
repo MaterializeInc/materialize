@@ -70,6 +70,6 @@ fn catch_panic() {
     // The `Display` impl appends the location to the message.
     assert_eq!(
         caught.to_string(),
-        format!("panicked with details, at {location}")
+        format!("panicked with details (at {location})")
     );
 }

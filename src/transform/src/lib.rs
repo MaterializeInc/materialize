@@ -333,7 +333,7 @@ where
             // panic the caller.
             panic!("{}", e.should_panic().expect("checked above"));
         }
-        Ok(result) => result.map_err(|e| e),
+        Ok(result) => result,
         Err(panic) => {
             // A panic during optimization is always a bug; log an error, including the panic
             // location and a backtrace from the panic site, so we learn about it. Pass the
@@ -351,11 +351,9 @@ where
             );
 
             // Surface at least the panic location in the user-facing error, so that internal
-            // errors are actionable without having to grep the logs for the backtrace.
-            let msg = format!(
-                "unexpected panic during query optimization: {} (at {})",
-                panic.message, location,
-            );
+            // errors are actionable without having to grep the logs for the backtrace. The
+            // `CaughtPanic` `Display` impl appends the panic location to the message.
+            let msg = format!("unexpected panic during query optimization: {panic}");
             Err(TransformError::Internal(msg).into())
         }
     }
