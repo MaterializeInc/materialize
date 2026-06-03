@@ -631,6 +631,17 @@ impl Plan {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            // A changelog read (`CHANGES`) must not have its `Get`'s MFP pushed
+            // into the source operators: rendering reinterprets the raw source
+            // read into the extended `(input.., mz_timestamp, mz_diff)` rows
+            // *after* `persist_source` applies these operators. Pushing the MFP
+            // down would apply it (e.g. a projection referencing the appended
+            // `mz_timestamp`/`mz_diff` columns) to the raw, narrower rows and
+            // index out of bounds. The MFP stays on the `Get`, where rendering
+            // applies it to the reinterpreted, extended collection.
+            if source_import.read_as_changelog {
+                continue;
+            }
             let source = &mut source_import.desc;
             let mut identity_present = false;
             let mut mfps = Vec::new();

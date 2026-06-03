@@ -364,6 +364,13 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 
     // Push predicate information into the SourceDesc.
     for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+        // A changelog read (`CHANGES`) reads the raw source and reinterprets it
+        // into the extended changelog rows during rendering; predicates must not
+        // be pushed below that reinterpretation (they stay on the `Get`). See the
+        // matching guard in `Plan::refine_source_mfps`.
+        if source_import.read_as_changelog {
+            continue;
+        }
         let source = &mut source_import.desc;
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {

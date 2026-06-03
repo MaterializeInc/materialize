@@ -313,6 +313,9 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/boolean.slt",
         "test/sqllogictest/bytea.slt",
         "test/sqllogictest/cast.slt",
+        # CHANGES is rejected in an index/materialized-view context, so wrapping
+        # its SELECTs in an indexed view is intentionally inconsistent.
+        "test/sqllogictest/changes.slt",
         "test/sqllogictest/char.slt",
         "test/sqllogictest/chbench.slt",
         "test/sqllogictest/chr.slt",
