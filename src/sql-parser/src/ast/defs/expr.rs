@@ -354,7 +354,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(data_type);
             }
             Expr::Collate { expr, collation } => {
-                f.write_node(&expr);
+                // `COLLATE` binds very tightly (`PostfixCollateAt`), so a
+                // low-precedence operand must be parenthesized or the collation
+                // re-associates onto its rightmost sub-operand — `a + b COLLATE c`
+                // would reparse as `a + (b COLLATE c)`. (Round-trip parens are
+                // stripped by `normalize`, so the printer must re-add them.)
+                if prints_self_delimiting(expr) {
+                    f.write_node(&expr);
+                } else {
+                    f.write_str("(");
+                    f.write_node(&expr);
+                    f.write_str(")");
+                }
                 f.write_str(" COLLATE ");
                 f.write_node(&collation);
             }
@@ -585,19 +596,20 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
     }
 }
 
-/// Whether `needle` is safe to print bare as the left operand of the
-/// `position(<needle> IN <haystack>)` special form. The parser reads the needle
-/// with `parse_subexpr(Precedence::Like)`, which stops at the first operator that
-/// binds at or below `Like` it reaches in the needle's left spine — so any such
-/// operator anywhere reachable on that spine (a comparison, `IN`, `IS`, `NOT`, a
-/// boolean connective, a quantified comparison, or even a higher-precedence
-/// binary op whose own left operand exposes one, e.g. `(a IN q) ->> b`) would
-/// split the special form on the wrong token on reparse. Rather than chase every
-/// such shape, only emit the special form for a *primary* needle — one that is
-/// atomic or self-delimiting (parenthesized, bracketed, `name(...)`, …) — and
-/// fall back to the plain quoted `"position"(a, b)` call form for anything else.
-fn needle_safe_before_in<T: AstInfo>(needle: &Expr<T>) -> bool {
-    match needle {
+/// Whether `expr` prints in a *self-delimiting* form — atomic, or wrapped in its
+/// own brackets/parens (`name(...)`, `(…)`, `ARRAY[…]`, `CASE … END`, …) — so it
+/// is safe to print immediately to the left of a tight postfix operator (`::`,
+/// `COLLATE`, or the `IN` delimiter of the `position(<needle> IN …)` special
+/// form) without the operator re-associating into the expression's spine.
+///
+/// Anything with an exposed operator spine is *not* self-delimiting: a tight
+/// postfix would bind to its rightmost sub-operand (`a + b COLLATE c` parses as
+/// `a + (b COLLATE c)`), and the `position` `IN` delimiter would split on an
+/// inner `IN`/comparison (`a IN (q) ->> b`). Callers must parenthesize / fall
+/// back for those. Postfix forms (`::`/`COLLATE`/`[…]`) are self-delimiting only
+/// when their own inner operand is.
+fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
+    match expr {
         Expr::Value(_)
         | Expr::Identifier(_)
         | Expr::QualifiedWildcard(_)
@@ -619,7 +631,7 @@ fn needle_safe_before_in<T: AstInfo>(needle: &Expr<T>) -> bool {
         // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
         // so they are safe only when their inner operand is.
         Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
-            needle_safe_before_in(expr)
+            prints_self_delimiting(expr)
         }
         _ => false,
     }
@@ -1037,7 +1049,7 @@ impl<T: AstInfo> Function<T> {
                     // with a needle that's safe to sit left of `IN`.
                     r#""position""#
                         if self.args.len() == Some(2)
-                            && self.args.first().is_some_and(needle_safe_before_in) =>
+                            && self.args.first().is_some_and(prints_self_delimiting) =>
                     {
                         Some(("position", &[None, Some(IN)]))
                     }

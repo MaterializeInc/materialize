@@ -417,6 +417,24 @@ fn test_role_password_display_roundtrip() {
     }
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_collate_low_precedence_display_roundtrip() {
+    // `COLLATE` binds very tightly (`PostfixCollateAt`), so a low-precedence
+    // operand must print parenthesized — `(a + b) COLLATE c` would otherwise
+    // reparse as `a + (b COLLATE c)`. The round-trip oracle strips the user's
+    // parens before reprinting (`Expr::Nested` is semantic noise), so the printer
+    // has to re-add them. Regression for the grammar_roundtrip finding.
+    for sql in [
+        r#"SELECT (a + b) COLLATE "en""#,
+        r#"SELECT (a = b) COLLATE "en""#,
+        r#"SELECT a COLLATE "en""#,
+        r#"SELECT (a COLLATE "en") = b"#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
 /// Asserts `parse -> AstDisplay (simple) -> parse` is stable for a single
 /// statement (the `parse_display_roundtrip` cargo-fuzz invariant).
 fn assert_display_roundtrips(sql: &str) {
