@@ -826,6 +826,13 @@ mod non_negative {
                     }
                     Id::Global(_) => true,
                 },
+                // A changelog read is a leaf (no input), so it must not fall into
+                // the `_ => results[index - 1]` arm below (which underflows for a
+                // leaf at post-order index 0). Its multiplicities are not
+                // guaranteed non-negative — the maintained sliding case retracts
+                // as rows age out of the window — so we report `false`
+                // conservatively, like the catch-all but without the indexing.
+                MirRelationExpr::Changes { .. } => false,
                 // Negate must be false unless input is "non-positive".
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
@@ -2001,5 +2008,45 @@ mod common_lattice {
             *into = *into && item;
             changed
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::{MirRelationExpr, MirScalarExpr};
+    use mz_repr::optimize::OptimizerFeatures;
+    use mz_repr::{Datum, GlobalId, ReprRelationType, ReprScalarType, Timestamp};
+
+    use super::{DerivedBuilder, NonNegative};
+
+    /// Regression test: a `Changes` node is a leaf, so the `NonNegative`
+    /// analysis must give it an explicit value rather than falling into the
+    /// `_ => results[index - 1]` arm. When a `Changes` leaf sits at post-order
+    /// index 0 (e.g. directly under a `Project`, as `SELECT a, mz_diff FROM
+    /// CHANGES(t)` optimizes to), that arm computes `results[usize::MAX]` and
+    /// panics the optimizer with an out-of-bounds index.
+    #[mz_ore::test]
+    fn non_negative_handles_changes_leaf() {
+        let changes = MirRelationExpr::Changes {
+            id: GlobalId::User(1),
+            typ: ReprRelationType::new(vec![ReprScalarType::MzTimestamp.nullable(false)]),
+            bound: MirScalarExpr::literal_ok(
+                Datum::MzTimestamp(Timestamp::from(0u64)),
+                ReprScalarType::MzTimestamp,
+            ),
+            strict: true,
+        };
+        // Wrap in a `Project` so the leaf is at post-order index 0 and the
+        // parent's `NonNegative` reads `results[index - 1]` (the leaf's value).
+        let expr = changes.project(vec![0]);
+
+        let features = OptimizerFeatures::default();
+        let mut builder = DerivedBuilder::new(&features);
+        builder.require(NonNegative);
+        // Would panic before the fix with "index out of bounds ... usize::MAX".
+        let derived = builder.visit(&expr);
+
+        // A changelog read is conservatively non-non-negative (it may retract).
+        assert_eq!(derived.as_view().value::<NonNegative>(), Some(&false));
     }
 }
