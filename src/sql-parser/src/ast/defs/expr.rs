@@ -319,27 +319,12 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    // `- <number>` folds into a negative literal at parse time,
-                    // and the `::` cast binds looser, so printing `- 2::t` — or a
-                    // cast *chain* like `- 2::t::u` — would reparse as `(-2)::t`,
-                    // migrating the negation into the innermost (numeric) operand.
-                    // Parenthesize whenever the operand is a cast chain bottoming
-                    // out in a numeric literal so the prefix operator keeps scope.
-                    let numeric_cast = {
-                        let mut e = expr1.as_ref();
-                        let mut saw_cast = false;
-                        loop {
-                            match e {
-                                Expr::Cast { expr, .. } => {
-                                    saw_cast = true;
-                                    e = expr.as_ref();
-                                }
-                                Expr::Value(Value::Number(_)) => break saw_cast,
-                                _ => break false,
-                            }
-                        }
-                    };
-                    if numeric_cast {
+                    // A prefix operator binds tighter than `COLLATE` and the
+                    // binary operators but looser than the postfix `::`/`[…]`
+                    // forms, and `- <number>` lexes as a negative literal, so a
+                    // low-precedence or numeric-leftmost operand must be
+                    // parenthesized to keep the prefix operator's scope.
+                    if prefix_operand_needs_parens(expr1.as_ref()) {
                         f.write_str("(");
                         f.write_node(&expr1);
                         f.write_str(")");
@@ -634,6 +619,32 @@ fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
             prints_self_delimiting(expr)
         }
         _ => false,
+    }
+}
+
+/// Whether the operand of a prefix operator (`-`/`+`/`~`) must be parenthesized
+/// to round-trip. A prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE` and
+/// the binary/comparison operators, but *looser* than the postfix `::`/`[…]`
+/// forms — and `- <number>` additionally lexes as a negative literal. So peel
+/// the tight postfixes (`::`/`[…]`); if the chain bottoms out at a numeric
+/// literal the sign would fold into it, and if it bottoms out at anything other
+/// than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a binary op, …) the
+/// prefix op would re-associate — both need parens. (`a + b COLLATE c` reparses
+/// as `a + (b COLLATE c)`; `- x COLLATE c` as `(- x) COLLATE c`.)
+fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
+    let mut e = operand;
+    let mut saw_postfix = false;
+    loop {
+        match e {
+            Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+                saw_postfix = true;
+                e = expr.as_ref();
+            }
+            Expr::Value(Value::Number(_)) => return saw_postfix,
+            // Self-delimiting, but a top-level `COLLATE` binds looser than the
+            // prefix op, so it (unlike `::`/`[…]`) is not safe here.
+            _ => return !(prints_self_delimiting(e) && !matches!(e, Expr::Collate { .. })),
+        }
     }
 }
 
