@@ -957,6 +957,29 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CAST function e.g. `CAST(expr AS FLOAT)`
     fn parse_cast_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        // Whether `expr` is safe to print directly to the left of a Postgres-style
+        // `::<type>` cast without wrapping it in parentheses. `Expr::Cast` /
+        // `Expr::Collate` print as the postfix forms `<inner>::<type>` /
+        // `<inner> COLLATE <c>`, so they are only safe when their *own* operand is
+        // — otherwise an inner low-precedence spine (e.g. the quantified comparison
+        // in `CAST(a = ANY (...) AS t)`, parsed as `Cast(AnySubquery)`) would
+        // re-associate against a surrounding operator on reparse. Everything else
+        // in the list is atomic or self-delimiting and so always safe.
+        fn safe_before_pg_cast(expr: &Expr<Raw>) -> bool {
+            match expr {
+                Expr::Nested(_)
+                | Expr::Value(_)
+                | Expr::Function { .. }
+                | Expr::Identifier { .. }
+                | Expr::HomogenizingFunction { .. }
+                | Expr::NullIf { .. }
+                | Expr::Subquery { .. }
+                | Expr::Parameter(..) => true,
+                Expr::Cast { expr, .. } | Expr::Collate { expr, .. } => safe_before_pg_cast(expr),
+                _ => false,
+            }
+        }
+
         self.expect_token(&Token::LParen)?;
         let expr = self.parse_expr()?;
         self.expect_keyword(AS)?;
@@ -973,26 +996,14 @@ impl<'a> Parser<'a> {
         //    (<expr> OP <expr>)::<type>
         // unless the inner expression is of a kind that we know is
         // safe to follow with a `::` without wrapping.
-        if !matches!(
-            expr,
-            Expr::Nested(_)
-                | Expr::Value(_)
-                | Expr::Cast { .. }
-                | Expr::Function { .. }
-                | Expr::Identifier { .. }
-                | Expr::Collate { .. }
-                | Expr::HomogenizingFunction { .. }
-                | Expr::NullIf { .. }
-                | Expr::Subquery { .. }
-                | Expr::Parameter(..)
-        ) {
+        if safe_before_pg_cast(&expr) {
             Ok(Expr::Cast {
-                expr: Box::new(Expr::Nested(Box::new(expr))),
+                expr: Box::new(expr),
                 data_type,
             })
         } else {
             Ok(Expr::Cast {
-                expr: Box::new(expr),
+                expr: Box::new(Expr::Nested(Box::new(expr))),
                 data_type,
             })
         }
