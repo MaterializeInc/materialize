@@ -184,11 +184,21 @@ impl RequestAuthenticator for Sigv4Authenticator {
             .and_then(|b| b.as_bytes())
             .map(|b| b.to_vec())
             .unwrap_or_default();
-        let headers: Vec<(&str, &str)> = req
+        let headers = req
             .headers()
             .iter()
-            .map(|(k, v)| (k.as_str(), v.to_str().unwrap_or("")))
-            .collect();
+            .map(|(k, v)| {
+                Ok((
+                    k.as_str(),
+                    v.to_str().map_err(|_| {
+                        iceberg::Error::new(
+                            iceberg::ErrorKind::DataInvalid,
+                            format!("header '{}' value is not all visible ASCII", k),
+                        )
+                    })?,
+                ))
+            })
+            .collect::<iceberg::Result<Vec<(&str, &str)>>>()?;
         let signable = SignableRequest::new(
             req.method().as_str(),
             req.url().as_str(),
