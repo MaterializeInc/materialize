@@ -692,9 +692,13 @@ impl<'a> SchemaResolver<'a> {
                 let (index, w_inner) = w_inner
                     .match_ref(other, &self.reader_to_writer_names)
                     .ok_or_else(|| {
+                        // `other` is the reader's concrete node (the second element
+                        // of the match), so its name must be looked up in the
+                        // reader's schema. Using `writer.root` here indexed the
+                        // writer's (possibly empty) `named` table out of bounds.
                         SchemaResolutionError::new(
                             format!("No matching schema in writer union for reader type `{}` for field `{}`",
-                                    other.get_human_name(writer.root),
+                                    other.get_human_name(reader.root),
                                     self.get_current_human_readable_path()))
                     })?;
                 let inner = Box::new(self.resolve(writer.step(w_inner), reader.step_ref(other))?);
@@ -879,9 +883,18 @@ impl<'a> SchemaResolver<'a> {
                             match self.resolve_named(writer.root, reader.root, w_index, r_index) {
                                 Ok(piece) => piece,
                                 Err(e) => {
-                                    // clean up the placeholder values that were added above.
-                                    self.named.pop();
-                                    self.reader_to_resolved_names.remove(&r_index);
+                                    // Roll back to the state before this node. We must remove not
+                                    // only this node's placeholder but also any nested named nodes
+                                    // resolved while resolving it: they live at indices
+                                    // `>= resolved_idx` and are unreachable now that this resolution
+                                    // failed. A plain `pop()` removed only the last one, orphaning a
+                                    // `None` placeholder (which a later `Option::unwrap` panics on)
+                                    // whenever a nested node had been pushed. Union resolution stores
+                                    // rather than propagates this error, so the orphan would survive.
+                                    self.named.truncate(resolved_idx);
+                                    self.reader_to_resolved_names
+                                        .retain(|_, v| *v < resolved_idx);
+                                    self.indices.retain(|_, v| *v < resolved_idx);
                                     return Err(e);
                                 }
                             };
