@@ -1347,12 +1347,13 @@ impl Pretty {
                 // impl: function names that clash with a keyword having its
                 // own special-grammar parser form (`(Kw, LParen)` dispatch in
                 // parse_prefix) must be quoted on emit, or the reparse goes
-                // through the special grammar instead of a regular call.
+                // through the special grammar instead of a regular call. (The
+                // `ANY`/`ALL`/`SOME` quantifier keywords are handled more
+                // generally by `can_be_printed_bare`, since they're also unsafe
+                // as bare identifiers.)
                 let needs_quote = matches!(
                     name_stable.as_str(),
-                    r#""all""#
-                        | r#""any""#
-                        | r#""array""#
+                    r#""array""#
                         | r#""coalesce""#
                         | r#""exists""#
                         | r#""extract""#
@@ -1364,7 +1365,6 @@ impl Pretty {
                         | r#""nullif""#
                         | r#""position""#
                         | r#""row""#
-                        | r#""some""#
                         | r#""substring""#
                         | r#""trim""#
                 );
