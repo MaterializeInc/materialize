@@ -15,7 +15,7 @@
 
 use std::panic;
 
-use mz_ore::panic::{catch_unwind_str, install_enhanced_handler};
+use mz_ore::panic::{catch_unwind_str, catch_unwind_with_details, install_enhanced_handler};
 use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
@@ -37,4 +37,39 @@ fn catch_panic() {
     .unwrap_err();
 
     assert_eq!(result, "panicked");
+
+    // `catch_unwind_with_details` additionally recovers the panic location and a
+    // backtrace captured at the panic site.
+    let line = line!() + 2;
+    let caught = catch_unwind_with_details(|| {
+        panic!("panicked with details");
+    })
+    .unwrap_err();
+
+    assert_eq!(caught.message, "panicked with details");
+
+    let location = caught
+        .location
+        .as_deref()
+        .expect("location should be captured");
+    assert!(
+        location.contains("tests/panic.rs"),
+        "unexpected location: {location}"
+    );
+    assert!(
+        location.contains(&format!(":{line}:")),
+        "location {location} should reference line {line}"
+    );
+
+    let backtrace = caught
+        .backtrace
+        .as_deref()
+        .expect("backtrace should be captured");
+    assert!(!backtrace.is_empty());
+
+    // The `Display` impl appends the location to the message.
+    assert_eq!(
+        caught.to_string(),
+        format!("panicked with details, at {location}")
+    );
 }
