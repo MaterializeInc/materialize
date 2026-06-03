@@ -163,6 +163,11 @@ SELECT mz_now()::text
 1 -1
 2 -1
 
+# The changelog is append-only, so min/max over it render monotonically
+# (no retraction support; see the Monotonic analysis for Changes).
+> SELECT min(a), max(a) FROM CHANGES (h AS OF ${h-as-of})
+1 20
+
 > DROP TABLE h
 
 # Multiple CHANGES with distinct bounds on distinct inputs in one query: each

@@ -349,6 +349,53 @@ Target cluster: quickstart
 
 EOF
 
+# The changelog is append-only (every update is emitted with diff +1), so the
+# Monotonic analysis lets aggregations over it render monotonically — here a
+# hierarchical max without retraction support.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+  SELECT max(mz_timestamp) FROM CHANGES (t AS OF AT LEAST 5)
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Get::Collection materialize.public.t
+          project=(#1)
+          raw=true
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
 # Distinct bounds keep the two reads as separate leaves; the unfiltered one
 # still blocks the pushdown.
 query T multiline

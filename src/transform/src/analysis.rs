@@ -828,11 +828,12 @@ mod non_negative {
                 },
                 // A changelog read is a leaf (no input), so it must not fall into
                 // the `_ => results[index - 1]` arm below (which underflows for a
-                // leaf at post-order index 0). Its multiplicities are not
-                // guaranteed non-negative — the maintained sliding case retracts
-                // as rows age out of the window — so we report `false`
-                // conservatively, like the catch-all but without the indexing.
-                MirRelationExpr::Changes { .. } => false,
+                // leaf at post-order index 0). Its accumulations are non-negative:
+                // every update is emitted exactly once with diff +1 and nothing is
+                // retracted at the node. (Aging out of a maintained window
+                // retracts in the temporal filter above the node, and retracting
+                // a present row keeps accumulations non-negative regardless.)
+                MirRelationExpr::Changes { .. } => true,
                 // Negate must be false unless input is "non-positive".
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
@@ -2046,7 +2047,7 @@ mod tests {
         // Would panic before the fix with "index out of bounds ... usize::MAX".
         let derived = builder.visit(&expr);
 
-        // A changelog read is conservatively non-non-negative (it may retract).
-        assert_eq!(derived.as_view().value::<NonNegative>(), Some(&false));
+        // A changelog read is non-negative: it only ever emits diff +1.
+        assert_eq!(derived.as_view().value::<NonNegative>(), Some(&true));
     }
 }
