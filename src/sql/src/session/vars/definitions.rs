@@ -39,8 +39,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
-    ValueConstraint,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -1441,7 +1441,8 @@ pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; Duration::from_millis(1000)),
     "The interval at which timestamps are assigned to data from sources and tables.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
