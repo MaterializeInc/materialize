@@ -15,7 +15,7 @@ aliases:
 {{% text-style %}}
 
 Materialize provides always-fresh results while also providing [strong
-consistency guarantees](/get-started/isolation-level/). In Materialize, both
+consistency guarantees](/reference/isolation-level/). In Materialize, both
 [indexes](/concepts/indexes/ "Indexes represents query results stored in memory
 within a cluster") and [materialized views](/concepts/views/#materialized-views)
 **incrementally update** results when Materialize ingests new data; i.e., work
