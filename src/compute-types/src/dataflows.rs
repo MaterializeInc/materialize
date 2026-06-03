@@ -670,10 +670,20 @@ impl<S> SourceImport<S> {
 /// How a changelog source import (the `CHANGES` table function) is read.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ChangelogMode {
-    /// A one-off read (peek): the source is read at the dataflow `as_of` with
-    /// the snapshot included, so the input's history collapses to the
-    /// changelog start.
-    OneShot,
+    /// A one-off read (peek): the source is read at `start` — at or below the
+    /// dataflow `as_of` — with the snapshot included, so the input's history
+    /// collapses to the changelog start. Each import carries its own start,
+    /// so multiple changelog reads with distinct bounds coexist in one
+    /// dataflow while the dataflow `as_of` stays the query time.
+    OneShot {
+        /// The resolved persist read position: the changelog start.
+        ///
+        /// Computed by the peek optimizer from the bound (resolving
+        /// `mz_now()` to the query time and clamping an advisory bound up to
+        /// the input's `since`). The controller installs the import's read
+        /// hold here, keeping the start readable for the dataflow's lifetime.
+        start: Antichain<Timestamp>,
+    },
     /// A maintained read (materialized view): the source is read from `start`
     /// with the snapshot excluded, emitting only the deltas after `start` at
     /// their true timestamps (in the `mz_timestamp` column), with the

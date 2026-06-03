@@ -9,6 +9,7 @@
 
 //! Optimizer implementation for `SELECT` statements.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -312,8 +313,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 }
             });
         }
-        let mut changelog_ids: Vec<GlobalId> = Vec::new();
-        let mut changelog_as_of: Option<Timestamp> = None;
+        let mut changelog_starts: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
         if !changelog_bounds.is_empty() {
             let prep = ExprPrepOneShot {
                 logical_time: match timestamp_ctx.timestamp() {
@@ -341,30 +341,38 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 // An advisory (`AS OF AT LEAST`) bound ages in: clamp it up to
                 // `since`, so the changelog starts at the earliest available
                 // history rather than erroring. A strict (`AS OF`) bound is
-                // pinned as written; if it precedes `since`, dataflow creation
-                // errors downstream, surfacing the unavailable history.
+                // pinned as written; if it precedes `since`, installing the
+                // import's read hold fails and dataflow creation errors,
+                // surfacing the unavailable history.
                 let start = match since {
                     Some(since) if !strict => start.max(since),
                     _ => start,
                 };
-                changelog_ids.push(id);
-                changelog_as_of =
-                    Some(changelog_as_of.map_or(start, |existing| existing.min(start)));
+                // Multiple changelog reads of the same input share one source
+                // import, so they share the *earliest* start; the snapshot
+                // collapse happens once, at that start, for all of them.
+                changelog_starts
+                    .entry(id)
+                    .and_modify(|existing| *existing = (*existing).min(start))
+                    .or_insert(start);
             }
         }
-        for id in &changelog_ids {
-            df_desc.set_source_changelog(id, ChangelogMode::OneShot);
+        for (id, start) in changelog_starts {
+            df_desc.set_source_changelog(
+                &id,
+                ChangelogMode::OneShot {
+                    start: Antichain::from_elem(start),
+                },
+            );
         }
 
         // Set the `as_of` and `until` timestamps for the dataflow.
+        //
+        // A changelog import takes its snapshot at its per-import `start`
+        // rather than at this `as_of` (see `ChangelogMode::OneShot`); the
+        // `as_of` stays the query time, so `mz_now()` elsewhere in the query
+        // resolves to the query time below.
         df_desc.set_as_of(timestamp_ctx.antichain());
-
-        // A changelog read must take its snapshot at the changelog start rather
-        // than at the peek timestamp. The dataflow's implied read hold pins the
-        // input's `since` at this `as_of` for the duration of the query.
-        if let Some(changelog_as_of) = changelog_as_of {
-            df_desc.set_as_of(Antichain::from_elem(changelog_as_of));
-        }
 
         // Get the single timestamp representing the `as_of` time.
         let as_of = df_desc

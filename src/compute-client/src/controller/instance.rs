@@ -1320,6 +1320,12 @@ impl Instance {
             replica_input_read_holds.push(read_hold.clone());
 
             let target = match &import.changelog {
+                // A one-off changelog import reads at its fixed `start`; the
+                // hold keeps it readable for the dataflow's lifetime. If a
+                // strict bound was pinned below the input's `since`, the
+                // downgrade fails and dataflow creation errors, surfacing the
+                // unavailable history.
+                Some(ChangelogMode::OneShot { start }) => start.clone(),
                 Some(ChangelogMode::Maintained { window, start }) => {
                     changelog_windows.insert(id, *window);
                     match start {
@@ -1337,7 +1343,7 @@ impl Instance {
                         }
                     }
                 }
-                _ => as_of.clone(),
+                None => as_of.clone(),
             };
             read_hold
                 .try_downgrade(target)

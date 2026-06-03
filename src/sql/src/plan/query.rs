@@ -3112,7 +3112,12 @@ fn plan_changes(
     let bound = bound_hir.lower_uncorrelated(qcx.scx.catalog.system_vars())?;
 
     // The changelog exposes the input columns plus the per-update `mz_timestamp`
-    // and `mz_diff`, matching SUBSCRIBE's diff output shape.
+    // and `mz_diff` — the same columns as SUBSCRIBE's diff output, though
+    // appended rather than prepended, with `mz_timestamp` typed as
+    // `mz_timestamp` (SUBSCRIBE: `numeric`) and `mz_diff` non-null
+    // (SUBSCRIBE: nullable). Note that an input column already named
+    // `mz_timestamp` or `mz_diff` yields duplicate column names, as in
+    // SUBSCRIBE.
     let changes_desc = RelationDesc::builder()
         .with_columns(desc.iter().map(|(name, ty)| (name.clone(), ty.clone())))
         .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(false))

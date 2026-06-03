@@ -325,8 +325,9 @@ impl Context {
                 // A changelog read lowers to a `Get` of the source import for
                 // `id`. The reinterpretation (append `mz_timestamp`/`mz_diff`,
                 // emit at `max(time, as_of)` with diff `+1`) happens in rendering
-                // because the import is flagged `read_as_changelog`; the `as_of`
-                // is applied to the dataflow as a whole by the coordinator. The
+                // because the import carries a `ChangelogMode`; the import's
+                // read start is resolved by the coordinator (see
+                // `ChangelogMode::{OneShot, Maintained}`). The
                 // reinterpreted source is a raw collection (no arrangement), so
                 // there are no input arrangements to surface or constrain; we
                 // simply absorb any leftover MFP into the `Get` stage.

@@ -65,6 +65,13 @@ SELECT mz_now()::text
 2 1
 3 1
 
+# mz_now() elsewhere in the query body resolves to the query time, not to the
+# changelog start: the dataflow's as_of stays the query time while only the
+# changelog import reads from its start. The writes above advanced the
+# timestamp oracle past the captured bound, so the comparison is strict.
+> SELECT DISTINCT mz_now() > ${as-of} FROM CHANGES (t AS OF ${as-of})
+true
+
 > DROP TABLE t
 
 # CHANGES over a materialized view (a non-table persist-backed input). The
@@ -143,6 +150,48 @@ SELECT mz_now()::text
 20 1
 
 > DROP TABLE h
+
+# Multiple CHANGES with distinct bounds on distinct inputs in one query: each
+# import carries its own changelog start. RETAIN HISTORY keeps both strict
+# bounds deterministically readable.
+> CREATE TABLE m1 (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> CREATE TABLE m2 (a int) WITH (RETAIN HISTORY FOR '7 days')
+
+> INSERT INTO m1 VALUES (1)
+
+> INSERT INTO m2 VALUES (10)
+
+# Capture the first bound: m1 holds {1}, m2 holds {10}.
+$ set-from-sql var=m-as-of-1
+SELECT mz_now()::text
+
+> INSERT INTO m1 VALUES (2)
+
+> INSERT INTO m2 VALUES (20)
+
+# Capture the second, later bound: m2 holds {10, 20}.
+$ set-from-sql var=m-as-of-2
+SELECT mz_now()::text
+
+> INSERT INTO m2 VALUES (30)
+
+# Both changelogs in one query (one dataflow). m2's snapshot collapses to *its*
+# bound — 10 and 20 sit exactly at it, only 30 is a later append — while m1's
+# changelog (snapshot {1} plus the append of 2) is read from the earlier bound.
+# If the two imports shared the earlier start, 10 would sit at the first bound
+# and 20 would be a separate append strictly between the bounds.
+> SELECT a, mz_timestamp = ${m-as-of-2} AS at_bound
+  FROM CHANGES (m2 AS OF ${m-as-of-2})
+  WHERE (SELECT count(*) FROM CHANGES (m1 AS OF ${m-as-of-1})) = 2
+  ORDER BY a
+10 true
+20 true
+30 false
+
+> DROP TABLE m1
+
+> DROP TABLE m2
 
 # A maintained materialized view over CHANGES with a sliding bound. The window
 # trails mz_now() by the lag; the changelog ages in from creation (the input's

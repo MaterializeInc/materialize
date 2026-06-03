@@ -91,13 +91,13 @@ SELECT count(*) FROM CHANGES (t AS OF AT LEAST 0)
 
 # A durable maintained object (materialized view, index) requires a sliding
 # bound: a fixed lower bound would hold the input's `since` open indefinitely.
-statement error CHANGES in a materialized view or index requires a sliding bound
+statement error CHANGES with a fixed bound is only supported in one-off SELECT queries
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM CHANGES (t AS OF 0)
 
 # The conservative implementation also rejects a fixed bound when defining a
 # plain view (a maintained lifetime), since it is only useful once indexed or
 # materialized.
-statement error CHANGES in a materialized view or index requires a sliding bound
+statement error CHANGES with a fixed bound is only supported in one-off SELECT queries
 CREATE VIEW changes_view AS SELECT * FROM CHANGES (t AS OF 0)
 
 # A maintained materialized view supports a sliding, advisory bound: the window
@@ -172,6 +172,51 @@ SELECT count(*) FROM changes_mv_wide
 
 statement ok
 DROP MATERIALIZED VIEW changes_mv_wide
+
+# A zero-lag sliding bound is the degenerate window: accepted, nothing ages in,
+# only changes after creation enter (and immediately age out of the empty
+# window in a maintained view).
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_zero AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now())
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_zero
+
+# EXPLAIN renders the Changes leaf with its bound and strictness.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM CHANGES (t AS OF 5)
+----
+Changes materialize.public.t as_of=integer_to_mz_timestamp(5)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM CHANGES (t AS OF 5)
+----
+Explained Query:
+  Changes materialize.public.t as_of=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+----
+Explained Query:
+  Changes materialize.public.t as_of_at_least=timestamp_tz_to_mz_timestamp((mz_timestamp_to_timestamp_tz(mz_now()) - 00:30:00))
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
 
 # Other maintained contexts (a view, an index) are not wired up, even with a
 # sliding bound.

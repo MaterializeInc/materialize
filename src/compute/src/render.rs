@@ -271,20 +271,24 @@ pub fn build_compute_dataflow(
                             .expect("Linear operators should always be valid")
                     });
 
-                    // `CHANGES`: a maintained changelog import reads the input
-                    // from its resolved `start` — *below* the dataflow
-                    // `as_of` — with the snapshot excluded, so the deltas of
-                    // the sliding window can be replayed at their true
-                    // timestamps; the reinterpretation below advances the
-                    // differential times to the `as_of`. All other imports
-                    // (including one-off changelog reads) read at the
-                    // dataflow `as_of`.
+                    // `CHANGES`: a changelog import reads the input from its
+                    // resolved `start` — at or below the dataflow `as_of` —
+                    // rather than at the `as_of` itself; the reinterpretation
+                    // below advances the differential times to the `as_of`. A
+                    // one-off read includes the snapshot, so the input's
+                    // history collapses to the changelog start; a maintained
+                    // read excludes it, replaying only the deltas of the
+                    // sliding window at their true timestamps. All other
+                    // imports read at the dataflow `as_of`.
                     let (source_as_of, snapshot_mode) = match &import.changelog {
+                        Some(ChangelogMode::OneShot { start }) => {
+                            (Some(start.clone()), SnapshotMode::Include)
+                        }
                         Some(ChangelogMode::Maintained { start, .. }) => {
                             let start = start.clone().or_else(|| dataflow.as_of.clone());
                             (start, SnapshotMode::Exclude)
                         }
-                        _ => {
+                        None => {
                             let snapshot_mode =
                                 if import.with_snapshot || !subscribe_snapshot_optimization {
                                     SnapshotMode::Include
@@ -299,7 +303,7 @@ pub fn build_compute_dataflow(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee
-                    // for reads at the dataflow `as_of`; a maintained changelog import reads
+                    // for reads at the dataflow `as_of`; a changelog import reads
                     // below it, and the changelog reinterpretation below restores the guarantee
                     // by advancing the emitted times.
                     let (mut ok_stream, err_stream, token) =
@@ -366,17 +370,16 @@ pub fn build_compute_dataflow(
 
                     // `CHANGES`: reinterpret the source read as an append-only
                     // changelog. We consolidate first so the snapshot collapses
-                    // to `as_of` (with net diffs) before we pack the diff into a
-                    // column; packing first would prevent that collapse, since
-                    // identical extended rows would merge by multiplicity instead
-                    // of netting the snapshot's diffs.
+                    // to the changelog start (with net diffs) before we pack
+                    // the diff into a column; packing first would prevent that
+                    // collapse, since identical extended rows would merge by
+                    // multiplicity instead of netting the snapshot's diffs.
                     //
-                    // The `mz_timestamp` column records the update's true time,
-                    // while the differential time is advanced to the dataflow
-                    // `as_of`. For a one-off read this is a no-op (the source
-                    // is read at the `as_of`); for a maintained read it
-                    // restores the times-advanced-by-`as_of` guarantee for the
-                    // window deltas read from below the `as_of`.
+                    // The `mz_timestamp` column records the update's true time
+                    // (advanced to the changelog `start` by the persist read
+                    // there), while the differential time is advanced to the
+                    // dataflow `as_of`, restoring the times-advanced-by-`as_of`
+                    // guarantee for updates read from below the `as_of`.
                     if import.read_as_changelog() {
                         let as_of = dataflow.as_of.clone().unwrap_or_default();
                         let as_of_errs = as_of.clone();
@@ -1868,11 +1871,15 @@ where
 /// `CHANGES` output row shape: the input columns followed by the `mz_timestamp`
 /// and `mz_diff` columns.
 ///
-/// `time` has already been advanced to `max(time, as_of)` by `persist_source`
-/// (snapshot updates collapse to the dataflow `as_of`), so we record it verbatim
-/// in the `mz_timestamp` column. `diff` is the net change at that time, recorded
-/// in the `mz_diff` column; the caller emits the resulting row with diff `+1`, so
-/// the changelog is append-only and never retracts.
+/// `time` has already been advanced to `max(time, start)` by the persist read
+/// at the changelog start (for a one-off read the included snapshot collapses
+/// to the start; a maintained read excludes the snapshot and its deltas pass
+/// through at their true times), so we record it verbatim in the `mz_timestamp`
+/// column. Note that `time` may be *below* the dataflow `as_of` — that is the
+/// point — which is why the caller advances the differential time separately.
+/// `diff` is the net change at that time, recorded in the `mz_diff` column; the
+/// caller emits the resulting row with diff `+1`, so the changelog is
+/// append-only and never retracts.
 fn pack_changelog_row(row: &Row, time: mz_repr::Timestamp, diff: Diff) -> Row {
     let mut packed = Row::default();
     let mut packer = packed.packer();

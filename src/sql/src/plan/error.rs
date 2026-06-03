@@ -676,7 +676,7 @@ impl fmt::Display for PlanError {
             },
             Self::ChangesRequiresSlidingBound => write!(
                 f,
-                "CHANGES in a materialized view or index requires a sliding bound"
+                "CHANGES with a fixed bound is only supported in one-off SELECT queries"
             ),
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
