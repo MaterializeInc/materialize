@@ -41,17 +41,13 @@ mod spines {
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
     use mz_timely_util::columnar::Column;
-    use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
+    use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
     use crate::{DatumContainer, OffsetOptimized};
 
     /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
     /// locally so this crate does not need to depend on `mz_compute`.
-    type KeyValBatcher<K, V, T, D> = MergeBatcher<
-        Vec<((K, V), T, D)>,
-        ColumnationChunker<((K, V), T, D)>,
-        ColInternalMerger<(K, V), T, D>,
-    >;
+    type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
     type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
     pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;

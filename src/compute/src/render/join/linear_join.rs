@@ -27,6 +27,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -389,6 +390,7 @@ where
             let arranged = if ENABLE_COLUMN_PAGED_BATCHER.get(&self.config_set) {
                 keyed.mz_arrange_core::<
                     _,
+                    batcher::ColumnChunker<_>,
                     Col2ValPagedBatcher<_, _, _, _>,
                     RowRowColPagedBuilder<_, _>,
                     RowRowSpine<_, _>,
@@ -396,6 +398,7 @@ where
             } else {
                 keyed.mz_arrange_core::<
                     _,
+                    batcher::Chunker<_>,
                     Col2ValBatcher<_, _, _, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,

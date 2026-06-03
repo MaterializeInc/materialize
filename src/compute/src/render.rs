@@ -113,6 +113,7 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
@@ -135,6 +136,7 @@ use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
@@ -175,6 +177,17 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
+
+/// Guard that presses a differential [`ShutdownButton`] when dropped.
+///
+/// Dropping this guard releases the imported trace's capabilities.
+struct PressOnDrop<T>(ShutdownButton<T>);
+
+impl<T> Drop for PressOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.press();
+    }
+}
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -651,7 +664,7 @@ where
             self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
-                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+                Rc::new((PressOnDrop(ok_button), PressOnDrop(err_button), token)),
             );
         } else {
             panic!(
@@ -775,14 +788,19 @@ where
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave(outer)
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                    .mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        _,
+                    >(
                         "Arrange export iterative",
                     );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave(outer)
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
                         "Arrange export iterative err",
                     );
 
@@ -947,7 +965,12 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let errs = err
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    .mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >(
                         "Arrange recursive err",
                     )
                     .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>>(

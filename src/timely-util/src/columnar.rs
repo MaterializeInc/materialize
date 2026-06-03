@@ -37,14 +37,15 @@ use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 
-use crate::columnation::{ColInternalMerger, ColumnationStack};
+use crate::columnation::ColInternalMerger;
 
 /// A batcher for columnar storage.
-pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
-    Column<((K, V), T, R)>,
-    batcher::Chunker<ColumnationStack<((K, V), T, R)>>,
-    ColInternalMerger<(K, V), T, R>,
->;
+///
+/// The chunker is supplied to the arrange operator separately. Callers pass
+/// it explicitly: [`ColumnationChunker`](crate::columnation::ColumnationChunker)
+/// for `Vec<_>` input, or [`batcher::Chunker`] (over a `ColumnationStack<_>`) for
+/// [`Column`] input.
+pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<ColInternalMerger<(K, V), T, R>>;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 

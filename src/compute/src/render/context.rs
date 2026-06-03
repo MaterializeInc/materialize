@@ -30,8 +30,10 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -1084,7 +1086,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
-                    errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    errs_concat.mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >(
                         &format!("{}-errors", name),
                     );
                 self.arranged
@@ -1166,6 +1173,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = if use_paged_path {
             ok_stream.mz_arrange_core::<
                 _,
+                batcher::ColumnChunker<_>,
                 Col2ValPagedBatcher<_, _, _, _>,
                 RowRowColPagedBuilder<_, _>,
                 RowRowSpine<_, _>,
@@ -1173,6 +1181,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         } else {
             ok_stream.mz_arrange_core::<
                 _,
+                batcher::Chunker<_>,
                 Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
