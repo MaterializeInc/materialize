@@ -132,6 +132,20 @@ pub enum SetExpr<T: AstInfo> {
     Table(T::ItemName),
 }
 
+impl<T: AstInfo> SetExpr<T> {
+    /// Whether the rendered SQL for this body begins with `SHOW` (i.e. its
+    /// leftmost leaf is a `Show`). Such a body must be parenthesized when it is
+    /// a statement's query, because a top-level leading `SHOW` is dispatched as
+    /// a `Statement::Show` and would swallow any following set operator.
+    pub fn starts_with_show(&self) -> bool {
+        match self {
+            SetExpr::Show(_) => true,
+            SetExpr::SetOperation { left, .. } => left.starts_with_show(),
+            _ => false,
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for SetExpr<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {

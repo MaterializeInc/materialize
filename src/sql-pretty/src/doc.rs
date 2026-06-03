@@ -873,11 +873,11 @@ impl Pretty {
         v: &'a SelectStatement<T>,
     ) -> RcDoc<'a> {
         let query = self.doc_query(&v.query);
-        // A query whose body is a bare `SHOW` only reparses when
-        // parenthesized — top-level `SHOW` is dispatched directly and can't
-        // carry ORDER BY/LIMIT. Mirror the same carve-out as `AstDisplay for
-        // SelectStatement`.
-        let mut doc = if matches!(v.query.body, SetExpr::Show(_)) {
+        // A query whose rendering begins with `SHOW` (a bare `SHOW` body or a
+        // set operation whose leftmost operand is one) only reparses when
+        // parenthesized — a top-level leading `SHOW` is dispatched directly and
+        // terminates the statement. Mirror `AstDisplay for SelectStatement`.
+        let mut doc = if v.query.body.starts_with_show() {
             bracket("(", query, ")")
         } else {
             query

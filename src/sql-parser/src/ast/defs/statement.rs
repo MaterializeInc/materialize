@@ -30,10 +30,10 @@ use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
     CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, IcebergSinkMode,
-    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SetExpr,
-    SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
+    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -290,13 +290,13 @@ pub struct SelectStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for SelectStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        // A query whose body is a bare `SHOW` only reparses as a query (rather
-        // than a top-level `Statement::Show`) when parenthesized: top-level
-        // `SHOW` is dispatched directly and can't carry ORDER BY/LIMIT/OFFSET.
-        // The `(SHOW …)` statement parser unwraps the modifier-free case into
-        // a `Statement::Show`, so a `Show` body surviving here always has
-        // modifiers and needs the parens to round-trip.
-        let parenthesize_show = matches!(self.query.body, SetExpr::Show(_));
+        // A query whose rendering begins with `SHOW` (a bare `SHOW` body, or a
+        // set operation whose leftmost operand is one) only reparses as a query
+        // when parenthesized: a top-level leading `SHOW` is dispatched as a
+        // `Statement::Show`, which terminates and would reject a following set
+        // operator or ORDER BY/LIMIT/OFFSET. The parser unwraps the redundant
+        // outer parens (see `parse_query_tail`), so wrapping round-trips.
+        let parenthesize_show = self.query.body.starts_with_show();
         if parenthesize_show {
             f.write_str("(");
         }
