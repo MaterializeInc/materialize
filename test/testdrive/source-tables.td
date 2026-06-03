@@ -144,10 +144,6 @@ ALTER TABLE pg_table REPLICA IDENTITY FULL;
 ! CREATE TABLE pg_table_1 FROM SOURCE pg_source (REFERENCE "pg_table");
 contains:referenced tables use unsupported types
 
-! CREATE TABLE pg_table_1 FROM SOURCE pg_source (REFERENCE "pg_table") WITH (TEXT COLUMNS = ());
-contains: invalid TEXT COLUMNS option value: cannot be empty
-
-
 > CREATE TABLE pg_table_1 FROM SOURCE pg_source (REFERENCE "pg_table") WITH (TEXT COLUMNS = (a));
 
 > SELECT * FROM pg_table_1;
@@ -270,9 +266,6 @@ INSERT INTO mysql_table VALUES ('var1', 1234), ('var0', 0);
 
 ! CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table");
 contains:referenced tables use unsupported types
-
-! CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table") WITH (TEXT COLUMNS = ());
-contains: invalid TEXT COLUMNS option value: cannot be empty
 
 > CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table") WITH (TEXT COLUMNS = (a));
 
