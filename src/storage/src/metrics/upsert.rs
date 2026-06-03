@@ -44,6 +44,8 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) multi_get_result_bytes: IntCounterVec,
     pub(crate) multi_put_latency: HistogramVec,
     pub(crate) multi_put_size: IntCounterVec,
+    pub(crate) stashed_records: UIntGaugeVec,
+    pub(crate) stashed_bytes: UIntGaugeVec,
 
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
@@ -182,6 +184,16 @@ impl UpsertMetricDefs {
                     of getting values into the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            stashed_records: registry.register(metric!(
+                name: "mz_storage_upsert_stashed_records",
+                help: "The number of records currently stashed in the upsert operator for this source.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            stashed_bytes: registry.register(metric!(
+                name: "mz_storage_upsert_stashed_bytes",
+                help: "The total size of records currently stashed in the upsert operator for this source.",
                 var_labels: ["source_id", "worker_id"],
             )),
             shared,
@@ -370,6 +382,8 @@ pub struct UpsertMetrics {
     pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) stashed_records: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) stashed_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -428,6 +442,12 @@ impl UpsertMetrics {
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+            stashed_records: defs
+                .stashed_records
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+            stashed_bytes: defs
+                .stashed_bytes
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
