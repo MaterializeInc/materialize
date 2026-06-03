@@ -12,6 +12,66 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 
 
+class RegexpExtractNonNullable(Check):
+    """Capture groups that always participate in a match yield non-nullable
+    columns (database-issues#612). This exercises that such a narrowed,
+    persisted desc survives restart/upgrade: an MV created on the previous
+    release registers all-nullable columns, while the current build re-derives
+    the desc with non-nullable columns. (The persist schema is
+    nullability-invariant, see database-issues#2488, so this must not conflict.)
+    """
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > CREATE TABLE regexp_extract_nn_table (f1 STRING);
+            > INSERT INTO regexp_extract_nn_table VALUES ('ab');
+            """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE MATERIALIZED VIEW regexp_extract_nn_view1 AS
+                  SELECT g.a, g.b FROM regexp_extract_nn_table,
+                    regexp_extract('(?P<a>[a-z])(?P<b>[a-z])', f1) AS g;
+                > INSERT INTO regexp_extract_nn_table VALUES ('kl');
+            """,
+                """
+                > CREATE MATERIALIZED VIEW regexp_extract_nn_view2 AS
+                  SELECT g.a, g.b FROM regexp_extract_nn_table,
+                    regexp_extract('(?P<a>[a-z])(?P<b>[a-z])', f1) AS g;
+                > INSERT INTO regexp_extract_nn_table VALUES ('yz');
+            """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+            > SELECT a, b FROM regexp_extract_nn_view1 ORDER BY a;
+            a b
+            k l
+            y z
+
+            > SELECT a, b FROM regexp_extract_nn_view2 ORDER BY a;
+            a b
+            k l
+            y z
+
+            > SELECT c.name, c.nullable FROM mz_columns c
+              JOIN mz_materialized_views v ON c.id = v.id
+              WHERE v.name = 'regexp_extract_nn_view1' ORDER BY c.position;
+            a false
+            b false
+
+            > SELECT c.name, c.nullable FROM mz_columns c
+              JOIN mz_materialized_views v ON c.id = v.id
+              WHERE v.name = 'regexp_extract_nn_view2' ORDER BY c.position;
+            a false
+            b false
+            """))
+
+
 class RegexpExtract(Check):
     """The regex from regexp_extract has its own ProtoAnalyzedRegex"""
 

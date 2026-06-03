@@ -3240,6 +3240,10 @@ pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 impl AnalyzedRegex {
     pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, RegexCompilationError> {
         let r = ReprRegex::new(s, opts.case_insensitive)?;
+        // A capture group that always participates in a match (when the regex
+        // matches at all) extracts a non-null value, so its column can be
+        // marked non-nullable.
+        let non_nullable = r.non_nullable_capture_groups();
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
@@ -3253,9 +3257,7 @@ impl AnalyzedRegex {
             .map(|(i, name)| CaptureGroupDesc {
                 index: i as u32,
                 name: name.map(String::from),
-                // TODO -- we can do better.
-                // https://github.com/MaterializeInc/database-issues/issues/612
-                nullable: true,
+                nullable: !non_nullable.contains(&(i as u32)),
             })
             .collect();
         Ok(Self(r, descs, opts))
