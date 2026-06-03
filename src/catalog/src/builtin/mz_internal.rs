@@ -695,6 +695,185 @@ WHERE
     }
 });
 
+pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_reconfigurations",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_RECONFIGURATIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("deadline", SqlScalarType::MzTimestamp.nullable(false))
+            .with_column("on_timeout", SqlScalarType::String.nullable(false))
+            .with_column("target", SqlScalarType::Jsonb.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "deadline",
+                "The deadline by which the reconfiguration must complete; after it passes the `on_timeout` action applies. Compare against `mz_now()` to distinguish an in-progress reconfiguration from one past its deadline.",
+            ),
+            (
+                "on_timeout",
+                "The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape).",
+            ),
+            (
+                "target",
+                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
+            ),
+        ]),
+        // One row per managed cluster with an in-flight graceful reconfiguration.
+        // The durable `reconfiguration` record is present only while the (gated,
+        // default-off) controller is converging on a new shape, and an absent
+        // `Option` serializes to a JSON `null`, so we key row presence on
+        // `!= 'null'`. We carry only the in-flight delta here; the realized
+        // (current) shape stays in `mz_clusters`. The deadline is the `u64`
+        // `mz_repr::Timestamp` cast to `mz_timestamp`; `on_timeout` is lowercased
+        // from the proto enum (`Commit`/`Rollback`) to match the SQL keywords.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL deadline,
+    ASSERT NOT NULL on_timeout,
+    ASSERT NOT NULL target
+) AS
+WITH
+    managed AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+            data->'value'->'config'->'variant'->'Managed'->'reconfiguration' AS reconfiguration
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Cluster' AND
+            data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    )
+SELECT
+    m.cluster_id,
+    (m.reconfiguration->>'deadline')::mz_timestamp AS deadline,
+    lower(m.reconfiguration->>'on_timeout') AS on_timeout,
+    m.reconfiguration->'target' AS target
+FROM managed m
+WHERE m.reconfiguration != 'null'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_reconfiguration",
+            description: "In-flight graceful cluster reconfiguration",
+            links: &const {
+                [OntologyLink {
+                    // At most one in-flight reconfiguration per cluster (unique
+                    // key on `cluster_id`), so the FK is one-to-one.
+                    name: "belongs_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    }
+});
+
+pub const MZ_CLUSTER_RECONFIGURATIONS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_reconfigurations_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_RECONFIGURATIONS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_reconfigurations (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
+pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || {
+        BuiltinMaterializedView {
+            name: "mz_cluster_auto_scaling_strategies",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::MV_MZ_CLUSTER_AUTO_SCALING_STRATEGIES_OID,
+            desc: RelationDesc::builder()
+                .with_column("cluster_id", SqlScalarType::String.nullable(false))
+                .with_column("strategy", SqlScalarType::Jsonb.nullable(false))
+                .with_column("state", SqlScalarType::Jsonb.nullable(true))
+                .with_key(vec![0])
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                (
+                    "cluster_id",
+                    "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+                ),
+                (
+                    "strategy",
+                    "**Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`.",
+                ),
+                (
+                    "state",
+                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`.",
+                ),
+            ]),
+            // One row per managed cluster that has an `AUTO SCALING STRATEGY`
+            // configured (the durable `auto_scaling_strategy` policy) or an
+            // in-flight autoscaling action (the durable `burst` record). These
+            // are two separate fields: a burst can briefly outlive a just-removed
+            // policy, so we admit a row when either is present. An absent
+            // `Option` serializes to a JSON `null`, so presence is `!= 'null'`.
+            // `state` keys the runtime by strategy (`{"burst": ...}`) so adding a
+            // future strategy's state is another key, not a schema change. The
+            // burst strategy is gated and default-off, so for an ordinary cluster
+            // `state` is `NULL`.
+            sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL strategy
+) AS
+WITH
+    managed AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+            data->'value'->'config'->'variant'->'Managed'->'auto_scaling_strategy' AS strategy,
+            data->'value'->'config'->'variant'->'Managed'->'burst' AS burst
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Cluster' AND
+            data->'value'->'config'->'variant'->'Managed' IS NOT NULL
+    )
+SELECT
+    m.cluster_id,
+    COALESCE(m.strategy, 'null'::jsonb) AS strategy,
+    CASE WHEN m.burst != 'null' THEN jsonb_build_object('burst', m.burst) END AS state
+FROM managed m
+WHERE m.strategy != 'null' OR m.burst != 'null'",
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "cluster_auto_scaling_strategy",
+                description: "Configured cluster autoscaling strategy and in-flight state",
+                links: &const {
+                    [OntologyLink {
+                        // At most one row per managed cluster (unique key on
+                        // `cluster_id`), so the FK is one-to-one.
+                        name: "belongs_to_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::OneToOne),
+                    }]
+                },
+                column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+            }),
+        }
+    },
+);
+
+pub const MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_auto_scaling_strategies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_AUTO_SCALING_STRATEGIES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_auto_scaling_strategies (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
     LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_internal_cluster_replicas",
@@ -5068,9 +5247,19 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
     desc: RelationDesc::builder()
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("replicas", SqlScalarType::String.nullable(true))
+        // A short summary of any in-flight reconfiguration and/or hydration
+        // burst. `NULL` when the cluster is steady. The realized size is already
+        // in `replicas`; the full detail is in `mz_cluster_reconfigurations` and
+        // `mz_cluster_auto_scaling_strategies`.
+        .with_column("activity", SqlScalarType::String.nullable(true))
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
+    // `activity` is a one-line, human-readable summary built from the two base
+    // builtins: the in-flight reconfiguration target and the active burst size,
+    // joined with `;` when both are happening. Both relations are sparse (a row
+    // only while active), so a matched LEFT JOIN means the activity is live,
+    // no `mz_now()` needed, keeping this indexed view non-temporal.
     sql: "
     WITH clusters AS (
         SELECT
@@ -5087,9 +5276,24 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         FROM mz_internal.mz_comments
         WHERE object_type = 'cluster' AND object_sub_id IS NULL
     )
-    SELECT name, replicas, COALESCE(comment, '') as comment
+    SELECT
+        name,
+        replicas,
+        CASE
+            WHEN recon.cluster_id IS NOT NULL AND ass.state IS NOT NULL
+                THEN 'reconfiguring to ' || (recon.target->>'size')
+                     || '; hydration burst at ' || (ass.state->'burst'->>'burst_size')
+            WHEN recon.cluster_id IS NOT NULL
+                THEN 'reconfiguring to ' || (recon.target->>'size')
+            WHEN ass.state IS NOT NULL
+                THEN 'hydration burst at ' || (ass.state->'burst'->>'burst_size')
+            ELSE NULL
+        END AS activity,
+        COALESCE(comment, '') as comment
     FROM clusters
-    LEFT JOIN comments ON clusters.id = comments.id",
+    LEFT JOIN comments ON clusters.id = comments.id
+    LEFT JOIN mz_internal.mz_cluster_reconfigurations recon ON clusters.id = recon.cluster_id
+    LEFT JOIN mz_internal.mz_cluster_auto_scaling_strategies ass ON clusters.id = ass.cluster_id",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 }

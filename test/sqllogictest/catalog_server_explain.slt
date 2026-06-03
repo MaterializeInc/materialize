@@ -476,6 +476,19 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN INDEX "mz_internal"."mz_cluster_auto_scaling_strategies_ind";
+----
+mz_internal.mz_cluster_auto_scaling_strategies_ind:
+  →Arrange (#0{cluster_id})
+    →Stream mz_internal.mz_cluster_auto_scaling_strategies
+
+Source mz_internal.mz_cluster_auto_scaling_strategies
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN INDEX "mz_internal"."mz_cluster_deployment_lineage_ind";
 ----
 mz_internal.mz_cluster_deployment_lineage_ind:
@@ -541,6 +554,19 @@ Source mz_catalog.mz_audit_events
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN INDEX "mz_internal"."mz_cluster_reconfigurations_ind";
+----
+mz_internal.mz_cluster_reconfigurations_ind:
+  →Arrange (#0{cluster_id})
+    →Stream mz_internal.mz_cluster_reconfigurations
+
+Source mz_internal.mz_cluster_reconfigurations
 
 Target cluster: mz_catalog_server
 
@@ -1652,43 +1678,118 @@ mz_internal.mz_show_clusters:
                       Key: (#0{id})
           →Stream l1
     cte l3 =
-      →Arrange (#0{id})
-        →Arranged l2
-    cte l4 =
-      →Differential Join %1:mz_comments[#0{id}] » %0:l3[#0{id}]
-        after %0:
-          Project: #0, #4, #5, #3
-          Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
-        →Arranged l3
-        →Arranged mz_internal.mz_comments
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Arranged l2
+              Key: (#0, #1)
   →Return
-    →Map/Filter/Project
-      Project: #0, #1, #3
-      Map: coalesce(#2{comment}, "")
+    →Delta Join [%0:l2[#0] » %1[#0] » %2[#0] » %3[#0]] [%1[#0] » %0:l2[#0] » %2[#0] » %3[#0]] [%2[#0] » %0:l2[#0] » %1[#0] » %3[#0]] [%3[#0] » %0:l2[#0] » %1[#0] » %2[#0]]
+      path %0:
+        after %1:
+          Project: #0..=#2, #5
+          Map: case when (#4) IS NULL then "" else coalesce(#3, "") end
+        after %2:
+          Project: #0..=#3, #7, #8
+          Map: (#5) IS NULL, case when #6 then null else #0 end, case when #6 then null else #4 end
+        after %3:
+          Project: #1, #2, #9, #3
+          Map: case when (#7) IS NULL then null else #6 end, case when ((#4{cluster_id}) IS NOT NULL AND (#8{state}) IS NOT NULL) then ((("reconfiguring to " || (#5 ->> "size")) || "; hydration burst at ") || ((#8 -> "burst") ->> "burst_size")) else case when (#4) IS NOT NULL then ("reconfiguring to " || (#5 ->> "size")) else case when (#8) IS NOT NULL then ("hydration burst at " || ((#8 -> "burst") ->> "burst_size")) else null end end end
+      path %1:
+        after %2:
+          Project: #2, #3, #0, #4, #8, #9
+          Map: (#6) IS NULL, case when #7 then null else #1 end, case when #7 then null else #5 end
+        after %3:
+          Project: #1, #2, #9, #3
+          Map: case when (#7) IS NULL then null else #6 end, case when ((#4{cluster_id}) IS NOT NULL AND (#8{state}) IS NOT NULL) then ((("reconfiguring to " || (#5 ->> "size")) || "; hydration burst at ") || ((#8 -> "burst") ->> "burst_size")) else case when (#4) IS NOT NULL then ("reconfiguring to " || (#5 ->> "size")) else case when (#8) IS NOT NULL then ("hydration burst at " || ((#8 -> "burst") ->> "burst_size")) else null end end end
+      path %2:
+        after %0:
+          Project: #3, #4, #0, #2, #5
+          Map: case when #1 then null else #0 end
+        after %1:
+          Project: #1, #2, #0, #3, #4, #7
+          Map: case when (#6) IS NULL then "" else coalesce(#5, "") end
+        after %3:
+          Project: #1, #2, #9, #5
+          Map: case when (#7) IS NULL then null else #6 end, case when ((#4{cluster_id}) IS NOT NULL AND (#8{state}) IS NOT NULL) then ((("reconfiguring to " || (#3 ->> "size")) || "; hydration burst at ") || ((#8 -> "burst") ->> "burst_size")) else case when (#4) IS NOT NULL then ("reconfiguring to " || (#3 ->> "size")) else case when (#8) IS NOT NULL then ("hydration burst at " || ((#8 -> "burst") ->> "burst_size")) else null end end end
+      path %3:
+        after %1:
+          Project: #1..=#3, #0, #4, #7
+          Map: case when (#6) IS NULL then "" else coalesce(#5, "") end
+        after %2:
+          Project: #2, #3, #11, #5
+          Map: (#7) IS NULL, case when #8 then null else #1 end, case when #8 then null else #6 end, case when ((#9{cluster_id}) IS NOT NULL AND (#4{state}) IS NOT NULL) then ((("reconfiguring to " || (#10 ->> "size")) || "; hydration burst at ") || ((#4 -> "burst") ->> "burst_size")) else case when (#9) IS NOT NULL then ("reconfiguring to " || (#10 ->> "size")) else case when (#4) IS NOT NULL then ("hydration burst at " || ((#4 -> "burst") ->> "burst_size")) else null end end end
+      →Arrange (#0)
+        →Arranged l2
+      →Arrange (#0)
         →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3, #4
+            Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
+            Map: true
+              →Arranged mz_internal.mz_comments
+                Key: (#0{id})
           →Map/Filter/Project
             Project: #0..=#2
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Differential Join %1[#0] » %0:l3[#0{id}]
-                    →Arranged l3
-                    →Distinct GroupAggregate
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
                       →Fused with Child Map/Filter/Project
                         Project: #0
-                          →Read l4
-                →Fused with Child Map/Filter/Project
-                  Project: #1, #2
-                    →Arranged l2
-                      Key: (#0, #1)
+                        Filter: (#1{object_type} = "cluster") AND (#2{object_sub_id}) IS NULL
+                          →Arranged mz_internal.mz_comments
+                            Key: (#0{id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
+      →Arrange (#0)
+        →Union
           →Fused with Child Map/Filter/Project
-            Project: #1..=#3
-              →Read l4
+            Project: #0, #3, #4
+            Map: true
+              →Arranged mz_internal.mz_cluster_reconfigurations
+                Key: (#0{cluster_id})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged mz_internal.mz_cluster_reconfigurations
+                            Key: (#0{cluster_id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2, #3
+            Map: true
+              →Arranged mz_internal.mz_cluster_auto_scaling_strategies
+                Key: (#0{cluster_id})
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged mz_internal.mz_cluster_auto_scaling_strategies
+                            Key: (#0{cluster_id})
+                    →Unarranged Raw Stream
+                      →Arranged l3
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***, differential join)
+  - mz_internal.mz_cluster_reconfigurations_ind (*** full scan ***)
+  - mz_internal.mz_cluster_auto_scaling_strategies_ind (*** full scan ***)
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_internal.mz_comments_ind (differential join)
+  - mz_internal.mz_comments_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -4294,7 +4395,7 @@ mz_catalog.mz_indexes:
           Project: #2, #0, #1, #3, #4, #7, #5, #6
           Map: "s1"
       →Arrange (#1{name}) (#2{on_schema}, #3{on_name})
-        →Constant (76 rows)
+        →Constant (78 rows)
       →Arrange (empty key) (#1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3
@@ -4400,7 +4501,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (23 rows)
+        →Constant (25 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4682,6 +4783,36 @@ mz_catalog.mz_system_privileges:
 
 Source mz_internal.mz_catalog_raw
   filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_cluster_auto_scaling_strategies";
+----
+mz_internal.mz_cluster_auto_scaling_strategies:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#5..=#7)
+  filter=(("Cluster" = (#0{data} ->> "kind")) AND (#1) IS NOT NULL AND ((json_null != #2) OR (json_null != #3)) AND (#4 OR (#3 != json_null)))
+  map=(((((#0{data} -> "value") -> "config") -> "variant") -> "Managed"), (#1 -> "burst"), (#1 -> "auto_scaling_strategy"), (#2 != json_null), parse_catalog_id(((#0{data} -> "key") -> "id")), coalesce(#3{strategy}, json_null), case when #4 then jsonb_build_object("burst", jsonbable_to_jsonb(#2)) else null end)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_cluster_reconfigurations";
+----
+mz_internal.mz_cluster_reconfigurations:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#5)
+  filter=(("Cluster" = (#0{data} ->> "kind")) AND (json_null != #1) AND (#1 != json_null))
+  map=((((((#0{data} -> "value") -> "config") -> "variant") -> "Managed") -> "reconfiguration"), parse_catalog_id(((#0{data} -> "key") -> "id")), text_to_mz_timestamp((#1{reconfiguration} ->> "deadline")), lower((#1{reconfiguration} ->> "on_timeout")), (#1{reconfiguration} -> "target"))
 
 Target cluster: mz_catalog_server
 
@@ -7040,7 +7171,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (23 rows)
+  →Constant (25 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8904,7 +9035,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_entity_types";
 ----
 Explained Query (fast path):
-  →Constant (132 rows)
+  →Constant (134 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8914,7 +9045,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_link_types";
 ----
 Explained Query (fast path):
-  →Constant (171 rows)
+  →Constant (173 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8928,7 +9059,7 @@ Explained Query:
     cte l0 =
       →Differential Join %1:mz_schemas[#0{id}] » %2:mz_objects[#2{schema_id}] » %0[#0{schema_name}, #1{table_name}] » %3:mz_columns[#0{id}]
         →Arrange (#0{schema_name}, #1{table_name})
-          →Constant (132 rows)
+          →Constant (134 rows)
         →Arrange (#0{id})
           →Fused with Child Map/Filter/Project
             Project: #1, #3
@@ -8981,7 +9112,7 @@ Explained Query:
       →Differential Join %0:l4[#0{entity_name}, #1{name}] » %1[#0{entity_name}, #1{column_name}]
         →Arranged l4
         →Arrange (#0{entity_name}, #1{column_name})
-          →Constant (270 rows)
+          →Constant (272 rows)
   →Return
     →Union
       →Map/Filter/Project
