@@ -67,11 +67,7 @@ struct PanicDetails {
 
 /// A panic recovered by [`catch_unwind_with_details`], bundling the panic
 /// message with the location and backtrace captured at the panic site.
-///
-/// Marked `#[non_exhaustive]` because it is likely to grow more context (e.g.
-/// thread name) over time; construct it only via [`catch_unwind_with_details`].
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct CaughtPanic {
     /// The panic message.
     pub message: Cow<'static, str>,
