@@ -62,7 +62,7 @@ Other options to consider:
 
 * If you've gone through the dataflow troubleshooting and do not want to make
   any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#available-sizes).
-* You can also consider changing your [isolation level](/get-started/isolation-level/),
+* You can also consider changing your [isolation level](/reference/isolation-level/),
   depending on the consistency guarantees that you need. With a lower isolation
   level, you may be able to query stale results out of lagging indexes and
   materialized views.

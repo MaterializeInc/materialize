@@ -1,0 +1,128 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Stage 1 tests for AWS Glue Schema Registry connections.
+#
+# Validates parsing, planning, catalog round-trip, ALTER compatibility, and
+# the `enable_glue_schema_registry` feature flag. No client crate exists in
+# this stage; `validate()` is a no-op (Stage 3 retrofits real validation).
+#
+# See doc/developer/design/20260512_aws_glue_schema_registry.md.
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
+# The feature flag is off by default; enable it for the happy-path tests.
+# A dedicated flag-off section toggles it back below.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_glue_schema_registry TO true;
+----
+COMPLETE 0
+
+# Prerequisite: an AWS connection to reference.
+statement ok
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN 'arn:aws:iam::123456789000:role/my-role'
+) WITH (VALIDATE = false)
+
+# Happy path: GSR connection with both required options.
+statement ok
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry'
+)
+
+# SHOW CREATE CONNECTION round-trip (pretty-printed multiline form).
+query T multiline
+SELECT create_sql FROM (SHOW CREATE CONNECTION glue_conn)
+----
+CREATE CONNECTION materialize.public.glue_conn
+TO AWS GLUE SCHEMA REGISTRY (AWS CONNECTION = materialize.public.aws_conn, REGISTRY = 'my-registry');
+EOF
+
+# mz_connections lists the connection with the expected type string.
+query TT
+SELECT name, type FROM mz_connections WHERE name = 'glue_conn'
+----
+glue_conn
+glue-schema-registry
+
+# DROP works.
+statement ok
+DROP CONNECTION glue_conn
+
+# Missing REGISTRY rejected at plan time.
+statement error REGISTRY option is required
+CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (AWS CONNECTION = aws_conn)
+
+# Missing AWS CONNECTION rejected at plan time.
+statement error AWS CONNECTION option is required
+CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (REGISTRY = 'my-registry')
+
+# Empty registry name rejected.
+statement error REGISTRY must not be empty
+CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = ''
+)
+
+# Wrong connection type for AWS CONNECTION rejected.
+statement ok
+CREATE CONNECTION csr_dummy TO CONFLUENT SCHEMA REGISTRY (URL 'http://localhost:8081') WITH (VALIDATE = false)
+
+statement error is not an AWS connection
+CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = csr_dummy,
+    REGISTRY = 'my-registry'
+)
+
+statement ok
+DROP CONNECTION csr_dummy
+
+# Unsupported option rejected (PORT belongs to other connection types).
+statement error AWS GLUE SCHEMA REGISTRY connections do not support PORT values
+CREATE CONNECTION bad_glue TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry',
+    PORT = 8080
+)
+
+# Feature flag gating.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_glue_schema_registry TO false;
+----
+COMPLETE 0
+
+statement error CREATE CONNECTION \.\.\. TO AWS GLUE SCHEMA REGISTRY is not available
+CREATE CONNECTION gated_glue TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry'
+)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_glue_schema_registry TO true;
+----
+COMPLETE 0
+
+# Re-enable: works again.
+statement ok
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'my-registry'
+)
+
+statement ok
+DROP CONNECTION glue_conn
+
+statement ok
+DROP CONNECTION aws_conn

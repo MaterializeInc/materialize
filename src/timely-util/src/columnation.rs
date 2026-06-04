@@ -17,7 +17,7 @@
 //!
 //! This module provides [`ColumnationStack`], a columnar container that stores data using the
 //! columnation library, along with [`ColumnationChunker`] for organizing streams into sorted
-//! chunks, and the [`InternalMerge`] implementation needed by the merge batcher.
+//! chunks, and the [`ColInternalMerger`] [`Merger`] implementation needed by the merge batcher.
 
 use std::collections::VecDeque;
 use std::iter::FromIterator;
@@ -26,7 +26,7 @@ use columnation::{Columnation, Region};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
+use differential_dataflow::trace::implementations::merge_batcher::Merger;
 use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 use timely::progress::Timestamp;
@@ -546,121 +546,242 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// InternalMerge impl for ColumnationStack
+// ColInternalMerger: a `Merger` for `ColumnationStack` chunks
 // ---------------------------------------------------------------------------
 
-impl<D, T, R> InternalMerge for ColumnationStack<(D, T, R)>
+/// A [`Merger`] using internal iteration over [`ColumnationStack`] chunks.
+///
+/// Implements differential-dataflow's chunk-list merge-batcher interface by
+/// merging and splitting chains of sorted, consolidated `ColumnationStack`
+/// chunks. Elements are copied through `copy` / `copy_destructured` rather than
+/// moved out of their backing regions, which is why this operates by internal
+/// iteration rather than draining owned tuples like the stock `VecMerger`.
+pub struct ColInternalMerger<D, T, R> {
+    _marker: std::marker::PhantomData<(D, T, R)>,
+}
+
+impl<D, T, R> Default for ColInternalMerger<D, T, R> {
+    fn default() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<D, T, R> ColInternalMerger<D, T, R>
 where
     D: Ord + Columnation + Clone + 'static,
     T: Ord + Columnation + Clone + PartialOrder + 'static,
     R: Default + Semigroup + Columnation + Clone + 'static,
 {
-    type TimeOwned = T;
-
-    fn len(&self) -> usize {
-        self[..].len()
+    /// Target chunk capacity in elements, mirroring [`ColumnationChunker`].
+    fn chunk_capacity() -> usize {
+        const BUFFER_SIZE_BYTES: usize = 64 << 10;
+        let size = std::mem::size_of::<(D, T, R)>();
+        if size == 0 {
+            BUFFER_SIZE_BYTES
+        } else if size <= BUFFER_SIZE_BYTES {
+            BUFFER_SIZE_BYTES / size
+        } else {
+            1
+        }
     }
 
-    fn clear(&mut self) {
-        ColumnationStack::clear(self)
-    }
-
-    fn account(&self) -> (usize, usize, usize, usize) {
-        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-        let cb = |siz, cap| {
-            size += siz;
-            capacity += cap;
-            allocations += 1;
-        };
-        self.heap_size(cb);
-        (self.len(), size, capacity, allocations)
-    }
-
-    fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
-        use std::cmp::Ordering;
-        match others.len() {
-            0 => {}
-            1 => {
-                let other = &mut others[0];
-                let pos = &mut positions[0];
-                if self[..].is_empty() && *pos == 0 {
-                    std::mem::swap(self, other);
-                    return;
-                }
-                for i in *pos..other[..].len() {
-                    self.copy(&other[i]);
-                }
-                *pos = other[..].len();
+    /// Acquire an empty chunk with the target capacity, recycling from `stash`.
+    fn empty(stash: &mut Vec<ColumnationStack<(D, T, R)>>) -> ColumnationStack<(D, T, R)> {
+        let target = Self::chunk_capacity();
+        match stash.pop() {
+            Some(mut chunk) if chunk.capacity() >= target => {
+                chunk.clear();
+                chunk
             }
-            2 => {
-                let (left, right) = others.split_at_mut(1);
-                let other1 = &left[0];
-                let other2 = &right[0];
+            _ => ColumnationStack::with_capacity(target),
+        }
+    }
 
-                let mut stash = R::default();
+    /// Recycle a consumed chunk into `stash`, retaining its allocations.
+    fn recycle(
+        mut chunk: ColumnationStack<(D, T, R)>,
+        stash: &mut Vec<ColumnationStack<(D, T, R)>>,
+    ) {
+        chunk.clear();
+        stash.push(chunk);
+    }
 
-                while positions[0] < other1[..].len()
-                    && positions[1] < other2[..].len()
-                    && !self.at_capacity()
-                {
-                    let (d1, t1, _) = &other1[positions[0]];
-                    let (d2, t2, _) = &other2[positions[1]];
-                    match (d1, t1).cmp(&(d2, t2)) {
-                        Ordering::Less => {
-                            self.copy(&other1[positions[0]]);
-                            positions[0] += 1;
+    /// Drain remaining items from one side into `result`/`output`.
+    ///
+    /// Copies the partially-consumed head into `result` (swapping wholesale
+    /// when `result` is empty and the head untouched), then appends remaining
+    /// full chunks directly to `output` without copying.
+    fn drain_side(
+        head: &mut ColumnationStack<(D, T, R)>,
+        pos: &mut usize,
+        list: &mut std::vec::IntoIter<ColumnationStack<(D, T, R)>>,
+        result: &mut ColumnationStack<(D, T, R)>,
+        output: &mut Vec<ColumnationStack<(D, T, R)>>,
+        stash: &mut Vec<ColumnationStack<(D, T, R)>>,
+    ) {
+        // Copy the partially-consumed head into result.
+        if *pos < head[..].len() {
+            if result.is_empty() && *pos == 0 {
+                std::mem::swap(result, head);
+            } else {
+                for i in *pos..head[..].len() {
+                    result.copy(&head[i]);
+                }
+            }
+            *pos = head[..].len();
+        }
+        // Flush result before appending full chunks.
+        if !result.is_empty() {
+            output.push(std::mem::replace(result, Self::empty(stash)));
+        }
+        // Remaining full chunks go directly to output.
+        output.extend(list);
+    }
+}
+
+impl<D, T, R> Merger for ColInternalMerger<D, T, R>
+where
+    D: Ord + Columnation + Clone + 'static,
+    T: Ord + Columnation + Clone + PartialOrder + 'static,
+    R: Default + Semigroup + Columnation + Clone + 'static,
+{
+    type Chunk = ColumnationStack<(D, T, R)>;
+    type Time = T;
+
+    fn merge(
+        &mut self,
+        list1: Vec<Self::Chunk>,
+        list2: Vec<Self::Chunk>,
+        output: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        use std::cmp::Ordering;
+
+        let mut list1 = list1.into_iter();
+        let mut list2 = list2.into_iter();
+        let mut head1 = list1.next().unwrap_or_default();
+        let mut head2 = list2.next().unwrap_or_default();
+        let mut pos1 = 0;
+        let mut pos2 = 0;
+        let mut result = Self::empty(stash);
+        let mut diff = R::default();
+
+        // Main merge loop: both sides have data.
+        while pos1 < head1[..].len() && pos2 < head2[..].len() {
+            // Tight inner loop bounded by the current heads and result capacity.
+            while pos1 < head1[..].len() && pos2 < head2[..].len() && !result.at_capacity() {
+                let (d1, t1, r1) = &head1[pos1];
+                let (d2, t2, r2) = &head2[pos2];
+                match (d1, t1).cmp(&(d2, t2)) {
+                    Ordering::Less => {
+                        result.copy(&head1[pos1]);
+                        pos1 += 1;
+                    }
+                    Ordering::Greater => {
+                        result.copy(&head2[pos2]);
+                        pos2 += 1;
+                    }
+                    Ordering::Equal => {
+                        diff.clone_from(r1);
+                        diff.plus_equals(r2);
+                        if !diff.is_zero() {
+                            result.copy_destructured(d1, t1, &diff);
                         }
-                        Ordering::Greater => {
-                            self.copy(&other2[positions[1]]);
-                            positions[1] += 1;
-                        }
-                        Ordering::Equal => {
-                            let (_, _, r1) = &other1[positions[0]];
-                            let (_, _, r2) = &other2[positions[1]];
-                            stash.clone_from(r1);
-                            stash.plus_equals(r2);
-                            if !stash.is_zero() {
-                                let (d, t, _) = &other1[positions[0]];
-                                self.copy_destructured(d, t, &stash);
-                            }
-                            positions[0] += 1;
-                            positions[1] += 1;
-                        }
+                        pos1 += 1;
+                        pos2 += 1;
                     }
                 }
             }
-            n => unimplemented!("{n}-way merge not yet supported"),
+            if result.at_capacity() {
+                output.push(std::mem::replace(&mut result, Self::empty(stash)));
+            }
+            if pos1 >= head1[..].len() {
+                let old = std::mem::replace(&mut head1, list1.next().unwrap_or_default());
+                Self::recycle(old, stash);
+                pos1 = 0;
+            }
+            if pos2 >= head2[..].len() {
+                let old = std::mem::replace(&mut head2, list2.next().unwrap_or_default());
+                Self::recycle(old, stash);
+                pos2 = 0;
+            }
+        }
+
+        // After the loop at least one side is exhausted; draining it is a
+        // no-op, and the other contributes its sorted tail in order — the
+        // partial head by copy, remaining full chunks by passthrough.
+        Self::drain_side(
+            &mut head1,
+            &mut pos1,
+            &mut list1,
+            &mut result,
+            output,
+            stash,
+        );
+        Self::drain_side(
+            &mut head2,
+            &mut pos2,
+            &mut list2,
+            &mut result,
+            output,
+            stash,
+        );
+
+        if !result.is_empty() {
+            output.push(result);
         }
     }
 
     fn extract(
         &mut self,
-        position: &mut usize,
+        merged: Vec<Self::Chunk>,
         upper: AntichainRef<T>,
         frontier: &mut Antichain<T>,
-        keep: &mut Self,
-        ship: &mut Self,
+        readied: &mut Vec<Self::Chunk>,
+        kept: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
     ) {
-        let len = self[..].len();
-        while *position < len && !keep.at_capacity() && !ship.at_capacity() {
-            let (data, time, diff) = &self[*position];
-            if upper.less_equal(time) {
-                frontier.insert_with(time, |time| time.clone());
-                keep.copy_destructured(data, time, diff);
-            } else {
-                ship.copy_destructured(data, time, diff);
+        let mut keep = Self::empty(stash);
+        let mut ready = Self::empty(stash);
+
+        for chunk in merged {
+            let len = chunk[..].len();
+            for i in 0..len {
+                let (data, time, diff) = &chunk[i];
+                if upper.less_equal(time) {
+                    frontier.insert_with(time, |time| time.clone());
+                    keep.copy_destructured(data, time, diff);
+                } else {
+                    ready.copy_destructured(data, time, diff);
+                }
+                if keep.at_capacity() {
+                    kept.push(std::mem::replace(&mut keep, Self::empty(stash)));
+                }
+                if ready.at_capacity() {
+                    readied.push(std::mem::replace(&mut ready, Self::empty(stash)));
+                }
             }
-            *position += 1;
+            // Chunk fully consumed; recycle its allocations.
+            Self::recycle(chunk, stash);
+        }
+
+        if !keep.is_empty() {
+            kept.push(keep);
+        }
+        if !ready.is_empty() {
+            readied.push(ready);
         }
     }
+
+    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+        chunk.heap_size(|siz, cap| {
+            size += siz;
+            capacity += cap;
+            allocations += 1;
+        });
+        (chunk[..].len(), size, capacity, allocations)
+    }
 }
-
-// ---------------------------------------------------------------------------
-// ColInternalMerger type alias
-// ---------------------------------------------------------------------------
-
-/// A `Merger` using internal iteration for `ColumnationStack` containers.
-pub type ColInternalMerger<D, T, R> =
-    differential_dataflow::trace::implementations::merge_batcher::InternalMerger<
-        ColumnationStack<(D, T, R)>,
-    >;

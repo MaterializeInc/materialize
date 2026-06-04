@@ -1760,7 +1760,7 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
             f.write_str(" (");
 
             match columns {
-                TableFromSourceColumns::NotSpecified => unreachable!(),
+                TableFromSourceColumns::NotSpecified => {}
                 TableFromSourceColumns::Named(columns) => {
                     f.write_node(&display::comma_separated(columns))
                 }
@@ -1769,7 +1769,9 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
                 }
             };
             if !constraints.is_empty() {
-                f.write_str(", ");
+                if !matches!(columns, TableFromSourceColumns::NotSpecified) {
+                    f.write_str(", ");
+                }
                 f.write_node(&display::comma_separated(constraints));
             }
             f.write_str(")");

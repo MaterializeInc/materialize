@@ -18,7 +18,7 @@ with always-fresh results. For pricing details, see [Pricing](https://materializ
 In Materialize, [clusters](/concepts/clusters/) are pools of compute resources
 (CPU, memory, and scratch disk space) for running your workloads, such as
 maintaining up-to-date results while also providing strong [consistency
-guarantees](/get-started/isolation-level/). The credit usage for a cluster is
+guarantees](/reference/isolation-level/). The credit usage for a cluster is
 measured at a one second granularity.
 
 {{< note >}}

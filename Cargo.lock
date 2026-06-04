@@ -1979,9 +1979,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "161f39fb04ec1e1446e76f65ee5fc19f59240d9095b0b89b9a325da608c927f1"
+checksum = "31b280b1509d6a79dccc29a809a4eda5916af652d479afb0e27f7718af6639f1"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1990,9 +1990,9 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d874c276acb8ce8e425e2822c54ce67a444dc407ec97767bbfc6490acc9fa2d"
+checksum = "72c9c88441fb60d0d5d9e939b5765abdff87d1a4d4cc80a90e0f945a6711c438"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2799,9 +2799,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d842a3e5e50bcd08a7f247c01a41cb057fde0c16f3865772682bff2edef5f40a"
+checksum = "befdc46c04f5671a2dfe32a9d06ce8efe44f650f0f6f974d190b9a6ee1c17665"
 dependencies = [
  "columnar",
  "columnation",
@@ -2814,9 +2814,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8665214a200212ff3bb3009da66cf0807a666ea2d722ff1816b27430f3e9c9d4"
+checksum = "6a8ec406d5dc1cb6ce0101df2b383de91ae0de283b1cf7812433ef57e031141c"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -3326,9 +3326,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fancy-regex"
-version = "0.18.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
+checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -5960,6 +5960,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "humantime",
  "indexmap 2.11.4",
  "k8s-openapi",
  "kube",
@@ -7020,6 +7021,7 @@ dependencies = [
  "clap",
  "futures",
  "http 1.4.0",
+ "humantime",
  "k8s-controller",
  "k8s-openapi",
  "kube",
@@ -7573,6 +7575,7 @@ dependencies = [
  "prost-build",
  "rand 0.9.4",
  "regex",
+ "regex-syntax",
  "ryu",
  "serde",
  "serde_json",
@@ -12028,9 +12031,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cdba58f1357fd65576620166d88afb7911b0d4f83b97c0624b03797e85ef4e9"
+checksum = "c5af6859fde675a87f12da672e0bdf08bfc809e68d8c6728f50942d09c0480a3"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12048,15 +12051,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beb91e9fc11841c4b07af1c95cea20470aaf144d6b412daddf63593cd8e7df50"
+checksum = "4b427b919d60d815c9c30b52d8080ebde599380db18c7c98a8c99fc172601ca1"
 
 [[package]]
 name = "timely_communication"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9efbf4f3899dc9905b780ec3646920022de3323086cc05ba84f4ffaad9a80c8"
+checksum = "2137e50f9c368c04d9971b7909c6fceadedb24c6e4fa4173bf55bf6d415329db"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12069,15 +12072,15 @@ dependencies = [
 
 [[package]]
 name = "timely_container"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e39eed4292e8e49f341c3d6cdfc8c43431634676a42dc8021cfd67e939c129a9"
+checksum = "b45d41809553b99db9abc2ad2c5f5b8f755df1f2191051527deaadeea12d5a7e"
 
 [[package]]
 name = "timely_logging"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ef86afa8b06f1bfa6e088b87909592a14622189f91ae4b5a49e76ac10ab73c"
+checksum = "00582f3cfc652e3173eb9a140981133f359029e6b746667414a8d334285163d6"
 dependencies = [
  "timely_container",
 ]

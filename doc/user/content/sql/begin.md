@@ -30,7 +30,7 @@ You can specify the following optional settings for `BEGIN`:
 
 Option | Description
 -------|----------
-`ISOLATION LEVEL <level>` | *Optional*. If specified, sets the transaction [isolation level](/get-started/isolation-level).
+`ISOLATION LEVEL <level>` | *Optional*. If specified, sets the transaction [isolation level](/reference/isolation-level).
 `READ ONLY` | <a name="begin-option-read-only"></a> *Optional*. If specified, restricts the transaction to [**read-only** statements](#read-only-transactions). If unspecified, Materialize restricts the transaction to [**read-only** statements](#read-only-transactions), [**write-only** statements](#write-only-transactions), or [**DDL-only** statements](#ddl-only-transactions) based on the first statement in the transaction.
 
 ## Details

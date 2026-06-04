@@ -549,9 +549,15 @@ mod columnar {
     }
 
     impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
         #[inline(always)]
-        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            columnar::chain(self.bounds.as_bytes(), self.values.as_bytes())
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert!(index < Self::SLICE_COUNT);
+            if index < BC::SLICE_COUNT {
+                self.bounds.get_byte_slice(index)
+            } else {
+                self.values.get_byte_slice(index - BC::SLICE_COUNT)
+            }
         }
     }
     impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {

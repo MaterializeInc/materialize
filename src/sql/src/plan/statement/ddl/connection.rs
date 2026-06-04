@@ -33,10 +33,11 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
-    CsrConnectionHttpAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
-    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogConnection,
+    IcebergCatalogImpl, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
+    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
+    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
+    Tunnel,
 };
 
 use crate::names::Aug;
@@ -66,6 +67,7 @@ generate_extracted_config!(
     (PublicKey1, String),
     (PublicKey2, String),
     (Region, String),
+    (Registry, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
@@ -115,6 +117,7 @@ pub(super) fn validate_options_per_connection_type(
         ]
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
+        CreateConnectionType::GlueSchemaRegistry => &[AwsConnection, Registry],
         CreateConnectionType::Csr => &[
             AwsPrivatelink,
             Password,
@@ -398,6 +401,23 @@ impl ConnectionOptionExtracted {
                     tls_identity,
                     http_auth,
                     tunnel,
+                })
+            }
+            CreateConnectionType::GlueSchemaRegistry => {
+                scx.require_feature_flag(&vars::ENABLE_GLUE_SCHEMA_REGISTRY)?;
+
+                let aws_connection = get_aws_connection_reference(scx, &self)?
+                    .ok_or_else(|| sql_err!("AWS CONNECTION option is required"))?;
+                let registry_name = self
+                    .registry
+                    .ok_or_else(|| sql_err!("REGISTRY option is required"))?;
+                if registry_name.is_empty() {
+                    sql_bail!("invalid CONNECTION: REGISTRY must not be empty");
+                }
+
+                ConnectionDetails::GlueSchemaRegistry(GlueSchemaRegistryConnection {
+                    aws_connection,
+                    registry_name,
                 })
             }
             CreateConnectionType::Postgres => {

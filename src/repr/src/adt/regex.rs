@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -106,6 +107,85 @@ impl Regex {
         // `as_str` returns the raw pattern as provided during construction,
         // and doesn't include any of the flags.
         self.regex.as_str()
+    }
+
+    /// Returns the indices of the capture groups that are guaranteed to
+    /// participate in every successful match of this regex.
+    ///
+    /// A capture group does *not* participate in a match when it is skipped
+    /// over by an optional construct: a `?` or `*` quantifier, a `{0,n}`-style
+    /// repetition, or an unmatched branch of an alternation. The indices
+    /// returned here are the complement of that set — capture groups that
+    /// always capture a value when the regex matches at all, and whose
+    /// extracted value is therefore non-nullable.
+    ///
+    /// Capture group indices match those used by [`regex::Captures`], where
+    /// index 0 refers to the entire match and is always included (it
+    /// necessarily participates whenever the regex matches).
+    ///
+    /// If the pattern cannot be parsed — which should not happen for a regex
+    /// that compiled successfully — an empty set is returned, conservatively
+    /// treating every capture group as nullable.
+    pub fn non_nullable_capture_groups(&self) -> BTreeSet<u32> {
+        let mut groups = BTreeSet::new();
+        if let Ok(ast) = regex_syntax::ast::parse::Parser::new().parse(self.pattern()) {
+            // The entire match (index 0) always participates in a match.
+            groups.insert(0);
+            collect_non_nullable_capture_groups(&ast, &mut groups);
+        }
+        groups
+    }
+}
+
+/// Walks the always-matched portion of `ast`, recording into `groups` the index
+/// of every capture group that is guaranteed to participate in a match.
+///
+/// This only recurses through nodes that a match cannot skip over, so every
+/// capture group it reaches is non-nullable. It stops descending at any node
+/// that introduces an optional context — an optional repetition or an
+/// alternation — since nothing beneath such a node is guaranteed to match.
+///
+/// The recursion depth is bounded by the AST nesting depth. This is safe
+/// because the only caller obtains `ast` from `regex_syntax`'s parser, whose
+/// default `nest_limit` (250) rejects more deeply nested patterns before we
+/// ever get here.
+fn collect_non_nullable_capture_groups(ast: &regex_syntax::ast::Ast, groups: &mut BTreeSet<u32>) {
+    use regex_syntax::ast::Ast;
+    match ast {
+        Ast::Group(group) => {
+            if let Some(index) = group.capture_index() {
+                groups.insert(index);
+            }
+            collect_non_nullable_capture_groups(&group.ast, groups);
+        }
+        // A required repetition (e.g. `+` or `{1,n}`) still always matches, so
+        // keep descending; an optional one is handled by the catch-all below.
+        Ast::Repetition(rep) if !repetition_is_optional(&rep.op.kind) => {
+            collect_non_nullable_capture_groups(&rep.ast, groups);
+        }
+        Ast::Concat(concat) => {
+            for ast in &concat.asts {
+                collect_non_nullable_capture_groups(ast, groups);
+            }
+        }
+        // Everything else — alternations (only one branch matches), optional
+        // repetitions, and leaf nodes — cannot contribute a non-nullable
+        // capture group, so we stop here.
+        _ => {}
+    }
+}
+
+/// Returns whether a repetition with the given kind may match zero times, in
+/// which case the repeated subexpression might be skipped over by a match.
+fn repetition_is_optional(kind: &regex_syntax::ast::RepetitionKind) -> bool {
+    use regex_syntax::ast::{RepetitionKind, RepetitionRange};
+    match kind {
+        RepetitionKind::ZeroOrOne | RepetitionKind::ZeroOrMore => true,
+        RepetitionKind::OneOrMore => false,
+        RepetitionKind::Range(range) => match range {
+            RepetitionRange::Exactly(min) | RepetitionRange::AtLeast(min) => *min == 0,
+            RepetitionRange::Bounded(min, _) => *min == 0,
+        },
     }
 }
 
@@ -377,6 +457,65 @@ mod tests {
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(pattern, roundtrip_result.pattern());
+        }
+    }
+
+    #[mz_ore::test]
+    fn regex_non_nullable_capture_groups() {
+        // `(idx, expected_non_nullable_indices)`. Index 0 (the whole match)
+        // always participates and is always reported.
+        let cases: &[(&str, &[u32])] = &[
+            // A plain capture group always participates.
+            ("(a)(b)", &[0, 1, 2]),
+            // `?` and `*` make the group optional.
+            ("(a)(b)?", &[0, 1]),
+            ("(a)(b)*", &[0, 1]),
+            // `+` and `{1,n}` keep the group required.
+            ("(a)(b)+", &[0, 1, 2]),
+            ("(a)(b){1,3}", &[0, 1, 2]),
+            // `{0,n}` and `{0}` make the group optional.
+            ("(a)(b){0,3}", &[0, 1]),
+            ("(a)(b){0}", &[0, 1]),
+            // Both branches of a top-level alternation are optional.
+            ("(a)|(b)", &[0]),
+            // A group wrapping an alternation still always participates, even
+            // though groups *inside* the branches do not.
+            ("(a|b)", &[0, 1]),
+            ("((a)|(b))", &[0, 1]),
+            // The soundness crux: a group that *wraps* an optional sub-expression
+            // still always captures (the empty string), so it is non-nullable —
+            // unlike a group that is *itself* made optional (`(a)?`, tested
+            // above). Note the difference in `?`/`*` position.
+            ("(a*)", &[0, 1]),
+            ("(a?)", &[0, 1]),
+            ("(a*)(b)?", &[0, 1]),
+            // Nesting inside an optional construct is contagious.
+            ("((a)(b))?", &[0]),
+            // A required group following an optional one is still required.
+            ("(a)?(b)", &[0, 2]),
+            // Named groups are handled the same way.
+            ("(?P<x>a)(?P<y>b)?", &[0, 1]),
+            // Non-capturing groups don't introduce indices.
+            ("(?:a)(b)", &[0, 1]),
+            // Real-world patterns exercised by our test suite. The request-log
+            // regex used by `test/testdrive/regex-sources.td`: `ip` (1), `ts`
+            // (2), `path` (3), and `code` (6) always participate, while
+            // `search_kw` (4) and `product_detail_id` (5) live inside
+            // alternation branches and are therefore nullable.
+            (
+                r#"(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -"#,
+                &[0, 1, 2, 3, 6],
+            ),
+            // The key/value regexes from
+            // `test/testdrive/kafka-include-key-sources.td`, where both groups
+            // always participate.
+            (r#"(?P<animal>[^,]+),(?P<food>\w+)"#, &[0, 1, 2]),
+        ];
+        for (pattern, expected) in cases {
+            let regex = Regex::new(pattern, false).unwrap();
+            let got = regex.non_nullable_capture_groups();
+            let expected: BTreeSet<u32> = expected.iter().copied().collect();
+            assert_eq!(got, expected, "pattern: {pattern}");
         }
     }
 
