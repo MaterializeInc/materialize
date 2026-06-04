@@ -11,10 +11,14 @@ The persist source places no bound on fetched-but-undecoded blob data by default
 Decode costs roughly twice the CPU of fetch, so during hydration the fetch side outpaces decode and raw blob buffers accumulate.
 A production heap profile of a compute replica showed ~91% of live heap attributed to the blob coalescing buffer in `S3Blob::get` (`src/persist/src/s3.rs`), with a 14× spike during hydration over steady state.
 
-A bound exists, but it is opt-in and disabled.
+Two bounds exist, and neither is effective.
 The `granular_backpressure` scope in `persist_source` limits in-flight encoded bytes, driven by `compute_dataflow_max_inflight_bytes` (default `None`) and `compute_dataflow_max_inflight_bytes_cc` (default `None`).
 The cc variant was defaulted off on the assumption that persist lgalloc would absorb the memory pressure, but lgalloc is disabled on the affected replicas and the project is moving away from lgalloc entirely.
 The flow-control mechanism is also complex: it encodes per-part retirement into a `Subtime` component of the timestamp, runs in a dedicated inner scope, and feeds back progress through a probe, with documented overshoot at batch granularity.
+
+Separately, persist itself already implements exactly the RAII byte-semaphore this design originally proposed: `BatchFetcher::fetch_leased_part` acquires permits from a `MetricsSemaphore` before each download (`src/persist-client/src/fetch.rs`), the permit is stored in `FetchedBlob.fetch_permit`, cloned into `ShardSourcePart` at `parse()`, and released only when `decode_and_mfp` retires the part.
+But its budget is `memory_limit × persist_fetch_semaphore_permit_adjustment` (default 1.0) on cc replicas — allowing in-flight fetched bytes up to the entire process memory limit, justified by the same lgalloc-spills assumption — and `Semaphore::MAX_PERMITS` (unbounded) on non-cc replicas, on the assumption that `granular_backpressure` covers them.
+The affected replicas run without lgalloc and without `granular_backpressure`, so in practice the fetch pipeline is unbounded.
 
 Separately, the persist source is built on `AsyncOperatorBuilder`, and we are migrating timely operators off the async bridge (see #36810).
 Solving the backpressure problem inside the async operators would build new plumbing on machinery scheduled for removal.
@@ -38,8 +42,9 @@ Solving the backpressure problem inside the async operators would build new plum
 ## Solution proposal
 
 Rewrite the persist source as synchronous timely operators (`OperatorBuilderRc`) paired with tokio tasks that own all async work.
-Backpressure becomes a byte-budget `tokio::sync::Semaphore` acquired by the fetch task before each download; the permit rides with the data and drops when decode retires the part.
-The `granular_backpressure` scope, `FlowControl`, `Subtime`, and both compute dyncfgs are deleted.
+Backpressure is the existing fetch semaphore: `fetch_leased_part` already acquires byte permits that are released when decode retires the part, so no new mechanism is added.
+Instead, the semaphore's gating is fixed: the `is_cc_active` condition is removed so non-cc replicas are bounded too, and the budget is tuned via the existing `persist_fetch_semaphore_permit_adjustment` dyncfg.
+The `granular_backpressure` scope, `FlowControl`, `Subtime`, and both compute dyncfgs are deleted in a later phase, as they are redundant with the semaphore.
 
 ```mermaid
 graph LR
@@ -84,10 +89,11 @@ The fetch task runs the backpressure loop:
 
 ```rust
 while let Some(part) = desc_rx.recv().await {
-    let bytes = part.encoded_size_bytes().min(budget_bytes); // jumbo parts overshoot, never deadlock
-    let permit = semaphore.acquire_many_owned(to_permits(bytes)).await?;
+    // `fetch_leased_part` internally acquires byte permits from the persist
+    // fetch semaphore before downloading; the permit is stored in the
+    // returned `FetchedBlob` and released when decode retires the part.
     let fetched = fetcher.fetch_leased_part(part).await?;
-    blob_tx.send((fetched, permit))?;
+    blob_tx.send(fetched)?;
     activator.activate()?;
 }
 ```
@@ -96,31 +102,32 @@ On activation the operator drains the blob channel, marries each result to its c
 Dropping the second capability advances the `completed_fetches` feedback frontier, which releases the lease on the chosen worker — the same contract as today, where the lease is released once the bytes are downloaded.
 
 **Decode operator (sync, per worker).**
-`decode_and_mfp` keeps its `PendingWork` queue and fueled `do_work` loop, converted from `AsyncOperatorBuilder` to `OperatorBuilderRc`.
-Yielding on fuel exhaustion becomes self-reactivation through the operator's activator instead of an await point.
-The semaphore permit moves from the `FetchedBlob` into `PendingWork` and drops when the part is fully drained, so the budget covers fetch start through row emission.
+`decode_and_mfp` is already a synchronous operator with a fueled `do_work` loop and activator-based self-rescheduling; it requires no changes.
+The fetch permit already reaches it today: `FetchedBlob.fetch_permit` is cloned into `ShardSourcePart` at `parse()` and dropped when `PendingWork` retires the part, so the budget covers fetch start through row emission.
 
 ### Backpressure semantics
 
-* The budget is a per-worker byte semaphore: `persist_source_max_inflight_fetch_bytes / peers`, with permits in KiB units to stay within tokio's permit limit.
-* The dyncfg defaults to a finite value (see open questions); `compute_dataflow_max_inflight_bytes{,_cc}` are removed.
-* A blocked fetch task leaves descs queued in its bounded desc channel and, transitively, in the fetch operator's input; descs are small (metadata, the lease stays on the chosen worker).
-* Overshoot is at most one clamped part per worker, replacing the batch-granularity overshoot of the current scope.
+* The budget is the existing process-wide persist fetch semaphore: `memory_limit × persist_fetch_semaphore_permit_adjustment` permits, costed at `encoded_size_bytes × persist_fetch_semaphore_cost_adjustment` per part.
+* The `is_cc_active` gate on the budget is removed, so non-cc replicas are bounded as well; without it they get `Semaphore::MAX_PERMITS`.
+* The defaults (`1.0` and `1.2`) were sized for lgalloc spill and are too lax for heap-resident buffers; retuning happens via the existing dyncfgs and does not require this rewrite (see open questions for the new default).
+* A blocked fetch task leaves descs queued in its channel and, transitively, in the fetch operator's input; descs are small (metadata, the lease stays on the chosen worker).
+* `compute_dataflow_max_inflight_bytes{,_cc}` are removed in phase 2 together with the `granular_backpressure` scope.
 
 Compared to `granular_backpressure`:
 
-| | today (flag on) | this design |
+| | `granular_backpressure` (flag on) | fetch semaphore |
 |---|---|---|
 | bound window | desc emission → decode frontier | fetch start → rows emitted |
-| overshoot | batch granularity | ≤ 1 clamped part per worker |
-| mechanism | `Subtime` + probe + capabilities | RAII permit |
-| default | off | on |
+| overshoot | batch granularity | ≤ 1 part per acquire |
+| mechanism | `Subtime` + probe + capabilities | RAII permit (already shipped) |
+| default | off | on for cc; on for all after this change |
+| scope | per dataflow | per process |
 
 ### Safety
 
 * **No deadlock.**
   Permits are released by decode progress on the same worker; fetch → decode is `Pipeline`, so no cross-worker wait cycle exists.
-  The jumbo-part clamp guarantees any single part can always acquire.
+  `MetricsSemaphore::acquire_permits` already clamps requests to the total permit count, so any single part can always acquire.
 * **No premature lease release.**
   The per-flight capability on the completed-fetches output is held until the fetched blob is emitted, which is stricter than the implicit input→output frontier tracking of the async builder.
 * **Shutdown.**
@@ -132,9 +139,10 @@ Compared to `granular_backpressure`:
 
 ### Phasing
 
-1. Deasync the three operators with the semaphore present but the budget effectively unbounded.
-   This isolates the structural risk; behavior matches today with flags unset.
-2. Flip the budget default to a finite value; remove `compute_dataflow_max_inflight_bytes{,_cc}` and the `granular_backpressure` scope, `FlowControl`, and `Subtime`.
+1. Deasync `shard_source_descs` (merging its `_return` lease operator) and `shard_source_fetch`; remove the `is_cc_active` gate from the fetch semaphore.
+   `decode_and_mfp` and the permit plumbing are untouched; behavior on cc replicas is unchanged.
+2. Retune `persist_fetch_semaphore_permit_adjustment` for heap-resident (non-lgalloc) operation, first via LaunchDarkly, then as the code default.
+3. Remove `compute_dataflow_max_inflight_bytes{,_cc}` and the `granular_backpressure` scope, `FlowControl`, and `Subtime`, which are redundant with the semaphore.
    Removing the inner scope flattens `persist_source_core` timestamps from `(Timestamp, Subtime)` to `Timestamp`, which touches every consumer of the decoded stream and lands as its own mechanical change.
 
 ### Observability
@@ -152,24 +160,26 @@ Compared to `granular_backpressure`:
 
 ## Minimal viable prototype
 
-Prototype phase 1 in a worktree: deasync `shard_source_fetch` only, with the semaphore and per-flight capabilities, leaving descs and decode async.
-Validate with the existing test suite plus a heap profile of a hydration under `bin/environmentd`, confirming the in-flight gauge tracks the `S3Blob::get` allocation site.
+Prototype phase 1 in a worktree: deasync `shard_source_fetch` first (per-flight capabilities, fetch task), then `shard_source_descs`, leaving decode untouched.
+Validate with the existing test suite plus a heap profile of a hydration under `bin/environmentd`, confirming the `mz_persist_semaphore_available_permits{name="fetch"}` gauge tracks the `S3Blob::get` allocation site.
 The timely-deasync skill patterns (per-flight capabilities, shared task handles) come from a prior prototype of exactly this operator, which de-risks the approach.
 
 ## Alternatives
 
-* **Enable the existing flags.**
-  Setting `compute_dataflow_max_inflight_bytes_cc` fixes the incident with zero code, but keeps the `Subtime` machinery, keeps the async bridge dependency, and keeps a default-off footgun that already misfired once.
-  Worth doing as an immediate production mitigation independent of this design.
-* **Semaphore inside the async operators.**
-  A small change (acquire in `shard_source_fetch`'s async body), but it builds on `AsyncOperatorBuilder`, which is being removed; the plumbing would be throwaway.
+* **Tune the existing knobs only.**
+  Lowering `persist_fetch_semaphore_permit_adjustment` (cc replicas) or setting `compute_dataflow_max_inflight_bytes` (non-cc) fixes the incident with zero code.
+  Worth doing as an immediate production mitigation independent of this design, but it keeps the unbounded non-cc default, the `Subtime` machinery, and the async bridge dependency.
+* **A new per-dataflow semaphore in the operators.**
+  The original draft of this design; superseded by the discovery that the persist fetch semaphore already implements the same RAII lifecycle process-wide.
+  Adding a second, per-dataflow budget on top remains possible later if process-wide coupling proves problematic.
 * **Full async rewrite including part distribution.**
   Per-worker listens would multiply consensus and pubsub load by the worker count, and moving decode to tokio loses worker-scaled CPU and dataflow introspection.
   Rejected; the hybrid keeps timely where timely earns its place.
 
 ## Open questions
 
-* Default budget value: a multiple of `BLOB_TARGET_SIZE` per worker versus a fixed per-process number; needs sizing against typical replica memory limits.
-* Per-dataflow versus per-process budget: per-process caps pod memory directly but couples dataflows (one slow decoder starves other dataflows' fetches); this design proposes per-dataflow, matching today's accounting.
+* New default for `persist_fetch_semaphore_permit_adjustment` once heap-resident: needs sizing against typical replica memory limits and arrangement footprints; likely well below 1.0.
+* Per-process budget couples dataflows (one slow decoder starves other dataflows' fetches); whether that needs a per-dataflow refinement in practice.
+* Whether `announce_memory_limit` is populated on all deployment paths the semaphore should bound; processes without it remain unbounded.
 * Ordering with #36810: both touch the async-to-sync conversion patterns; land txn-wal first to validate the shared patterns, or in parallel?
 * Whether `desc_transformer` users (txn-wal) constrain the desc-channel handoff in the fetch operator.
