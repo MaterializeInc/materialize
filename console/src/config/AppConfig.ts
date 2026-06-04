@@ -207,6 +207,8 @@ export class SelfManagedAppConfig implements IBaseAppConfig {
 
   authMode: SelfManagedAuthMode = appConfigJson.auth.mode;
 
+  balancerdDnsNames: string[] | undefined = appConfigJson.balancerdDnsNames;
+
   environmentdScheme = getEnvironmentdScheme({
     buildConstants,
     isLocalImpersonation: false,
