@@ -5910,6 +5910,67 @@ fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
     }
 }
 
+/// MCP routes on a `Password`-authenticator listener must NOT advertise
+/// OAuth — discovery is scoped to `Oidc` listeners by
+/// [`oauth_metadata::McpOAuthDiscovery::for_authenticator`]. Regression
+/// guard for the seam: even with MCP routes enabled, a Password listener
+/// emits only `Basic` on a 401 and 404s the well-known discovery URI.
+#[mz_ore::test]
+fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let res = Client::new()
+            .post(&format!(
+                "http://{}/api/mcp/{endpoint}",
+                server.http_local_addr()
+            ))
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "Password listener should still emit Basic on /api/mcp/{endpoint}: {challenges:?}",
+        );
+        assert!(
+            !challenges.iter().any(|c| c.starts_with("Bearer ")),
+            "Password listener MUST NOT advertise OAuth on /api/mcp/{endpoint}: {challenges:?}",
+        );
+    }
+
+    // The discovery endpoint must 404 on a Password listener even though
+    // `oidc_issuer` is set — there is no OAuth flow this listener honours.
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "discovery doc must not be published on a Password listener",
+    );
+}
+
 /// The SQL HTTP layer must NOT gain the Bearer challenge — only MCP
 /// routes opt into OAuth discovery. Regression guard so we don't
 /// accidentally widen the OAuth surface to the rest of the HTTP server.

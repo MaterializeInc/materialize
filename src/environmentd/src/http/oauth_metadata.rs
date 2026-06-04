@@ -593,6 +593,33 @@ mod tests {
         }
     }
 
+    /// Pin the authenticator-to-discovery mapping. Today only `Oidc`
+    /// advertises OAuth; if Frontegg, Password, Sasl, or None flips to
+    /// enabled by accident, MCP clients would be steered into a flow
+    /// the listener can't honour.
+    #[mz_ore::test]
+    fn test_mcp_oauth_discovery_for_authenticator() {
+        use listeners::AuthenticatorKind;
+        assert_eq!(
+            McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Oidc),
+            McpOAuthDiscovery::Oidc,
+        );
+        for kind in [
+            AuthenticatorKind::None,
+            AuthenticatorKind::Password,
+            AuthenticatorKind::Frontegg,
+            AuthenticatorKind::Sasl,
+        ] {
+            assert_eq!(
+                McpOAuthDiscovery::for_authenticator(kind),
+                McpOAuthDiscovery::Disabled,
+                "{kind:?} must not advertise OAuth until explicitly wired up",
+            );
+        }
+        assert!(McpOAuthDiscovery::Oidc.is_enabled());
+        assert!(!McpOAuthDiscovery::Disabled.is_enabled());
+    }
+
     /// Rejects values that would confuse clients downstream or leak
     /// embedded secrets in a public document.
     #[mz_ore::test]
