@@ -32,6 +32,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SOURCE s FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 
 ! CREATE TABLE foo FROM SOURCE s (REFERENCE = public.foo) WITH (TEXT COLUMNS = ());
+contains: invalid TEXT COLUMNS option value: cannot be empty
 
 
 # Test MySql version
