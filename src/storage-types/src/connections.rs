@@ -179,10 +179,16 @@ impl RequestAuthenticator for Sigv4Authenticator {
             .build()
             .map_err(sigv4_err)?
             .into();
-        let body: Vec<u8> = req
+        let body: &[u8] = req
             .body()
-            .and_then(|b| b.as_bytes())
-            .map(|b| b.to_vec())
+            .map(|b| match b.as_bytes() {
+                Some(b) => Ok(b),
+                None => Err(iceberg::Error::new(
+                    iceberg::ErrorKind::FeatureUnsupported,
+                    "SigV4 Authenticator cannot sign a streaming request body.",
+                )),
+            })
+            .transpose()?
             .unwrap_or_default();
         let headers = req
             .headers()
@@ -203,7 +209,7 @@ impl RequestAuthenticator for Sigv4Authenticator {
             req.method().as_str(),
             req.url().as_str(),
             headers.into_iter(),
-            SignableBody::Bytes(&body),
+            SignableBody::Bytes(body),
         )
         .map_err(sigv4_err)?;
         let (instructions, _sig) = sign(signable, &params).map_err(sigv4_err)?.into_parts();
