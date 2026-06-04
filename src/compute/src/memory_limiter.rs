@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use mz_compute_types::dyncfgs::{
-    MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS,
+    MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_ENFORCE, MEMORY_LIMITER_INTERVAL,
+    MEMORY_LIMITER_USAGE_BIAS,
 };
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -35,10 +36,13 @@ static LIMITER: Mutex<Option<Limiter>> = Mutex::new(None);
 
 /// Start the process-global memory limiter.
 ///
+/// If no `memory_limit` is given, the limiter runs in observe-only mode: it still samples memory
+/// usage and exports metrics, but never terminates the process.
+///
 /// # Panics
 ///
 /// Panics if the limiter was already started previously.
-pub fn start_limiter(memory_limit: usize, metrics_registry: &MetricsRegistry) {
+pub fn start_limiter(memory_limit: Option<usize>, metrics_registry: &MetricsRegistry) {
     let mut limiter = LIMITER.lock().expect("poisoned");
 
     if limiter.is_some() {
@@ -67,15 +71,15 @@ pub fn apply_limiter_config(config: &ConfigSet) {
 /// Get the current effective memory limit.
 pub fn get_memory_limit() -> Option<usize> {
     let limiter = LIMITER.lock().expect("poisoned");
-    limiter.as_ref().map(|l| l.effective_memory_limit)
+    limiter.as_ref().and_then(|l| l.effective_memory_limit)
 }
 
 /// A handle to a running memory limiter task.
 struct Limiter {
-    /// The base process memory limit.
-    base_memory_limit: usize,
+    /// The base process memory limit, if one was announced.
+    base_memory_limit: Option<usize>,
     /// The effective memory limit, obtained by applying dyncfgs to the base limit.
-    effective_memory_limit: usize,
+    effective_memory_limit: Option<usize>,
     /// A sender for limiter configuration updates.
     config_tx: UnboundedSender<LimiterConfig>,
 }
@@ -90,12 +94,17 @@ impl Limiter {
             interval = Duration::MAX;
         }
 
-        let memory_limit =
-            f64::cast_lossy(self.base_memory_limit) * MEMORY_LIMITER_USAGE_BIAS.get(config);
-        let memory_limit = usize::cast_lossy(memory_limit);
+        let memory_limit = self.base_memory_limit.map(|base| {
+            let limit = f64::cast_lossy(base) * MEMORY_LIMITER_USAGE_BIAS.get(config);
+            usize::cast_lossy(limit)
+        });
 
-        let burst_budget = f64::cast_lossy(memory_limit) * MEMORY_LIMITER_BURST_FACTOR.get(config);
-        let burst_budget = usize::cast_lossy(burst_budget);
+        let burst_budget = memory_limit.map_or(0, |limit| {
+            let budget = f64::cast_lossy(limit) * MEMORY_LIMITER_BURST_FACTOR.get(config);
+            usize::cast_lossy(budget)
+        });
+
+        let enforce = MEMORY_LIMITER_ENFORCE.get(config);
 
         self.effective_memory_limit = memory_limit;
 
@@ -104,6 +113,7 @@ impl Limiter {
                 interval,
                 memory_limit,
                 burst_budget,
+                enforce,
             })
             .expect("limiter task never shuts down");
     }
@@ -114,10 +124,12 @@ impl Limiter {
 struct LimiterConfig {
     /// The interval at which memory usage is checked against the memory limit.
     interval: Duration,
-    /// The memory limit.
-    memory_limit: usize,
+    /// The memory limit, if one is known. Without a limit the task only observes memory usage.
+    memory_limit: Option<usize>,
     /// Budget to allow memory usage above the memory limit, in byte-seconds.
     burst_budget: usize,
+    /// Whether to enforce the memory limit by terminating the process.
+    enforce: bool,
 }
 
 impl LimiterConfig {
@@ -125,19 +137,20 @@ impl LimiterConfig {
     fn disabled() -> Self {
         Self {
             interval: Duration::MAX,
-            memory_limit: 0,
+            memory_limit: None,
             burst_budget: 0,
+            enforce: false,
         }
     }
 }
 
-/// A task that enforces configured memory limits.
+/// A task that observes memory usage and enforces configured memory limits.
 ///
 /// The task operates by performing limit checks at a configured interval. For each check it
-/// obtains the current memory utilization from proc stats. It then compares the utilization against
-/// the configured memory limit, and if it exceeds the limit, reduces the burst budget by the amount
-/// of memory utilization that exceeds the limit. If the burst budget is exhausted, the limiter
-/// terminates the process.
+/// obtains the current memory utilization from proc stats and exports it as metrics. If a memory
+/// limit is configured, it then compares the utilization against the limit, and if it exceeds the
+/// limit, reduces the burst budget by the amount of memory utilization that exceeds the limit. If
+/// the burst budget is exhausted and enforcement is enabled, the limiter terminates the process.
 struct LimiterTask {
     /// The current limiter configuration.
     config: LimiterConfig,
@@ -200,7 +213,8 @@ impl LimiterTask {
         }
     }
 
-    /// Perform a memory usage check, terminating the process if the configured limits are exceeded.
+    /// Perform a memory usage check, terminating the process if the configured limits are exceeded
+    /// and enforcement is enabled.
     fn check(&mut self) -> Result<(), anyhow::Error> {
         debug!("checking memory limits");
 
@@ -213,7 +227,11 @@ impl LimiterTask {
 
         debug!(
             memory_usage,
-            memory_limit, burst_budget_remaining, vm_rss, vm_swap, "memory utilization check",
+            ?memory_limit,
+            burst_budget_remaining,
+            vm_rss,
+            vm_swap,
+            "memory utilization check",
         );
 
         self.metrics.vm_rss.set(u64::cast_from(vm_rss));
@@ -223,7 +241,9 @@ impl LimiterTask {
             .burst_budget
             .set(u64::cast_from(burst_budget_remaining));
 
-        if memory_usage > memory_limit {
+        if let Some(memory_limit) = memory_limit
+            && memory_usage > memory_limit
+        {
             // Calculate excess usage in byte-seconds.
             let elapsed = self.last_check.elapsed().as_secs_f64();
             let excess = memory_usage - memory_limit;
@@ -232,15 +252,18 @@ impl LimiterTask {
             if burst_budget_remaining >= excess_bs {
                 self.burst_budget_remaining -= excess_bs;
             } else {
-                // Burst budget exhausted, terminate the process.
+                // Burst budget exhausted.
+                self.burst_budget_remaining = 0;
                 warn!(
                     memory_usage,
                     memory_limit, "memory utilization exceeded configured limits",
                 );
-                // We terminate with a recognizable exit code so the orchestrator knows the
-                // termination was caused by exceeding memory limits, as opposed to another,
-                // unexpected cause.
-                mz_ore::process::exit_thread_safe(167);
+                if self.config.enforce {
+                    // We terminate with a recognizable exit code so the orchestrator knows the
+                    // termination was caused by exceeding memory limits, as opposed to another,
+                    // unexpected cause.
+                    mz_ore::process::exit_thread_safe(167);
+                }
             }
         } else {
             // Reset burst budget if under limit.
@@ -270,7 +293,7 @@ impl LimiterTask {
 
         self.metrics
             .memory_limit
-            .set(u64::cast_from(config.memory_limit));
+            .set(u64::cast_from(config.memory_limit.unwrap_or(0)));
     }
 }
 
@@ -293,7 +316,7 @@ impl LimiterMetrics {
             )),
             memory_limit: registry.register(metric!(
                 name: "mz_memory_limiter_memory_limit_bytes",
-                help: "The configured memory limit.",
+                help: "The configured memory limit. Zero if no limit is configured.",
             )),
             memory_usage: registry.register(metric!(
                 name: "mz_memory_limiter_memory_usage_bytes",
@@ -354,8 +377,9 @@ mod tests {
 
         let new_config = LimiterConfig {
             interval: Duration::from_secs(1),
-            memory_limit: 1024,
+            memory_limit: Some(1024),
             burst_budget: 1024,
+            enforce: true,
         };
         task.apply_config(new_config);
 
@@ -381,6 +405,47 @@ mod tests {
         task.apply_config(LimiterConfig::disabled());
 
         assert_eq!(task.last_check, stale);
+    }
+
+    /// In observe-only mode (no memory limit), `check` must never terminate the
+    /// process, regardless of memory usage.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // reads /proc/self/status
+    fn check_without_limit_observes_only() {
+        let mut task = task_for_test();
+        task.apply_config(LimiterConfig {
+            interval: Duration::from_secs(1),
+            memory_limit: None,
+            burst_budget: 0,
+            enforce: true,
+        });
+
+        // If this terminated the process, the test would fail by aborting.
+        task.check().unwrap();
+
+        // Usage metrics must be populated even without a limit.
+        assert_ne!(task.metrics.memory_usage.get(), 0);
+        assert_eq!(task.metrics.memory_limit.get(), 0);
+    }
+
+    /// With enforcement disabled, exceeding the limit with an exhausted burst
+    /// budget must not terminate the process.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // reads /proc/self/status
+    fn check_without_enforce_does_not_terminate() {
+        let mut task = task_for_test();
+        // A zero limit guarantees the current usage exceeds it.
+        task.apply_config(LimiterConfig {
+            interval: Duration::from_secs(1),
+            memory_limit: Some(0),
+            burst_budget: 0,
+            enforce: false,
+        });
+
+        // If this terminated the process, the test would fail by aborting.
+        task.check().unwrap();
+
+        assert_eq!(task.burst_budget_remaining, 0);
     }
 }
 
