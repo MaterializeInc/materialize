@@ -2531,9 +2531,12 @@ impl SemaphoreMetrics {
         let registry = self.registry.clone();
         let init = async move {
             let total_permits = match cfg.announce_memory_limit {
-                // Non-cc replicas have the old physical flow control mechanism,
-                // so only apply this one on cc replicas.
-                Some(mem) if cfg.is_cc_active => {
+                // This semaphore is the bound on fetched-but-not-yet-decoded
+                // bytes for all replica types. (It used to apply only to cc
+                // replicas, on the assumption that non-cc replicas were
+                // covered by the persist_source flow control dyncfgs, but
+                // those default to off.)
+                Some(mem) => {
                     // We can't easily adjust the number of permits later, so
                     // make sure we've synced dyncfg values at least once.
                     info!("fetch semaphore awaiting first dyncfg values");
@@ -2544,7 +2547,7 @@ impl SemaphoreMetrics {
                     info!("fetch_semaphore got first dyncfg values");
                     total_permits
                 }
-                Some(_) | None => Semaphore::MAX_PERMITS,
+                None => Semaphore::MAX_PERMITS,
             };
             MetricsSemaphore::new(&registry, "fetch", total_permits)
         };
