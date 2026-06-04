@@ -563,6 +563,34 @@ async fn purify_create_sink(
                 }
             };
 
+            // For S3 Tables connections in the Materialize Cloud product, verify the
+            // AWS region matches the environment's region. This check only applies when
+            // the enable_s3_tables_region_check dyncfg is set.
+            if let Some(s3tables) = connection.s3tables_catalog() {
+                let enable_region_check =
+                    ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
+                if enable_region_check {
+                    let env_id = &catalog.config().environment_id;
+                    if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
+                        let env_region = env_id.cloud_provider_region();
+                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
+                        // connection, so we need to do the same check here.
+                        let s3_tables_region = s3tables
+                            .aws_connection
+                            .connection
+                            .region
+                            .clone()
+                            .unwrap_or_else(|| "us-east-1".to_string());
+                        if s3_tables_region != env_region {
+                            Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
+                                s3_tables_region,
+                                environment_region: env_region.to_string(),
+                            })?;
+                        }
+                    }
+                }
+            }
+
             // Validate the sink's (optional) AWS connection even though we never use it.
             // TODO(kynan): If we do start using the sink's creds, check again that this validation
             //   accurately reflects what we need.
@@ -581,34 +609,6 @@ async fn purify_create_sink(
                         ),
                     }
                 };
-
-                // For S3 Tables connections in the Materialize Cloud product, verify the
-                // AWS region matches the environment's region. This check only applies when
-                // the enable_s3_tables_region_check dyncfg is set.
-                if let Some(s3tables) = connection.s3tables_catalog() {
-                    let enable_region_check =
-                        ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
-                    if enable_region_check {
-                        let env_id = &catalog.config().environment_id;
-                        if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
-                            let env_region = env_id.cloud_provider_region();
-                            // Later on we default to "us-east-1" if the region is not set on the S3 Tables
-                            // connection, so we need to do the same check here.
-                            let s3_tables_region = s3tables
-                                .aws_connection
-                                .connection
-                                .region
-                                .clone()
-                                .unwrap_or_else(|| "us-east-1".to_string());
-                            if s3_tables_region != env_region {
-                                Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
-                                    s3_tables_region,
-                                    environment_region: env_region.to_string(),
-                                })?;
-                            }
-                        }
-                    }
-                }
 
                 let _sdk_config = aws_connection
                     .load_sdk_config(
