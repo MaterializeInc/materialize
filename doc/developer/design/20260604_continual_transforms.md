@@ -209,25 +209,59 @@ non-deterministic — **forgetting is irreversible** (we cannot recompute what w
 drop). For these use cases that is the point, not a defect: "finalization" is
 exactly *keep the finalized answers, drop the working state.*
 
+**How data leaves the output — two eviction shapes, not one.** "Phasing out
+data we no longer care about" is really two physically distinct operations, and
+the `DELETE`-vs-automatic question only resolves once they are separated:
+
+- **Age / time-based phase-out** ("forget data older than X") should be
+  **automatic, implemented as a temporal filter on the output** — the same
+  `mz_now() < mz_timestamp + lag` + lagged-read-hold mechanism the CHANGES
+  maintained-MV mode already uses. It is *not* a `DELETE`, and that matters:
+  - It is **clock-driven**, so data ages out even when the input is idle. A
+    user-written `DELETE … WHERE ts < mz_now() - '30d'` only fires when the
+    transform commits, so for an input-triggered transform stale data never ages
+    out if the input goes quiet — exactly the Decision-Log "commit at every
+    timestamp vs. only when the input is non-empty" footgun, which the temporal
+    filter sidesteps.
+  - It is **self-finalizing and cheap**: each row gets exactly one
+    insert@`T` / retract@`T+W` pair, `since` advances steadily, and the pairs
+    consolidate as a matter of course. The "careful re-integration to finalize
+    deletes" problem **does not arise** for time-based eviction — there is
+    nothing to reconcile, and the shard stays at ~one window of data by
+    construction.
+  - It needs **no self-reference** in the body.
+- **Supersession** ("a newer fact replaces an older one" — upsert,
+  dedup-within-window) is value-dependent and input-driven: a new row for a key
+  must retract the *specific* prior row. This is where re-integration is real
+  (the `-1` must be the exact stored row to consolidate). Expressed as a
+  declared **key on the output**, the engine emits the exact prior-value
+  retraction and the body stays self-reference-free; only non-last-write-wins
+  supersession needs an explicit form.
+
+This decouples **when output is produced** (input-driven) from **when old data
+is forgotten** (clock-driven) — a separation CTs conflated by doing both via
+committed statements. Note also that **finalization needs no output `DELETE`**:
+a window close is a retraction in the *input* changelog, so it is captured by
+reacting to `mz_diff = -1` from `CHANGES(open)`, not by deleting from the output.
+
 **Output models, each with its growth-bounding story:**
 
 - **Append + retention** (audit logs, retention windows, metrics). Bounded by an
-  explicit, mostly **stateless** retention predicate
-  (`… WHERE ts < mz_now() - INTERVAL '30 days'`); the engine emits the
-  retractions, and because the predicate does not read current contents there is
-  no self-reference. Intentionally-growing logs are the sub-case where retention
+  explicit **time-based retention** applied as the temporal filter above — not a
+  scan-and-delete. Intentionally-growing logs are the sub-case where retention
   is an optional user policy.
 - **Keyed / upsert output** (upsert, dedup, finalization). Declare a **key** on
   the output; a new row for an existing key *replaces* it. The "find the prior
   value, retract it, insert the new" step is performed by the **output
   collection's machinery, not the user's SQL**, so the body has no
-  self-reference and state is **O(live keys)**, not O(updates). We already have
-  exactly this in storage — the upsert operator and `upsert_continual_feedback`
-  — and the keyed output should reuse it rather than reinvent it.
+  self-reference and live state is **O(live keys)**, not O(updates). (This is
+  just an arrangement with a loop + filter + negate — nothing exotic.)
 - **Writable table output** (general / CT model). The body issues explicit
-  `INSERT`/`DELETE`/`UPDATE`. Most general; stateless deletes are fine, but
-  stateful deletes (retract the superseded value of a key) reintroduce
-  read-your-own-writes and the Decision-Log iteration questions.
+  `INSERT`/`DELETE`/`UPDATE`. This is the **escape hatch for eviction logic that
+  is neither a time policy nor a key** (arbitrary predicate deletes). It is
+  available only in the imperative surface, and is documented as a read-then-
+  write that reintroduces self-reference and the re-integration cost — a
+  time-predicate `DELETE` here is the inferior way to express retention.
 
 **Internal reclamation — "finalizing" deletes.** Bounding the *logical* output
 is not sufficient; the physical persist shard and in-memory state must reclaim
@@ -358,12 +392,15 @@ marker — which is just a Tier-1 recorded collection.
   flagged as not-yet-available.
 - Needs an owned-output / progress-frontier concept so "consumed-through-`T`" is
   recorded by the output rather than a manual drain.
-- **Reuses the storage upsert machinery** (`upsert_continual_feedback`, the
-  upsert operator) for the keyed-output model, rather than reinventing
-  bounded-by-key state and exact prior-value retraction.
+- For time-based retention, **reuses the temporal-filter / lagged-read-hold
+  mechanism from the CHANGES maintained-MV mode** to age data out on the clock,
+  rather than emitting per-row deletes.
+- The keyed-output model is an ordinary keyed arrangement (loop + filter +
+  negate) emitting the exact prior-value retraction; no special storage
+  component is assumed.
 - Needs the engine to **own the read policy / compaction** on its output so
-  finalized deletes are physically reclaimed; interacts with `RETAIN HISTORY`
-  (which trades off against bounded growth).
+  superseding retractions are physically reclaimed; interacts with
+  `RETAIN HISTORY` (which trades off against bounded growth).
 - Multi-replica race-to-commit (compare-and-append, losers discard) — already
   contemplated by the original CT design.
 
@@ -426,15 +463,20 @@ upsert (transform + MV-on-top) to validate the relaxed-correctness story.
   before resolving it?
 - **Owned outputs & multi-output.** Output ownership rules; multi-output
   transforms (needed for webhook demux); interaction with `RETAIN HISTORY`.
-- **Retention / keying syntax and enforcement.** How is the output's growth
-  contract expressed (`INTO UPSERT … KEY (…)`, `RETAIN '30 days'`, count-based
-  `KEEP LAST n PER key`)? For time-based retention, is the retraction emitted
-  eagerly by the engine or applied as a stateless filter on read? How do we
-  guarantee compaction keeps up so finalized deletes are actually reclaimed, and
-  how do we surface it when it falls behind?
-- **Unbounded key spaces.** When even O(live keys) is unbounded, what is the
-  required interaction with temporal filters / key-space bounds, and what
-  happens if the user provides none?
+- **`DELETE` vs. automatic phase-out — where is the line?** The proposal is:
+  time → automatic temporal-filter retention; supersession → declared key;
+  arbitrary predicate eviction → explicit `DELETE` in the imperative surface
+  only. Is that the right split, or should the declarative surface also accept a
+  restricted predicate-eviction policy? Should explicit time-predicate `DELETE`
+  be discouraged/linted given the temporal filter is better?
+- **Retention / keying syntax.** How is the output's contract expressed
+  (`INTO UPSERT … KEY (…)`, `RETAIN '30 days'`, count-based
+  `KEEP LAST n PER key`)? How do we guarantee compaction keeps up so reclamation
+  actually happens, and surface it when it falls behind?
+- **Supersession with many keys.** Live state is O(live keys); if the live key
+  set is itself large, do we lean on time-based retention of the keyed output to
+  cap it, and what is the interaction between a key and a retention window on the
+  same output?
 - **Multi-replica & at-least-once observability.** Surfacing
   delivered/committed-through frontiers; behavior under replica churn.
 - **Relationship to standing queries (PR #35347)** — overlap or composition?
