@@ -1740,14 +1740,6 @@ async fn purify_alter_source_refresh_references(
     })
 }
 
-/// The error returned when `TEXT COLUMNS` is present but resolves to an empty set.
-fn text_columns_empty_err() -> PlanError {
-    PlanError::InvalidOptionValue {
-        option_name: TableFromSourceOptionName::TextColumns.to_ast_string_simple(),
-        err: Box::new(PlanError::Unstructured("cannot be empty".to_string())),
-    }
-}
-
 async fn purify_create_table_from_source(
     catalog: impl SessionCatalog,
     mut stmt: CreateTableFromSourceStatement<Aug>,
@@ -2059,12 +2051,9 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => return Err(text_columns_empty_err()),
-                }
+                text_cols_option.value = Some(WithOptionValue::Sequence(
+                    gen_text_columns.unwrap_or_default(),
+                ));
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
@@ -2117,12 +2106,9 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => return Err(text_columns_empty_err()),
-                }
+                text_cols_option.value = Some(WithOptionValue::Sequence(
+                    gen_text_columns.unwrap_or_default(),
+                ));
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
@@ -2175,12 +2161,9 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::TextColumns)
             {
-                match gen_text_columns {
-                    Some(gen_text_columns) => {
-                        text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns))
-                    }
-                    None => return Err(text_columns_empty_err()),
-                }
+                text_cols_option.value = Some(WithOptionValue::Sequence(
+                    gen_text_columns.unwrap_or_default(),
+                ));
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
