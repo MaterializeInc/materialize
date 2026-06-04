@@ -75,6 +75,7 @@ use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
+use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
@@ -719,6 +720,17 @@ async fn x_materialize_user_header_auth(
 
 type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
+/// Resolve the dyncfg-configured group claim path from a delayed adapter
+/// client. Callers must already have driven `adapter_client_rx` to readiness
+/// (e.g. via `get_authenticator`), so the await here is non-blocking.
+async fn group_claim_for(adapter_client_rx: &Delayed<Client>) -> String {
+    let client = adapter_client_rx
+        .clone()
+        .await
+        .expect("adapter client receiver dropped");
+    OIDC_GROUP_CLAIM.get(client.get_system_vars().await.dyncfgs())
+}
+
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
@@ -1069,11 +1081,13 @@ async fn http_auth(
     )
     .await;
 
+    let group_claim = group_claim_for(&adapter_client_rx).await;
     let user = auth(
         &authenticator,
         creds,
         allowed_roles,
         include_www_authenticate_header,
+        Some(&group_claim),
     )
     .await?;
 
@@ -1164,7 +1178,15 @@ async fn init_ws(
                 &adapter_client_rx,
             )
             .await;
-            let user = auth(&authenticator, Some(creds), allowed_roles, false).await?;
+            let group_claim = group_claim_for(&adapter_client_rx).await;
+            let user = auth(
+                &authenticator,
+                Some(creds),
+                allowed_roles,
+                false,
+                Some(&group_claim),
+            )
+            .await?;
             user
         }
         (None, None) => anyhow::bail!("expected auth information"),
@@ -1272,23 +1294,32 @@ async fn auth(
     creds: Option<Credentials>,
     allowed_roles: AllowedRoles,
     include_www_authenticate_header: bool,
+    group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
     let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
-                let (auth_session, authenticated) =
-                    frontegg.authenticate(&username, password.as_str()).await?;
+                let (auth_session, authenticated) = frontegg
+                    .authenticate(&username, password.as_str(), group_claim)
+                    .await?;
                 let name = auth_session.user().into();
+                let groups = auth_session.groups();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (name, external_metadata_rx, authenticated, None)
+                (name, external_metadata_rx, authenticated, groups)
             }
             Some(Credentials::Token { token }) => {
-                let (claims, authenticated) = frontegg.validate_access_token(&token, None)?;
+                let (claims, authenticated) =
+                    frontegg.validate_access_token(&token, None, group_claim)?;
                 let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.user, Some(external_metadata_rx), authenticated, None)
+                (
+                    claims.user,
+                    Some(external_metadata_rx),
+                    authenticated,
+                    claims.groups,
+                )
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {

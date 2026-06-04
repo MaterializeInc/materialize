@@ -44,6 +44,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 TENANT_ID = str(uuid.uuid4())
 ADMIN_USER = "u1@example.com"
 OTHER_USER = "u2@example.com"
+GROUP_SYNC_USER = "u3@example.com"
 ADMIN_ROLE = "MaterializePlatformAdmin"
 OTHER_ROLE = "MaterializePlatform"
 USERS = {
@@ -62,6 +63,19 @@ USERS = {
     },
     OTHER_USER: {
         "email": OTHER_USER,
+        "password": str(uuid.uuid4()),
+        "id": str(uuid.uuid4()),
+        "tenant_id": TENANT_ID,
+        "initial_api_tokens": [
+            {
+                "client_id": str(uuid.uuid4()),
+                "secret": str(uuid.uuid4()),
+            }
+        ],
+        "roles": [OTHER_ROLE],
+    },
+    GROUP_SYNC_USER: {
+        "email": GROUP_SYNC_USER,
         "password": str(uuid.uuid4()),
         "id": str(uuid.uuid4()),
         "tenant_id": TENANT_ID,
@@ -812,3 +826,154 @@ def workflow_split_proxy_header(c: Composition) -> None:
         assert (
             json.loads(body)["results"][0]["rows"][0][0] == "42"
         ), f"unexpected response body: {body}"
+
+
+def _frontegg_curl(
+    c: Composition, method: str, path: str, body: dict | None = None
+) -> str:
+    args = [
+        "curl",
+        "-s",
+        "-X",
+        method,
+        "-H",
+        "Content-Type: application/json",
+        f"{FRONTEGG_URL}{path}",
+    ]
+    if body is not None:
+        args += ["-d", json.dumps(body)]
+    return c.exec("materialized", *args, capture=True).stdout
+
+
+def _user_is_member_of(cursor: Cursor, user: str, role: str) -> bool:
+    cursor.execute(
+        """
+        SELECT count(*) FROM mz_role_members rm
+        JOIN mz_roles r ON rm.role_id = r.id
+        JOIN mz_roles m ON rm.member = m.id
+        WHERE m.name = %s AND r.name = %s
+        """,
+        (user, role),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    return row[0] > 0
+
+
+def workflow_frontegg_group_sync_stale_groups(c: Composition) -> None:
+    """Regression: a cached Frontegg auth session must observe group
+    revocations within one refresh cycle.
+
+    Before the fix, ``AuthSessionIdent`` froze the JWT groups at first login.
+    Cache hits returned the stale value forever, so a user removed from a
+    group in the IdP kept its synced role until their session expired
+    (~24h). The fix pushes fresh groups through a `watch::channel` on every
+    refresh, so the next login that hits the cache picks them up.
+
+    This test drives short-expiry tokens so the background refresh fires
+    within seconds, then polls until the cached session's group sync
+    revokes the role — bounded by a deadline rather than a fixed sleep.
+    """
+    c.down(destroy_volumes=True)
+
+    # Refresh fires at ~0.8 * expires_in. Keep it short for fast tests, but
+    # not so short that the first login races a refresh before it finishes.
+    expires_in_secs = 5
+
+    with c.override(
+        FronteggMock(
+            issuer=FRONTEGG_URL,
+            encoding_key_file="/secrets/frontegg-mock.key",
+            decoding_key_file="/secrets/frontegg-mock.crt",
+            users=json.dumps(list(USERS.values())),
+            depends_on=["test-certs"],
+            volumes=["secrets:/secrets"],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["frontegg-mock"]}},
+            expires_in_secs=expires_in_secs,
+        ),
+        Materialized(
+            options=[
+                "--tls-mode=require",
+                "--tls-key=/secrets/materialized.key",
+                "--tls-cert=/secrets/materialized.crt",
+                f"--frontegg-tenant={TENANT_ID}",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--startup-log-filter=debug",
+            ],
+            sanity_restart=False,
+            depends_on=["test-certs"],
+            volumes_extra=["secrets:/secrets"],
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/frontegg_https.json",
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
+        ),
+    ):
+        c.up("balancerd", "frontegg-mock", "materialized")
+
+        sys_cursor = c.sql_cursor(service="materialized", port=6877, user="mz_system")
+        sys_cursor.execute("ALTER SYSTEM SET oidc_group_role_sync_enabled = true")
+        sys_cursor.execute("CREATE ROLE analytics")
+
+        # Mirror the IdP-side group: create an "analytics" group and add the
+        # user. The frontegg-mock stamps the user's group memberships into
+        # the JWT `groups` claim, which the login path then syncs to roles.
+        group = json.loads(
+            _frontegg_curl(
+                c,
+                "POST",
+                "/frontegg/identity/resources/groups/v1",
+                {"name": "analytics"},
+            )
+        )
+        group_id = group["id"]
+        _frontegg_curl(
+            c,
+            "POST",
+            f"/frontegg/identity/resources/groups/v1/{group_id}/users",
+            {"userIds": [USERS[GROUP_SYNC_USER]["id"]]},
+        )
+
+        # Hold a primer connection open for the duration of the test so the
+        # auth session's refresh task keeps a live `external_metadata_rx`
+        # receiver and never hits the zero-receiver branch that would let it
+        # exit between our polling logins.
+        with contextlib.closing(sql_cursor(c, email=GROUP_SYNC_USER)) as primer:
+            primer.execute("SELECT 1")
+            if not _user_is_member_of(sys_cursor, GROUP_SYNC_USER, "analytics"):
+                print(c.invoke("logs", "materialized", capture=True).stdout)
+                raise AssertionError(
+                    "first login should sync the analytics group → role"
+                )
+
+            # Revoke the group in the IdP.
+            _frontegg_curl(
+                c,
+                "DELETE",
+                f"/frontegg/identity/resources/groups/v1/{group_id}/users",
+                {"userIds": [USERS[GROUP_SYNC_USER]["id"]]},
+            )
+
+            # The cached session won't expire on the test's timescale; only
+            # the background refresh will pick up the IdP change. Poll new
+            # logins (which hit the cached session, see the latest groups
+            # pushed via groups_tx, and re-run sync_jwt_groups) until the
+            # role is revoked.
+            deadline = time.monotonic() + 60.0
+            last_seen_member = True
+            while time.monotonic() < deadline:
+                with contextlib.closing(sql_cursor(c, email=GROUP_SYNC_USER)) as cur:
+                    cur.execute("SELECT 1")
+                last_seen_member = _user_is_member_of(
+                    sys_cursor, GROUP_SYNC_USER, "analytics"
+                )
+                if not last_seen_member:
+                    return
+                time.sleep(0.5)
+
+            raise AssertionError(
+                "cached Frontegg session did not pick up group revocation "
+                f"within 60s (expires_in_secs={expires_in_secs}); "
+                f"last_seen_member={last_seen_member}. "
+                "the refresh task's groups_tx push regressed."
+            )

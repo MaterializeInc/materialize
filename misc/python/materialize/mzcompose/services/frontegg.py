@@ -35,6 +35,7 @@ class FronteggMock(Service):
             | None
         ) = None,
         depends_on: list[str] = [],
+        expires_in_secs: int | None = None,
     ) -> None:
         command = [
             "--listen-addr=0.0.0.0:6880",
@@ -43,6 +44,8 @@ class FronteggMock(Service):
             "--issuer",
             issuer,
         ]
+        if expires_in_secs is not None:
+            command += [f"--expires-in-secs={expires_in_secs}"]
         if encoding_key:
             command += ["--encoding-key", encoding_key]
         elif encoding_key_file:
