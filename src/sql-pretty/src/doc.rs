@@ -1193,6 +1193,10 @@ impl Pretty {
                                     e = expr.as_ref();
                                 }
                                 Expr::Value(Value::Number(_)) => break saw_postfix,
+                                // Another prefix operator stacks directly (no
+                                // re-association, no `- <number>` fold) — safe,
+                                // and avoids exploding deep unary chains.
+                                Expr::Op { expr2: None, .. } | Expr::Not { .. } => break false,
                                 Expr::Value(_)
                                 | Expr::Identifier(_)
                                 | Expr::QualifiedWildcard(_)
