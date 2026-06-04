@@ -98,7 +98,7 @@ use mz_expr::{
     RECURSION_LIMIT, VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
-use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
 use crate::{TransformCtx, TransformError};
@@ -326,7 +326,7 @@ impl PredicatePushdown {
                                             if let MirScalarExpr::Column(i, _) = e {
                                                 *e = group_key[*i].clone();
                                             }
-                                        })?;
+                                        });
                                         push_down.push(new_predicate);
                                     } else if let MirScalarExpr::Column(col, _) = &predicate {
                                         if *col == group_key.len()
@@ -934,7 +934,7 @@ impl PredicatePushdown {
             if !predicate.is_literal_err() || all_errors {
                 // Consider inlining Map expressions.
                 if let Some(cleaned) =
-                    Self::inline_if_not_too_big(&predicate, input_arity, map_exprs)?
+                    Self::inline_if_not_too_big(&predicate, input_arity, map_exprs)
                 {
                     pushdown.push(cleaned);
                 } else {
@@ -965,7 +965,7 @@ impl PredicatePushdown {
         expr: &MirScalarExpr,
         input_arity: usize,
         map_exprs: &Vec<MirScalarExpr>,
-    ) -> Result<Option<MirScalarExpr>, RecursionLimitError> {
+    ) -> Option<MirScalarExpr> {
         let size_limit = 1000;
 
         // Transitively determine the support of `expr` produced by `map_exprs`
@@ -1022,7 +1022,7 @@ impl PredicatePushdown {
                         new_size += m_size - 1; // Adjust for the +1 above.
                     }
                 }
-            })?;
+            });
 
             if new_size <= size_limit {
                 inlined.insert(*c, (new_expr, new_size));
@@ -1033,7 +1033,7 @@ impl PredicatePushdown {
 
         // Try to resolve expr against the memo table.
         if inlined.len() < cols_to_inline.len() {
-            Ok(None) // We couldn't memoize all map expressions within the given limit.
+            None // We couldn't memoize all map expressions within the given limit.
         } else {
             let mut new_expr = expr.clone();
             let mut new_size = 0;
@@ -1047,13 +1047,13 @@ impl PredicatePushdown {
                         new_size += m_size - 1; // Adjust for the +1 above.
                     }
                 }
-            })?;
+            });
 
             soft_assert_eq_no_log!(new_size, new_expr.size());
             if new_size <= size_limit {
-                Ok(Some(new_expr)) // We managed to stay within the limit.
+                Some(new_expr) // We managed to stay within the limit.
             } else {
-                Ok(None) // Limit exceeded.
+                None // Limit exceeded.
             }
         }
     }

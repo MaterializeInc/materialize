@@ -269,7 +269,7 @@ fn plan_select_inner(
     // we just disallow AS OF when there is an unmaterializable function in a query (except mz_now).
     if scx.is_feature_flag_enabled(&DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF)
         && select.as_of.is_some()
-        && expr.contains_unmaterializable_except_temporal()?
+        && expr.contains_unmaterializable_except_temporal()
     {
         bail_unsupported!("unmaterializable function (except `mz_now`) in an AS OF query");
     }

@@ -77,9 +77,9 @@ impl crate::Transform for ReductionPushdown {
     ) -> Result<(), crate::TransformError> {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.
-        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        relation.visit_mut_pre(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
@@ -90,7 +90,7 @@ impl ReductionPushdown {
     /// edges are join constraints. After removing constraints containing a
     /// GroupBy, the reduce will be pushed down to all connected components. If
     /// there is only one connected component, this method is a no-op.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -117,7 +117,7 @@ impl ReductionPushdown {
                                 *e = lower[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
                 for key in group_key.iter_mut() {
                     key.visit_mut_post(&mut |e| {
@@ -126,7 +126,7 @@ impl ReductionPushdown {
                                 *e = scalars[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
                 for agg in aggregates.iter_mut() {
                     agg.expr.visit_mut_post(&mut |e| {
@@ -135,7 +135,7 @@ impl ReductionPushdown {
                                 *e = scalars[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
 
                 **input = inner.take_dangerous()
@@ -158,7 +158,6 @@ impl ReductionPushdown {
                 }
             }
         }
-        Ok(())
     }
 }
 
