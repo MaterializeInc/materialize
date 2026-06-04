@@ -25,6 +25,7 @@ aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true
 bytes.workspace = true
 columnation.workspace = true
+csv-core.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
