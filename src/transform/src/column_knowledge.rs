@@ -765,6 +765,7 @@ fn optimize(
     // `DatumKnowledge` in the stack are the `DatumKnowledge` corresponding to
     // the children.
     assert!(knowledge_stack.is_empty());
+    #[allow(deprecated)]
     expr.visit_mut_pre_post(
         &mut |e| {
             if let MirScalarExpr::If { then, els, .. } = e {
@@ -843,7 +844,7 @@ fn optimize(
             };
             knowledge_stack.push(result);
         },
-    );
+    )?;
     let knowledge_datum = knowledge_stack.pop();
     assert!(knowledge_stack.is_empty());
     knowledge_datum.ok_or_else(|| {

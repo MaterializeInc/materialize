@@ -41,14 +41,14 @@ impl crate::Transform for CoalesceCase {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        relation.visit_mut_post(&mut |e| self.action(e));
+        relation.try_visit_mut_post(&mut |e| self.action(e))?;
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
 
 impl CoalesceCase {
-    fn action(&self, relation: &mut MirRelationExpr) {
+    fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } |
             MirRelationExpr::Get { .. } |
@@ -66,44 +66,47 @@ impl CoalesceCase {
             MirRelationExpr::FlatMap { exprs, .. } => {
                 // NB TableFunc doesn't ever hold an MSE
                 for expr in exprs.iter_mut() {
-                    self.rewrite_scalar(expr);
+                    self.rewrite_scalar(expr)?;
                 }
             }
             MirRelationExpr::Join { equivalences, implementation, .. } => {
                 if implementation.is_implemented() {
                     soft_panic_or_log!("unexpected implemented Join when optimizing coalesce/case, skipping: {implementation:?}");
-                    return;
+                    return Ok(());
                 }
 
                 for equivalence in equivalences.iter_mut() {
                     for expr in equivalence {
-                        self.rewrite_scalar(expr);
+                        self.rewrite_scalar(expr)?;
                     }
                 }
             }
             MirRelationExpr::Reduce { group_key, aggregates, .. } => {
                 for expr in group_key.iter_mut() {
-                    self.rewrite_scalar(expr);
+                    self.rewrite_scalar(expr)?;
                 }
 
                 for agg in aggregates.iter_mut() {
-                    self.rewrite_aggreagte(agg);
+                    self.rewrite_aggreagte(agg)?;
                 }
             }
             MirRelationExpr::TopK { limit, .. } => {
                 if let Some(expr) = limit {
-                    self.rewrite_scalar(expr);
+                    self.rewrite_scalar(expr)?;
                 }
             }
         }
+
+        Ok(())
     }
 
-    fn rewrite_scalar(&self, expr: &mut MirScalarExpr) {
+    fn rewrite_scalar(&self, expr: &mut MirScalarExpr) -> Result<(), TransformError> {
         // Visiting in pre-order means that when we push a `COALESCE` down, we'll keep pushing if the `CASE` chain continues.
         expr.visit_mut_pre(&mut |e| self.try_combine_coalesce_case(e))
+            .map_err(TransformError::from)
     }
 
-    fn rewrite_aggreagte(&self, agg: &mut AggregateExpr) {
+    fn rewrite_aggreagte(&self, agg: &mut AggregateExpr) -> Result<(), TransformError> {
         // NB AggregateFunc doesn't contain any MSEs
         self.rewrite_scalar(&mut agg.expr)
     }

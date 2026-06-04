@@ -246,7 +246,7 @@ impl RedundantJoin {
                                             *c -= old_input_mapper.input_arity(remove_input_idx);
                                         }
                                     }
-                                });
+                                })?;
                             }
                         }
 
