@@ -929,6 +929,7 @@ mod tests {
     use mz_persist::location::SeqNo;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::capture::{Capture, Event as CaptureEvent};
     use timely::dataflow::operators::probe::Handle as ProbeHandle;
     use timely::progress::Antichain;
 
@@ -1093,6 +1094,269 @@ mod tests {
         });
 
         assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that the source fetches and emits actual data: a batch
+    /// written before the dataflow starts must come out as at least one
+    /// `FetchedBlob`, and the output frontier must reach the shard's upper.
+    /// This exercises the listen task -> descs operator -> fetch task ->
+    /// fetch operator pipeline end-to-end.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetches_data() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [
+            (("k1".to_owned(), "v1".to_owned()), 0u64, 1u64),
+            (("k2".to_owned(), "v2".to_owned()), 1u64, 1u64),
+        ];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+
+        let expected_frontier = 5;
+        let (blob_count, frontier) = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(0);
+            let until = Antichain::new();
+
+            let (capture, probe, token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let stream = stream.probe_with(&probe);
+                (stream.capture(), probe, token)
+            });
+
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while probe.less_than(&expected_frontier) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for output frontier {expected_frontier}"
+                );
+                worker.step();
+            }
+            drop(token);
+
+            let mut blob_count = 0;
+            while let Ok(event) = capture.try_recv() {
+                if let CaptureEvent::Messages(_, msgs) = event {
+                    blob_count += msgs.len();
+                }
+            }
+            let mut frontier = Antichain::new();
+            probe.with_frontier(|f| frontier.extend(f.iter().cloned()));
+            (blob_count, frontier)
+        });
+
+        assert!(blob_count >= 1, "expected at least one fetched blob");
+        assert_eq!(frontier, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that dropping the shard source's tokens while the source is
+    /// running does not panic or wedge the worker. Capabilities must be
+    /// released so the dataflow can shut down.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_shutdown_mid_stream() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [(("k1".to_owned(), "v1".to_owned()), 0u64, 1u64)];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+
+        timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(0);
+            // An empty `until` means the source would run forever if not shut
+            // down by dropping its tokens.
+            let until = Antichain::new();
+
+            let (probe, token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Step until the source has made some progress, so that the
+            // shutdown happens while the listen and fetch machinery is live.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while probe.less_than(&1) {
+                assert!(Instant::now() < deadline, "timed out waiting for progress");
+                worker.step();
+            }
+
+            // Shut down and confirm the dataflow drains: with all tokens
+            // dropped, the operators must release their capabilities and the
+            // frontier must become empty.
+            drop(token);
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                assert!(Instant::now() < deadline, "timed out waiting for shutdown");
+                worker.step();
+                let done = probe.with_frontier(|f| f.is_empty());
+                if done {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Verifies that an unserveable `as_of` reports an error through the
+    /// `ErrorHandler` and freezes the source: the output frontier must stay
+    /// at the requested `as_of` (no spurious progress) and the worker must
+    /// not panic.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_error_freeze() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        // Write data so the shard's upper is past the as_of (otherwise
+        // `snapshot` blocks waiting for the upper instead of erroring), then
+        // advance the since past the as_of we'll request.
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [(("k1".to_owned(), "v1".to_owned()), 0u64, 1u64)];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+        initialize_shard(&persist_client, shard_id, Antichain::from_elem(3)).await;
+
+        let (errored, frontier) = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(1);
+            let until = Antichain::new();
+
+            let errored = Rc::new(std::cell::Cell::new(false));
+            let error_handler = ErrorHandler::signal({
+                let errored = Rc::clone(&errored);
+                move |_err| errored.set(true)
+            });
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        error_handler,
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Step until the error is reported.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !errored.get() {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for error; probe at {:?}",
+                    probe.with_frontier(|f| f.to_owned())
+                );
+                worker.step();
+            }
+            // Keep stepping; the source must stay frozen at the as_of.
+            for _ in 0..100 {
+                worker.step();
+            }
+
+            let mut frontier = Antichain::new();
+            probe.with_frontier(|f| frontier.extend(f.iter().cloned()));
+            (errored.get(), frontier)
+        });
+
+        assert!(errored);
+        assert_eq!(frontier, Antichain::from_elem(1));
     }
 
     async fn initialize_shard(
