@@ -1905,14 +1905,14 @@ impl Coordinator {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
                 } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
                     let v = values.into_first().to_lowercase();
-                    if v == IsolationLevel::ReadUncommitted.as_str()
-                        || v == IsolationLevel::ReadCommitted.as_str()
-                        || v == IsolationLevel::RepeatableRead.as_str()
+                    if v == IsolationLevel::ReadUncommitted.as_variant_str()
+                        || v == IsolationLevel::ReadCommitted.as_variant_str()
+                        || v == IsolationLevel::RepeatableRead.as_variant_str()
                     {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
-                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_variant_str() {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
