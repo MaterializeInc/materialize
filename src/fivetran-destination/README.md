@@ -23,18 +23,18 @@ for instructions.
 To build the destination into a static Rust binary, run:
 
 ```shell
-cargo build --release -p mz-fivetran-destination
+cargo build --release -p fivetran_destination
 ```
 
 > **Note:** If you already have [`protoc`](https://grpc.io/docs/protoc-installation/) installed
 and in your PATH, you can skip building the vendored version with:
 
 ```shell
-cargo build --release -p mz-fivetran-destination --no-default-features
+cargo build --release -p fivetran_destination --no-default-features
 ```
 
 Cargo will emit the built binary at
-`ROOT/target/release/mz-fivetran-destination.`
+`ROOT/target/release/fivetran_destination.`
 
 ### Docker image distribution
 
