@@ -96,6 +96,10 @@ A solution is successful if:
   keying contract, and **the engine's internal/working state and the underlying
   persist shards are physically reclaimed** (no unbounded growth from
   superseded rows whose retractions never consolidate).
+- **A recorded row's value can be frozen at processing time while its existence
+  stays tied to a referenced entity** — so deleting a user **physically erases**
+  their recorded rows (compliance), even though the recorded values do not
+  recompute when the source changes.
 - The system provides a clear, documented **correctness ladder**: exactly-once
   into Materialize-owned persist where achievable; at-least-once with an
   idempotent recovery path otherwise.
@@ -209,46 +213,61 @@ non-deterministic — **forgetting is irreversible** (we cannot recompute what w
 drop). For these use cases that is the point, not a defect: "finalization" is
 exactly *keep the finalized answers, drop the working state.*
 
-**How data leaves the output.** There are two distinct mechanisms, and only one
-is actually an output-side eviction concern:
+**A recorded row has two independent relationships to its sources — its
+*value* and its *existence* — and eviction is about existence.** Time-based
+retention is only one corner of this. Take "currency-converted transactions":
+join `transactions` to `users`, convert the amount at the FX rate *as of
+processing time*, and record the result. Two freshness behaviors are required at
+once:
 
-- **Age / time-based forgetting** ("forget data older than X") — the real
-  output-side eviction — should be **automatic, implemented as a temporal filter
-  on the output** (the same `mz_now() < mz_timestamp + lag` + lagged-read-hold
-  mechanism the CHANGES maintained-MV mode uses), *not* a `DELETE`:
-  - It is **clock-driven**, so data ages out even when the input is idle. A
-    user-written `DELETE … WHERE ts < mz_now() - '30d'` fires only when the
-    transform commits, so for an input-triggered transform stale data never ages
-    out if the input goes quiet — the Decision-Log "commit at every timestamp
-    vs. only when the input is non-empty" footgun, which the temporal filter
-    sidesteps.
-  - It is **self-finalizing and cheap**: each row gets one insert@`T` /
-    retract@`T+W` pair, `since` advances steadily, the pairs consolidate, and
-    the shard stays at ~one window of data. The "careful re-integration to
-    finalize deletes" problem does not arise.
-  - It needs **no self-reference**.
-- **Supersession** ("a newer fact replaces an older one" — upsert, dedup) is
-  **not an output-side concern at all: it is just a `top-k` (`top-1`) body.**
-  Upsert is `top-1 by latest`; the reduce already emits the exact retract-old /
-  insert-new diffs and the output simply records them — no declared key, no
-  upsert output mode, no engine-special retraction. The body produces bounded,
-  correct diffs (output is O(live keys)) exactly as any `top-k` view does.
+- **Value is frozen.** The converted amount (and any snapshotted user
+  attributes) is computed once at arrival and must *not* change when the FX rate
+  — or the user's row — later changes. This is the non-deterministic/recorded
+  part.
+- **Existence may stay live.** For compliance, when a `user` is *deleted* every
+  recorded transaction of theirs must be **physically erased** — the row's
+  lifetime is tied to the user's existence, even though its value was frozen.
 
-This decouples **when output is produced** (input-driven) from **when old data
-is forgotten** (clock-driven) — a separation CTs conflated by doing both via
-committed statements. And **finalization needs no output `DELETE`**: a window
-close is a `mz_diff = -1` in the *input* changelog, captured by reacting to it
-(`… FROM CHANGES(open) WHERE mz_diff = -1`), not by deleting from the output.
+So the model is: **the relational/join structure governs a row's lifetime
+(live), while a `FROZEN(...)`-style marker governs which values are snapshotted
+at arrival.** Here the FX rate and `user.name` are `FROZEN` (later changes
+ignored), but the join to `users` stays live, so a user deletion cascades and
+retracts the recorded rows. Eviction is then just a row's lifetime condition
+ceasing to hold, and the familiar cases are instances of it:
 
-**So the output side is simple:** the transform records the diffs its body
-emits, plus an optional declared **time-based retention** (temporal filter).
-Compaction/supersession is a property of the *body* (`top-k`), not a special
-output mode. The only escape hatch is an explicit predicate `DELETE` in the
-imperative surface, for eviction that is neither a time policy nor expressible
-as the body's diffs — documented as a read-then-write that reintroduces
-self-reference and the re-integration cost.
+- **Age** ("forget older than X") — a temporal filter (`mz_now() < ts + W`) in
+  the live structure. Cheapest: clock-driven (ages out even when the input is
+  idle, avoiding the Decision-Log "commit only when input is non-empty"
+  footgun), self-finalizing (one insert@`T`/retract@`T+W` pair, consolidating as
+  `since` advances), and needs **no index** on the output.
+- **Referential / ownership** ("delete when the parent is deleted") — an
+  `ON DELETE CASCADE` from a live dimension. This is what compliance needs, and
+  it is a **physical retraction + compaction**, not a read-time filter (the data
+  must actually be gone). Cost: the recorded output must be indexed by the
+  liveness key (e.g. `user_id`) so the cascade can find the rows — O(output)
+  state we store anyway, plus an arrangement. Opt-in.
+- **Supersession** ("newer replaces older" — upsert, dedup) — **not an output
+  concern at all, just a `top-k` body**: the reduce emits the exact
+  retract-old/insert-new diffs (output is O(live keys)); no declared key, no
+  special output mode.
+- **Arbitrary predicate** — the escape hatch: an explicit `DELETE` in the
+  imperative surface (or reacting to `mz_diff = -1` from a
+  `CHANGES(reference)`), documented as a read-then-write with self-reference and
+  re-integration cost.
 
-**Why this is a transform and not just a `top-k` MV.** A plain `top-1` MV
+So this is a **cost spectrum, not a single "simple" output**: *fully-frozen*
+enrichment (existence frozen too — the value froze the dimension and the row
+only ages out by time) needs **no stream index** and is the cheap Tier-1 case;
+*live-existence* enrichment (cascade on a dimension delete) needs the output
+indexed by its liveness key. The design must let the user choose **per
+relationship**, because currency-conversion-with-compliance needs *both in one
+transform* (FX rate frozen; user existence live). Note we still never index the
+*stream* — transactions stay a listen-only changelog with a frozen value; only
+the recorded output and the live dimension are indexed. And **finalization needs
+no output `DELETE`**: a window close is a `mz_diff = -1` in the *input*
+changelog, captured by reacting to it, not by deleting from the output.
+
+**Why this is a transform and not just a `top-k`/join MV.** A plain `top-1` MV
 already yields a bounded O(live keys) output — so the value here is on the
 *input* side: the transform consumes its input as a **listen-only changelog**
 (no snapshot) and persists the **reduce's state as its output**, rehydrating
@@ -314,6 +333,11 @@ CREATE CONTINUAL TRANSFORM enriched
   we consume the changelog (listen), not a snapshot, there is no rehydration
   spike — this is what makes it cheaper than an equivalent MV for large,
   high-churn inputs.
+- In its pure form the dimension value is **frozen** and later dimension changes
+  (including deletes) do not affect the output. Tying a recorded row's lifetime
+  to a dimension (e.g. compliance erase on user delete) is the *live-existence*
+  variant described under "Bounding output growth", at the extra cost of an
+  index on the output's liveness key.
 - Covers: stream-table join, internal sink/audit (replacing Notion's Kafka
   loopback), stateless source transforms, webhook demux (multi-output as a
   follow-up), and all non-deterministic/UDF enrichment.
@@ -451,12 +475,19 @@ upsert (transform + MV-on-top) to validate the relaxed-correctness story.
   before resolving it?
 - **Owned outputs & multi-output.** Output ownership rules; multi-output
   transforms (needed for webhook demux); interaction with `RETAIN HISTORY`.
+- **Per-relationship freshness (frozen value vs. live existence).** What is the
+  surface for marking a value `FROZEN` (snapshot at arrival) vs. keeping a
+  join's existence live (cascade on parent delete)? What are the defaults? Can
+  the same dimension supply a frozen *value* and also anchor *lifetime*? How is
+  the extra index (output keyed by liveness key) costed and made explicit to the
+  user, and what is the cascade's commit/atomicity story (a dimension delete and
+  the resulting recorded-row retractions at one timestamp)?
 - **`DELETE` vs. automatic phase-out — where is the line?** The proposal is:
-  time → automatic temporal-filter retention; supersession → declared key;
-  arbitrary predicate eviction → explicit `DELETE` in the imperative surface
-  only. Is that the right split, or should the declarative surface also accept a
-  restricted predicate-eviction policy? Should explicit time-predicate `DELETE`
-  be discouraged/linted given the temporal filter is better?
+  age → temporal filter; ownership → `ON DELETE CASCADE`; supersession →
+  `top-k` body; arbitrary predicate → explicit `DELETE` in the imperative
+  surface only. Is that the right split, or should the declarative surface also
+  accept a restricted predicate-eviction policy? Should explicit time-predicate
+  `DELETE` be discouraged/linted given the temporal filter is better?
 - **Retention / keying syntax.** How is the output's contract expressed
   (`INTO UPSERT … KEY (…)`, `RETAIN '30 days'`, count-based
   `KEEP LAST n PER key`)? How do we guarantee compaction keeps up so reclamation
