@@ -9,7 +9,7 @@ Name                                        | Default value             |  Descr
 `cluster_replica`                           |                           | The target cluster replica for `SELECT` queries.                      | Yes
 `database`                                  | `materialize`             | The current database.                                                 | Yes
 `search_path`                               | `public`                  | The schema search order for names that are not schema-qualified.      | Yes
-`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Consistency guarantees](/overview/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`. | Yes
+`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Isolation level](/reference/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`. | Yes
 
 ### Other configuration parameters
 
@@ -53,8 +53,8 @@ Name                                        | Default value             |  Descr
 `max_tables`                                | `200`                     | The maximum number of tables in the region, across all schemas                                                                                                         | [Contact support]
 `mz_version`                                | Version-dependent         | Shows the Materialize server version.                                                                                                                                  | No
 `network_policy`                            | `default`                 | The default network policy for the region. | Yes
-`real_time_recency`                         | `false`                   | Boolean flag indicating whether [real-time recency](/get-started/isolation-level/#real-time-recency) is enabled for the current session.                               | [Contact support]
-`real_time_recency_timeout`                 | `10s`                     | Sets the maximum allowed duration of `SELECT` statements that actively use [real-time recency](/get-started/isolation-level/#real-time-recency). If this value is specified without units, it is taken as milliseconds (`ms`).                      | Yes
+`real_time_recency`                         | `false`                   | Boolean flag indicating whether [real-time recency](/reference/isolation-level/#real-time-recency) is enabled for the current session.                               | [Contact support]
+`real_time_recency_timeout`                 | `10s`                     | Sets the maximum allowed duration of `SELECT` statements that actively use [real-time recency](/reference/isolation-level/#real-time-recency). If this value is specified without units, it is taken as milliseconds (`ms`).                      | Yes
 `server_version_num`                        | Version-dependent         | The PostgreSQL compatible server version as an integer.                                                                                                                | No
 `server_version`                            | Version-dependent         | The PostgreSQL compatible server version.                                                                                                                              | No
 `sql_safe_updates`                          | `false`                   | Boolean flag indicating whether to prohibit SQL statements that may be overly destructive.                                                                             | Yes
