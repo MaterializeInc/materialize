@@ -969,8 +969,8 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
     fn proptest_binary_encoding_error_matches_encode_binary() {
-        let strat = any::<SqlScalarType>()
-            .prop_flat_map(|ty| (Just(ty.clone()), arb_datum_for_scalar(ty)));
+        let strat =
+            any::<SqlScalarType>().prop_flat_map(|ty| (Just(ty.clone()), arb_datum_for_scalar(ty)));
         proptest!(ProptestConfig::with_cases(256), |((ty, prop_datum) in strat)| {
             // `binary_encoding_error` is a precondition for callers of
             // `encode_binary`: if it returns `Ok`, then encoding must succeed

@@ -5421,9 +5421,7 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
                     let element_datums: Vec<Datum<'_>> =
                         elements.iter().map(|pd| pd.into()).collect();
                     let mut row = Row::default();
-                    row.packer()
-                        .try_push_array(&dims, element_datums)
-                        .unwrap();
+                    row.packer().try_push_array(&dims, element_datums).unwrap();
                     PropDatum::Array(PropArray(row, elements))
                 })
                 .boxed()
