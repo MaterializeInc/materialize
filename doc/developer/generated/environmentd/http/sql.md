@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/sql.rs
-revision: 61212870d6
+revision: c8a90af6a2
 ---
 
 # environmentd::http::sql

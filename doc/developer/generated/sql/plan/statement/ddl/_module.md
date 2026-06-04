@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: b9af1dbdd8
+revision: b1959edbc1
 ---
 
 # mz-sql::plan::statement::ddl
@@ -8,3 +8,4 @@ revision: b9af1dbdd8
 Plans all DDL statements; the root file covers the full breadth of catalog-modifying statements, while the `connection` submodule focuses on connection-type-specific option parsing and validation.
 Iceberg sinks support `MODE UPSERT` and `MODE APPEND`; append mode prohibits a KEY and rejects source columns that conflict with system-managed append columns. Range types are permitted as Iceberg sink key columns.
 `REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`.
+`plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
