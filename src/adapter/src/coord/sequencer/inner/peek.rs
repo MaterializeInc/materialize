@@ -650,8 +650,7 @@ impl Coordinator {
                             }
                         }
                         Ok(optimize::PeekGlobalLirPlan::CopyTo(global_lir_plan)) => {
-                            let optimizer =
-                                optimizer.into_copy_to().expect("a COPY TO optimizer");
+                            let optimizer = optimizer.into_copy_to().expect("a COPY TO optimizer");
                             PeekStage::CopyToPreflight(PeekStageCopyTo {
                                 validity,
                                 optimizer,
