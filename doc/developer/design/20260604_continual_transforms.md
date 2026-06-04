@@ -188,7 +188,7 @@ keep them separate.
 |---|---|---|---|
 | **1. Recorded append** | enrichment/stream-table join, internal sink/audit, stateless transform, webhook demux, non-det/UDF enrichment | **exactly-once into persist** | single timestamped output write; group-commit rejects duplicate `T` |
 | **2. General read-then-write** | arbitrary bundled `INSERT/UPDATE/DELETE` | exactly-once into persist (per commit) | OCC loop, control-plane commit |
-| **3. Eventual (self-referential)** | upsert, dedup-in-window, metrics rollup, finalization | **at-least-once / eventual**, exact answer recovered downstream | keyed/upsert output (O(live keys)); or compacting shard + MV |
+| **3. Eventual / stateful** | upsert, dedup-in-window, metrics rollup, finalization | **at-least-once / eventual**; reduce gives exact diffs | `top-k`/reducing body (O(live keys)); output is the durable state |
 | **4. External effects** | reverse-ETL, outbox, webhooks out | **at-least-once + idempotency key** | persisted "delivered-through-`T`" frontier |
 
 Non-determinism and UDFs are safe at every tier for the same reason: the body
@@ -209,59 +209,54 @@ non-deterministic — **forgetting is irreversible** (we cannot recompute what w
 drop). For these use cases that is the point, not a defect: "finalization" is
 exactly *keep the finalized answers, drop the working state.*
 
-**How data leaves the output — two eviction shapes, not one.** "Phasing out
-data we no longer care about" is really two physically distinct operations, and
-the `DELETE`-vs-automatic question only resolves once they are separated:
+**How data leaves the output.** There are two distinct mechanisms, and only one
+is actually an output-side eviction concern:
 
-- **Age / time-based phase-out** ("forget data older than X") should be
-  **automatic, implemented as a temporal filter on the output** — the same
-  `mz_now() < mz_timestamp + lag` + lagged-read-hold mechanism the CHANGES
-  maintained-MV mode already uses. It is *not* a `DELETE`, and that matters:
+- **Age / time-based forgetting** ("forget data older than X") — the real
+  output-side eviction — should be **automatic, implemented as a temporal filter
+  on the output** (the same `mz_now() < mz_timestamp + lag` + lagged-read-hold
+  mechanism the CHANGES maintained-MV mode uses), *not* a `DELETE`:
   - It is **clock-driven**, so data ages out even when the input is idle. A
-    user-written `DELETE … WHERE ts < mz_now() - '30d'` only fires when the
+    user-written `DELETE … WHERE ts < mz_now() - '30d'` fires only when the
     transform commits, so for an input-triggered transform stale data never ages
-    out if the input goes quiet — exactly the Decision-Log "commit at every
-    timestamp vs. only when the input is non-empty" footgun, which the temporal
-    filter sidesteps.
-  - It is **self-finalizing and cheap**: each row gets exactly one
-    insert@`T` / retract@`T+W` pair, `since` advances steadily, and the pairs
-    consolidate as a matter of course. The "careful re-integration to finalize
-    deletes" problem **does not arise** for time-based eviction — there is
-    nothing to reconcile, and the shard stays at ~one window of data by
-    construction.
-  - It needs **no self-reference** in the body.
-- **Supersession** ("a newer fact replaces an older one" — upsert,
-  dedup-within-window) is value-dependent and input-driven: a new row for a key
-  must retract the *specific* prior row. This is where re-integration is real
-  (the `-1` must be the exact stored row to consolidate). Expressed as a
-  declared **key on the output**, the engine emits the exact prior-value
-  retraction and the body stays self-reference-free; only non-last-write-wins
-  supersession needs an explicit form.
+    out if the input goes quiet — the Decision-Log "commit at every timestamp
+    vs. only when the input is non-empty" footgun, which the temporal filter
+    sidesteps.
+  - It is **self-finalizing and cheap**: each row gets one insert@`T` /
+    retract@`T+W` pair, `since` advances steadily, the pairs consolidate, and
+    the shard stays at ~one window of data. The "careful re-integration to
+    finalize deletes" problem does not arise.
+  - It needs **no self-reference**.
+- **Supersession** ("a newer fact replaces an older one" — upsert, dedup) is
+  **not an output-side concern at all: it is just a `top-k` (`top-1`) body.**
+  Upsert is `top-1 by latest`; the reduce already emits the exact retract-old /
+  insert-new diffs and the output simply records them — no declared key, no
+  upsert output mode, no engine-special retraction. The body produces bounded,
+  correct diffs (output is O(live keys)) exactly as any `top-k` view does.
 
 This decouples **when output is produced** (input-driven) from **when old data
 is forgotten** (clock-driven) — a separation CTs conflated by doing both via
-committed statements. Note also that **finalization needs no output `DELETE`**:
-a window close is a retraction in the *input* changelog, so it is captured by
-reacting to `mz_diff = -1` from `CHANGES(open)`, not by deleting from the output.
+committed statements. And **finalization needs no output `DELETE`**: a window
+close is a `mz_diff = -1` in the *input* changelog, captured by reacting to it
+(`… FROM CHANGES(open) WHERE mz_diff = -1`), not by deleting from the output.
 
-**Output models, each with its growth-bounding story:**
+**So the output side is simple:** the transform records the diffs its body
+emits, plus an optional declared **time-based retention** (temporal filter).
+Compaction/supersession is a property of the *body* (`top-k`), not a special
+output mode. The only escape hatch is an explicit predicate `DELETE` in the
+imperative surface, for eviction that is neither a time policy nor expressible
+as the body's diffs — documented as a read-then-write that reintroduces
+self-reference and the re-integration cost.
 
-- **Append + retention** (audit logs, retention windows, metrics). Bounded by an
-  explicit **time-based retention** applied as the temporal filter above — not a
-  scan-and-delete. Intentionally-growing logs are the sub-case where retention
-  is an optional user policy.
-- **Keyed / upsert output** (upsert, dedup, finalization). Declare a **key** on
-  the output; a new row for an existing key *replaces* it. The "find the prior
-  value, retract it, insert the new" step is performed by the **output
-  collection's machinery, not the user's SQL**, so the body has no
-  self-reference and live state is **O(live keys)**, not O(updates). (This is
-  just an arrangement with a loop + filter + negate — nothing exotic.)
-- **Writable table output** (general / CT model). The body issues explicit
-  `INSERT`/`DELETE`/`UPDATE`. This is the **escape hatch for eviction logic that
-  is neither a time policy nor a key** (arbitrary predicate deletes). It is
-  available only in the imperative surface, and is documented as a read-then-
-  write that reintroduces self-reference and the re-integration cost — a
-  time-predicate `DELETE` here is the inferior way to express retention.
+**Why this is a transform and not just a `top-k` MV.** A plain `top-1` MV
+already yields a bounded O(live keys) output — so the value here is on the
+*input* side: the transform consumes its input as a **listen-only changelog**
+(no snapshot) and persists the **reduce's state as its output**, rehydrating
+top-per-key from the output on restart. That is what lets the upstream input
+shard be retracted/forgotten ("write down answers while deleting the upstream
+state") without an unbounded rehydration snapshot — the thing a plain MV cannot
+do. The only "self-reference" is standard stateful-operator state persistence
+(the checkpoint happens to be the output), not per-commit read-your-own-writes.
 
 **Internal reclamation — "finalizing" deletes.** Bounding the *logical* output
 is not sufficient; the physical persist shard and in-memory state must reclaim
@@ -345,36 +340,28 @@ knobs. Self-referential bodies are permitted but carry documented footguns (the
 `INSERT INTO t SELECT * FROM t` family); read-your-own-writes within one commit
 is the ordinary multi-statement-transaction problem, not a novel reclocking one.
 
-### Tier 3: self-referential / eventual (incl. UPSERT)
+### Tier 3: eventual / stateful (incl. UPSERT)
 
-The hardest, most-demanded case — upsert — is where bounded growth and
-self-reference collide. The via-Diffs design observed that upsert **cannot be
-done in place** (a retraction must be computed before it is first written) and
-concluded it needs **two shards**: a compacting working shard plus an **MV on
-top that recovers exact semantics** ("eventual upsert"). That works, but the
-working shard is precisely the growth risk from the section above — its inserts
-and later retractions must be finalized or it grows as O(updates).
-
-We therefore **prefer a keyed/upsert output** as the primary mechanism, reusing
-the storage upsert machinery so growth is bounded by construction and the body
-needs no self-reference:
+Upsert — the most-demanded case — is **just a `top-1` body** (`top-k` in
+general). The reduce emits exact retract/insert diffs and the output records
+them, bounded at O(live keys); there is no special "upsert output" mode and no
+per-commit self-reference:
 
 ```sql
--- output declared with a key; new rows for a key replace the prior value,
--- retracting the *exact* stored row. State is O(live keys). No body self-ref.
 CREATE CONTINUAL TRANSFORM upserted
   FROM CHANGES(append_only)
-  AS SELECT key, value FROM changes
-  INTO UPSERT upserted KEY (key);
+  AS SELECT DISTINCT ON (key) key, value
+     FROM changes ORDER BY key, seq DESC;   -- top-1 by latest
 ```
 
-Because the keyed collection maintains the exact, bounded answer, no separate MV
-is needed, and **the transform only needs to be eventually / at-least-once
-correct** — the bar we accept here. The two-shard + MV pattern remains available
-as a fallback for non-keyed eventual cases. The same keyed/retention shapes
-cover dedup-in-window (key space bounded by a temporal filter), metrics rollup,
-and tumbling/session-window finalization (capture the rows an MV *deletes* into
-a closed-window shard).
+What makes this a transform rather than a plain `top-1` MV is the input side
+(above): it consumes `append_only` as a listen-only changelog and treats
+`upserted` as its durable state (rehydrated on restart), so the upstream input
+shard can be retracted/forgotten instead of snapshotted. dedup-in-window, metrics
+rollup, and tumbling/session-window finalization are the same story — a reducing
+body, plus a time-based retention on the output where relevant. The body need
+only be **eventually / at-least-once correct**; the reduce yields exact diffs
+once caught up.
 
 ### Tier 4: external effects
 
@@ -395,9 +382,10 @@ marker — which is just a Tier-1 recorded collection.
 - For time-based retention, **reuses the temporal-filter / lagged-read-hold
   mechanism from the CHANGES maintained-MV mode** to age data out on the clock,
   rather than emitting per-row deletes.
-- The keyed-output model is an ordinary keyed arrangement (loop + filter +
-  negate) emitting the exact prior-value retraction; no special storage
-  component is assumed.
+- Supersession/upsert is an ordinary `top-k` reduce in the *body* (nothing
+  special on the output side); the reduce's state is **rehydrated from the
+  transform's own output** on restart, so the input is consumed listen-only
+  without a snapshot.
 - Needs the engine to **own the read policy / compaction** on its output so
   superseding retractions are physically reclaimed; interacts with
   `RETAIN HISTORY` (which trades off against bounded growth).
@@ -473,10 +461,11 @@ upsert (transform + MV-on-top) to validate the relaxed-correctness story.
   (`INTO UPSERT … KEY (…)`, `RETAIN '30 days'`, count-based
   `KEEP LAST n PER key`)? How do we guarantee compaction keeps up so reclamation
   actually happens, and surface it when it falls behind?
-- **Supersession with many keys.** Live state is O(live keys); if the live key
-  set is itself large, do we lean on time-based retention of the keyed output to
-  cap it, and what is the interaction between a key and a retention window on the
-  same output?
+- **Rehydrating reduce state from the output.** A `top-k`/reducing body keeps
+  O(live keys) state rehydrated from its own output on restart. What exactly must
+  the output retain (and at what `since`) for the reduce to resume correctly
+  *without* re-snapshotting the input, and how does that interact with a
+  time-based retention on the same output?
 - **Multi-replica & at-least-once observability.** Surfacing
   delivered/committed-through frontiers; behavior under replica churn.
 - **Relationship to standing queries (PR #35347)** — overlap or composition?
