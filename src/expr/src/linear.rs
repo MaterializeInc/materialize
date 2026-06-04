@@ -1263,16 +1263,14 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                 if let Some(i) = e.as_column() {
                     reference_count[i] += 1;
                 }
-            })
-            .expect("visit_pre hit recursion limit");
+            });
         }
         for (_, pred) in self.predicates.iter() {
             pred.visit_pre(&mut |e| {
                 if let Some(i) = e.as_column() {
                     reference_count[i] += 1;
                 }
-            })
-            .expect("visit_pre hit recursion limit");
+            });
         }
         for proj in self.projection.iter() {
             reference_count[*proj] += 1;
@@ -1323,15 +1321,13 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     pub fn perform_inlining(&mut self, should_inline: Vec<bool>) {
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
-            expr[0]
-                .visit_mut_post(&mut |e| {
-                    if let Some(i) = e.as_column() {
-                        if should_inline[i] {
-                            *e = prior[i - self.input_arity].clone();
-                        }
+            expr[0].visit_mut_post(&mut |e| {
+                if let Some(i) = e.as_column() {
+                    if should_inline[i] {
+                        *e = prior[i - self.input_arity].clone();
                     }
-                })
-                .expect("inlining hit recursion limit");
+                }
+            });
         }
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
@@ -1341,8 +1337,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                         *e = expressions[i - self.input_arity].clone();
                     }
                 }
-            })
-            .expect("inlining hit recursion limit");
+            });
         }
     }
 
@@ -1450,7 +1445,6 @@ pub fn memoize_expr<E: OptimizableExpr>(
     memoized_parts: &mut Vec<E>,
     input_arity: usize,
 ) {
-    #[allow(deprecated)]
     expr.visit_mut_pre_post(&mut |e| e.eager_children(), &mut |e| {
         if E::is_literal(e) {
             // Literals do not need to be memoized.
@@ -1481,8 +1475,7 @@ pub fn memoize_expr<E: OptimizableExpr>(
                 E::column(input_arity + memoized_parts.len()),
             ));
         }
-    })
-    .expect("memoize_expr hit recursion limit");
+    });
 }
 
 pub mod util {

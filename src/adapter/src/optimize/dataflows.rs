@@ -186,7 +186,7 @@ impl ExprPrep for ExprPrepMaintained {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
                 last_observed_unmaterializable_func = Some(f.clone());
             }
-        })?;
+        });
 
         if let Some(f) = last_observed_unmaterializable_func {
             Err(OptimizerError::UnmaterializableFunction(f))
