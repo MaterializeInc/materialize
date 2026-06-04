@@ -10,8 +10,8 @@
 //! A source that reads from a persist shard.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -31,22 +31,27 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::activator::ArcActivator;
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, button,
 };
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp, timestamp::Refines};
+use tokio::sync::mpsc::error::TryRecvError;
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
+use crate::internal::paths::BlobKey;
 use crate::internal::state::BatchPart;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -107,6 +112,19 @@ impl ErrorHandler {
     /// Returns a new error handler that uses the provided function to signal an error.
     pub fn signal(signal_fn: impl Fn(anyhow::Error) + 'static) -> Self {
         Self::Signal(Rc::new(signal_fn))
+    }
+
+    /// Signal an error to an error handler from a synchronous operator. For [ErrorHandler::Halt]
+    /// this never returns; for [ErrorHandler::Signal] it returns after invoking the callback, and
+    /// the caller is responsible for "freezing": retaining its capabilities and doing no further
+    /// work, so that no spurious progress is observable while a restart is pending.
+    pub fn report_and_freeze(&self, error: anyhow::Error) {
+        match self {
+            ErrorHandler::Halt(name) => {
+                mz_ore::halt!("unhandled error in {name}: {error:#}")
+            }
+            ErrorHandler::Signal(callback) => callback(error),
+        }
     }
 
     /// Signal an error to an error handler. This function never returns: logically it blocks until
@@ -602,53 +620,154 @@ where
     D: Monoid + Codec64 + Send + Sync,
     TInner: Timestamp + Refines<T>,
 {
+    let scope = descs.scope();
     let mut builder =
-        AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (completed_fetches_output, completed_fetches_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many(
+        OperatorBuilderRc::new(format!("shard_source_fetch({})", name), scope.clone());
+    let info = builder.operator_info();
+    // NB: create the outputs before the input, so that the input's default
+    // connection covers both outputs.
+    let (fetched_output, fetched_stream) =
+        builder.new_output::<Vec<FetchedBlob<K, V, T, D>>>();
+    let mut fetched_output = OutputBuilder::from(fetched_output);
+    let (_completed_fetches_output, completed_fetches_stream) =
+        builder.new_output::<Vec<Infallible>>();
+    let mut descs_input = builder.new_input(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
-        [&fetched_output, &completed_fetches_output],
     );
     let name_owned = name.to_owned();
 
-    let shutdown_button = builder.build(move |_capabilities| async move {
-        let mut fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
-            let diagnostics = Diagnostics {
-                shard_name: name_owned.clone(),
-                handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-            };
-            async move {
-                client
-                    .await
-                    .create_batch_fetcher::<K, V, T, D>(
-                        shard_id,
-                        key_schema,
-                        val_schema,
-                        is_transient,
-                        diagnostics,
-                    )
-                    .await
-            }
-        })
-        .await
-        .expect("shard codecs should not change");
+    // Channels between the operator and the fetch task: descs flow to the
+    // task, fetch results flow back. The task wakes the operator through the
+    // activator after each result.
+    let (desc_tx, mut desc_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ExchangeableBatchPart<T>>();
+    let (blob_tx, blob_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>>();
+    let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
-        while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data {
-                    let reader_id = part.reader_id().clone();
-                    let fetched = fetcher
-                        .fetch_leased_part(part)
-                        .await
-                        .expect("shard_id should match across all workers");
-                    let fetched = match fetched {
-                        Ok(fetched) => fetched,
-                        Err(blob_key) => {
+    // The fetch task owns the `BatchFetcher` and performs all async work:
+    // fetcher creation and the per-part downloads. `fetch_leased_part`
+    // internally acquires permits from the persist fetch semaphore before
+    // downloading, which is what bounds fetched-but-undecoded bytes; the
+    // permit travels inside the returned `FetchedBlob` and is released when
+    // decode retires the part.
+    let task = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+        let diagnostics = Diagnostics {
+            shard_name: name_owned.clone(),
+            handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+        };
+        async move {
+            let mut fetcher = client
+                .await
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    is_transient,
+                    diagnostics,
+                )
+                .await
+                .expect("shard codecs should not change");
+            while let Some(part) = desc_rx.recv().await {
+                let reader_id = part.reader_id().clone();
+                let fetched = fetcher
+                    .fetch_leased_part(part)
+                    .await
+                    .expect("shard_id should match across all workers");
+                let fetched = match fetched {
+                    Ok(fetched) => Ok(fetched),
+                    Err(blob_key) => {
+                        // Check the state of the minting reader's lease so the
+                        // operator can tell a lease expiry apart from a GC bug.
+                        let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
+                        Err((blob_key, diagnostics))
+                    }
+                };
+                if blob_tx.send(fetched).is_err() {
+                    // The operator is gone; we can stop fetching.
+                    return;
+                }
+                activator.activate();
+            }
+        }
+    })
+    .abort_on_drop();
+
+    let (shutdown_handle, shutdown_button) = button(scope, info.address);
+
+    builder.build(move |_capabilities| {
+        // Per-flight capabilities, in the order parts were sent to the fetch
+        // task (which processes and returns them in the same order). The first
+        // capability emits the fetched blob; dropping the second advances the
+        // `completed_fetches` frontier, which releases the part's lease on the
+        // chosen worker. Holding both until the fetch completes is what keeps
+        // the lease alive while the download is in flight.
+        let mut inflight_caps: VecDeque<(Capability<TInner>, Capability<TInner>)> =
+            VecDeque::new();
+        // Wrapped in `Option` so we can drop the sender to signal the task
+        // that no more descs are coming.
+        let mut desc_tx = Some(desc_tx);
+        let mut blob_rx = Some(blob_rx);
+        // Set once `error_handler` has been notified of an error: the operator
+        // stops doing work but intentionally retains its capabilities, so the
+        // frontier does not advance and downstream consumers do not observe
+        // spurious progress while a restart is pending.
+        let mut failed = false;
+
+        move |frontiers| {
+            // Keep the fetch task alive for as long as the operator runs.
+            let _ = &task;
+            activation_ack.ack();
+
+            if shutdown_handle.local_pressed() {
+                // Shutdown: drop all capabilities and disconnect from the
+                // task. In-flight fetches are abandoned; the task exits when
+                // it observes the closed desc channel (or is aborted when the
+                // operator, and with it the `AbortOnDropHandle`, is dropped).
+                inflight_caps.clear();
+                desc_tx = None;
+                blob_rx = None;
+                // Still drain the input to avoid stalling the dataflow.
+                descs_input.for_each(|_cap, _data| {});
+                return;
+            }
+
+            // Forward incoming descs to the fetch task, retaining a capability
+            // pair for each.
+            descs_input.for_each(|cap, data| {
+                for (_idx, part) in data.drain(..) {
+                    if failed {
+                        continue;
+                    }
+                    let fetched_cap = cap.delayed(cap.time(), 0);
+                    let completed_cap = cap.delayed(cap.time(), 1);
+                    inflight_caps.push_back((fetched_cap, completed_cap));
+                    desc_tx
+                        .as_ref()
+                        .expect("desc_tx alive while operator is running")
+                        .send(part)
+                        .expect("fetch task unexpectedly gone");
+                }
+            });
+
+            // Drain completed fetches, emitting each at its retained
+            // capability.
+            if let Some(rx) = blob_rx.as_mut() {
+                loop {
+                    match rx.try_recv() {
+                        Ok(Ok(fetched)) => {
+                            let (fetched_cap, _completed_cap) = inflight_caps
+                                .pop_front()
+                                .expect("capability for every in-flight fetch");
+                            fetched_output
+                                .activate()
+                                .session(&fetched_cap)
+                                .give(fetched);
+                            // `_completed_cap` drops here, advancing the
+                            // `completed_fetches` frontier past this part.
+                        }
+                        Ok(Err((blob_key, diagnostics))) => {
                             // Ideally, readers should never encounter a missing blob. They place a seqno
                             // hold as they consume their snapshot/listen, preventing any blobs they need
                             // from being deleted by garbage collection, and all blob implementations are
@@ -656,27 +775,38 @@ where
                             //
                             // However, it is possible for a lease to expire given a sustained period of
                             // downtime, which could allow parts we expect to exist to be deleted...
-                            // at which point our best option is to request a restart. Check the state
-                            // of the minting reader's lease to tell the two cases apart.
-                            let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
-                            error_handler
-                                .report_and_stop(anyhow!(
-                                    "batch fetcher could not fetch batch part {}: {}",
-                                    blob_key,
-                                    diagnostics
-                                ))
-                                .await
+                            // at which point our best option is to request a restart, with the lease
+                            // state of the minting reader attached to tell the two cases apart. We
+                            // report the error and freeze: capabilities are retained so the frontier
+                            // cannot advance past the missing part.
+                            error_handler.report_and_freeze(anyhow!(
+                                "batch fetcher could not fetch batch part {}: {}",
+                                blob_key,
+                                diagnostics
+                            ));
+                            failed = true;
+                            break;
                         }
-                    };
-                    {
-                        // Do very fine-grained output activation/session
-                        // creation to ensure that we don't hold activated
-                        // outputs or sessions across await points, which
-                        // would prevent messages from being flushed from
-                        // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched);
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            // The task exits only after the desc channel closes (which
+                            // we haven't done) or a panic; in either case, with fetches
+                            // outstanding this is unexpected.
+                            assert!(
+                                inflight_caps.is_empty(),
+                                "fetch task unexpectedly gone with {} fetches in flight",
+                                inflight_caps.len()
+                            );
+                            break;
+                        }
                     }
                 }
+            }
+
+            // Once the input is closed and nothing is in flight, disconnect
+            // from the task so it can exit.
+            if frontiers[0].frontier().is_empty() && inflight_caps.is_empty() {
+                desc_tx = None;
             }
         }
     });
