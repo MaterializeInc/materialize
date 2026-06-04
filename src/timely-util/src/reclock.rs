@@ -177,7 +177,7 @@ use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
+use differential_dataflow::{AsCollection, ExchangeData, VecCollection};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
@@ -428,12 +428,16 @@ where
                 // STEP 5. Downgrade capability and compact remap trace
                 capset.downgrade(&reclocked_source_frontier.borrow());
                 remap_since = reclocked_source_frontier;
+                // `advance_by` moves every binding's `IntoTime` up to
+                // `remap_since`. It is monotone, and the trace was already
+                // ordered by `IntoTime` (new bindings are appended in `IntoTime`
+                // order off the `pending_remap` min-heap, with times strictly
+                // greater than any existing binding), so the trace stays
+                // `IntoTime`-ordered after this loop.
                 for (_, t, _) in remap_trace.iter_mut() {
                     t.advance_by(remap_since.borrow());
                 }
-                consolidation::consolidate_updates(&mut remap_trace);
-                remap_trace
-                    .sort_unstable_by(|(_, t1, _): &(_, IntoTime, _), (_, t2, _)| t1.cmp(t2));
+                consolidate_remap_trace(&mut remap_trace);
 
                 // If using less than a quarter of the capacity, shrink the container. To avoid having
                 // to resize the container on a subsequent push, shrink to 2x the length, which is
@@ -469,6 +473,46 @@ where
     });
 
     (Box::new(pusher), reclocked.as_collection())
+}
+
+/// Re-establish `(IntoTime, FromTime)` order and consolidate a remap trace in
+/// place: sort by `(IntoTime, FromTime)`, fold the diffs of bindings with equal
+/// `(FromTime, IntoTime)`, and drop any that cancel to zero.
+///
+/// On entry the trace is already ordered by `IntoTime`: STEP 4 walks it in time
+/// order, new bindings are appended in `IntoTime` order (with times strictly
+/// greater than any existing binding) off the `pending_remap` min-heap, and the
+/// preceding `advance_by` is monotone. The only disorder is `FromTime` within
+/// the prefix that `advance_by` just collapsed onto `remap_since`.
+///
+/// `<[_]>::sort_by` (driftsort) detects the long already-sorted tail as a
+/// natural run and does not re-sort it; it only sorts the small collapsed
+/// prefix and then merges, so this is a single ~`O(n)` pass. That replaces the
+/// previous `consolidate_updates` (which sorts by `(FromTime, IntoTime)`) plus a
+/// re-sort into the `IntoTime` order STEP 4 needs — two full `O(n log n)` passes
+/// in conflicting orders on every invocation, which dominated CPU during source
+/// hydration when `[remap_since, remap_upper)`, and thus the trace, grows large.
+/// (Driftsort's run detection has a ~`sqrt(n)` minimum-run threshold, which the
+/// maintained tail comfortably exceeds; it is the merge, not a re-sort, that
+/// keeps this `O(n)` rather than sub-linear.)
+fn consolidate_remap_trace<FromTime, IntoTime, R>(remap_trace: &mut Vec<(FromTime, IntoTime, R)>)
+where
+    FromTime: Ord,
+    IntoTime: Ord,
+    R: Semigroup,
+{
+    remap_trace.sort_by(|(f1, t1, _), (f2, t2, _)| (t1, f1).cmp(&(t2, f2)));
+    // `dedup_by` passes the later element as `a` and the retained earlier one as
+    // `b`, so we fold `a`'s diff into `b`.
+    remap_trace.dedup_by(|a, b| {
+        if a.0 == b.0 && a.1 == b.1 {
+            b.2.plus_equals(&a.2);
+            true
+        } else {
+            false
+        }
+    });
+    remap_trace.retain(|(_, _, diff)| !diff.is_zero());
 }
 
 /// A batch of differential updates that vary over some partial order. This type maintains the data
@@ -1076,6 +1120,40 @@ mod test {
         )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
+    }
+
+    /// `consolidate_remap_trace` must sort by `(IntoTime, FromTime)`, fold
+    /// equal-key diffs, and drop cancellations — regardless of input order, so
+    /// it is correct even when a wide `advance_by` collapse leaves the prefix
+    /// unordered by `FromTime`.
+    #[mz_ore::test]
+    fn test_consolidate_remap_trace() {
+        // (FromTime, IntoTime, Diff): deliberately out of order, with a
+        // duplicate `(5, 20)` that must sum and a `(3, 10)` pair that cancels.
+        let mut trace: Vec<(u64, u64, Diff)> = vec![
+            (5, 20, Diff::ONE),
+            (1, 10, Diff::ONE),
+            (5, 20, Diff::ONE),
+            (3, 10, Diff::ONE),
+            (3, 10, Diff::MINUS_ONE),
+            (1, 20, Diff::ONE),
+        ];
+        super::consolidate_remap_trace(&mut trace);
+
+        assert_eq!(
+            trace,
+            vec![
+                (1, 10, Diff::ONE),
+                (1, 20, Diff::ONE),
+                (5, 20, Diff::from(2)),
+            ]
+        );
+        // Ordered by `(IntoTime, FromTime)`.
+        assert!(
+            trace
+                .windows(2)
+                .all(|w| (w[0].1, w[0].0) <= (w[1].1, w[1].0))
+        );
     }
 
     #[mz_ore::test]
