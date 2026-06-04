@@ -5431,6 +5431,24 @@ impl<T: AstInfo> GrantTargetAllSpecification<T> {
     }
 }
 
+/// Writes the plural keyword for `object_type` as `GRANT`/`REVOKE ... ON ALL`
+/// expects it. Most object types just take a trailing `S` (`TABLES`, `SECRETS`,
+/// ...), but `NETWORK POLICY` pluralizes to the `POLICIES` keyword the parser
+/// accepts — naively appending `S` would emit `NETWORK POLICYS`, which fails to
+/// reparse.
+fn write_grant_object_type_plural<W: fmt::Write>(
+    f: &mut AstFormatter<W>,
+    object_type: &ObjectType,
+) {
+    match object_type {
+        ObjectType::NetworkPolicy => f.write_str("POLICIES"),
+        other => {
+            f.write_node(other);
+            f.write_str("S");
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -5441,19 +5459,18 @@ impl<T: AstInfo> AstDisplay for GrantTargetSpecification<T> {
                 GrantTargetSpecificationInner::All(all_spec) => match all_spec {
                     GrantTargetAllSpecification::All => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S");
+                        write_grant_object_type_plural(f, object_type);
                     }
                     GrantTargetAllSpecification::AllDatabases { databases } => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S IN DATABASE ");
+                        write_grant_object_type_plural(f, object_type);
+                        f.write_str(" IN DATABASE ");
                         f.write_node(&display::comma_separated(databases));
                     }
                     GrantTargetAllSpecification::AllSchemas { schemas } => {
                         f.write_str("ALL ");
-                        f.write_node(object_type);
-                        f.write_str("S IN SCHEMA ");
+                        write_grant_object_type_plural(f, object_type);
+                        f.write_str(" IN SCHEMA ");
                         f.write_node(&display::comma_separated(schemas));
                     }
                 },
