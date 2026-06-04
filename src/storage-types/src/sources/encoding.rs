@@ -10,8 +10,9 @@
 //! Types and traits related to the *decoding* of data for sources.
 
 use anyhow::Context;
+use itertools::Itertools;
 use mz_interchange::{avro, protobuf};
-use mz_repr::{GlobalId, RelationDesc, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::AlterCompatible;
@@ -20,6 +21,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::controller::AlterError;
+use crate::errors::DecodeErrorKind;
 use crate::wire_format::WireFormat;
 
 /// A description of how to interpret data from various sources
@@ -365,4 +367,267 @@ impl ColumnSpec {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RegexEncoding {
     pub regex: mz_repr::adt::regex::Regex,
+}
+
+/// Incrementally decodes CSV bytes into `Row`s for a [`CsvEncoding`].
+///
+/// This is the pure, dataflow-independent half of CSV source decoding (it lives
+/// here, rather than in `mz-storage`, so it can be exercised without that
+/// crate's heavy dependency tree). `mz-storage`'s decode operator drives it.
+#[derive(Debug)]
+pub struct CsvDecoderState {
+    next_row_is_header: bool,
+    header_names: Option<Vec<String>>,
+    n_cols: usize,
+    output: Vec<u8>,
+    output_cursor: usize,
+    ends: Vec<usize>,
+    ends_cursor: usize,
+    csv_reader: csv_core::Reader,
+    row_buf: Row,
+    events_error: usize,
+    events_success: usize,
+}
+
+impl CsvDecoderState {
+    fn total_events(&self) -> usize {
+        self.events_error + self.events_success
+    }
+
+    pub fn new(format: CsvEncoding) -> Self {
+        let CsvEncoding { columns, delimiter } = format;
+        let n_cols = columns.arity();
+
+        let header_names = columns.into_header_names();
+        Self {
+            next_row_is_header: header_names.is_some(),
+            header_names,
+            n_cols,
+            output: vec![0],
+            output_cursor: 0,
+            ends: vec![0],
+            ends_cursor: 1,
+            csv_reader: csv_core::ReaderBuilder::new().delimiter(delimiter).build(),
+            row_buf: Row::default(),
+            events_error: 0,
+            events_success: 0,
+        }
+    }
+
+    pub fn reset_for_new_object(&mut self) {
+        if self.header_names.is_some() {
+            self.next_row_is_header = true;
+        }
+    }
+
+    pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
+        loop {
+            let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
+                *chunk,
+                &mut self.output[self.output_cursor..],
+                &mut self.ends[self.ends_cursor..],
+            );
+            self.output_cursor += n_output;
+            *chunk = &(*chunk)[n_input..];
+            self.ends_cursor += n_ends;
+            match result {
+                // Error cases
+                csv_core::ReadRecordResult::InputEmpty => break Ok(None),
+                csv_core::ReadRecordResult::OutputFull => {
+                    let length = self.output.len();
+                    self.output.extend(std::iter::repeat(0).take(length));
+                }
+                csv_core::ReadRecordResult::OutputEndsFull => {
+                    let length = self.ends.len();
+                    self.ends.extend(std::iter::repeat(0).take(length));
+                }
+                // Success cases
+                csv_core::ReadRecordResult::Record | csv_core::ReadRecordResult::End => {
+                    let result = {
+                        let ends_valid = self.ends_cursor - 1;
+                        if ends_valid == 0 {
+                            break Ok(None);
+                        }
+                        if ends_valid != self.n_cols {
+                            self.events_error += 1;
+                            Err(DecodeErrorKind::Text(
+                                format!(
+                                    "CSV error at record number {}: expected {} columns, got {}.",
+                                    self.total_events(),
+                                    self.n_cols,
+                                    ends_valid
+                                )
+                                .into(),
+                            ))
+                        } else {
+                            // Validate each field's bytes as UTF-8 independently.
+                            // Validating the whole record's output at once is
+                            // wrong: the delimiter can split a byte sequence so
+                            // that the concatenation is valid UTF-8 while an
+                            // individual field boundary falls inside a multi-byte
+                            // character (which panicked the `&str` slice), or so
+                            // that bytes are silently merged across a field
+                            // boundary. A field whose bytes are not valid UTF-8 on
+                            // their own is a decode error.
+                            let mut fields: Vec<&str> = Vec::with_capacity(self.n_cols);
+                            let mut utf8_error = None;
+                            for i in 0..self.n_cols {
+                                match std::str::from_utf8(
+                                    &self.output[self.ends[i]..self.ends[i + 1]],
+                                ) {
+                                    Ok(field) => fields.push(field),
+                                    Err(e) => {
+                                        utf8_error = Some(e);
+                                        break;
+                                    }
+                                }
+                            }
+                            match utf8_error {
+                                None => {
+                                    self.events_success += 1;
+                                    let mut row_packer = self.row_buf.packer();
+                                    row_packer.extend(fields.iter().map(|f| Datum::String(f)));
+                                    Ok(Some(self.row_buf.clone()))
+                                }
+                                Some(e) => {
+                                    self.events_error += 1;
+                                    Err(DecodeErrorKind::Text(
+                                        format!(
+                                            "CSV error at record number {}: invalid UTF-8 ({})",
+                                            self.total_events(),
+                                            e
+                                        )
+                                        .into(),
+                                    ))
+                                }
+                            }
+                        }
+                    };
+
+                    // Clear this record's scratch buffers now that it has been
+                    // consumed, whether it decoded or errored. Doing this only on
+                    // the success path (as the code used to) left stale field
+                    // offsets behind after a malformed record — `csv_core` resets
+                    // its own per-record output position while these cursors kept
+                    // advancing — so the *next* record read back non-monotonic
+                    // `ends`, panicking the `output[..]` slice (or silently
+                    // producing corrupt rows). One bad row must not corrupt the
+                    // rest of the source.
+                    self.output_cursor = 0;
+                    self.ends_cursor = 1;
+
+                    // Header rows are validated but never sent into the dataflow;
+                    // every other record is handed straight back to the caller.
+                    if !self.next_row_is_header {
+                        break result;
+                    }
+                    self.next_row_is_header = false;
+
+                    let row = match result {
+                        // Don't swallow a parse error just because it occurred on
+                        // the header row.
+                        Err(e) => break Err(e),
+                        Ok(Some(row)) => row,
+                        // An empty record (`ends_valid == 0`) already breaks out of
+                        // the loop above, so a decoded record always carries a row.
+                        Ok(None) => unreachable!("decoded record without a row"),
+                    };
+
+                    let mismatched = row
+                        .iter()
+                        .zip_eq(self.header_names.iter().flatten())
+                        .enumerate()
+                        .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
+                    if let Some((i, (actual, expected))) = mismatched {
+                        break Err(DecodeErrorKind::Text(
+                            format!(
+                                "source file contains incorrect columns '{:?}', \
+                             first mismatched column at index {} expected={} actual={}",
+                                row,
+                                i + 1,
+                                expected,
+                                actual
+                            )
+                            .into(),
+                        ));
+                    }
+
+                    // Header looks good. If the chunk is exhausted we're done for
+                    // now; otherwise loop around to decode the first data row.
+                    if chunk.is_empty() {
+                        break Ok(None);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::Datum;
+
+    use super::{ColumnSpec, CsvDecoderState, CsvEncoding};
+
+    /// A malformed record (wrong column count) must not corrupt the records that
+    /// follow it: the decoder has to reset its scratch buffers after every
+    /// record, not just successful ones. Previously the stale field offsets left
+    /// behind by the error made the next record decode to a panic or a wrong row.
+    #[mz_ore::test]
+    fn test_csv_decoder_recovers_after_error() {
+        let mut state = CsvDecoderState::new(CsvEncoding {
+            columns: ColumnSpec::Count(2),
+            delimiter: b',',
+        });
+
+        // One column where two are expected, then a well-formed two-column row.
+        let mut input: &[u8] = b"oops\na,b\n";
+
+        let first = state.decode(&mut input);
+        assert!(
+            first.is_err(),
+            "expected a column-count error for the first record, got {first:?}"
+        );
+
+        let row = state
+            .decode(&mut input)
+            .expect("the second record must decode, not error/panic")
+            .expect("the second record must yield a row");
+        let datums: Vec<Datum> = row.iter().collect();
+        assert_eq!(
+            datums,
+            vec![Datum::String("a"), Datum::String("b")],
+            "the record after an error decoded to the wrong values",
+        );
+    }
+
+    /// A delimiter can fall between two bytes that, with the delimiter removed,
+    /// would form a single multi-byte UTF-8 character (here `0xdf 0x8d`). The
+    /// whole record's bytes then look like valid UTF-8, but the individual field
+    /// `0xdf` is not — validating per field must reject it as a decode error
+    /// rather than panicking on a slice that falls inside the character.
+    #[mz_ore::test]
+    fn test_csv_decoder_rejects_field_split_inside_char() {
+        let mut state = CsvDecoderState::new(CsvEncoding {
+            columns: ColumnSpec::Count(2),
+            delimiter: b'!',
+        });
+
+        // Fields "0xdf" and "0x8d 0x33"; `0xdf 0x8d` is a valid 2-byte char.
+        let mut input: &[u8] = b"\xdf!\x8d3\n";
+        let result = state.decode(&mut input);
+        assert!(
+            result.is_err(),
+            "a field that is not valid UTF-8 on its own must be an error, got {result:?}"
+        );
+
+        // The decoder stays usable: a clean record after it still decodes.
+        let mut input: &[u8] = b"a!b\n";
+        let row = state
+            .decode(&mut input)
+            .expect("the following record must decode")
+            .expect("the following record must yield a row");
+        let datums: Vec<Datum> = row.iter().collect();
+        assert_eq!(datums, vec![Datum::String("a"), Datum::String("b")]);
+    }
 }
