@@ -26,6 +26,7 @@ fail.workspace = true
 futures.workspace = true
 governor.workspace = true
 hex.workspace = true
+humantime.workspace = true
 imbl.workspace = true
 http.workspace = true
 hyper-tls = "0.5.0"

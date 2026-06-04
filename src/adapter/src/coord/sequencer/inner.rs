@@ -1931,6 +1931,20 @@ impl Coordinator {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
+
+                // Reject incompatible combinations of bounded staleness and
+                // `real_time_recency` after the variable has been applied. Either
+                // SET name can introduce the conflict, so check both.
+                if (name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                    || name.as_str() == vars::REAL_TIME_RECENCY.name())
+                    && session
+                        .vars()
+                        .transaction_isolation()
+                        .is_bounded_staleness()
+                    && session.vars().real_time_recency()
+                {
+                    return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
+                }
             }
             None => vars.reset(self.catalog().system_config(), &name, local)?,
         }
@@ -2538,6 +2552,15 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::ReadOnlyTransaction));
             return;
         }
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+            return;
+        }
 
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
@@ -2634,6 +2657,16 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()

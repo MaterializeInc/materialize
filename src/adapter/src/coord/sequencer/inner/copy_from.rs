@@ -50,6 +50,15 @@ impl Coordinator {
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            return ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+        }
+
         // STDIN is sequenced by handing control back to pgwire, which drives the
         // CopyData/CopyDone exchange. URL/S3 sources stage a one-shot ingestion
         // server-side and fall through to the rest of this function.
