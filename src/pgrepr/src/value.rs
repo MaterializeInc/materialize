@@ -954,7 +954,43 @@ pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::arb_datum_for_scalar;
+    use proptest::prelude::*;
+
     use super::*;
+
+    /// Property test: [`Value::binary_encoding_error`] agrees with the actual
+    /// behavior of [`Value::encode_binary`] for every `(SqlScalarType, Datum)`
+    /// pair the proptest infrastructure can generate.
+    ///
+    /// This guards against future drift between the static predicate and the
+    /// encoder: any new `SqlScalarType` variant whose classification disagrees
+    /// with what `encode_binary` actually does will surface here.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn proptest_binary_encoding_error_matches_encode_binary() {
+        let strat = any::<SqlScalarType>()
+            .prop_flat_map(|ty| (Just(ty.clone()), arb_datum_for_scalar(ty)));
+        proptest!(ProptestConfig::with_cases(256), |((ty, prop_datum) in strat)| {
+            // `binary_encoding_error` is a precondition for callers of
+            // `encode_binary`: if it returns `Ok`, then encoding must succeed
+            // (and not panic via the internal `.expect`).
+            if Value::binary_encoding_error(&ty).is_err() {
+                return Ok(());
+            }
+            let datum = Datum::from(&prop_datum);
+            let value = match Value::from_datum(datum, &ty) {
+                Some(v) => v,
+                // `Datum::Null` produces `None`; nothing to encode.
+                None => return Ok(()),
+            };
+            let pg_ty = Type::from(&ty);
+            let mut buf = BytesMut::new();
+            value
+                .encode_binary(&pg_ty, &mut buf)
+                .expect("encode_binary must succeed when binary_encoding_error returns Ok");
+        });
+    }
 
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
     #[mz_ore::test]

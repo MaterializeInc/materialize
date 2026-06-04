@@ -7304,6 +7304,8 @@ dependencies = [
  "mz-pgwire-common",
  "mz-repr",
  "postgres-types",
+ "proptest",
+ "proptest-derive",
  "uuid",
 ]
 
