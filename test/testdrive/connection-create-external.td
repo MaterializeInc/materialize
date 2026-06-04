@@ -231,18 +231,18 @@ $ set gcp-ssrf-key="-----BEGIN PRIVATE KEY-----\\nMIIEvAIBADANBgkqhkiG9w0BAQEFAA
 # IP, and testdrive stops at the first failure.
 > CREATE SECRET gcp_ssrf_private AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"http://127.0.0.1:1/token"}'
 ! CREATE CONNECTION gcp_ssrf_private_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = true);
-contains:disallowed token_uri
+contains:token_uri must be https://oauth2.googleapis.com/token
 
 # Correct host, but plaintext HTTP -- the scheme must be HTTPS.
 > CREATE SECRET gcp_ssrf_scheme AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"http://oauth2.googleapis.com/token"}'
 ! CREATE CONNECTION gcp_ssrf_scheme_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_scheme) WITH (VALIDATE = true);
-contains:disallowed token_uri
+contains:token_uri must be https://oauth2.googleapis.com/token
 
 # Public host that merely ends in the allowlisted suffix -- only a host allowlist,
 # not a private-IP check, rejects this.
 > CREATE SECRET gcp_ssrf_host AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"https://oauth2.googleapis.com.evil.com/token"}'
 ! CREATE CONNECTION gcp_ssrf_host_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_host) WITH (VALIDATE = true);
-contains:disallowed token_uri
+contains:token_uri must be https://oauth2.googleapis.com/token
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false
@@ -258,4 +258,8 @@ contains:Connection refused
 # it does not consult storage_enforce_external_addresses. With enforcement now
 # off, the malicious token_uri is still rejected.
 ! CREATE CONNECTION gcp_ssrf_private_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = true);
-contains:disallowed token_uri
+contains:token_uri must be https://oauth2.googleapis.com/token
+
+# In fact, the GCP allowlist should even apply when VALIDATE = false.
+! CREATE CONNECTION gcp_ssrf_private_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = false);
+contains:token_uri must be https://oauth2.googleapis.com/token
