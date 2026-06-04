@@ -1385,7 +1385,10 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let diff = diff.into();
         match kind {
-            StateUpdateKind::Role(role) => self.pack_role_update(role.id, diff),
+            // mz_roles and mz_role_parameters are MaterializedViews backed by
+            // mz_internal.mz_catalog_raw, so role rows do not produce builtin
+            // table updates here.
+            StateUpdateKind::Role(_) => Vec::new(),
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }

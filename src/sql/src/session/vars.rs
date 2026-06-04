@@ -124,9 +124,18 @@ pub enum EndTransactionAction {
 #[derive(Debug, Clone, Copy)]
 pub enum VarInput<'a> {
     /// The input has been flattened into a single string.
+    ///
+    /// NOTE: when adding a new variant here (or in [`OwnedVarInput`]), extend
+    /// the `mz_catalog.mz_role_parameters` materialized view in
+    /// `src/catalog/src/builtin/mz_catalog.rs`. That MV discriminates on the
+    /// externally-tagged JSON shape of [`OwnedVarInput`] to format
+    /// `parameter_value`.
     Flat(&'a str),
     /// The input comes from a SQL `SET` statement and is jumbled across
     /// multiple components.
+    ///
+    /// NOTE: see the doc-comment on [`VarInput::Flat`] — adding a new variant
+    /// requires extending `mz_catalog.mz_role_parameters`.
     SqlSet(&'a [String]),
 }
 
@@ -144,8 +153,15 @@ impl<'a> VarInput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum OwnedVarInput {
     /// See [`VarInput::Flat`].
+    ///
+    /// NOTE: adding a new variant requires extending the
+    /// `mz_catalog.mz_role_parameters` materialized view in
+    /// `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the
+    /// externally-tagged JSON shape of this enum.
     Flat(String),
     /// See [`VarInput::SqlSet`].
+    ///
+    /// NOTE: see the doc-comment on [`OwnedVarInput::Flat`].
     SqlSet(Vec<String>),
 }
 

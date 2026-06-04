@@ -23,7 +23,7 @@ use mz_sql::catalog::{
     CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference, ObjectType,
 };
 use mz_sql::rbac;
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_storage_client::controller::IntrospectionType;
 
 use super::{
@@ -1691,39 +1691,73 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         },
     }),
 });
-pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_roles",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ROLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("inherit", SqlScalarType::Bool.nullable(false))
-        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
-        .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the role."),
-        ("oid", "A PostgreSQL-compatible OID for the role."),
-        ("name", "The name of the role."),
-        (
-            "inherit",
-            "Indicates whether the role has inheritance of privileges.",
-        ),
-        ("rolcanlogin", "Indicates whether the role can log in."),
-        ("rolsuper", "Indicates whether the role is a superuser."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "role",
-        description: "A user or role for authentication and access control",
-        links: &const { [] },
-        column_semantic_types: &const { [("id", SemanticType::RoleId), ("oid", SemanticType::OID)] },
-    }),
+pub static MZ_ROLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    // The two built-in super-roles are identified by name; their names live as
+    // compile-time constants in `mz_sql::session::user`, so we interpolate to
+    // keep the SQL in sync with the Rust definition.
+    let sql = format!(
+        "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL inherit
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    data->'value'->>'name' AS name,
+    (data->'value'->'attributes'->>'inherit')::bool AS inherit,
+    COALESCE(
+        (data->'value'->'attributes'->>'login')::bool,
+        data->'value'->>'name' IN ('{system}', '{support}')
+    ) AS rolcanlogin,
+    COALESCE(
+        (data->'value'->'attributes'->>'superuser')::bool,
+        CASE WHEN data->'value'->>'name' IN ('{system}', '{support}') THEN true END
+    ) AS rolsuper
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Role' AND data->'key'->'id' != '\"Public\"'::jsonb",
+        system = SYSTEM_USER_NAME,
+        support = SUPPORT_USER_NAME,
+    );
+
+    BuiltinMaterializedView {
+        name: "mz_roles",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ROLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("inherit", SqlScalarType::Bool.nullable(false))
+            .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
+            .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the role."),
+            ("oid", "A PostgreSQL-compatible OID for the role."),
+            ("name", "The name of the role."),
+            (
+                "inherit",
+                "Indicates whether the role has inheritance of privileges.",
+            ),
+            ("rolcanlogin", "Indicates whether the role can log in."),
+            ("rolsuper", "Indicates whether the role is a superuser."),
+        ]),
+        sql: Box::leak(sql.into_boxed_str()),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "role",
+            description: "A user or role for authentication and access control",
+            links: &const { [] },
+            column_semantic_types: &const { [("id", SemanticType::RoleId), ("oid", SemanticType::OID)] },
+        }),
+    }
 });
 
 pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -1800,43 +1834,67 @@ WHERE data->>'kind' = 'Role'",
     }
 });
 
-pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_role_parameters",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
-    desc: RelationDesc::builder()
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("parameter_name", SqlScalarType::String.nullable(false))
-        .with_column("parameter_value", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "role_id",
-            "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.",
-        ),
-        (
-            "parameter_name",
-            "The configuration parameter name. One of the supported configuration parameters.",
-        ),
-        (
-            "parameter_value",
-            "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "role_parameter",
-        description: "A session parameter default set for a role",
-        links: &const {
-            [OntologyLink {
-                name: "default_parameter_setting_of",
-                target: "role",
-                properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("role_id", SemanticType::RoleId)],
-    }),
+pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_role_parameters",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ROLE_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("parameter_name", SqlScalarType::String.nullable(false))
+            .with_column("parameter_value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "role_id",
+                "The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "parameter_name",
+                "The configuration parameter name. One of the supported configuration parameters.",
+            ),
+            (
+                "parameter_value",
+                "The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL parameter_name,
+    ASSERT NOT NULL parameter_value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS role_id,
+    entry->>'key' AS parameter_name,
+    CASE
+        WHEN entry->'val' ? 'Flat' THEN entry->'val'->>'Flat'
+        ELSE (
+            SELECT pg_catalog.string_agg(t.elem, ', ' ORDER BY t.ord)
+            FROM jsonb_array_elements_text(entry->'val'->'SqlSet')
+                WITH ORDINALITY AS t(elem, ord)
+        )
+    END AS parameter_value
+FROM
+    mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'vars'->'entries') AS entry
+WHERE data->>'kind' = 'Role'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "role_parameter",
+            description: "A session parameter default set for a role",
+            links: &const {
+                [OntologyLink {
+                    name: "default_parameter_setting_of",
+                    target: "role",
+                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("role_id", SemanticType::RoleId)],
+        }),
+    }
 });
 pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_role_auth",
