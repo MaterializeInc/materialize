@@ -4,7 +4,6 @@
         SIZE = <text>
         [, REPLICATION FACTOR = <int>]
         [, MANAGED = <bool>]
-        [, SCHEDULE = MANUAL|ON REFRESH(...)]
     );
   syntax_elements:
     - name: "`<cluster_name>`"
@@ -40,11 +39,3 @@
         {{</ tip >}}
 
         Default: `TRUE`
-    - name: "`SCHEDULE`"
-      description: |
-        Optional. The [scheduling type](#scheduling) for the cluster.
-        Valid values are:
-        - `MANUAL`
-        - `ON REFRESH`
-
-        Default: `MANUAL`

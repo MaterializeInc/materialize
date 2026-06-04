@@ -5,7 +5,6 @@
         SIZE = <text>
         [, REPLICATION FACTOR = <int>]
         [, MANAGED = <bool>]
-        [, SCHEDULE = MANUAL|ON REFRESH(...)]
     )
     [WITH ( <with_option>[,...])]
     ;
@@ -44,12 +43,6 @@
         REPLICA`](/sql/create-cluster-replica) command.
 
         Default: `TRUE`
-    - name: "`SCHEDULE`"
-      description: |
-        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
-        cluster. Valid values are `MANUAL` and `ON REFRESH`.
-
-        Default: `MANUAL`
 
     - name: "`WITH (<with_option>[,...])`"
       description: |
@@ -64,7 +57,7 @@
   code: |
     ALTER CLUSTER <cluster_name>
     RESET (
-        REPLICATION FACTOR | MANAGED | SCHEDULE,
+        REPLICATION FACTOR | MANAGED,
         ...
     )
     ;
@@ -84,12 +77,6 @@
         on the configured size and replication factor.
 
         Default: `TRUE`
-    - name: "`SCHEDULE`"
-      description: |
-        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
-        cluster.
-
-        Default: `MANUAL`
 
 - name: "syntax-rename"
   code: |
