@@ -28,6 +28,7 @@ import {
 import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
 import TextLink from "~/components/TextLink";
+import { useAppConfig } from "~/config/useAppConfig";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import ConnectionIcon from "~/svg/ConnectionIcon";
@@ -47,6 +48,7 @@ const OidcConnectModal = ({
   auth: AuthContextProps;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const appConfig = useAppConfig();
   const idToken = auth.user?.id_token;
 
   const { sqlRole } = useSelfManagedProfile(auth);
@@ -54,7 +56,13 @@ const OidcConnectModal = ({
 
   const obfuscated = idToken ? obfuscateSecret(idToken) : "";
 
-  const sqlAddress = `${HOST_PLACEHOLDER}:6875`;
+  const balancerdHost =
+    appConfig.mode === "self-managed"
+      ? appConfig.balancerdDnsNames?.[0]
+      : undefined;
+  const sqlAddress = balancerdHost
+    ? `${balancerdHost}:6875`
+    : `${HOST_PLACEHOLDER}:6875`;
 
   return (
     <Modal size="3xl" isOpen={isOpen} onClose={onClose}>
@@ -68,12 +76,13 @@ const OidcConnectModal = ({
             whiteSpace="normal"
             color={colors.foreground.secondary}
           >
-            Replace <Code fontSize="xs">{HOST_PLACEHOLDER}</Code> with your
-            Materialize SQL endpoint. For Terraform installs, run{" "}
-            <Code fontSize="xs">
-              terraform output -raw balancerd_load_balancer_ip
-            </Code>{" "}
-            to get it. See the{" "}
+            {!balancerdHost && (
+              <>
+                Replace <Code fontSize="xs">{HOST_PLACEHOLDER}</Code> with your
+                Materialize SQL endpoint.{" "}
+              </>
+            )}
+            See the{" "}
             <TextLink
               href="https://materialize.com/docs/self-managed-deployments/installation/install-on-gcp/#step-3-apply-the-terraform"
               isExternal

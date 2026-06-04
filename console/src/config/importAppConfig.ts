@@ -34,14 +34,20 @@ export function importAppConfig(): {
   auth: {
     mode: SelfManagedAuthMode;
   };
+  balancerdDnsNames?: string[];
 } {
   if (process.env.NODE_ENV === "test") {
     return DEFAULT_APP_CONFIG;
   }
 
-  return appConfigJson as {
+  const json = appConfigJson as {
     auth: {
       mode: SelfManagedAuthMode;
     };
+    balancerd_dns_names?: string[];
+  };
+  return {
+    auth: json.auth,
+    balancerdDnsNames: json.balancerd_dns_names,
   };
 }
