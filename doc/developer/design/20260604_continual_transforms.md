@@ -482,6 +482,23 @@ upsert (transform + MV-on-top) to validate the relaxed-correctness story.
   the extra index (output keyed by liveness key) costed and made explicit to the
   user, and what is the cascade's commit/atomicity story (a dimension delete and
   the resulting recorded-row retractions at one timestamp)?
+- **Is the asymmetric join a distinct construct (`STREAM JOIN` / temporal join)
+  or plain `JOIN` + `FROZEN(...)`?** A symmetric `JOIN` cannot silently mean
+  "stream-driven, value-frozen, stream-not-indexed"; that asymmetry (which side
+  is the unretained stream) and its cost model want to be explicit, and there is
+  strong prior art (Flink temporal/lookup join `FOR SYSTEM_TIME AS OF`, Kafka
+  Streams stream-table join). But a single keyword conflates the two axes: the
+  classic stream-table join freezes *everything* (value *and* existence, no
+  cascade — once emitted it cannot be retracted), whereas our value/existence
+  split needs `FROZEN(...)` for per-value control and an explicit live-existence
+  opt-in for the compliance cascade (a capability Flink/Kafka lack, since we
+  keep the output as a recorded collection). And because the result is
+  non-definite it is only valid inside a recorded collection (it would taint a
+  normal MV). Open: pick the surface — `STREAM JOIN` as the fully-frozen floor
+  composed with `FROZEN`/lifetime modifiers, vs. plain `JOIN` + markers — and
+  whether it is a body-only construct or a standalone operator that *implies*
+  materialization into a recorded collection (a possible third altitude
+  alongside the declarative object and the imperative transaction).
 - **`DELETE` vs. automatic phase-out — where is the line?** The proposal is:
   age → temporal filter; ownership → `ON DELETE CASCADE`; supersession →
   `top-k` body; arbitrary predicate → explicit `DELETE` in the imperative
