@@ -327,9 +327,11 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
 def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
     """Test that S3 Tables sinks fail when region doesn't match environment.
 
-    The environment is configured as aws-us-east-1, so attempting to create
-    an Iceberg sink using an S3 Tables connection pointing to us-west-2 should
-    fail with a region mismatch error during sink purification.
+    The environment is aws-us-east-1; an Iceberg sink whose catalog connection
+    points at us-west-2 must fail region validation during purification. This
+    holds whether or not the sink specifies the optional (and unused)
+    `USING AWS CONNECTION` clause, since the check reads the catalog
+    connection's region, not the sink's AWS connection.
     """
     bucket = None
     customer_role = None
@@ -392,26 +394,32 @@ def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
         c.sql("CREATE TABLE sink_test_table (id INT, value TEXT)")
         c.sql("INSERT INTO sink_test_table VALUES (1, 'test')")
 
-        # This should fail because the AWS connection is configured for us-west-2
-        # but the environment is running in us-east-1. The region check happens
-        # during sink purification.
-        try:
-            c.sql("""CREATE SINK s3tables_sink
-                    FROM sink_test_table
-                    INTO ICEBERG CATALOG CONNECTION s3tables_wrong_region (
-                        NAMESPACE 'test_namespace',
-                        TABLE 'test_table'
-                    )
-                    USING AWS CONNECTION aws_wrong_region""")
-            raise AssertionError(
-                "Expected S3 Tables sink to fail due to region mismatch"
-            )
-        except InternalError_ as e:
-            assert e.diag.message_primary is not None
-            assert (
-                "region mismatch" in e.diag.message_primary.lower()
-            ), f"Expected 'region mismatch' error but got: {e.diag.message_primary}"
+        # The region check must fire with or without the optional AWS connection;
+        # the no-AWS case is the regression guard. MODE/COMMIT INTERVAL keep the
+        # sink otherwise valid so the region check is its only failure mode.
+        for sink_name, using_aws in [
+            ("s3tables_sink", "USING AWS CONNECTION aws_wrong_region"),
+            ("s3tables_sink_no_aws", ""),
+        ]:
+            try:
+                c.sql(f"""CREATE SINK {sink_name}
+                        FROM sink_test_table
+                        INTO ICEBERG CATALOG CONNECTION s3tables_wrong_region (
+                            NAMESPACE 'test_namespace', TABLE 'test_table'
+                        )
+                        {using_aws}
+                        MODE APPEND WITH (COMMIT INTERVAL '1s')""")
+                raise AssertionError(f"Expected {sink_name} to fail: region mismatch")
+            except InternalError_ as e:
+                msg = e.diag.message_primary or ""
+                assert "region mismatch" in msg.lower(), f"got: {msg}"
     finally:
+        # On buggy code the no-AWS sink is created rather than rejected; drop it
+        # so it stops writing and the bucket can be deleted.
+        try:
+            c.sql("DROP SINK IF EXISTS s3tables_sink_no_aws")
+        except Exception:
+            pass
         if bucket is not None:
             ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
         if customer_role is not None:
