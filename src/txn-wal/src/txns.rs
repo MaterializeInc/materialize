@@ -1525,7 +1525,14 @@ mod tests {
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
                     loop {
-                        subscribe.worker.step_or_park(None);
+                        // NB: Bound the park: the `rx` oneshot is checked
+                        // between steps but does not activate the worker, so
+                        // an indefinite park can miss it. (The persist source
+                        // does its listen polling in a tokio task, so a fully
+                        // caught-up dataflow produces no further activations.)
+                        subscribe
+                            .worker
+                            .step_or_park(Some(Duration::from_millis(1)));
                         subscribe.capture_output();
                         let until = match rx.try_recv() {
                             Ok(ts) => ts,
