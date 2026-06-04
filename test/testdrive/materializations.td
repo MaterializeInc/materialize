@@ -75,11 +75,13 @@ b  sum
 1  6
 2  1
 
+# The exported desc of a materialized view is canonicalized: inferred
+# non-nullability is dropped, so all columns report as nullable.
 > SHOW COLUMNS FROM test1
 name nullable type     comment
 ------------------------------
-b     false   bigint   ""
-sum   false   numeric  ""
+b     true    bigint   ""
+sum   true    numeric  ""
 
 > SHOW VIEWS LIKE '%data%'
 data_view  ""

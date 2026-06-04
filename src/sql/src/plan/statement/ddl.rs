@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
@@ -3239,9 +3240,16 @@ fn plan_sink(
         bail_unsupported!("creating a sink directly on a catalog object");
     }
 
-    let desc = from
-        .relation_desc()
-        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
+    // For materialized views, plan the sink against the precise,
+    // optimizer-inferred desc rather than the canonicalized exported desc:
+    // the sink's encoded schemas and natural-key selection keep reflecting
+    // the inferred nullability and unique keys.
+    let desc = match from.inferred_relation_desc() {
+        Some(desc) => Cow::Borrowed(desc),
+        None => from
+            .relation_desc()
+            .ok_or_else(|| sql_err!("item does not have a relation description"))?,
+    };
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -3326,15 +3334,10 @@ fn plan_sink(
                 }
             }
 
-            // The exported desc of a materialized view does not carry the
-            // optimizer-inferred unique keys (persisted history may
-            // contradict them), so additionally consult the advisory keys
-            // kept on the catalog item.
             let is_valid_key = desc
                 .typ()
                 .keys
                 .iter()
-                .chain(from.inferred_unique_keys())
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
@@ -3352,7 +3355,6 @@ fn plan_sink(
                             .typ()
                             .keys
                             .iter()
-                            .chain(from.inferred_unique_keys())
                             .map(|key| {
                                 key.iter()
                                     .map(|col| desc.get_name(*col).as_str().into())
@@ -3428,16 +3430,8 @@ fn plan_sink(
         _ => None,
     };
 
-    // Pick the first valid natural relation key, if any. For materialized
-    // views the inferred keys live next to the (canonicalized, key-less)
-    // desc; consult them so that sinks on materialized views keep their
-    // natural-key based message keying.
-    let relation_key_indices = desc
-        .typ()
-        .keys
-        .first()
-        .or_else(|| from.inferred_unique_keys().first())
-        .cloned();
+    // pick the first valid natural relation key, if any
+    let relation_key_indices = desc.typ().keys.get(0).cloned();
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
         let cols = desc
@@ -4070,15 +4064,13 @@ pub fn plan_create_index(
             for name in on_desc.iter_names() {
                 *name_counts.entry(name).or_insert(0usize) += 1;
             }
-            // For materialized views the inferred keys live next to the
-            // (canonicalized, key-less) desc; fall back to them so that
-            // default indexes keep using a natural key when one is known.
-            let key = match on_desc.typ().keys.first() {
-                Some(_) => on_desc.typ().default_key(),
-                None => match on.inferred_unique_keys().first() {
-                    Some(key) if !key.is_empty() => key.clone(),
-                    _ => (0..on_desc.typ().arity()).collect(),
-                },
+            // For materialized views the inferred keys live on the precise,
+            // inferred desc next to the (canonicalized, key-less) exported
+            // desc; use it so that default indexes keep using a natural key
+            // when one is known.
+            let key = match on.inferred_relation_desc() {
+                Some(inferred_desc) => inferred_desc.typ().default_key(),
+                None => on_desc.typ().default_key(),
             };
             key.iter()
                 .map(|i| {
