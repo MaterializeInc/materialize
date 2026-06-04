@@ -596,6 +596,204 @@ mod tests {
         }
     }
 
+    /// A `Codec` whose arrow `DataType` does *not* depend on its schema's
+    /// per-column nullability. Like `Row`/`SourceData` (see
+    /// database-issues#2488), it marks every column nullable at the arrow
+    /// level, so two `NullInvariantSchema`s that differ only in their logical
+    /// nullability produce the same `DataType`.
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+    struct NullInvariant(Vec<String>);
+
+    impl Codec for NullInvariant {
+        type Schema = NullInvariantSchema;
+        type Storage = ();
+
+        fn codec_name() -> String {
+            "NullInvariant".into()
+        }
+
+        fn encode<B: BufMut>(&self, buf: &mut B) {
+            buf.put_slice(self.0.join(",").as_bytes());
+        }
+        fn decode<'a>(buf: &'a [u8], schema: &Self::Schema) -> Result<Self, String> {
+            let buf = std::str::from_utf8(buf).map_err(|err| err.to_string())?;
+            let mut ret = buf.split(",").map(|x| x.to_owned()).collect::<Vec<_>>();
+            while schema.0.len() > ret.len() {
+                ret.push("".into());
+            }
+            while schema.0.len() < ret.len() {
+                ret.pop();
+            }
+            Ok(NullInvariant(ret))
+        }
+
+        // The logical nullability is part of the schema (and thus its in-mem
+        // equality), but is deliberately *not* reflected in the arrow
+        // `DataType` produced below.
+        fn encode_schema(schema: &Self::Schema) -> bytes::Bytes {
+            schema
+                .0
+                .iter()
+                .map(|x| x.then_some('n').unwrap_or(' '))
+                .collect::<String>()
+                .into_bytes()
+                .into()
+        }
+        fn decode_schema(buf: &bytes::Bytes) -> Self::Schema {
+            let buf = std::str::from_utf8(buf).expect("valid schema");
+            NullInvariantSchema(
+                buf.chars()
+                    .map(|x| match x {
+                        'n' => true,
+                        ' ' => false,
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    #[derive(Debug, Clone, Default, PartialEq)]
+    struct NullInvariantSchema(Vec<bool>);
+
+    impl Schema<NullInvariant> for NullInvariantSchema {
+        type ArrowColumn = StructArray;
+        type Statistics = NoneStats;
+        type Decoder = NullInvariantDecoder;
+        type Encoder = NullInvariantEncoder;
+
+        fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+            let mut cols = Vec::new();
+            for (idx, _) in self.0.iter().enumerate() {
+                cols.push(as_string_array(col.column_by_name(&idx.to_string()).unwrap()).clone());
+            }
+            Ok(NullInvariantDecoder(cols))
+        }
+        fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+            let mut fields = Vec::new();
+            let mut arrays = Vec::new();
+            for (idx, _nullable) in self.0.iter().enumerate() {
+                // Always nullable at the arrow level, regardless of the
+                // schema's logical nullability.
+                fields.push(Field::new(idx.to_string(), DataType::Utf8, true));
+                arrays.push(StringBuilder::new());
+            }
+            Ok(NullInvariantEncoder { fields, arrays })
+        }
+    }
+
+    #[derive(Debug)]
+    struct NullInvariantDecoder(Vec<StringArray>);
+    impl ColumnDecoder<NullInvariant> for NullInvariantDecoder {
+        fn decode(&self, idx: usize, val: &mut NullInvariant) {
+            val.0.clear();
+            for col in self.0.iter() {
+                if col.is_valid(idx) {
+                    val.0.push(col.value(idx).into());
+                } else {
+                    val.0.push("".into());
+                }
+            }
+        }
+        fn is_null(&self, _: usize) -> bool {
+            false
+        }
+        fn goodbytes(&self) -> usize {
+            self.0
+                .iter()
+                .map(|val| ArrayOrd::String(val.clone()).goodbytes())
+                .sum()
+        }
+        fn stats(&self) -> StructStats {
+            StructStats {
+                len: self.0[0].len(),
+                cols: Default::default(),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct NullInvariantEncoder {
+        fields: Vec<Field>,
+        arrays: Vec<StringBuilder>,
+    }
+    impl ColumnEncoder<NullInvariant> for NullInvariantEncoder {
+        type FinishedColumn = StructArray;
+
+        fn goodbytes(&self) -> usize {
+            self.arrays.iter().map(|a| a.values_slice().len()).sum()
+        }
+
+        fn append(&mut self, val: &NullInvariant) {
+            for (idx, val) in val.0.iter().enumerate() {
+                if val.is_empty() {
+                    self.arrays[idx].append_null();
+                } else {
+                    self.arrays[idx].append_value(val);
+                }
+            }
+        }
+        fn append_null(&mut self) {
+            unreachable!()
+        }
+        fn finish(self) -> Self::FinishedColumn {
+            assert_eq!(self.fields.len(), self.arrays.len(), "invalid schema");
+            if self.fields.is_empty() {
+                StructArray::new_empty_fields(0, None)
+            } else {
+                let arrays = self
+                    .arrays
+                    .into_iter()
+                    .map(|mut x| ArrayBuilder::finish(&mut x))
+                    .collect();
+                StructArray::new(self.fields.into(), arrays, None)
+            }
+        }
+    }
+
+    /// Regression test for database-issues (CLU-105): a writer presenting a
+    /// schema that differs from the registered one *only* in column
+    /// nullability must reuse the existing `SchemaId` rather than fail to
+    /// register. Persist encodes all top-level columns as nullable, so such
+    /// schemas are byte-compatible; failing to match would return `None` from
+    /// `try_register_schema` and trip the "shard should be tombstoned"
+    /// assertion on the write path.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn register_schema_nullability_invariant(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let d = Diagnostics::for_tests();
+        let shard_id = ShardId::new();
+
+        // Register an all-nullable schema, as an older build would have.
+        let mut write_nullable = client
+            .open_writer::<NullInvariant, (), u64, i64>(
+                shard_id,
+                Arc::new(NullInvariantSchema(vec![true, true])),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        let id = write_nullable.try_register_schema().await;
+        assert_eq!(id, Some(SchemaId(0)));
+
+        // A newer build re-derives the same columns as non-nullable. This is a
+        // different in-mem schema, but the same arrow `DataType`, so it must
+        // resolve to the already-registered `SchemaId` instead of `None`.
+        let mut write_non_nullable = client
+            .open_writer::<NullInvariant, (), u64, i64>(
+                shard_id,
+                Arc::new(NullInvariantSchema(vec![false, false])),
+                Arc::new(UnitSchema),
+                d.clone(),
+            )
+            .await
+            .unwrap();
+        let id = write_non_nullable.try_register_schema().await;
+        assert_eq!(id, Some(SchemaId(0)));
+    }
+
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn compare_and_evolve_schema(dyncfgs: ConfigUpdates) {
