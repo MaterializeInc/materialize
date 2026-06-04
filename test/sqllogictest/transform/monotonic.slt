@@ -58,13 +58,19 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
 ----
 Explained Query:
-  TopK group_by=[#0{f1}] order_by=[#1{counter} desc nulls_first] limit=3
-    Filter (#1{counter} < #0{f1})
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          ReadStorage materialize.public.v1
-        ArrangeBy keys=[[]]
-          ReadStorage materialize.public.v2
+  Project (#0{f1}, #2{counter})
+    Join on=(#0{f1} = #1{f1}) type=differential
+      ArrangeBy keys=[[#0{f1}]]
+        ReadStorage materialize.public.v1
+      ArrangeBy keys=[[#0{f1}]]
+        TopK group_by=[#0{f1}] order_by=[#1{counter} desc nulls_first] limit=3
+          Filter (#1{counter} < #0{f1})
+            CrossJoin type=differential
+              ArrangeBy keys=[[]]
+                Distinct project=[#0{f1}]
+                  ReadStorage materialize.public.v1
+              ArrangeBy keys=[[]]
+                ReadStorage materialize.public.v2
 
 Source materialize.public.v1
 Source materialize.public.v2

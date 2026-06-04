@@ -680,6 +680,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
+                    inferred_keys: local_mir_plan.typ().keys.clone(),
                     collections,
                     resolved_ids,
                     dependencies,

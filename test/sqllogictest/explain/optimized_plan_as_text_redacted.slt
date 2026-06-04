@@ -365,14 +365,14 @@ Explained Query:
             Distinct project=[#0{a}] // { equivs: "[[█, (#0{a}) IS NULL]]" }
               Project (#0{a}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
                 Filter (#0{a} < #1{a}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{a}) IS NULL], [█, (#0{a} < #1{a})]]" }
-                  CrossJoin type=differential // { equivs: "[[█, (#1{a}) IS NULL]]" }
+                  CrossJoin type=differential // { equivs: "[]" }
                     ArrangeBy keys=[[]] // { equivs: "[]" }
                       Distinct project=[#0{a}] // { equivs: "[]" }
                         Project (#0{a}) // { equivs: "[]" }
                           ReadIndex on=t t_a_idx=[*** full scan ***] // { equivs: "[]" }
-                    ArrangeBy keys=[[]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
-                      Project (#0{a}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
-                        ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                    ArrangeBy keys=[[]] // { equivs: "[]" }
+                      Project (#0{a}) // { equivs: "[]" }
+                        ReadStorage materialize.public.mv // { equivs: "[]" }
   Return // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
     Project (#0{a}, #1{b}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
       Join on=(#1{b} = #2{b}) type=differential // { equivs: "[[#1{b}, #2{b}], [█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
@@ -389,7 +389,7 @@ Explained Query:
                         Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
                   ArrangeBy keys=[[]] // { equivs: "[]" }
                     Project (#1{b}) // { equivs: "[]" }
-                      ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                      ReadStorage materialize.public.mv // { equivs: "[]" }
 
 Source materialize.public.mv
 

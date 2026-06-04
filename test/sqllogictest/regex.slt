@@ -50,6 +50,28 @@ g2  true
 g3  false
 g4  true
 
+# The exported desc of a *materialized* view is canonicalized: persisted
+# history could contradict optimizer-inferred constraints, so inferred
+# non-nullability (and unique keys) are dropped and all columns report as
+# nullable.
+statement ok
+CREATE MATERIALIZED VIEW regex_nullability_mv AS
+SELECT r.* FROM data, regexp_extract('(?P<g1>a)(?P<g2>b)?(?P<g3>(?P<g4>c)|d)', data.input) AS r
+
+query TT
+SELECT c.name, c.nullable::text
+FROM mz_columns c JOIN mz_materialized_views v ON c.id = v.id
+WHERE v.name = 'regex_nullability_mv'
+ORDER BY c.position
+----
+g1  true
+g2  true
+g3  true
+g4  true
+
+statement ok
+DROP MATERIALIZED VIEW regex_nullability_mv
+
 # Standard regex matching.
 query TTT
 SELECT 'foo' ~ 'foo?', 'fo' ~ 'foo?', 'f' ~ 'foo?'

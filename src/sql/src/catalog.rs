@@ -905,6 +905,20 @@ pub trait CatalogItem {
 
     /// The latest version of this item, if it's version-able.
     fn latest_version(&self) -> Option<RelationVersion>;
+
+    /// Returns optimizer-inferred unique keys that are *not* part of the
+    /// item's relation description.
+    ///
+    /// The exported relation description of a persisted collection drops
+    /// inferred unique keys because persisted history may contradict them
+    /// (see `RelationDesc::canonicalize_for_persisted_export`). For such
+    /// items (currently materialized views), the inferred keys are available
+    /// here for DDL planning decisions only (e.g. upsert sink key validation,
+    /// default index key selection); they must never be used to interpret the
+    /// contents of the collection.
+    fn inferred_unique_keys(&self) -> &[Vec<usize>] {
+        &[]
+    }
 }
 
 /// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it

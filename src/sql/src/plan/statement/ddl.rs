@@ -3326,10 +3326,15 @@ fn plan_sink(
                 }
             }
 
+            // The exported desc of a materialized view does not carry the
+            // optimizer-inferred unique keys (persisted history may
+            // contradict them), so additionally consult the advisory keys
+            // kept on the catalog item.
             let is_valid_key = desc
                 .typ()
                 .keys
                 .iter()
+                .chain(from.inferred_unique_keys())
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
@@ -3347,6 +3352,7 @@ fn plan_sink(
                             .typ()
                             .keys
                             .iter()
+                            .chain(from.inferred_unique_keys())
                             .map(|key| {
                                 key.iter()
                                     .map(|col| desc.get_name(*col).as_str().into())
@@ -3422,8 +3428,16 @@ fn plan_sink(
         _ => None,
     };
 
-    // pick the first valid natural relation key, if any
-    let relation_key_indices = desc.typ().keys.get(0).cloned();
+    // Pick the first valid natural relation key, if any. For materialized
+    // views the inferred keys live next to the (canonicalized, key-less)
+    // desc; consult them so that sinks on materialized views keep their
+    // natural-key based message keying.
+    let relation_key_indices = desc
+        .typ()
+        .keys
+        .first()
+        .or_else(|| from.inferred_unique_keys().first())
+        .cloned();
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
         let cols = desc
@@ -4056,7 +4070,16 @@ pub fn plan_create_index(
             for name in on_desc.iter_names() {
                 *name_counts.entry(name).or_insert(0usize) += 1;
             }
-            let key = on_desc.typ().default_key();
+            // For materialized views the inferred keys live next to the
+            // (canonicalized, key-less) desc; fall back to them so that
+            // default indexes keep using a natural key when one is known.
+            let key = match on_desc.typ().keys.first() {
+                Some(_) => on_desc.typ().default_key(),
+                None => match on.inferred_unique_keys().first() {
+                    Some(key) if !key.is_empty() => key.clone(),
+                    _ => (0..on_desc.typ().arity()).collect(),
+                },
+            };
             key.iter()
                 .map(|i| {
                     let name = on_desc.get_name(*i);

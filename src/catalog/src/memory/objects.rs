@@ -826,6 +826,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
     fn latest_version(&self) -> Option<RelationVersion> {
         self.entry.latest_version()
     }
+
+    fn inferred_unique_keys(&self) -> &[Vec<usize>] {
+        mz_sql::catalog::CatalogItem::inferred_unique_keys(&self.entry)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1404,6 +1408,15 @@ pub struct MaterializedView {
     pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
+    /// Optimizer-inferred unique keys, derived from the `create_sql`.
+    ///
+    /// The exported `desc` deliberately drops inferred unique keys (and
+    /// inferred non-nullability) because persisted history may contradict
+    /// them; see `RelationDesc::canonicalize_for_persisted_export`. The
+    /// inferred keys are kept here for DDL planning purposes only (e.g.
+    /// upsert sink key validation, default index key selection); they must
+    /// not influence how the contents of the collection are interpreted.
+    pub inferred_keys: Vec<Vec<usize>>,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1532,6 +1545,7 @@ impl MaterializedView {
             raw_expr: replacement.raw_expr,
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
+            inferred_keys: replacement.inferred_keys,
             resolved_ids,
             dependencies,
             replacement_target: None,
@@ -3694,6 +3708,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn latest_version(&self) -> Option<RelationVersion> {
         self.table().map(|t| t.desc.latest_version())
+    }
+
+    fn inferred_unique_keys(&self) -> &[Vec<usize>] {
+        self.materialized_view()
+            .map(|mv| mv.inferred_keys.as_slice())
+            .unwrap_or(&[])
     }
 }
 
