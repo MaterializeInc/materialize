@@ -84,8 +84,12 @@ use crate::metrics::BackpressureMetrics;
     Debug,
     Serialize,
     Deserialize,
-    Hash
+    Hash,
+    columnar::Columnar
 )]
+// Derive ordering on the generated `SubtimeReference` too: the paged merge
+// batcher sorts the `(Timestamp, Subtime)` time and so requires `Ref: Ord`.
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct Subtime(u64);
 
 impl PartialOrder for Subtime {
