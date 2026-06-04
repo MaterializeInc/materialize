@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/differential.rs
-revision: 9727769b0d
+revision: 225aeaa79f
 ---
 
 # mz-compute::logging::differential

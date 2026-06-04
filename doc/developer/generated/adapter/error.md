@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/error.rs
-revision: 3df8ae2fd8
+revision: 0094e55a71
 ---
 
 # adapter::error
@@ -11,3 +11,4 @@ Implements `From` conversions from many downstream error types (`PlanError`, `St
 The `From<OptimizerError>` conversion maps `OptimizerError::RestrictedFunction` to `AdapterError::Unauthorized(UnauthorizedError::RestrictedSystemObject)` rather than the generic `Optimizer` variant; within `code()`, `OptimizerError::RestrictedFunction` maps to `SqlState::INSUFFICIENT_PRIVILEGE`.
 Several constructor helpers on `AdapterError` (e.g. `concurrent_dependency_drop_from_instance_missing`, `concurrent_dependency_drop_from_peek_error`) perform explicit error-kind conversions that are intentionally not automatic `From` impls.
 The `ShouldTerminateGracefully` trait (private) identifies errors — such as `FenceError::DeployGeneration` — that should cause a clean process exit rather than a panic.
+`RecursionLimitError` (from `mz_ore::stack`) carries a `std::backtrace::Backtrace` field and does not implement `Clone`; as a result, `AdapterError` is also not `Clone`.

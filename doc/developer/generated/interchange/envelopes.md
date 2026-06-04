@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/envelopes.rs
-revision: 85fe1c5a51
+revision: 225aeaa79f
 ---
 
 # interchange::envelopes

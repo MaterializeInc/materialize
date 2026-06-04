@@ -1,6 +1,6 @@
 ---
 source: src/http-util/src/lib.rs
-revision: c8a90af6a2
+revision: 7b43a3d28e
 ---
 
 # mz-http-util

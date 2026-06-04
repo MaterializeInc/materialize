@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/typecheck.rs
-revision: 489539cd8f
+revision: 0094e55a71
 ---
 
 # mz-transform::typecheck
