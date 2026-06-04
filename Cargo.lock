@@ -7575,7 +7575,6 @@ dependencies = [
  "prost-build",
  "rand 0.9.4",
  "regex",
- "regex-syntax",
  "ryu",
  "serde",
  "serde_json",
