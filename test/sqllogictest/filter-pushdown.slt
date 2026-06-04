@@ -294,6 +294,30 @@ Target cluster: quickstart
 
 EOF
 
+# Verifies that the dynamic-monotonicity handler for `add/sub_timestamp_interval`
+# recovers filter pushdown when the interval is a literal with no months
+# component. The underlying function is non-monotone in general because of
+# calendar-month / day-clamping arithmetic, so the static annotation is
+# `(false, false)`; the abstract interpreter must look at the actual interval
+# value to claim monotonicity here. See database-issues#9656.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
+select * from t
+where t - INTERVAL '1' day < '2023-10-02 15:55:31.918 UTC';
+----
+Explained Query:
+  Filter ((#1{t} - 1 day) < 2023-10-02 15:55:31.918)
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(((#1{t} - 1 day) < 2023-10-02 15:55:31.918))
+  pushdown=(((#1{t} - 1 day) < 2023-10-02 15:55:31.918))
+
+Target cluster: quickstart
+
+EOF
+
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
 select * from t
