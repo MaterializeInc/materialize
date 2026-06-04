@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/ast.rs
-revision: 82048ca795
+revision: b0a35bb135
 ---
 
 # mz-sql::ast
