@@ -2696,7 +2696,7 @@ impl Coordinator {
         };
 
         // Disallow mz_now in any position because read time and write time differ.
-        let contains_temporal = selection.contains_temporal()
+        let contains_temporal = return_if_err!(selection.contains_temporal(), ctx)
             || assignments.values().any(|e| e.contains_temporal())
             || returning.iter().any(|e| e.contains_temporal());
         if contains_temporal {

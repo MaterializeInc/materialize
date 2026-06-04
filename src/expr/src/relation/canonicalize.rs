@@ -69,7 +69,8 @@ pub fn canonicalize_equivalences<'a, I>(
             // which will then replace `to_reduce[i]`.
             let mut new_equivalence = Vec::with_capacity(to_reduce[i].len());
             while let Some((_, mut popped_expr)) = to_reduce[i].pop() {
-                popped_expr.visit_mut_post(&mut |e: &mut MirScalarExpr| {
+                #[allow(deprecated)]
+                popped_expr.visit_mut_post_nolimit(&mut |e: &mut MirScalarExpr| {
                     // If a simpler expression can be found that is equivalent
                     // to e,
                     if let Some(simpler_e) = to_reduce.iter().find_map(|cls| {
@@ -394,7 +395,8 @@ fn replace_subexpr_and_reduce(
     repr_column_types: &[ReprColumnType],
 ) -> bool {
     let mut changed = false;
-    predicate.visit_mut_pre_post(
+    #[allow(deprecated)]
+    predicate.visit_mut_pre_post_nolimit(
         &mut |e| {
             // The `cond` of an if statement is not visited to prevent `then`
             // or `els` from being evaluated before `cond`, resulting in a

@@ -347,7 +347,8 @@ impl MirRelationExpr {
     /// visited in `type_stack`.
     pub fn typ(&self) -> ReprRelationType {
         let mut type_stack = Vec::new();
-        self.visit_pre_post(
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
                     MirRelationExpr::Let { body, .. } => Some(vec![&*body]),
@@ -959,7 +960,8 @@ impl MirRelationExpr {
     /// visited in `arity_stack`.
     pub fn arity(&self) -> usize {
         let mut arity_stack = Vec::new();
-        self.visit_pre_post(
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
                     MirRelationExpr::Let { body, .. } => {
@@ -1791,6 +1793,7 @@ impl MirRelationExpr {
     pub fn try_visit_scalars_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         self.try_visit_mut_post(&mut |expr| expr.try_visit_scalars_mut1(f))
     }
@@ -1919,6 +1922,7 @@ impl MirRelationExpr {
     pub fn try_visit_scalars<F, E>(&self, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&MirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         self.try_visit_post(&mut |expr| expr.try_visit_scalars_1(f))
     }
@@ -2382,6 +2386,7 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         for child in self.children() {
             f(child)?
@@ -2392,25 +2397,12 @@ impl VisitChildren<Self> for MirRelationExpr {
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
     where
         F: FnMut(&mut Self) -> Result<(), E>,
+        E: From<RecursionLimitError>,
     {
         for child in self.children_mut() {
             f(child)?
         }
         Ok(())
-    }
-
-    fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a MirRelationExpr>
-    where
-        Self: 'a,
-    {
-        self.children()
-    }
-
-    fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut MirRelationExpr>
-    where
-        Self: 'a,
-    {
-        self.children_mut()
     }
 }
 

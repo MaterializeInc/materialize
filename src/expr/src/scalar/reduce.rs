@@ -37,7 +37,8 @@ pub fn reduce(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
     let mut old = MirScalarExpr::column(0);
     while old != *expr {
         old = expr.clone();
-        expr.visit_mut_pre_post(
+        #[allow(deprecated)]
+        expr.visit_mut_pre_post_nolimit(
             &mut |e| {
                 reduce_pre(e, column_types);
                 None

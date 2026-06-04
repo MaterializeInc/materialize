@@ -456,7 +456,7 @@ impl PeekClient {
         let contains_temporal = match query_plan {
             QueryPlan::Select(s) => s.source.contains_temporal(),
             QueryPlan::CopyTo(s, _) => s.source.contains_temporal(),
-            QueryPlan::Subscribe(s) => s.from.contains_temporal(),
+            QueryPlan::Subscribe(s) => Ok(s.from.contains_temporal()),
         };
 
         // # From sequence_plan
@@ -548,7 +548,7 @@ impl PeekClient {
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal {
+        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal? {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
             // required because `source_ids` doesn't contain functions.
