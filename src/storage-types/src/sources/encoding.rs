@@ -168,31 +168,23 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                     desc.with_column(name, ty.clone())
                 })
                 .finish(),
-            Self::Regex(RegexEncoding { regex }) => {
-                // A capture group that always participates in a match (when the
-                // regex matches at all) extracts a non-null value, so its column
-                // can be marked non-nullable.
-                let non_nullable = regex.non_nullable_capture_groups();
-                regex
-                    .capture_names()
-                    .enumerate()
-                    // The first capture is the entire matched string. This will
-                    // often not be useful, so skip it. If people want it they can
-                    // just surround their entire regex in an explicit capture
-                    // group.
-                    .skip(1)
-                    .fold(RelationDesc::builder(), |desc, (i, name)| {
-                        let name = match name {
-                            None => format!("column{}", i),
-                            Some(name) => name.to_owned(),
-                        };
-                        // `capture_names` yields at most `u32::MAX` groups.
-                        let nullable = !non_nullable.contains(&u32::try_from(i).unwrap());
-                        let ty = SqlScalarType::String.nullable(nullable);
-                        desc.with_column(name, ty)
-                    })
-                    .finish()
-            }
+            Self::Regex(RegexEncoding { regex }) => regex
+                .capture_names()
+                .enumerate()
+                // The first capture is the entire matched string. This will
+                // often not be useful, so skip it. If people want it they can
+                // just surround their entire regex in an explicit capture
+                // group.
+                .skip(1)
+                .fold(RelationDesc::builder(), |desc, (i, name)| {
+                    let name = match name {
+                        None => format!("column{}", i),
+                        Some(name) => name.to_owned(),
+                    };
+                    let ty = SqlScalarType::String.nullable(true);
+                    desc.with_column(name, ty)
+                })
+                .finish(),
             Self::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => (1..=*n)
                     .fold(RelationDesc::builder(), |desc, i| {
