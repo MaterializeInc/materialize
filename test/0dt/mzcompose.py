@@ -1981,13 +1981,20 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     insertions = None
     deletions = None
 
-    # The correction buffer should stabilize in a state where it has seen 2000
-    # insertions (positive + negative updates), and as many deletions. The
-    # absolute amount of records in the correction buffer should be zero.
+    # The correction buffer should stabilize in a state where it has seen at
+    # least 1000 insertions (the size of the snapshot) and as many deletions:
+    # all snapshot updates are consolidated away on the read-only side, leaving
+    # zero records in the correction buffer.
+    #
+    # Note: the metric counts net length deltas, not raw record insertions, so
+    # we don't see 2000 here even though both the desired and the
+    # persist-retraction sides flow through the buffer — by the time the
+    # second insert's `update_metrics` runs, consolidation has already taken
+    # the length back down.
     for _ in range(10):
         time.sleep(1)
         insertions, deletions = get_correction_metrics()
-        if insertions > 1000 and insertions - deletions == 0:
+        if insertions >= 1000 and insertions - deletions == 0:
             break
     else:
         raise AssertionError(
