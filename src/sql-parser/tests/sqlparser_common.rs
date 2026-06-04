@@ -340,6 +340,32 @@ fn test_prefix_operator_chain_not_overparenthesized() {
 }
 
 #[mz_ore::test]
+fn test_grant_revoke_all_policies_roundtrips() {
+    // `GRANT/REVOKE ... ON ALL POLICIES` must redisplay as `ALL POLICIES`, the
+    // plural keyword the parser accepts — not `ALL NETWORK POLICYS` (the naive
+    // singular `NETWORK POLICY` + `S`), which fails to reparse. Regression for
+    // the parse_display_roundtrip fuzz crash on `GRANT CREATE ON ALL POLICIES
+    // TO j`.
+    for sql in [
+        "GRANT CREATE ON ALL POLICIES TO j",
+        "REVOKE CREATE ON ALL POLICIES FROM j",
+    ] {
+        let displayed = parse_statements(sql)
+            .unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
+            .into_iter()
+            .next()
+            .unwrap()
+            .ast
+            .to_ast_string_simple();
+        assert!(
+            displayed.contains("ALL POLICIES") && !displayed.contains("POLICYS"),
+            "{sql:?} mis-pluralized network policies: {displayed:?}"
+        );
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_negated_cast_display_roundtrip() {
     // `- <number>` folds into a negative literal at parse time and the `::` cast
