@@ -303,6 +303,44 @@ fn test_show_query_body_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_prefix_operator_chain_not_overparenthesized() {
+    // Prefix operators stack without parentheses (`+ + a`, `- - a`, `NOT NOT a`,
+    // `~ ~ a`); parenthesizing each level is unnecessary and — on long chains —
+    // doubles the nesting depth on reparse and overflows the stack. The display
+    // of a unary-operator operand must stay bare. Regression for the deep-unary
+    // parse_pretty/parse_expr/parse_display fuzz crashes.
+    for (sql, want) in [
+        ("SELECT + + + a", "SELECT + + + a"),
+        ("SELECT - - - a", "SELECT - - - a"),
+        ("SELECT NOT NOT NOT a", "SELECT NOT NOT NOT a"),
+        ("SELECT ~ ~ ~ a", "SELECT ~ ~ ~ a"),
+    ] {
+        let ast = parse_statements(sql)
+            .unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
+            .into_iter()
+            .next()
+            .unwrap()
+            .ast;
+        assert_eq!(
+            ast.to_ast_string_simple(),
+            want,
+            "{sql:?} over-parenthesized"
+        );
+        assert_display_roundtrips(sql);
+    }
+    // ...but a non-prefix operand that would re-associate or fold still needs
+    // parens: a cast over a numeric literal, and a binary operand.
+    assert!(
+        parse_statements("SELECT -CAST(2 AS int4)").unwrap()[0]
+            .ast
+            .to_ast_string_simple()
+            .contains('('),
+        "numeric cast under prefix op must stay parenthesized"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_negated_cast_display_roundtrip() {
     // `- <number>` folds into a negative literal at parse time and the `::` cast
     // binds looser, so a unary minus applied to `CAST(<number> AS t)` must print
