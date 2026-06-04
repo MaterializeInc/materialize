@@ -331,7 +331,7 @@ impl Coordinator {
             .catalog()
             .validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && plan.source.contains_temporal()
+            && plan.source.contains_temporal()?
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
