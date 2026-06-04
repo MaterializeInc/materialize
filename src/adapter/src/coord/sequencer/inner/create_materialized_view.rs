@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -663,6 +663,16 @@ impl Coordinator {
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
+        // The precise, optimizer-inferred desc, kept next to the
+        // (canonicalized) exported desc for DDL planning purposes.
+        let inferred_desc = {
+            let mut typ = local_mir_plan.typ().clone();
+            for &i in &non_null_assertions {
+                typ.column_types[i].nullable = false;
+            }
+            RelationDesc::new(typ, global_lir_plan.desc().iter_names().cloned())
+        };
+
         let local_mir_for_cache = local_mir_plan.expr();
 
         let ops = vec![
@@ -680,6 +690,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
+                    inferred_desc,
                     collections,
                     resolved_ids,
                     dependencies,

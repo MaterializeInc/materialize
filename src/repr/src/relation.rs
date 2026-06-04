@@ -1456,6 +1456,32 @@ impl RelationDesc {
 
         new_desc
     }
+
+    /// Canonicalizes this [`RelationDesc`] for use as the exported schema of a
+    /// persisted collection (e.g. a materialized view).
+    ///
+    /// Persisted collections retain history: consumers may read at past
+    /// timestamps (`AS OF`, retained history, replicas catching up).
+    /// Optimizer-inferred constraints—column nullability and unique keys—are
+    /// derived from the *current* version's plan of the defining expression
+    /// and may not hold for data written by earlier versions or earlier
+    /// definitions. To avoid advertising constraints that history could
+    /// contradict, the exported desc marks every column as nullable and drops
+    /// all unique keys.
+    ///
+    /// Constraints that are *enforced* on every write are kept: the columns in
+    /// `non_null_cols` (e.g. `ASSERT NOT NULL` options on a materialized view)
+    /// remain non-nullable.
+    pub fn canonicalize_for_persisted_export(mut self, non_null_cols: &[usize]) -> Self {
+        for column_type in self.typ.column_types.iter_mut() {
+            column_type.nullable = true;
+        }
+        for &i in non_null_cols {
+            self.typ.column_types[i].nullable = false;
+        }
+        self.typ.keys.clear();
+        self
+    }
 }
 
 #[cfg(any(test, feature = "proptest"))]
@@ -2090,6 +2116,65 @@ pub fn arb_relation_desc_diff(
 mod tests {
     use super::*;
     use prost::Message;
+
+    #[mz_ore::test]
+    fn test_canonicalize_for_persisted_export() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Bool.nullable(false))
+            .with_column("b", SqlScalarType::String.nullable(true))
+            .with_column("c", SqlScalarType::Int64.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1, 2])
+            .finish();
+
+        // Without assertions: everything nullable, no keys.
+        let canonical = desc.clone().canonicalize_for_persisted_export(&[]);
+        assert!(canonical.typ().column_types.iter().all(|ct| ct.nullable));
+        assert!(canonical.typ().keys.is_empty());
+
+        // Non-null assertions are preserved, inferred non-nullability is not.
+        let canonical = desc.clone().canonicalize_for_persisted_export(&[2]);
+        let nullable: Vec<_> = canonical
+            .typ()
+            .column_types
+            .iter()
+            .map(|ct| ct.nullable)
+            .collect();
+        assert_eq!(nullable, [true, true, false]);
+        assert!(canonical.typ().keys.is_empty());
+
+        // Canonicalization is idempotent.
+        let twice = canonical.clone().canonicalize_for_persisted_export(&[2]);
+        assert_eq!(canonical, twice);
+
+        // Names and scalar types are untouched.
+        assert!(desc.iter_names().eq(canonical.iter_names()));
+        assert!(
+            desc.typ()
+                .column_types
+                .iter()
+                .map(|ct| &ct.scalar_type)
+                .eq(canonical
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(|ct| &ct.scalar_type))
+        );
+
+        // Descs that differ only in inferred nullability and keys (e.g. the
+        // same SQL planned by different optimizer versions) canonicalize to
+        // the same desc.
+        let other = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Bool.nullable(true))
+            .with_column("b", SqlScalarType::String.nullable(false))
+            .with_column("c", SqlScalarType::Int64.nullable(false))
+            .with_key(vec![1])
+            .finish();
+        assert_eq!(
+            desc.clone().canonicalize_for_persisted_export(&[2]),
+            other.canonicalize_for_persisted_export(&[2]),
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`

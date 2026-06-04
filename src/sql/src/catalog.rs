@@ -905,6 +905,23 @@ pub trait CatalogItem {
 
     /// The latest version of this item, if it's version-able.
     fn latest_version(&self) -> Option<RelationVersion>;
+
+    /// Returns the precise, optimizer-inferred relation description of this
+    /// item, including inferred column nullability and unique keys that are
+    /// *not* part of the item's exported relation description.
+    ///
+    /// The exported relation description of a persisted collection drops
+    /// inferred unique keys and inferred non-nullability because persisted
+    /// history may contradict them (see
+    /// `RelationDesc::canonicalize_for_persisted_export`). For such items
+    /// (currently materialized views), the inferred desc is available here
+    /// for DDL planning decisions only (e.g. upsert sink key validation and
+    /// sink schema generation, default index key selection); it must never
+    /// be used to interpret the contents of the collection. Returns `None`
+    /// for items whose exported relation description is already precise.
+    fn inferred_relation_desc(&self) -> Option<&RelationDesc> {
+        None
+    }
 }
 
 /// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it

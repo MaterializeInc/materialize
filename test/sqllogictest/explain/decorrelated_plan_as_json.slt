@@ -406,7 +406,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                 "column_types": [
                                   {
                                     "scalar_type": "Int32",
-                                    "nullable": false
+                                    "nullable": true
                                   },
                                   {
                                     "scalar_type": "Int32",
@@ -551,7 +551,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                       "column_types": [
                         {
                           "scalar_type": "Int32",
-                          "nullable": false
+                          "nullable": true
                         },
                         {
                           "scalar_type": "Int32",
@@ -889,7 +889,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                       "column_types": [
                                         {
                                           "scalar_type": "Int32",
-                                          "nullable": false
+                                          "nullable": true
                                         },
                                         {
                                           "scalar_type": "Int32",
@@ -1050,7 +1050,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                   "column_types": [
                                     {
                                       "scalar_type": "Int32",
-                                      "nullable": false
+                                      "nullable": true
                                     },
                                     {
                                       "scalar_type": "Int32",
@@ -1959,7 +1959,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                       "column_types": [
                                                                         {
                                                                           "scalar_type": "Int32",
-                                                                          "nullable": false
+                                                                          "nullable": true
                                                                         },
                                                                         {
                                                                           "scalar_type": "Int32",
@@ -2390,7 +2390,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           "column_types": [
                                                             {
                                                               "scalar_type": "Int32",
-                                                              "nullable": false
+                                                              "nullable": true
                                                             },
                                                             {
                                                               "scalar_type": "Int32",
@@ -3567,7 +3567,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                         "column_types": [
                                                                           {
                                                                             "scalar_type": "Int32",
-                                                                            "nullable": false
+                                                                            "nullable": true
                                                                           },
                                                                           {
                                                                             "scalar_type": "Int32",
@@ -3653,7 +3653,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             },
                                                             {
                                                               "scalar_type": "Int32",
-                                                              "nullable": false
+                                                              "nullable": true
                                                             }
                                                           ],
                                                           "keys": [
@@ -3685,7 +3685,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                           },
                                                                           {
                                                                             "scalar_type": "Int32",
-                                                                            "nullable": false
+                                                                            "nullable": true
                                                                           }
                                                                         ],
                                                                         "keys": [
@@ -3771,7 +3771,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                         },
                                                         {
                                                           "scalar_type": "Int32",
-                                                          "nullable": false
+                                                          "nullable": true
                                                         }
                                                       ],
                                                       "keys": []
@@ -3807,7 +3807,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                       },
                                                                                       {
                                                                                         "scalar_type": "Int32",
-                                                                                        "nullable": false
+                                                                                        "nullable": true
                                                                                       }
                                                                                     ],
                                                                                     "keys": []

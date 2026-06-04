@@ -200,6 +200,15 @@ impl LocalMirPlan {
     pub fn expr(&self) -> OptimizedMirRelationExpr {
         OptimizedMirRelationExpr(self.expr.clone())
     }
+
+    /// The precise, optimizer-inferred relation type of the materialized
+    /// view's output, including inferred nullability and unique keys.
+    ///
+    /// Note that the exported [`RelationDesc`] (see [`GlobalLirPlan::desc`])
+    /// is canonicalized and does *not* carry this information.
+    pub fn typ(&self) -> &SqlRelationType {
+        &self.typ
+    }
 }
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
@@ -226,11 +235,14 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        let mut rel_typ = plan.typ;
-        for &i in self.non_null_assertions.iter() {
-            rel_typ.column_types[i].nullable = false;
-        }
-        let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
+        // The exported desc of a materialized view must not advertise
+        // optimizer-inferred nullability or unique keys: persist retains
+        // history that earlier versions or definitions wrote, which may
+        // contradict constraints inferred from the current plan. Only the
+        // enforced `ASSERT NOT NULL` columns stay non-nullable. Internal
+        // optimization of the dataflow continues to use the precise types.
+        let rel_desc = RelationDesc::new(plan.typ, self.column_names.clone())
+            .canonicalize_for_persisted_export(&self.non_null_assertions);
 
         let mut df_builder = {
             let compute = self.compute_instance.clone();

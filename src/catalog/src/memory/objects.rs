@@ -681,6 +681,17 @@ impl CatalogCollectionEntry {
     pub fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
         self.item().relation_desc(self.version)
     }
+
+    /// Reports the [`RelationDesc`] that a sink exporting this collection
+    /// should be planned and rendered against: the precise, optimizer-inferred
+    /// desc when one exists (materialized views), otherwise the exported
+    /// relation desc. See `MaterializedView::inferred_desc`.
+    pub fn relation_desc_for_sink(&self) -> Option<Cow<'_, RelationDesc>> {
+        match self.entry.materialized_view() {
+            Some(mv) => Some(Cow::Borrowed(&mv.inferred_desc)),
+            None => self.relation_desc(),
+        }
+    }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
@@ -825,6 +836,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
 
     fn latest_version(&self) -> Option<RelationVersion> {
         self.entry.latest_version()
+    }
+
+    fn inferred_relation_desc(&self) -> Option<&RelationDesc> {
+        mz_sql::catalog::CatalogItem::inferred_relation_desc(&self.entry)
     }
 }
 
@@ -1404,6 +1419,17 @@ pub struct MaterializedView {
     pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
+    /// The precise, optimizer-inferred [`RelationDesc`], derived from the
+    /// `create_sql`, including inferred column nullability and unique keys.
+    ///
+    /// The exported `desc` deliberately drops inferred unique keys and
+    /// inferred non-nullability because persisted history may contradict
+    /// them; see `RelationDesc::canonicalize_for_persisted_export`. The
+    /// inferred desc is kept here for DDL planning purposes only (e.g.
+    /// upsert sink key validation and sink schema generation, default index
+    /// key selection); it must not influence how the contents of the
+    /// collection are interpreted.
+    pub inferred_desc: RelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1532,6 +1558,7 @@ impl MaterializedView {
             raw_expr: replacement.raw_expr,
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
+            inferred_desc: replacement.inferred_desc,
             resolved_ids,
             dependencies,
             replacement_target: None,
@@ -3694,6 +3721,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn latest_version(&self) -> Option<RelationVersion> {
         self.table().map(|t| t.desc.latest_version())
+    }
+
+    fn inferred_relation_desc(&self) -> Option<&RelationDesc> {
+        self.materialized_view().map(|mv| &mv.inferred_desc)
     }
 }
 

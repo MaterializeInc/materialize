@@ -1413,11 +1413,20 @@ impl CatalogState {
                     }
                 };
                 let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
-
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }
-                let desc = RelationDesc::new(typ, materialized_view.column_names);
+
+                // Keep the precise, optimizer-inferred desc for DDL planning
+                // (e.g. upsert sink key validation and sink schema
+                // generation), but canonicalize the exported desc: it must
+                // not advertise inferred nullability or keys that persisted
+                // history could contradict. Enforced `ASSERT NOT NULL`
+                // columns stay non-nullable.
+                let inferred_desc = RelationDesc::new(typ, materialized_view.column_names);
+                let desc = inferred_desc
+                    .clone()
+                    .canonicalize_for_persisted_export(&materialized_view.non_null_assertions);
                 let desc = VersionedRelationDesc::new(desc);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
@@ -1435,6 +1444,7 @@ impl CatalogState {
                     raw_expr,
                     locally_optimized_expr: optimized_expr,
                     desc,
+                    inferred_desc,
                     resolved_ids,
                     dependencies,
                     replacement_target: materialized_view.replacement_target,

@@ -3451,7 +3451,7 @@ impl Coordinator {
         let storage_sink_desc = StorageSinkDesc {
             from: sink_plan.from,
             from_desc: from_entry
-                .relation_desc()
+                .relation_desc_for_sink()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink_plan

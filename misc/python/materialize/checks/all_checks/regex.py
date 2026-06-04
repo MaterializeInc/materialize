@@ -14,11 +14,15 @@ from materialize.checks.checks import Check
 
 class RegexpExtractNonNullable(Check):
     """Capture groups that always participate in a match yield non-nullable
-    columns (database-issues#612). This exercises that such a narrowed,
-    persisted desc survives restart/upgrade: an MV created on the previous
-    release registers all-nullable columns, while the current build re-derives
-    the desc with non-nullable columns. (The persist schema is
-    nullability-invariant, see database-issues#2488, so this must not conflict.)
+    columns inside the optimizer (database-issues#612), but the exported desc
+    of a materialized view is canonicalized: persisted history could
+    contradict optimizer-inferred constraints, so inferred non-nullability
+    (and unique keys) are dropped and all MV columns report as nullable.
+    This exercises that the canonical desc is stable across restart/upgrade:
+    an MV created on the previous release and one created on the current
+    build must register the same persist schema, regardless of optimizer
+    changes between the versions. (The persist schema is
+    nullability-invariant, see database-issues#2488.)
     """
 
     def initialize(self) -> Testdrive:
@@ -61,14 +65,14 @@ class RegexpExtractNonNullable(Check):
             > SELECT c.name, c.nullable FROM mz_columns c
               JOIN mz_materialized_views v ON c.id = v.id
               WHERE v.name = 'regexp_extract_nn_view1' ORDER BY c.position;
-            a false
-            b false
+            a true
+            b true
 
             > SELECT c.name, c.nullable FROM mz_columns c
               JOIN mz_materialized_views v ON c.id = v.id
               WHERE v.name = 'regexp_extract_nn_view2' ORDER BY c.position;
-            a false
-            b false
+            a true
+            b true
             """))
 
 

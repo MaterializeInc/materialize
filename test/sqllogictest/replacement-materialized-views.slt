@@ -126,29 +126,29 @@ CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::text, b FROM t
 db error: ERROR: replacement schema differs from target schema
 DETAIL: column "a" at position 1: type mismatch (target: Int32, replacement: String)
 
-# nullability mismatch
-simple
+# Inferred nullability is not part of the exported schema of a materialized
+# view (the desc is canonicalized: all columns nullable, no unique keys), so a
+# replacement whose plan infers tighter nullability is accepted.
+statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b FROM t WHERE a IS NOT NULL
-----
-db error: ERROR: replacement schema differs from target schema
-DETAIL: column "a" at position 1: nullability mismatch (target: NULL, replacement: NOT NULL)
 
-# key mismatch
-simple
+statement ok
+DROP MATERIALIZED VIEW rp
+
+# Likewise for inferred unique keys.
+statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT DISTINCT a, b FROM t
-----
-db error: ERROR: replacement schema differs from target schema
-DETAIL: keys differ (target: (none), replacement: {a, b})
+
+statement ok
+DROP MATERIALIZED VIEW rp
 
 # multiple mismatches
 simple
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT DISTINCT a, b AS c, 1 AS d FROM t WHERE a IS NOT NULL
 ----
 db error: ERROR: replacement schema differs from target schema
-DETAIL: column "a" at position 1: nullability mismatch (target: NULL, replacement: NOT NULL)
-column at position 2: name mismatch (target: "b", replacement: "c")
+DETAIL: column at position 2: name mismatch (target: "b", replacement: "c")
 extra column "d" at position 3
-keys differ (target: (none), replacement: {a, c})
 
 
 statement ok
