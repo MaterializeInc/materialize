@@ -317,3 +317,16 @@ name                nullable    type    comment
  indexname          false       text    ""
  tablespace         true        text    ""
  indexdef           true        text    ""
+
+# pg_user.passwd is redacted, like pg_roles.rolpassword.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_password_auth = true
+DROP ROLE IF EXISTS passwd_redaction_role
+CREATE ROLE passwd_redaction_role WITH LOGIN PASSWORD 'pw_123'
+
+> SELECT passwd FROM pg_catalog.pg_user WHERE usename = 'passwd_redaction_role'
+"********"
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+DROP ROLE passwd_redaction_role
+ALTER SYSTEM RESET enable_password_auth
