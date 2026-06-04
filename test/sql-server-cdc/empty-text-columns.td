@@ -16,12 +16,12 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-CREATE TABLE empty_text_cols (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'empty_text_cols', @role_name = 'SA', @supports_net_changes = 0;
+CREATE TABLE foo (id INT PRIMARY KEY, name VARCHAR(1024));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'foo', @role_name = 'SA', @supports_net_changes = 0;
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
-> CREATE CONNECTION empty_text_cols_conn TO SQL SERVER (
+> CREATE CONNECTION ssconn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
     DATABASE test,
@@ -29,9 +29,9 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'empty_text_
     PASSWORD = SECRET sql_server_pass
   );
 
-> CREATE SOURCE empty_text_cols_src FROM SQL SERVER CONNECTION empty_text_cols_conn;
+> CREATE SOURCE s FROM SQL SERVER CONNECTION ssconn;
 
-! CREATE TABLE empty_text_cols FROM SOURCE empty_text_cols_src (REFERENCE dbo.empty_text_cols) WITH (TEXT COLUMNS = ());
+! CREATE TABLE foo FROM SOURCE s (REFERENCE dbo.foo) WITH (TEXT COLUMNS = ());
 contains:invalid TEXT COLUMNS option value: cannot be empty
 
-> DROP SOURCE empty_text_cols_src CASCADE;
+> DROP SOURCE s CASCADE;
