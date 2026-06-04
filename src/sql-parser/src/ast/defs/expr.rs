@@ -641,6 +641,13 @@ fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
                 e = expr.as_ref();
             }
             Expr::Value(Value::Number(_)) => return saw_postfix,
+            // Another prefix operator (`+ + x`, `- ~ x`, `NOT NOT x`) stacks
+            // directly: prefix operators don't re-associate, and the inner
+            // operator symbol sits between the outer one and any digit so there
+            // is no `- <number>` fold. Always safe — and crucially, NOT adding
+            // parens here keeps deep unary chains from exploding the nesting
+            // depth (and overflowing the stack) on reparse.
+            Expr::Op { expr2: None, .. } | Expr::Not { .. } => return false,
             // Self-delimiting, but a top-level `COLLATE` binds looser than the
             // prefix op, so it (unlike `::`/`[…]`) is not safe here.
             _ => return !(prints_self_delimiting(e) && !matches!(e, Expr::Collate { .. })),
