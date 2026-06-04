@@ -529,24 +529,21 @@ impl Coordinator {
             || "optimize peek",
             move || {
                 span.in_scope(|| {
-                    // Run the optimization pipeline. This is wrapped in a closure
-                    // so that we control where the `?`s return from: even when a
-                    // `catch_unwind_optimize` call inside `optimize` fails, we can
-                    // still handle `EXPLAIN BROKEN` below.
-                    let pipeline = || -> Result<optimize::PeekGlobalLirPlan, AdapterError> {
+                    // Run the optimization pipeline. The dispatch guard borrows
+                    // `explain_ctx`, so we scope it in a block to drop it before
+                    // `explain_ctx` is inspected below. A failed optimization is
+                    // captured in `pipeline_result` rather than returned, so that
+                    // `EXPLAIN BROKEN` can still be handled in the match.
+                    let pipeline_result = {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
                         let raw_expr = plan.source.clone();
 
-                        Ok(optimizer.optimize(
-                            raw_expr,
-                            timestamp_context.clone(),
-                            &session,
-                            stats,
-                        )?)
+                        optimizer
+                            .optimize(raw_expr, timestamp_context.clone(), &session, stats)
+                            .map_err(AdapterError::from)
                     };
 
-                    let pipeline_result = pipeline();
                     let optimization_finished_at = now();
 
                     let stage = match pipeline_result {
