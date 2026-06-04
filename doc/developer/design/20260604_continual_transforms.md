@@ -52,6 +52,19 @@ Recomputation-from-scratch is not just unnecessary here — for the
 non-deterministic cases it would produce a *different* answer, so it must be
 avoided.
 
+**The central hard problem is bounding growth.** Because we have deliberately
+given up recomputation, the output collection — and the engine's internal state
+— have no natural way to shrink: a recorded, append-only output grows forever,
+and the working state behind an upsert or rollup accumulates unless its
+superseded rows are physically reclaimed. CTs' answer was that the output is a
+*table* you could `DELETE` from, or a task body with an explicit `DELETE`
+clause. That is a starting point, but it underspecifies (a) *which* output
+model bounds growth for *which* use case and (b) how deletes are **physically
+reclaimed** internally — e.g. the two-shard upsert approach requires careful
+re-integration so that later retractions actually consolidate with their
+original inserts and compaction can reclaim the space. Any design here lives or
+dies on this question.
+
 We shipped a predecessor for exactly this — **Continual Tasks (CTs)** — in
 `v0.127.0`, flag-gated it off in `v26.21.0`, and removed it in `v26.23.0`
 (PR #35967). The removal rationale (database-issues#9694) was explicit:
@@ -79,6 +92,10 @@ A solution is successful if:
 - A transformation body may invoke **non-deterministic / side-effecting
   functions (UDFs)**, with each invocation's result **recorded once** and reused
   across restarts and replicas rather than recomputed.
+- **The output collection has a bounded size** under an explicit retention or
+  keying contract, and **the engine's internal/working state and the underlying
+  persist shards are physically reclaimed** (no unbounded growth from
+  superseded rows whose retractions never consolidate).
 - The system provides a clear, documented **correctness ladder**: exactly-once
   into Materialize-owned persist where achievable; at-least-once with an
   idempotent recovery path otherwise.
@@ -171,7 +188,7 @@ keep them separate.
 |---|---|---|---|
 | **1. Recorded append** | enrichment/stream-table join, internal sink/audit, stateless transform, webhook demux, non-det/UDF enrichment | **exactly-once into persist** | single timestamped output write; group-commit rejects duplicate `T` |
 | **2. General read-then-write** | arbitrary bundled `INSERT/UPDATE/DELETE` | exactly-once into persist (per commit) | OCC loop, control-plane commit |
-| **3. Eventual (self-referential)** | upsert, dedup-in-window, metrics rollup, finalization | **at-least-once / eventual**, exact answer recovered downstream | compacting output + an MV on top |
+| **3. Eventual (self-referential)** | upsert, dedup-in-window, metrics rollup, finalization | **at-least-once / eventual**, exact answer recovered downstream | keyed/upsert output (O(live keys)); or compacting shard + MV |
 | **4. External effects** | reverse-ETL, outbox, webhooks out | **at-least-once + idempotency key** | persisted "delivered-through-`T`" frontier |
 
 Non-determinism and UDFs are safe at every tier for the same reason: the body
@@ -179,6 +196,70 @@ runs at commit time `T` and its result is **persisted, never recomputed**. Each
 invocation is frozen the instant it is written. Multi-replica execution is
 handled as in the original design — replicas race to commit and losers discard
 (compare-and-append) — so the logic need not be definite (`now()` is allowed).
+
+### Bounding output growth (the central problem)
+
+The hard part is not triggering or committing — it is keeping the **output** and
+the engine's **internal state** bounded, given that we have given up
+recomputation. Two properties are in direct tension: *record, don't recompute*
+wants to keep data (and, for time-travel reads, history), while *bounded
+resources* wants to forget it. They reconcile only if **forgetting is explicit
+and part of the output's contract**, and — because the transform is
+non-deterministic — **forgetting is irreversible** (we cannot recompute what we
+drop). For these use cases that is the point, not a defect: "finalization" is
+exactly *keep the finalized answers, drop the working state.*
+
+**Output models, each with its growth-bounding story:**
+
+- **Append + retention** (audit logs, retention windows, metrics). Bounded by an
+  explicit, mostly **stateless** retention predicate
+  (`… WHERE ts < mz_now() - INTERVAL '30 days'`); the engine emits the
+  retractions, and because the predicate does not read current contents there is
+  no self-reference. Intentionally-growing logs are the sub-case where retention
+  is an optional user policy.
+- **Keyed / upsert output** (upsert, dedup, finalization). Declare a **key** on
+  the output; a new row for an existing key *replaces* it. The "find the prior
+  value, retract it, insert the new" step is performed by the **output
+  collection's machinery, not the user's SQL**, so the body has no
+  self-reference and state is **O(live keys)**, not O(updates). We already have
+  exactly this in storage — the upsert operator and `upsert_continual_feedback`
+  — and the keyed output should reuse it rather than reinvent it.
+- **Writable table output** (general / CT model). The body issues explicit
+  `INSERT`/`DELETE`/`UPDATE`. Most general; stateless deletes are fine, but
+  stateful deletes (retract the superseded value of a key) reintroduce
+  read-your-own-writes and the Decision-Log iteration questions.
+
+**Internal reclamation — "finalizing" deletes.** Bounding the *logical* output
+is not sufficient; the physical persist shard and in-memory state must reclaim
+space. Two invariants:
+
+1. **Retractions must consolidate with their inserts.** A `-1` cancels a `+1`
+   only if it is the *exact same row* (key + value). Hand-written `DELETE`s can
+   fail to match what is actually stored (e.g. retract `max(value)` without
+   knowing the stored value), leaving both rows resident forever; the
+   keyed/upsert machinery retracts the *exact prior value* by construction. This
+   is a strong argument for the keyed model over hand-written deletes for the
+   upsert case, and is the "careful re-integration to finalize deletes" that the
+   two-shard approach demands.
+2. **Bounded growth ⇔ bounded `since` lag ⇔ bounded retention window.** Physical
+   space is reclaimed only once persist compaction advances `since` past a
+   retraction, so an `(insert@T1, retract@T5)` pair occupies space until `since`
+   passes `T5`; the lag between an insert and its eventual retraction directly
+   bounds un-reclaimed data. Consequently **`RETAIN HISTORY` trades off directly
+   against bounded growth**: within the retained window there is history and the
+   data is not reclaimed; beyond it, paired updates consolidate and drop. The
+   engine must own and drive the read policy / compaction on its output, or a
+   lagging compactor is transient unbounded growth.
+
+This reframes the via-Diffs **two-shard + MV** upsert: its working shard *is*
+the growth risk, because its inserts and later retractions must be finalized
+(consolidated + compacted) or it grows as O(updates). The **keyed output** model
+is strictly better when the use case is keyed: the output *is* the
+by-key-compacted collection, maintained at O(live keys) with exact prior-value
+retraction, often removing the need for a separate MV. For genuinely unbounded
+key spaces, even O(live keys) is unbounded, so those require a **temporal/count
+bound on the key space** (the temporal-filter-shrinks-the-active-keyset case) —
+the retention contract applied to keys.
 
 ### Tier 1: recorded append (the high-demand, low-risk core)
 
@@ -232,30 +313,34 @@ is the ordinary multi-statement-transaction problem, not a novel reclocking one.
 
 ### Tier 3: self-referential / eventual (incl. UPSERT)
 
-The hardest, most-demanded case — upsert — is tractable **under the relaxed
-bar** because of an observation from the via-Diffs design: upsert **cannot be
-done in place** (a retraction must be computed before it is first written), so
-it inherently needs **two shards** — a compacting output the transform maintains
-*eventually*, plus an ordinary **MV on top that recovers exact semantics**
-("eventual upsert"):
+The hardest, most-demanded case — upsert — is where bounded growth and
+self-reference collide. The via-Diffs design observed that upsert **cannot be
+done in place** (a retraction must be computed before it is first written) and
+concluded it needs **two shards**: a compacting working shard plus an **MV on
+top that recovers exact semantics** ("eventual upsert"). That works, but the
+working shard is precisely the growth risk from the section above — its inserts
+and later retractions must be finalized or it grows as O(updates).
+
+We therefore **prefer a keyed/upsert output** as the primary mechanism, reusing
+the storage upsert machinery so growth is bounded by construction and the body
+needs no self-reference:
 
 ```sql
--- transform keeps the working set bounded (eventually correct)
-CREATE CONTINUAL TRANSFORM upsert_ct FROM CHANGES(append_only) AS (
-    DELETE FROM compacted WHERE key IN (SELECT key FROM changes);
-    INSERT INTO compacted SELECT key, max(value) FROM changes GROUP BY key;
-) INTO compacted;
-
--- MV recovers the exact answer
-CREATE MATERIALIZED VIEW upserted AS
-  SELECT key, max(value) FROM compacted GROUP BY key;
+-- output declared with a key; new rows for a key replace the prior value,
+-- retracting the *exact* stored row. State is O(live keys). No body self-ref.
+CREATE CONTINUAL TRANSFORM upserted
+  FROM CHANGES(append_only)
+  AS SELECT key, value FROM changes
+  INTO UPSERT upserted KEY (key);
 ```
 
-Because the MV recovers exactness, **the transform itself only needs to be
-eventually / at-least-once correct** — precisely the bar we accept here. The
-self-reference exists to bound state, not for correctness. The same shape
-covers dedup-in-window, metrics rollup, and tumbling/session-window
-finalization (capture the rows an MV *deletes* into a closed-window shard).
+Because the keyed collection maintains the exact, bounded answer, no separate MV
+is needed, and **the transform only needs to be eventually / at-least-once
+correct** — the bar we accept here. The two-shard + MV pattern remains available
+as a fallback for non-keyed eventual cases. The same keyed/retention shapes
+cover dedup-in-window (key space bounded by a temporal filter), metrics rollup,
+and tumbling/session-window finalization (capture the rows an MV *deletes* into
+a closed-window shard).
 
 ### Tier 4: external effects
 
@@ -273,6 +358,12 @@ marker — which is just a Tier-1 recorded collection.
   flagged as not-yet-available.
 - Needs an owned-output / progress-frontier concept so "consumed-through-`T`" is
   recorded by the output rather than a manual drain.
+- **Reuses the storage upsert machinery** (`upsert_continual_feedback`, the
+  upsert operator) for the keyed-output model, rather than reinventing
+  bounded-by-key state and exact prior-value retraction.
+- Needs the engine to **own the read policy / compaction** on its output so
+  finalized deletes are physically reclaimed; interacts with `RETAIN HISTORY`
+  (which trades off against bounded growth).
 - Multi-replica race-to-commit (compare-and-append, losers discard) — already
   contemplated by the original CT design.
 
@@ -335,6 +426,15 @@ upsert (transform + MV-on-top) to validate the relaxed-correctness story.
   before resolving it?
 - **Owned outputs & multi-output.** Output ownership rules; multi-output
   transforms (needed for webhook demux); interaction with `RETAIN HISTORY`.
+- **Retention / keying syntax and enforcement.** How is the output's growth
+  contract expressed (`INTO UPSERT … KEY (…)`, `RETAIN '30 days'`, count-based
+  `KEEP LAST n PER key`)? For time-based retention, is the retraction emitted
+  eagerly by the engine or applied as a stateless filter on read? How do we
+  guarantee compaction keeps up so finalized deletes are actually reclaimed, and
+  how do we surface it when it falls behind?
+- **Unbounded key spaces.** When even O(live keys) is unbounded, what is the
+  required interaction with temporal filters / key-space bounds, and what
+  happens if the user provides none?
 - **Multi-replica & at-least-once observability.** Surfacing
   delivered/committed-through frontiers; behavior under replica churn.
 - **Relationship to standing queries (PR #35347)** — overlap or composition?
