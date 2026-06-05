@@ -1379,10 +1379,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                                 (update.0).0.hashed()
                             });
                         let as_of = self.as_of_frontier.clone();
-                        let packed = consolidate_pact::<KeyBatcher<mz_repr::Row, _, _>, _>(
-                            oks.map(|row| (row, ())).inner,
-                            exchange,
-                            "ChangelogNet",
+                        let packed = consolidate_pact::<
+                            ColumnationChunker<_>,
+                            KeyBatcher<mz_repr::Row, _, _>,
+                            _,
+                            _,
+                        >(
+                            oks.map(|row| (row, ())).inner, exchange, "ChangelogNet"
                         )
                         .unary(Pipeline, "ChangelogPack", |_cap, _info| {
                             move |input, output| {
