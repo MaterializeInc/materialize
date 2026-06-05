@@ -190,34 +190,6 @@ when creating an [Iceberg catalog connection](#iceberg-catalog).
 
 {{% include-syntax file="examples/create_connection" example="syntax-gcp" %}}
 
-#### Service account key {#gcp-service-account-key}
-
-Materialize authenticates as a [service account](https://docs.cloud.google.com/iam/docs/service-account-overview) you own.
-
-[Create a service-account key in JSON format](https://docs.cloud.google.com/iam/docs/keys-create-delete#creating),
-then load the key into a [secret](/sql/create-secret/) in Materialize:
-
-```bash
-base64 < key.json
-```
-
-```mzsql
-CREATE SECRET gcp_service_account_key
-  AS decode('<base64-encoded service account key JSON>', 'base64');
-```
-
-We recommend you base64-encode the key avoid pasting a multi-line JSON literal into SQL.
-
-#### Example {#gcp-example}
-
-To create a GCP connection that authenticates with a service-account key:
-
-```mzsql
-CREATE CONNECTION gcp_connection TO GCP (
-    SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
-);
-```
-
 ### Kafka
 
 A Kafka connection establishes a link to a [Kafka] cluster. You can use Kafka
