@@ -302,16 +302,11 @@ where
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
     // panics.
     //
-    // This source is split as such:
-    // 1. Sets up `async_stream`, which only yields data (parts) on one chosen
-    //    worker. Generating also generates SeqNo leases on the chosen worker,
-    //    ensuring `part`s do not get GCed while in flight.
-    // 2. Part distribution: A timely source operator which continuously reads
-    //    from that stream, and distributes the data among workers.
-    // 3. Part fetcher: A timely operator which downloads the part's contents
-    //    from S3, and outputs them to a timely stream. Additionally, the
-    //    operator returns the `LeasedBatchPart` to the original worker, so it
-    //    can release the SeqNo lease.
+    // See the module documentation for the structure of this source: a descs
+    // operator (with a listen task minting parts and leases on one chosen
+    // worker) distributing parts to a fetch operator (with a fetch task
+    // downloading their contents) on each worker, with a feedback loop of
+    // completed fetches that releases the leases.
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
 
