@@ -49,12 +49,14 @@ it off in `v26.21.0`, and removed it in `v26.23.0` (PR #35967). The removal
 rationale (database-issues#9694) was explicit: *"Implementation isn't done, and
 there is no consensus whether it's the right design or not,"* plus a push to burn
 down complexity. **It was not removed because the model is unsound.** The use
-cases remain, and two new primitives now exist that did not when CTs were
-designed: the `CHANGES` table function (#36869) and the OCC timestamped-write
-substrate (`20260210_incremental_occ_read_then_write.md`). This document revives
-the capability by **distilling it to a small calculus** (`differentiate` /
-`integrate` / `record` / `freeze`) realized as **separate, independently-managed
-objects** (`RECORD`/`INTEGRATE`/prune) over **`DELTA TABLE`s**.
+cases remain, and two new primitives are now in reach that did not exist when CTs
+were designed: the `CHANGES` table function (#36869, open PR) and the OCC
+timestamped-write substrate (`20260210_incremental_occ_read_then_write.md`,
+designed but unbuilt). This document revives the capability by **distilling it to
+a small calculus** (`differentiate` / `integrate` / `record` / `freeze`) realized
+over **`DELTA TABLE`s**: one new standing-write object (the `RECORD` writer),
+`INTEGRATE` as a read operator usable in ordinary materialized views, and ordinary
+DML for bounding.
 
 ## Success Criteria
 
@@ -86,9 +88,10 @@ objects** (`RECORD`/`INTEGRATE`/prune) over **`DELTA TABLE`s**.
   via OCC retries; not an OLTP write path.
 - **Event-time / partially-ordered time.** We assume the existing totally-ordered
   logical-time model (event-time imports are a separate effort).
-- **Atomic multi-output transactions.** Outputs are separate objects;
-  cross-output consistency comes from reading at a common logical time, not from
-  co-committing — there is no atomic multi-action bundle.
+- **Atomic multi-output transactions.** Outputs are independent objects (a delta
+  table fed by a `RECORD` writer, MVs over `INTEGRATE`, bounding DML); cross-output
+  consistency comes from reading at a common logical time, not from co-committing —
+  there is no atomic multi-action bundle.
 - **Replacing materialized views.** Deterministic IVM stays in MVs; this is for
   recording non-deterministic/processing-time decisions.
 
@@ -107,23 +110,25 @@ Four operations move between them:
 
 | operation | signature | surface |
 |---|---|---|
-| **differentiate** | TVC → dTVC | `CHANGES(x AS OF …)` (shipped, #36869) |
-| **integrate** | dTVC → TVC | `INTEGRATE r AS v` |
-| **record** | dTVC → durable dTVC | `RECORD r INTO delta_table` |
-| **bound** | keep a dTVC finite | temporal filter, or `DELETE r FROM delta_table` |
+| **differentiate** | TVC → dTVC | `CHANGES(x AS OF …)` operator (open PR #36869) |
+| **integrate** | dTVC → TVC | `INTEGRATE(r)` operator — dual of `CHANGES`, usable in plain MVs |
+| **record** | dTVC → durable dTVC | `RECORD (r) INTO d` — the one new standing-write object |
+| **bound** | keep a dTVC finite | temporal filter, or `DELETE`/`UPDATE` DML on the mutable `d` |
 
 plus **freeze**, which is not a keyword but falls out of typing (below).
 
-These operations are realized as **separate, independently-managed standing
-objects** over `DELTA TABLE`s — a writer that `RECORD`s into a delta table, an
-`INTEGRATE` that maintains a TVC from one, a prune that bounds one — each created
-and dropped on its own. They are **not** bundled into one atomic transaction:
-cross-object consistency comes from **reading at a common logical time** (as it
-already does everywhere in Materialize), and each object commits via a
-**frontier-gated (OCC) write** (compute over data through frontier `X`, commit at
-`X+1`). Everything else — stream-table join, upsert, retention, the compliance
-cascade, the correctness tiers — is a *composition*, not a separate feature.
-(Exact object kinds and syntax are deferred; this doc fixes the model.)
+The surface is deliberately small: only the **`RECORD` writer is a new standing
+object**. `INTEGRATE` is a *read operator* (the dual of `CHANGES`) usable inside
+ordinary materialized views — it carries no non-determinism, so it needs no new
+object kind. `DELTA TABLE`s are **mutable**, so bounding is ordinary `DELETE` /
+`UPDATE` DML, not a standing object. These pieces are **not** bundled into one
+atomic transaction: cross-object consistency comes from **reading at a common
+logical time** (as it already does everywhere in Materialize); the `RECORD`
+writer (and any body that reads what it writes) commits via a **frontier-gated
+(OCC) write** (compute over data through frontier `X`, commit at `X+1`).
+Everything else — stream-table join, upsert, retention, the compliance cascade,
+the correctness tiers — is a *composition*, not a separate feature. (Exact
+keywords/object-kind ergonomics are deferred; this doc fixes the model.)
 
 ### The conceptual basis: TVC ↔ dTVC duality
 
@@ -161,53 +166,90 @@ taints it and is rejected at plan time.
 A **`DELTA TABLE`** is a table typed as a dTVC: it has implicit
 `mz_timestamp mz_timestamp` and `mz_diff bigint` columns, and its rows are
 *deltas* (its value is their integral). It is *not* append-only — it can be
-pruned/compacted — which is why "delta" (what the rows are), not "journal" (an
-append-only promise we don't keep), is the right name. Crucially, a `DELTA TABLE`
-**names the domain** its `mz_timestamp`s belong to (the input's timeline, domain
-A) and **owns the reclock** for that domain (the A↔B mapping; see "Time domains").
-That makes it self-describing: data (physical, domain B) + a named domain + the
-reclock — so any reader knows how to reclock it, and there is no separate
-question of "what does `INTEGRATE` reclock by" (it is the delta table's reclock).
+pruned/compacted, and supports ordinary `DELETE`/`UPDATE` DML — which is why
+"delta" (what the rows are), not "journal" (an append-only promise we don't keep),
+is the right name. A `DELTA TABLE` **names the domain** its `mz_timestamp`s belong
+to (the input's timeline, domain A) and **owns the reclock** for that domain (the
+A↔B mapping; see "Time domains"). That makes it self-describing — data (physical,
+domain B) + a named domain + the reclock — so any reader knows how to reclock it,
+and there is no separate question of "what does `INTEGRATE` reclock by" (it is the
+delta table's reclock).
+
+The domain is **inherited by default**: there is one global logical timeline
+(domain A) in Materialize, so a delta table left unbound at creation has its
+domain **bound by its first `RECORD` writer** (from that writer's differentiate
+input). The binding is then **immutable and table-owned** — it survives dropping
+the writer, and any later writer must conform to it. An explicit `IN DOMAIN
+<name>` is the escape hatch for a hand-written delta table (no input to inherit
+from) or to bind several writers to a shared named domain (see "Time domains").
 
 ```sql
 CREATE DELTA TABLE enriched (a, b, c, val);   -- implicit mz_timestamp, mz_diff
 ```
 
-The operations are *separate objects* over delta tables (syntax illustrative,
-TBD). The dedup pipeline below is three independent objects, not one bundle:
+The dedup pipeline below uses all three surfaces — the `RECORD` writer object,
+`INTEGRATE` inside a plain MV, and bounding DML (syntax illustrative, TBD):
 
 ```sql
--- 1) record enriched events (frozen dim lookup) into a delta table
-RECORD (
-  SELECT e.*, d.val
-  FROM CHANGES(events AS OF AT LEAST mz_now() - INTERVAL '1 hour') e
-  JOIN dim d ON e.fk = d.key            -- bare TVC reference ⇒ frozen lookup
-) INTO enriched;
+-- 1) record enriched events (frozen dim lookup) into the delta table.
+--    The RECORD writer is the one new standing object; it picks T, re-evaluates
+--    on driver deltas, and commits frontier-gated. Cadence is implicit.
+CREATE RECORDER enrich INTO enriched AS
+  RECORD (
+    SELECT e.*, d.val
+    FROM CHANGES(events AS OF AT LEAST mz_now() - INTERVAL '1 hour') e
+    JOIN dim d ON e.fk = d.key          -- bare TVC reference ⇒ frozen lookup
+  );
 
--- 2) maintain a first-seen (deduped) TVC from the delta table
-INTEGRATE (
-  SELECT DISTINCT ON (a, b, c) *        -- first value seen per key
-  FROM enriched WHERE mz_diff > 0 ORDER BY a, b, c, mz_timestamp ASC
-) AS first_seen;
+-- 2) maintain a first-seen (deduped) TVC with INTEGRATE inside a plain MV.
+--    All mz_timestamp-aware logic lives INSIDE INTEGRATE's argument: it is the
+--    typing boundary. The result is a TVC with no mz_timestamp/mz_diff columns.
+CREATE MATERIALIZED VIEW first_seen AS
+  SELECT * FROM INTEGRATE(
+    SELECT DISTINCT ON (a, b, c) *      -- first +1 per key, by event time
+    FROM enriched WHERE mz_diff > 0 ORDER BY a, b, c, mz_timestamp ASC
+  );
 
--- 3) prune superseded rows to bound the delta table (frontier-gated)
-DELETE ( SELECT * FROM enriched ANTI JOIN first_seen ) FROM enriched;
+-- 3) bound the delta table with ordinary (periodic) DML: a consolidating DELETE
+--    that retracts superseded rows at their original mz_timestamp.
+DELETE FROM enriched e
+  WHERE NOT EXISTS (SELECT 1 FROM first_seen f
+                    WHERE (f.a, f.b, f.c) = (e.a, e.b, e.c));
 ```
 
-Each is created/dropped independently and commits on its own frontier-gated
-schedule; they coordinate through `enriched`'s logical time, not a shared
-transaction (see "The evaluation rule").
+The `RECORD` writer is the only standing object here; `first_seen` is a normal MV,
+and the bounding step is plain DML run when desired. They coordinate through
+`enriched`'s logical time, not a shared transaction (see "The evaluation rule").
 
-- **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to the delta
-  table `d`, which also advances `d`'s reclock for its named domain.
-- **`INTEGRATE r AS v`**: `r` reads a delta table `d`; `v` is a maintained TVC
-  reclocked back onto `d`'s named domain (domain A) **using `d`'s reclock** — see
-  "Time domains". Each delta is placed by its `mz_timestamp`, clamped to
-  `max(mz_timestamp, upper)` for arbitrary / below-frontier values (logical
-  compaction), and `v`'s frontier is driven into domain A by the reclock. So an
-  event at input-time `t` appears in `v` at `t`. `v` is a definite function of
-  `d` + its reclock; non-determinism lives only in the recorded *values*.
-- **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
+- **`CREATE RECORDER … INTO d AS RECORD (r)`** — the one new standing-write
+  object. `r` must be a dTVC; its deltas are appended to delta table `d`, which
+  also advances `d`'s reclock for its named domain. It re-evaluates on its
+  **driver deltas** and commits **frontier-gated** (compute through `X`, commit at
+  `X+1`); cadence is implicit — there is no `COMMIT EVERY` (an anti-pattern;
+  frontier advancement drives commits).
+- **`INTEGRATE(r)`** — a **read operator**, the dual of `CHANGES`; *not* an object
+  kind. `r` is a dTVC expression (often a reduce over a delta table). `INTEGRATE`
+  is the **typing boundary**: inside its argument `mz_timestamp`/`mz_diff` are
+  data; its result is a TVC where they are *gone* — turned into the row's time.
+  Each delta is placed by its `mz_timestamp`, clamped to `max(mz_timestamp, upper)`
+  for arbitrary / below-frontier values (logical compaction), and the result's
+  frontier is driven onto `d`'s named domain (domain A) by `d`'s reclock — so an
+  event at input-time `t` appears at `t`. Used in a plain MV (as above) it
+  maintains a definite TVC; non-determinism lives only in the recorded *values*.
+  *To keep a timestamp as queryable data past the boundary, copy it into an
+  ordinary column* (`mz_timestamp AS first_seen_at`) **inside** the argument — but
+  that surfaced value is subject to the same clamp and can **advance as `since`
+  ticks forward** (stable only within `RETAIN HISTORY`; see the pitfall under
+  "Bounding growth").
+- **`DELETE` / `UPDATE` on `d`** — ordinary DML against the mutable delta table,
+  one way to `bound` it. A `DELETE` is **consolidating**: it retracts at the
+  targeted rows' *original* `mz_timestamp` so the `-1` cancels the `+1` and
+  compaction reclaims the space — distinct from age-out (a temporal filter that
+  retracts *forward*; see "Bounding growth"). It reads its inputs at a logical
+  time and commits as a normal table write; run periodically, it converges
+  eventually. (A *standing*, frontier-gated pruner that automates this is a later
+  power-user convenience, deferred — keeping v1 bounding off the OCC critical
+  path.)
 
 **Frontiers: data vs. progress.** The `mz_timestamp` is *data* and does not by
 itself set the output's frontier. `INTEGRATE`'s output `v` lives in domain A (the
@@ -273,20 +315,28 @@ grounds:
 This respects a boundary worth stating plainly: **the `DELTA TABLE` is
 user-queryable data; the reclock is control-plane bookkeeping** — and tying it to
 the delta table (rather than to a recorder, or a free-floating collection)
-unifies ownership: the one `RECORD` writer of a delta table advances its reclock,
+unifies ownership: the reclock is a property of the *table's accumulated writes*,
 and every `INTEGRATE` reader uses it. Folding the reclock into the table as data
 is the root of the tampering risk and consumption noise of the in-band
 alternative (see Alternatives).
 
-The reclock advances with the delta table's `RECORD` writes — the delta table and
-its reclock are written together (one writer), so a delta cannot be recorded
-without its reclock entry and they cannot diverge. Replica races are an
-*exactly-once* concern — a delta must not be recorded twice — not a correctness
-one (the data and frontiers each function sees are deterministic); the guard is
-the CAS on that `RECORD` commit. Non-determinism is confined to the recorded
-**values** (frozen at processing time), so `v` is a definite function of the
-`DELTA TABLE` + its reclock. The `mz_timestamp` remains queryable as data for "as
-of input-time" questions, within `RETAIN HISTORY`.
+**This is exactly what lets several `RECORD` writers feed one delta table.** Each
+writer commits "whenever," interleaved in domain B; the table-owned reclock
+recovers the precise A→B mapping regardless of who wrote what when, so the
+integral is well-defined over the merged log — a strong motivation for owning the
+reclock at the table, not the writer. The constraints that keep it sound: a new
+writer starts at (≥) the table's current `upper` (it extends the frontier, never
+backfilling below `since`, which is finalized); the domain is **bound once, on the
+table, and is immutable** — it survives dropping the writer that bound it, and any
+later writer must conform. Because there is one global domain A, inherited-domain
+writers trivially agree (webhook demux = several independent `RECORD`s into one or
+several delta tables). Per-writer replica races are an *exactly-once* concern — a
+given writer's delta must not be recorded twice — not a correctness one (the data
+and frontiers each function sees are deterministic); the guard is the CAS on that
+`RECORD` commit. Non-determinism is confined to the recorded **values** (frozen at
+processing time), so `v` is a definite function of the `DELTA TABLE` + its reclock.
+The `mz_timestamp` remains queryable as data for "as of input-time" questions,
+within `RETAIN HISTORY`.
 
 The write verbs differ by *shape*: **`RECORD` → `DELTA TABLE`** keeps the per-row
 change log in domain B (with `mz_timestamp` as data); **`INTEGRATE` → TVC**
@@ -294,11 +344,14 @@ maintains integrated state reclocked onto domain A.
 
 ### Freeze is typing, not a keyword
 
-A `RECORD`/`INTEGRATE` body re-evaluates only on **driver** deltas (its dTVC
-inputs: `CHANGES(...)` or `DELTA TABLE`s). A **TVC reference** joined in (`JOIN dim d`)
+A `RECORD` writer's body re-evaluates only on **driver** deltas (its dTVC inputs:
+`CHANGES(...)` or `DELTA TABLE`s). A **TVC reference** joined in (`JOIN dim d`)
 is therefore looked up **once per driver-delta and recorded** — a later change to
 `dim` produces no driver-delta, so the recorded row never moves. **Recording a
-join against a bare TVC reference *is* the freeze**; no marker is needed.
+join against a bare TVC reference *is* the freeze**; no marker is needed. (Freeze
+lives only in the `RECORD` body — the non-deterministic boundary; a bare TVC
+reference inside a plain MV or an `INTEGRATE` argument is an ordinary maintained
+join, not a freeze.)
 
 The rule: **`CHANGES(x)` / `DELTA TABLE` = tracked (deltas flow); bare TVC =
 frozen reference (sampled at lookup).** Tracking is the opt-in; freeze is the
@@ -329,26 +382,26 @@ the cascade `DELETE`), each frontier-gated.
 
 ### The evaluation rule (the key semantic)
 
-Several objects read and write the same delta table — e.g. the prune above reads
-`enriched` (and `first_seen`, derived from it) and deletes from `enriched`. With
-separate objects there is no shared transaction, so consistency comes from
-**frontier-gating**, the same idea as the OCC commit:
+The `RECORD` writer must commit at a definite time and may read what it writes, so
+its commit rule is **frontier-gating**, the same idea as the OCC commit:
 
-> **An action computes over its inputs through a frontier `X` and commits at
+> **A writer computes over its inputs through a frontier `X` and commits at
 > `X+1`.** Committing at `X+1` means it has observed *every* event `≤ X` — no late
 > arrival can still change the result — so the computation is final through `X`.
 
-This is what makes the split-object dedup safe without an atomic bundle: the
-prune computes `enriched ANTI JOIN first_seen` through frontier `X` and commits at
-`X+1`, by which point `first_seen` is final through `X`, so it can only delete
-genuinely non-first-seen rows (no late event can retroactively flip which row is
-first). Pruning therefore lags recording by the frontier — **eventual
-convergence**, the relaxed bar these use cases accept — and the cross-object
+This is what keeps the split surfaces safe without an atomic bundle. Bounding is
+ordinary DML and its semantics are deliberately **relaxed**: a periodic
+consolidating `DELETE` of `enriched ANTI JOIN first_seen` reads at some logical
+time and may race a concurrent `RECORD`; if it does, it simply runs again later.
+Because it only retracts rows that are not first-seen *as observed at its read
+time*, the worst case is that it lags — pruning trails recording, **eventual
+convergence**, the relaxed bar these use cases accept. The cross-object
 consistency a *reader* sees comes from reading all the objects at one logical
 time, exactly as in Materialize today. There is no atomic multi-action commit and
 no intra-commit fixpoint; the only residual machinery is the read-hold /
-`step_forward` an action needs when it reads a collection it also writes (see
-Implementation feasibility).
+`step_forward` the `RECORD` writer needs when it reads a collection it also writes
+(see Implementation feasibility). The optional standing pruner (deferred) would
+reuse the writer's frontier-gating rule; the v1 manual `DELETE` does not need it.
 
 ### Stream-table join: there are two freezes
 
@@ -361,7 +414,8 @@ For `events` (→ `CHANGES`, carrying `mz_timestamp = t_e`) joined to a dimensio
    change which version covered `t_e`), is fully recomputable, and needs **no
    freeze** — the inequality on the timestamp columns *is* the freeze. Cost: the
    dimension must retain history back to the oldest live event. This is nearly
-   expressible today with `CHANGES` + `RETAIN HISTORY` + SQL.
+   expressible with `CHANGES` (#36869) + `RETAIN HISTORY` + SQL, once `CHANGES`
+   lands.
 2. **As of processing time — NON-DEFINITE.** Attach whatever the dimension was
    when the event was processed, recorded once. Used when you do not want to keep
    dimension history, or the value is not in Materialize (external UDF, `now()`).
@@ -383,8 +437,10 @@ part of the contract, and (being non-deterministic) irreversible** — i.e.
 finalization. The ways to bound, composed from the operations:
 
 - **Age** — a temporal filter (`mz_now() < mz_timestamp + W`) on the dTVC;
-  clock-driven, self-finalizing (insert@`T`/retract@`T+W` consolidate as `since`
-  advances), no index. Reuses the `CHANGES` maintained-MV machinery.
+  clock-driven, self-finalizing (insert@`T`/retract-forward@`T+W` consolidate as
+  `since` advances), no index. Reuses the `CHANGES` maintained-MV machinery. This
+  retracts *forward* (the row was true, then ages out); it is not the consolidating
+  erasure below.
 - **Referential / ownership** (compliance) — a `DELETE` action driven by
   `CHANGES(dimension) WHERE mz_diff < 0`; a **physical** retraction, not a
   read-time filter; costs an index on the dTVC's liveness key. Note the tension
@@ -397,7 +453,8 @@ finalization. The ways to bound, composed from the operations:
   advanced `since`.
 - **Supersession** — a `top-k`/`reduce` body; the reduce emits exact
   retract-old/insert-new diffs (O(live keys)).
-- **Arbitrary** — an explicit `DELETE` action (read-then-write; documented cost).
+- **Arbitrary** — an explicit consolidating `DELETE` (read-then-write; retracts at
+  the rows' original `mz_timestamp` so the `-1` cancels the `+1`; documented cost).
 
 Two physical invariants the engine must hold for space to be reclaimed:
 
@@ -410,6 +467,32 @@ Two physical invariants the engine must hold for space to be reclaimed:
    `RETAIN HISTORY` trades off directly against bounded growth. The engine owns
    the read policy / compaction on its outputs.
 
+**Two distinct deletes.** Bounding must be precise about *where* a retraction
+lands, because only one kind reclaims space:
+
+- **Age-out / retract-forward** — append a `-1` at the *current* time. The row was
+  true and becomes false now; integrated, it reads "present until now, then gone."
+  This is the temporal filter; it expresses retention, but the log only *grows*.
+- **Erasure / consolidating** — retract at the row's *original* `mz_timestamp` so
+  the `-1` cancels the `+1` and compaction physically reclaims it (the row "never
+  was"). This is what bounds growth, and what `DELETE` against a delta table means.
+
+Ordinary table DML naturally does the former; a delta-table `DELETE` is defined to
+do the latter.
+
+**Pitfall — `mz_timestamp` surfaced as data is not stable.** Once `INTEGRATE`
+copies `mz_timestamp` into an ordinary column (`… AS first_seen_at`), that value
+is subject to the `max(mz_timestamp, upper)` clamp, so it can **advance as `since`
+ticks forward** — `first_seen_at` may read *later* after compaction than it did
+originally. It is stable only within `RETAIN HISTORY`. The change-records in the
+log are immutable, but a timestamp *projected as data through `INTEGRATE`* inherits
+the collection's compaction frontier. A powerful tool, but document it.
+
+**Deferred — data-domain compaction.** The dual of logical/physical compaction,
+applied in the *data* domain: "advance all `mz_timestamp`s ≤ `t` to `t` and
+consolidate," shrinking the log without advancing `since`. Out of scope for v1 (it
+sharpens the pitfall above), recorded here as a future capability.
+
 Note that the input window (`CHANGES(events AS OF AT LEAST mz_now() - '1 hour')`)
 and the output `DELTA TABLE` are **two independent dTVCs with two independent
 bounds**: the window bounds the `differentiate` state; the `DELETE`/dedup bounds
@@ -419,14 +502,16 @@ the recorded output.
 
 Same operations, two altitudes; neither adds capability.
 
-1. **Declarative objects** — `DELTA TABLE`s with separate `RECORD`/`INTEGRATE`/
-   prune objects over them (shown above), the safe default. Each is created and
-   dropped independently; they coordinate via logical-time frontiers, not a
-   shared transaction.
-2. **`BEGIN CONTINUAL TRANSACTION … COMMIT EVERY`** (imperative) — Aljoscha's
-   prototype: arbitrary bundled read-then-write statements, fed from `CHANGES`.
-   The power-user surface; self-referential bodies allowed with documented
-   footguns. ("Continual transaction" is reserved for this imperative form.)
+1. **Declarative** — a `DELTA TABLE`, a `RECORD` writer feeding it, `INTEGRATE`
+   inside ordinary MVs, and `DELETE`/`UPDATE` DML for bounding (shown above); the
+   safe default. The pieces are created and dropped independently and coordinate
+   via logical-time reads, not a shared transaction.
+2. **`BEGIN CONTINUAL TRANSACTION`** (imperative) — Aljoscha's prototype:
+   arbitrary bundled read-then-write statements, fed from `CHANGES`, where a single
+   `COMMIT` is one atomic write at `T`. The power-user surface; self-referential
+   bodies allowed with documented footguns. ("Continual transaction" is reserved
+   for this imperative form. Commit cadence is still frontier-driven — a
+   declarative `COMMIT EVERY` knob is rejected as an anti-pattern.)
 
 ### The correctness ladder is a classification of compositions
 
@@ -450,28 +535,31 @@ The tiers are not primitives; they fall out of which operations a body uses:
 
 ### Dependencies / things that may change
 
-- Builds on `CHANGES` (#36869) and the OCC timestamped-write substrate; needs the
-  per-object frontier-gated timestamped write (compute through `X`, commit at
-  `X+1`). Cross-object consistency is via logical-time reads, so **no cross-object
-  atomic bundle is required**.
-- Needs `DELTA TABLE` as a typed object that **names its domain and owns its
-  reclock** (implicit `mz_timestamp`/`mz_diff`); engine-driven read policy /
-  compaction on outputs.
+- Builds on `CHANGES` (#36869, open PR) and the OCC timestamped-write substrate;
+  the **`RECORD` writer** needs the frontier-gated timestamped write (compute
+  through `X`, commit at `X+1`). `INTEGRATE` is a read operator over a definite
+  collection (no new commit path), and v1 bounding is ordinary DML — both **off
+  the OCC critical path**. Cross-object consistency is via logical-time reads, so
+  **no cross-object atomic bundle is required**.
+- Needs `DELTA TABLE` as a typed, **mutable** object that **names its domain and
+  owns its reclock** (implicit `mz_timestamp`/`mz_diff`; `DELETE`/`UPDATE` defined
+  as consolidating); engine-driven read policy / compaction on outputs.
 - Time-based bounding reuses the `CHANGES` maintained-MV temporal-filter /
   lagged-read-hold mechanism.
 - Multi-replica race-to-commit (compare-and-append, losers discard).
 
 ## Minimal Viable Prototype
 
-Two prototypes already de-risk this: `CHANGES` (#36869, the `differentiate` side,
-including restart-exact reproduction) and `BEGIN CONTINUAL TRANSACTION` (Feb
-2026, the imperative surface + the data-plane/control-plane commit split). The
-MVP is to connect them as separate objects: a `RECORD` into a `DELTA TABLE` plus
-an `INTEGRATE` over it, fed by `CHANGES(input)`, demonstrated on (a) the stream-table join /
-UDF enrichment with type-based freeze (Tier 1) and (b) the `top-1` eventual
-upsert with input forgetting (Tier 3). The currency-conversion-with-compliance
-case (frozen value + a `DELETE`-driven cascade) is the stretch goal that
-validates the freeze typing and the lint rule.
+Two in-flight prototypes de-risk this: the `CHANGES` PR (#36869, the
+`differentiate` side, including restart-exact reproduction) and `BEGIN CONTINUAL
+TRANSACTION` (Feb 2026, the imperative surface + the data-plane/control-plane
+commit split). The MVP connects them: a `RECORD` writer into a `DELTA TABLE` fed
+by `CHANGES(input)`, plus an `INTEGRATE`-in-a-plain-MV reading it back,
+demonstrated on (a) the stream-table join / UDF enrichment with type-based freeze
+(Tier 1) and (b) the `top-1` eventual upsert with input forgetting (Tier 3),
+bounded by a periodic consolidating `DELETE`. The
+currency-conversion-with-compliance case (frozen value + a `DELETE`-driven
+cascade) is the stretch goal that validates the freeze typing and the lint rule.
 
 ## Implementation feasibility
 
@@ -481,30 +569,31 @@ register, what to salvage from the removed CT code, and a phased plan. The gatin
 findings from a codebase pass (against the recovered Continual Tasks (CT)
 implementation, PR #35967):
 
-- **Gating dependency.** Each object's frontier-gated commit ("compute through
-  `X`, commit at `X+1`, retry on conflict") is the OCC timestamped-write substrate
-  (`20260210_incremental_occ_read_then_write.md`), which is **unbuilt** — none of
-  its symbols exist in the tree. The *storage* primitive does exist: a timestamped
-  write at a supplied `T` via txn-wal (`commit_at(write_ts)` fails on
-  `UpperMismatch`). The net-new work is the adapter-level target-`T`/retry loop
-  and the **data-plane → control-plane hand-off** (CTs used a bespoke compute sink
-  that bypassed txn-wal — the reason a control-plane commit path is mandatory).
-  Because outputs are **separate objects** coordinated by logical-time reads,
-  **no cross-object atomic bundle is required**, removing the multi-shard-atomicity
-  burden a single RECORDER would have imposed.
+- **Gating dependency.** The **`RECORD` writer's** frontier-gated commit ("compute
+  through `X`, commit at `X+1`, retry on conflict") is the OCC timestamped-write
+  substrate (`20260210_incremental_occ_read_then_write.md`), which is **unbuilt** —
+  none of its symbols exist in the tree. The *storage* primitive does exist: a
+  timestamped write at a supplied `T` via txn-wal (`commit_at(write_ts)` fails on
+  `UpperMismatch`). The net-new work is the adapter-level target-`T`/retry loop and
+  the **data-plane → control-plane hand-off** (CTs used a bespoke compute sink that
+  bypassed txn-wal — the reason a control-plane commit path is mandatory).
+  `INTEGRATE` (a read operator over a definite collection) and v1 bounding
+  (ordinary DML) are **off this critical path**, and there is **no cross-object
+  atomic bundle**, removing the multi-shard-atomicity burden a single RECORDER
+  would have imposed.
 - **Known sharp edges, all hit by CTs.** (a) *Self-reference reclocking* — the
   frontier-gating rule (compute through `X`, commit at `X+1`) avoids the fixpoint
   CTs never finished, but the lagged self-read still needs the CT `step_forward` /
   since-held-below-output-upper machinery (reusable, hardest-won). (b) *Object
-  model* — outputs are independent catalog items (a `DELTA TABLE` + its reclock,
-  its `RECORD` writer, `INTEGRATE` views, prunes), each its own dataflow — fitting
-  Materialize's one-object-one-collection model and avoiding CTs'
-  single-sink-per-dataflow wall; no atomic multi-output orchestration is needed.
-  (c) *Freeze-by-typing* — CTs did it as a
-  persist-source renderer trick (inputs fed as insert-then-retract diffs) with a
-  known gap; first-class HIR/MIR support is new optimizer work. (d) *`DELTA
-  TABLE`* is a new collection kind (rows embedding `mz_timestamp`/`mz_diff` while
-  written at system `T`).
+  model* — the only new standing object is the `RECORD` writer; the `DELTA TABLE`
+  (+ its reclock) is a storage object, `INTEGRATE` lives inside ordinary MVs, and
+  bounding is DML — each its own dataflow, fitting Materialize's
+  one-object-one-collection model and avoiding CTs' single-sink-per-dataflow wall;
+  no atomic multi-output orchestration is needed. (c) *Freeze-by-typing* — CTs did
+  it as a persist-source renderer trick (inputs fed as insert-then-retract diffs)
+  with a known gap; first-class HIR/MIR support is new optimizer work. (d) *`DELTA
+  TABLE`* is a new, mutable collection kind (rows embedding `mz_timestamp`/`mz_diff`
+  while written at system `T`).
 - **Reusable from CT history:** body rendering, restart-cheap rehydration
   (resume from output `upper`, snapshot-exclude), and self-reference bootstrap.
   **Not reusable:** the commit path and the multi-output model.
@@ -545,10 +634,15 @@ implementation, PR #35967):
 
 ## Open questions
 
-- **Object kinds & syntax (deferred).** How are `RECORD`/`INTEGRATE`/prune
-  expressed as separate objects, and how is a `DELTA TABLE`'s domain named
-  (explicit vs. inherited from the input)? How is the trigger cadence expressed?
-  (Decided: separate objects, not one atomic bundle.)
+- **Object kinds & syntax.** *Decided:* the only new standing object is the
+  `RECORD` writer (illustratively `CREATE RECORDER … INTO d AS RECORD (…)`);
+  `INTEGRATE` is a read operator usable in ordinary MVs (not an object kind);
+  bounding is `DELETE`/`UPDATE` DML on a mutable `DELTA TABLE`; a delta table's
+  domain is **inherited from its first `RECORD` writer** by default, with
+  `IN DOMAIN <name>` as the escape hatch; cadence is **implicit / frontier-driven**
+  (`COMMIT EVERY` rejected as an anti-pattern). *Open:* the exact keywords /
+  object-kind ergonomics (is `RECORDER` the right noun for the writer? how is the
+  `RECORD` vs prune verb spelled?).
 - **Which domain does `mz_now()` / aging resolve in?** With `INTEGRATE`'s output
   reclocked onto the input timeline (domain A), time-based aging and `mz_now()`
   in a body could mean **domain A** (event-age — "last 30 days of *events*";
@@ -556,11 +650,12 @@ implementation, PR #35967):
   These are different semantics; the design must pick (perhaps per use:
   event-age vs. wall-clock retention), and the input `AS OF AT LEAST mz_now()`
   window has the same A/B question.
-- **Commit-timestamp / frontier-advance policy.** "Every timestamp" vs
-  "timestamps where a driver is non-empty" (the Decision Log's question) — the
-  `INSERT … VALUES` footgun, exposing millisecond granularity, whether
-  time-driven bodies are allowed; the cadence/granularity of frontier ticks and
-  the data-write trigger.
+- **Commit-timestamp / frontier-advance policy.** With cadence frontier-driven
+  (no `COMMIT EVERY`), at which frontiers does a writer actually commit — "every
+  timestamp" vs "timestamps where a driver is non-empty" (the Decision Log's
+  question)? A time-driven body (referencing `mz_now()` with no data driver) is
+  driven by the clock frontier; confirm that subsumes the time-driven case. Plus
+  the `INSERT … VALUES` footgun and millisecond-granularity exposure.
 - **Freeze typing & per-value `FROZEN`.** Confirm bare-TVC-reference = frozen,
   `CHANGES`/`DELTA TABLE` = tracked. Is a per-value `FROZEN(expr)` needed at all,
   or only the typing? Can one dimension supply a frozen value *and* anchor
@@ -568,25 +663,34 @@ implementation, PR #35967):
 - **Cascade cost.** The compliance cascade is a frontier-gated `DELETE` driven by
   `CHANGES(dim)`; how is the liveness-key index (to find a deleted entity's rows)
   costed and made explicit?
-- **`INTEGRATE` past-dated deltas.** Confirm `max(mz_timestamp, mz_now())` +
-  consolidation; the history caveat under `RETAIN HISTORY`; behavior of
-  retractions for already-clamped rows.
-- **`DELETE` from a `DELTA TABLE` semantics.** Physical removal vs appending a
-  `-1`; how reclamation is guaranteed and surfaced when compaction lags.
+- **`INTEGRATE` past-dated deltas & timestamp-as-data stability.** Confirm
+  `max(mz_timestamp, upper)` + consolidation; the history caveat under
+  `RETAIN HISTORY`; behavior of retractions for already-clamped rows. Note the
+  pitfall: a timestamp surfaced as a data column (`… AS first_seen_at`) inherits
+  this clamp and can advance as `since` ticks forward — should we warn/lint on it?
+- **`DELETE` from a `DELTA TABLE` semantics.** *Decided:* a delta-table `DELETE` is
+  **consolidating** — it retracts at the rows' original `mz_timestamp` so the `-1`
+  cancels the `+1` (distinct from age-out, which retracts forward via a temporal
+  filter). *Open:* how physical reclamation is guaranteed and surfaced when
+  compaction lags; the unenforceable exact-row-retraction invariant for
+  hand-written `DELETE`s; and **data-domain compaction** ("advance all
+  `mz_timestamp`s ≤ `t` to `t`, consolidate") as a deferred future capability.
 - **Stream-table join: which freeze is the default?** As-of-event-time (definite,
   needs dim history) vs as-of-processing-time (the `record` route). Do we offer
   the definite temporal join as first-class sugar, given it is nearly expressible
   today?
-- **Output ownership.** Is a `DELTA TABLE` written by exactly one `RECORD`
-  (single-writer, so it owns the reclock cleanly), or may users also write it?
-  Webhook demux = several independent `RECORD`s into several delta tables (no
-  bundle); `RETAIN HISTORY` interaction.
+- **Output ownership.** *Decided:* **multiple `RECORD` writers per delta table are
+  allowed** — the table-owned reclock recovers the A→B mapping over the interleaved
+  log; new writers extend the frontier (no backfill below `since`) and conform to
+  the bound-once, immutable domain. *Open:* may users *also* hand-write a delta
+  table directly (mixed `RECORD` + DML provenance)? `RETAIN HISTORY` interaction.
 - **Read-your-own-writes / frontier-gating.** Is "compute through `X`, commit at
   `X+1`" sufficient for all intended bodies, or do some need controlled iteration
   (imperative surface)?
-- **Naming.** Names for the `RECORD`/`INTEGRATE`/prune object kinds and
-  `DELTA TABLE`; is the `STREAM JOIN` keyword worth adding as sugar for the
-  as-of-event-time join?
+- **Naming.** *Decided:* keep `CHANGES` (open PR, not renamed to `DIFFERENTIATE`)
+  and `INTEGRATE` — dual in concept, not lexically symmetric. *Open:* the object
+  kind name for the `RECORD` writer (`RECORDER`?) and whether `STREAM JOIN` is
+  worth adding as sugar for the as-of-event-time join.
 - **Non-deterministic function story.** Explicit `VOLATILE` marker + memoization,
   or is "recorded once" sufficient?
 - **Relationship to standing queries (PR #35347)** — overlap or composition?

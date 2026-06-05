@@ -13,11 +13,12 @@
 
 This is the implementation companion to `20260604_recorders.md`. That doc
 distils the feature to a calculus (`differentiate` / `integrate` / `record` /
-`bound`, with `freeze`) realized as **separate objects** (`RECORD`/`INTEGRATE`/
-prune) over `DELTA TABLE`s, each committing on its own frontier-gated schedule
-(no atomic multi-output bundle; consistency via logical-time reads). This doc
-assesses **how to build it**: the architecture, the gating dependency, the
-per-crate change map, the risks, and a phased plan.
+`bound`, with `freeze`) realized over `DELTA TABLE`s as **one new standing-write
+object** (the `RECORD` writer), `INTEGRATE` as a **read operator** usable in
+ordinary materialized views, and ordinary **DML** for bounding — no atomic
+multi-output bundle; consistency via logical-time reads. This doc assesses **how
+to build it**: the architecture, the gating dependency, the per-crate change map,
+the risks, and a phased plan.
 
 `CHANGES` (#36869) is assumed working. The single most important input to this
 doc is the **removed Continual Tasks implementation**, which actually shipped a
@@ -31,10 +32,11 @@ A recorder is a *standing dataflow* (the body) whose results must be *committed
 by the control plane* at `T`. There are two ways to wire that, and the codebase
 makes the choice clear.
 
-Each object is a *separate* standing object — a `RECORD` writer, an `INTEGRATE`,
-a prune — with its own dataflow and its own frontier-gated commit; there is **no
-atomic multi-output bundle** (cross-object consistency is via logical-time reads).
-The question is how each object's body commits.
+The only new standing object is the `RECORD` writer (its own dataflow + a
+frontier-gated commit). `INTEGRATE` is a read operator inside ordinary MVs (no new
+commit path) and bounding is ordinary DML; there is **no atomic multi-output
+bundle** (cross-object consistency is via logical-time reads). The question is how
+the `RECORD` writer's body commits.
 
 - **Option A — compute sink (what CTs did).** The body is a compute dataflow
   whose sink writes persist directly. CTs reused the MV optimizer but swapped
@@ -53,10 +55,10 @@ The question is how each object's body commits.
   (committing the object's data shard and its reclock together). This is the OCC
   timestamped write, per object — not a cross-object bundle.
 
-**Decision: Option B, per object.** Recorders commit through the table-write path
-(txn-wal), not a compute sink — needed even for a single object (to commit
-data+reclock atomically and to support frontier-gated retry). The largest piece
-of net-new code is the **data-plane → control-plane hand-off**: a standing
+**Decision: Option B, for the `RECORD` writer.** The writer commits through the
+table-write path (txn-wal), not a compute sink — needed even for one object (to
+commit data+reclock atomically and to support frontier-gated retry). The largest
+piece of net-new code is the **data-plane → control-plane hand-off**: a standing
 dataflow whose output frontier and proposed diffs are drained by a coordinator
 loop that commits them. CT code is reusable for the *body rendering and diff
 production*; it is **not** reusable for the commit path.
@@ -105,22 +107,23 @@ should be sequenced first (Phase 0).
 |---|---|---|
 | `src/adapter` — group commit, per-object sequencing, the target-`T`/retry loop, the dataflow→control-plane drain | Build the timestamped group-commit extension (target `T`, fail-on-conflict, oracle advance) and the per-object control loop that commits its data + reclock via txn-wal. Adapt the removed `sequence_create_continual_task` scaffolding. | **XL** |
 | `src/compute/src/render` | Revive CT body rendering (`render/continual_task.rs`: the input/self/normal source transformers, `step_forward`, time extract/reduce). Replace the bespoke sink with *emit proposed diffs to the control plane*. Each object is its own dataflow (one primary export), so the CT one-sink-per-dataflow shape is kept, not torn out. | **L** |
-| `src/sql` (parser + plan) | New DDL (`CREATE DELTA TABLE`, `CREATE RECORDER … WITH … AS …`). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES`/`DELTA TABLE`). The lint rule: freeze / processing-time write legal only inside a recorder. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
-| `src/catalog` + `src/catalog-protos` | New item kinds (`RECORDER`, `DELTA TABLE`); one item owning / orchestrating multiple output collections + dependency edges; a new durable-catalog migration version. | **M** |
-| `src/storage-types` + persist schema | `DELTA TABLE` collection kind with reserved `mz_timestamp`/`mz_diff` columns; write path embedding logical ts/diff while writing at system `T`; txns registration of recorder outputs. | **M** |
+| `src/sql` (parser + plan) | New DDL (`CREATE DELTA TABLE`, mutable; `CREATE RECORDER … INTO d AS RECORD (…)`), the `INTEGRATE(…)` table operator (dual of `CHANGES`), and `DELETE`/`UPDATE` planning against delta tables (consolidating semantics). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES`/`DELTA TABLE`), legal only in a `RECORD` body. The lint rule: freeze / processing-time write legal only inside a `RECORD` writer. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
+| `src/catalog` + `src/catalog-protos` | New item kinds (`DELTA TABLE` storage object + its reclock; `RECORDER` writer) and dependency edges; a delta table owns its domain binding + reclock; a new durable-catalog migration version. No multi-output orchestration (`INTEGRATE` rides on MVs; bounding is DML). | **M** |
+| `src/storage-types` + persist schema | `DELTA TABLE` collection kind (mutable) with reserved `mz_timestamp`/`mz_diff` columns; write path embedding logical ts/diff while writing at system `T`; consolidating `DELETE` (retract at original `mz_timestamp`); txns registration of delta-table outputs. | **M** |
 | `src/compute-client` (`as_of_selection.rs`, `controller/instance.rs`) | Self-reference read-hold (since strictly below output upper). **These files already carry the write-only-collection (CT) special-casing** (`as_of_selection.rs:460`, `controller/instance.rs:1530,1776`) — reuse, do not rebuild. | **M** |
 | `src/adapter/src/coord/read_policy.rs` + compaction | Engine-owned read policy / compaction advancement on recorder outputs so retractions consolidate and `since` advances; `RETAIN HISTORY` interaction. | **M** |
 
 ## Risk register (ranked)
 
-### HIGH — H1: the per-object commit substrate (OCC timestamped write) is unbuilt
-Every object's frontier-gated commit (compute through `X`, commit at `X+1`,
+### HIGH — H1: the `RECORD` writer's commit substrate (OCC timestamped write) is unbuilt
+The `RECORD` writer's frontier-gated commit (compute through `X`, commit at `X+1`,
 retry on conflict — committing its data shard and reclock together) depends on a
 substrate that exists only as a design doc (see above). The storage-level
 conditional write (`commit_at` → `UpperMismatch`) is there; the adapter-level
 target-`T`/retry loop and the dataflow hand-off are not. **CTs did not solve
 this** — they bypassed it with a bespoke sink. Mitigation: build the OCC substrate
-first (Phase 0), shared with the OCC read-then-write effort. (Note: there is **no**
+first (Phase 0), shared with the OCC read-then-write effort. (Note: `INTEGRATE`
+and v1 bounding DML are **off this critical path**, and there is **no**
 cross-object atomic bundle to build — consistency is via logical-time reads.)
 
 ### HIGH — H2: self-reference reclocking — partly escaped, not fully
@@ -139,8 +142,9 @@ read-hold machinery. Mitigation: reuse the (working) read-hold + step-forward
 code; rely on the relaxed rule to avoid the (unfinished) fixpoint sub-scope.
 
 ### MED — H3: object/catalog model — independent objects (de-risked by the model)
-Each output is its own object: a `DELTA TABLE` (+ its reclock), a `RECORD` writer,
-`INTEGRATE` views, prunes. CTs were structurally single-output
+Each piece is its own object: a `DELTA TABLE` (+ its reclock) and a `RECORD`
+writer are the new kinds; `INTEGRATE` rides on ordinary MVs and bounding is DML.
+CTs were structurally single-output
 (`sequence_create_continual_task` allocated a single `(item_id, global_id)`;
 `ContinualTaskCtx::new` hard-asserts one sink per dataflow and a single input) —
 but with **separate objects, each its own dataflow with one primary export, that
@@ -149,8 +153,8 @@ is no longer a wall**: it matches how controllers already key dataflows by
 top-level catalog item). The earlier worry — a single multi-sink dataflow
 committing N outputs atomically — **is moot**: there is no atomic multi-output
 commit. What remains is ordinary new-object-kind catalog work (`DELTA TABLE`,
-`RECORD`/`INTEGRATE`/prune objects) plus per-object dataflow wiring — no
-multi-output orchestration. (Demote from High to Med given the model change.)
+`RECORDER`) plus per-object dataflow wiring — no multi-output orchestration.
+(Demote from High to Med given the model change.)
 
 ### MED — M1: freeze-by-typing needs first-class optimizer support
 The design needs `JOIN dim` (bare TVC) rendered as "looked up once per
@@ -255,30 +259,35 @@ recorder design tries to sidestep (and, per H2, only partly does).
   restart machinery; emit proposed diffs to Phase 0's commit path instead of the
   bespoke sink. One `RECORD` into one `DELTA TABLE` (+ its reclock). Validates
   freeze (renderer form), self-read, restart, and the data+reclock commit.
-- **Phase 2 — `INTEGRATE` + prune as separate objects.** `INTEGRATE` reading a
-  `DELTA TABLE` and reclocking to domain A; a frontier-gated prune `DELETE`. These
-  are independent objects/dataflows — no atomic bundle, no multi-sink dataflow;
-  consistency is via logical-time reads. Add the `DELTA TABLE` domain/reclock
-  ownership.
+- **Phase 2 — `INTEGRATE` operator + mutable-table bounding.** `INTEGRATE(d)` as a
+  read operator inside a plain MV, reclocking to domain A; consolidating
+  `DELETE`/`UPDATE` DML against the mutable `DELTA TABLE`. No atomic bundle, no
+  multi-sink dataflow; consistency via logical-time reads. Add the `DELTA TABLE`
+  domain binding (inherited / `IN DOMAIN`) + reclock ownership, and multi-writer
+  support.
 - **Phase 3 — freeze as first-class.** Lift `freeze`/asymmetric join into
   HIR/MIR (remove the persist-source-only hack and `NoIndexCatalog`); the lint
   rule; the definite as-of-event-time temporal join (possibly `STREAM JOIN`).
 - **Phase 4 — bounding polish.** Engine-owned read policy/compaction; retention
-  syntax; `RETAIN HISTORY` interaction; compaction-lag observability.
+  syntax; `RETAIN HISTORY` interaction; compaction-lag observability; the optional
+  standing frontier-gated pruner; data-domain compaction (deferred).
 
 ## Open implementation questions
 
 1. **The hand-off mechanism.** Is it a per-recorder internal subscribe draining
    proposed diffs? At what frontier does the control loop decide `T` is ready?
 2. **Build OCC first vs co-develop?** It is the critical-path dependency.
-3. **Object granularity confirmed.** Separate objects, one dataflow each — no
-   atomic multi-output bundle, no multi-sink dataflow. (The remaining question is
-   syntax/object-kind ergonomics, deferred.)
+3. **Object granularity confirmed.** One new standing object (the `RECORD`
+   writer), `INTEGRATE` on MVs, bounding via DML — one dataflow each, no atomic
+   multi-output bundle, no multi-sink dataflow. (Remaining: keyword/object-kind
+   ergonomics, deferred.)
 4. **Does the relaxed rule actually let us drop machinery, or only the fixpoint
    sub-scope?** (H2 says: only the latter — the lagged self-read stays.)
-5. **`DELETE` consolidation** — invariant unenforceable for hand-written
-   `DELETE`s; what is the guardrail when compaction lags and space is not
-   reclaimed?
+5. **`DELETE` consolidation.** Decided: a delta-table `DELETE` is consolidating
+   (retract at the row's original `mz_timestamp`), distinct from forward age-out.
+   Open: the exact-row-retraction invariant is unenforceable for hand-written
+   `DELETE`s — what is the guardrail when compaction lags and space is not
+   reclaimed? (Plus data-domain compaction as a deferred dual.)
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
 7. **Two time domains + reclock (A → B → A).** Domain A = the input timeline
@@ -301,9 +310,11 @@ recorder design tries to sidestep (and, per H2, only partly does).
      (decided) — the source-remap pattern (`20210714_reclocking.md`), not data in
      the table. It drives `v`'s domain-A frontier and is recovered on restart; its
      invariants are engine-maintained and *assumed* (no user tampering, no
-     read-time validation), and it can be retained independently of the data. The
-     one `RECORD` writer commits the delta table **and** its reclock together (two
-     shards, one writer), so they cannot diverge — no cross-object bundle needed.
+     read-time validation), and it can be retained independently of the data. Each
+     `RECORD` write commits the delta table **and** its reclock entry together (one
+     writer's commit, two shards), so they cannot diverge; multiple writers
+     interleave and the reclock recovers the merged A→B mapping — no cross-object
+     bundle needed.
      Exactly-once (no double-recording) is guarded by the CAS on that commit; not
      a determinism problem. (In-band `mz_progressed` markers were the
      considered-and-rejected alternative — user data → tampering/validation +
