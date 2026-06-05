@@ -232,50 +232,9 @@ account](https://docs.cloud.google.com/iam/docs/service-account-overview) you ow
     - `storage.objectUser` (Storage Object User)
 4. [Create a service account key.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
 
-### Step 2. Create a GCP connection in Materialize
+### Step 2. Create a GCP connection and Iceberg catalog connection in Materialize
 
-In Materialize, create a **GCP connection** that holds the service account key.
-
-1. Base64-encode the JSON key file. For example, in a shell:
-
-   ```bash
-   base64 < key.json
-   ```
-
-2. Store the base64-encoded key in a Materialize [secret](/sql/create-secret/):
-
-   ```mzsql
-   CREATE SECRET gcp_service_account_key
-     AS decode('<base64-encoded service account key JSON>', 'base64');
-   ```
-
-3. Create the GCP connection. See [`CREATE
-   CONNECTION`](/sql/create-connection/#gcp) for more on GCP connection
-   options.
-
-   ```mzsql
-   CREATE CONNECTION gcp_connection TO GCP (
-       SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
-   );
-   ```
-
-### Step 3. Create an Iceberg catalog connection in Materialize
-
-In Materialize, create an **Iceberg catalog connection** for the Iceberg sink
-to use. Use [`CREATE CONNECTION ... TO ICEBERG
-CATALOG`](/sql/create-connection/#iceberg-catalog), replacing `<bucket>` with
-your GCS bucket name.
-
-The command uses the GCP connection you created earlier.
-
-```mzsql
-CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
-    CATALOG TYPE = 'rest',
-    URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
-    WAREHOUSE = 'gs://<bucket>',
-    GCP CONNECTION = gcp_connection
-);
-```
+{{% include-example file="examples/create_connection" example="example-iceberg-catalog-gcp-connection" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
