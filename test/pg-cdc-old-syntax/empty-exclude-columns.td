@@ -14,6 +14,12 @@
 # `CREATE TABLE .. FROM SOURCE` syntax, where an empty set is rejected with
 # `invalid EXCLUDE COLUMNS option value: cannot be empty`.
 #
+# EXCLUDE COLUMNS on the legacy Postgres source syntax was introduced in
+# v0.162, so skip on older binaries in the multi-version upgrade path that
+# cannot parse the option.
+
+$ skip-if
+SELECT mz_version_num() < 16200;
 
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
