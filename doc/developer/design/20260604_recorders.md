@@ -355,7 +355,9 @@ validates the freeze typing and the lint rule.
 
 ## Implementation feasibility
 
-A separate implementation design doc will cover this in depth. The gating
+The companion implementation design doc (`20260604_recorders_implementation.md`)
+covers this in depth — architecture, the per-crate change map, the ranked risk
+register, what to salvage from the removed CT code, and a phased plan. The gating
 findings from a codebase pass (against the recovered Continual Tasks (CT)
 implementation, PR #35967):
 
