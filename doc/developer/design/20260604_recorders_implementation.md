@@ -295,16 +295,16 @@ recorder design tries to sidestep (and, per H2, only partly does).
      functions of the `DELTA TABLE` + reclock (the reclock makes the clamped
      integration reproducible), so the optimizer *may* treat them as recomputable
      over the recorded data.
-   - The **reclock** (A→B) drives `v`'s domain-A frontier and is recovered on
-     restart. Representation is an open choice that does not change the model:
-     *in-band* as `SUBSCRIBE` `mz_progressed` markers in the `DELTA TABLE` (a
-     persisted subscribe — single-shard CAS, but progress-marker noise for
-     consumers) vs. a *separate collection* (clean data, but a combined CAS with
-     the data — nearly free since the multi-output bundle already needs a
-     multi-shard txn). Leaning separate for data cleanliness. Either way, exactly-
-     once (no double-recording) is guarded by the CAS on the recording commit; it
-     is not a determinism problem. Reuses the reclock framework
-     (`20210714_reclocking.md`).
+   - The **reclock** (A→B) is a **separate, engine-owned collection** (decided) —
+     the source-remap pattern (`20210714_reclocking.md`), not data in the `DELTA
+     TABLE`. It drives `v`'s domain-A frontier and is recovered on restart; its
+     invariants are engine-maintained and *assumed* (no user tampering, no
+     read-time validation), and it can be retained independently of the data. It
+     is committed in the **same multi-shard bundle txn** as the recording, so the
+     extra shard adds no atomicity machinery. Exactly-once (no double-recording)
+     is guarded by the CAS on that commit; not a determinism problem. (In-band
+     `mz_progressed` markers were the considered-and-rejected alternative — user
+     data → tampering/validation + consumption noise — see the design doc.)
    - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
      `since` to physically drop history, which forfeits `AS OF`/replay in the
      erased range. It is mutually exclusive with stable history there; scope it

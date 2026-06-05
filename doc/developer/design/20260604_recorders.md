@@ -241,32 +241,38 @@ it writes the `DELTA TABLE` (so `mz_now()` there is A); `INTEGRATE`'s query read
 the `DELTA TABLE` in B and reclocks B→A as it writes `v` (placing by
 `mz_timestamp`, driving the frontier via the reclock; `mz_now()` there is B).
 
-**Representing the reclock (a choice that does not change the model).** The A→B
-mapping can be a **separate collection**, or live **in-band** as progress markers
-in the `DELTA TABLE` (`SUBSCRIBE`'s `mz_progressed` rows — frontier advances with
-no data), making the `DELTA TABLE` a persisted `SUBSCRIBE` stream. Either way the
-semantics are identical; only the representation differs:
+**The reclock is a separate, engine-owned collection (decision).** The A→B
+mapping is kept as its own durable collection — a monotone mapping between the two
+domains, exactly the **source-remap pattern** (`20210714_reclocking.md`) — *not*
+as data in the `DELTA TABLE`. Two grounds:
 
-- *In-band* gives a single-shard, single-CAS `RECORD` (data and reclock cannot
-  diverge), but burdens every consumer of the `DELTA TABLE` with progress-marker
-  noise — the same awkwardness as consuming `SUBSCRIBE` directly.
-- *Separate collection* keeps the `DELTA TABLE` clean to query, at the cost of
-  committing the reclock atomically with the data — but that is a **combined
-  CAS** the design already needs for the multi-output bundle
-  (`RECORD`/`INTEGRATE`/`DELETE` at one `T`), so it is nearly free.
+- **Clean reasoning.** The reclock is a separable object `R`, so `v` is provably
+  `INTEGRATE(DELTA TABLE)` with its frontier driven by `R` — a function we can
+  state and verify in isolation, rather than one entangled with parsing frontier
+  information back out of the data stream.
+- **No tampering, no validation.** It is **engine-owned metadata, not user
+  data**, so its invariants (monotone, well-formed) are *maintained* by the
+  engine and *assumed* by every consumer — there is nothing for a user to corrupt
+  (the frontier is not "just data" in a writable table) and nothing to
+  defensively validate on read. It can also be retained independently of the
+  data, long enough to interpret history.
 
-It is an open implementation choice (see Open Questions); the clean-data argument
-leans toward a separate collection. (The conceptual symmetry is worth noting
-regardless: `CHANGES` turns *changes* into data via `mz_diff`, the frontier can be
-turned into data via `mz_progressed`, and `INTEGRATE` reads them back.)
+This respects a boundary worth stating plainly: **the `DELTA TABLE` is
+user-queryable data; the reclock is control-plane bookkeeping.** Folding the
+latter into the former is the root of both the tampering risk and the
+consumption noise that the in-band alternative incurs (see Alternatives).
+
+The reclock is committed atomically with the recording — in the same multi-shard
+transaction the multi-output bundle (`RECORD`/`INTEGRATE`/`DELETE` at one `T`)
+already requires — so the extra shard costs nothing in atomicity machinery.
 
 Replica races are an *exactly-once* concern — a delta must not be recorded twice
 — not a correctness one (the data and frontiers each function sees are
-deterministic); whichever representation, the guard is the CAS on the recording
-commit. Non-determinism is confined to the recorded **values** (frozen at
-processing time), so `v` is a definite function of the recorded data. The
-`mz_timestamp` remains queryable as data for "as of input-time" questions, within
-`RETAIN HISTORY`.
+deterministic); the guard is the CAS on the recording commit. Non-determinism is
+confined to the recorded **values** (frozen at processing time), so `v` is a
+definite function of the recorded `DELTA TABLE` + reclock. The `mz_timestamp`
+remains queryable as data for "as of input-time" questions, within `RETAIN
+HISTORY`.
 
 The write verbs differ by *shape*: **`RECORD` → `DELTA TABLE`** keeps the per-row
 change log in domain B (with `mz_timestamp` as data); **`INTEGRATE` → TVC**
@@ -507,22 +513,20 @@ implementation, PR #35967):
   operationally heavy; the point is to stay inside Materialize.
 - **Distributed locking instead of OCC commit.** Rejected (latency, brittleness,
   scalability), per the OCC read-then-write design.
-- **Reclock representation: in-band progress markers vs. a separate collection.**
-  A representation choice, not a model change (see Solution). In-band
-  (`mz_progressed`, a persisted `SUBSCRIBE`) gives a single-shard CAS but makes
-  the `DELTA TABLE` awkward to consume; a separate collection keeps the data clean
-  at the cost of a combined CAS the multi-output bundle already needs. Leaning
-  toward a separate collection for data cleanliness; left open.
+- **In-band progress markers instead of a separate reclock.** Considered and
+  rejected. Encoding the A→B mapping as `mz_progressed` rows in the `DELTA TABLE`
+  (a persisted `SUBSCRIBE`) gives a single-shard CAS, but (a) makes the frontier
+  *user data* — inviting tampering and forcing defensive validation on every read
+  — and (b) burdens every `DELTA TABLE` consumer with progress-marker noise. Its
+  single-CAS upside is moot since the multi-output bundle already needs a
+  multi-shard transaction. (Conceptually neat — `mz_diff` is changes-as-data,
+  `mz_progressed` is frontier-as-data — but not worth storing that way.)
 
 ## Open questions
 
 - **`RECORDER` object model & syntax.** Confirm `CREATE RECORDER WITH <rels> AS
   <actions>`. How is the trigger cadence expressed (vs `COMMIT EVERY`)? Are the
   bundled actions always one atomic commit at `T`?
-- **Reclock representation.** In-band progress markers (`mz_progressed`, a
-  persisted `SUBSCRIBE`) vs. a separate reclock collection — a representation
-  choice that does not change the model; trades single-shard CAS against
-  data-consumption cleanliness (the body leans toward a separate collection).
 - **Which domain does `mz_now()` / aging resolve in?** With `INTEGRATE`'s output
   reclocked onto the input timeline (domain A), time-based aging and `mz_now()`
   in a body could mean **domain A** (event-age — "last 30 days of *events*";
