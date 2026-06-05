@@ -235,13 +235,35 @@ time. (A frozen value is computed in domain B but placed at its domain-A time `t
 — temporally consistent, though not the domain-A historical truth at `t`; see the
 freeze caveat.)
 
-Non-determinism is confined to the recorded **values** (frozen at processing
-time) and the A → B reclock; the reclock makes the clamped integration
-**reproducible**, so `v` is a definite function of the `DELTA TABLE` + reclock —
-not of the wall-clock rate at which facts were processed. (Replicas race to
-commit and may record different correspondences; the winning commit is
-authoritative.) The `mz_timestamp` remains queryable as data for "as of
-input-time" questions, within `RETAIN HISTORY`.
+**Reclocking happens at the write boundary**, and `mz_now()` is contextual — the
+body runs in its *inputs'* domain. `RECORD`'s query is in A and reclocks A→B as
+it writes the `DELTA TABLE` (so `mz_now()` there is A); `INTEGRATE`'s query reads
+the `DELTA TABLE` in B and reclocks B→A as it writes `v` (placing by
+`mz_timestamp`, driving the frontier via the reclock; `mz_now()` there is B).
+
+**Representing the reclock: frontier as data.** Rather than a separate reclock
+collection, the A→B mapping can live **in-band** as progress markers in the
+`DELTA TABLE` — exactly `SUBSCRIBE`'s `mz_progressed` rows (a frontier advance
+with no data). A `DELTA TABLE` is then a **persisted `SUBSCRIBE` stream**: data
+rows (`mz_timestamp`/`mz_diff`) interleaved with progress markers whose
+domain-B write position records "domain A is complete through `F_A`." `INTEGRATE`
+replays it — applying data rows at their `mz_timestamp` and advancing its
+domain-A output frontier on each progress marker. This is the symmetric partner
+of `differentiate`: where `CHANGES` turns *changes* into data (`mz_diff`),
+progress markers turn the *frontier* into data (`mz_progressed`), and `INTEGRATE`
+reads both back.
+
+This is the preferred representation because it makes exactly-once simple:
+`RECORD`'s data and progress are one shard, so a delta is guarded against
+double-recording by a **single compare-and-append** — no multi-shard atomicity is
+needed to keep data and reclock consistent (they cannot diverge; they are the
+same shard). Replica races are thus an exactly-once concern resolved by that one
+CAS, not a correctness problem (the data and frontiers each function sees are
+deterministic). (The multi-*output* bundle — `RECORD`/`INTEGRATE`/`DELETE` at one
+`T` — still wants a multi-shard transaction; that is separate.) Non-determinism
+is confined to the recorded **values** (frozen at processing time), so `v` is a
+definite function of the `DELTA TABLE`. The `mz_timestamp` remains queryable as
+data for "as of input-time" questions, within `RETAIN HISTORY`.
 
 The write verbs differ by *shape*: **`RECORD` → `DELTA TABLE`** keeps the per-row
 change log in domain B (with `mz_timestamp` as data); **`INTEGRATE` → TVC**
@@ -482,6 +504,11 @@ implementation, PR #35967):
   operationally heavy; the point is to stay inside Materialize.
 - **Distributed locking instead of OCC commit.** Rejected (latency, brittleness,
   scalability), per the OCC read-then-write design.
+- **Separate reclock collection (vs. in-band progress markers).** Considered but
+  not preferred: keeping the A→B mapping in its own shard forces a combined CAS
+  across two shards for exactly-once. Representing it in-band as `mz_progressed`
+  progress markers in the `DELTA TABLE` (a persisted `SUBSCRIBE` stream) needs
+  only a single-shard CAS and is self-describing.
 
 ## Open questions
 
