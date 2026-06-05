@@ -1,8 +1,8 @@
-# Continual Transforms: Recorded, Non-Deterministic, At-Least-Once Transformations
+# Recorders: Recorded, Non-Deterministic, At-Least-Once Transformations
 
 - Associated:
   - #4527 (consume a collection's change stream as a relation) — read side, addressed by `CHANGES`
-  - #36869 (`CHANGES` table function) — the read-side primitive this builds on
+  - #36869 (`CHANGES` table function) — the `differentiate` primitive this builds on
   - database-issues#9694 (Delete continual tasks) — the removed predecessor
   - PR #35967 (Remove continual tasks feature)
   - PR #35347 (standing queries) — adjacent prior art
@@ -13,403 +13,401 @@
 ## The Problem
 
 Materialize maintains views as **definite, deterministic functions** of their
-inputs: a view's contents at logical time `T` are fully determined by its
-inputs at `T`, and are recomputed identically on restart or on a fresh replica.
-This is the foundation of our correctness story, and it is the right default.
+inputs: a view's contents at logical time `T` are fully determined by its inputs
+at `T`, and are recomputed identically on restart or on a fresh replica. This is
+the foundation of our correctness story, and the right default.
 
 But a class of high-value workloads does not fit that model. They require
 **recording a decision made at processing time and never recomputing it**:
 
-- **Stream-table / enrichment joins.** Join a large event stream against a
-  small dimension table using the dimension's value *at the moment the event
-  arrived*, and never backfill when the dimension later changes. A normal join
-  re-derives output when the dimension changes; there is no way to express
-  "freeze the looked-up value."
-- **Finalization.** "Write down answers while deleting the upstream state" —
-  stop paying to maintain data the user knows will not change. Today customers
-  emulate this with `REFRESH EVERY` (General Mills), external Kafka loopbacks
-  (Notion), or round-tripping through Postgres (expensive at scale). Chainalysis
-  and others have asked for a first-class pattern.
-- **Upsert in compute.** Turn an append-only or custom-CDC input into an
-  upsert collection without unbounded rehydration growth — especially when a
-  temporal filter means the *active* keyspace is far smaller than all keys
-  ever seen. Wanted for custom CDC formats (custom INSERT/UPDATE/DELETE over
-  Kafka reassembled with `top k`) and partial CDC (Salesforce sends only
-  changed columns). This is the single most frequently requested item ("how do
-  I write an UPSERT in Materialize?").
+- **Stream-table / enrichment joins.** Join a large event stream against a small
+  dimension table using the dimension's value *at the moment the event arrived*,
+  and never backfill when the dimension later changes.
+- **Finalization.** "Write down answers while deleting the upstream state" — stop
+  paying to maintain data the user knows will not change. Emulated today with
+  `REFRESH EVERY` (General Mills), Kafka loopbacks (Notion), or Postgres
+  round-trips (expensive at scale). Chainalysis and others have asked for it.
+- **Upsert in compute.** Turn an append-only or custom-CDC input into an upsert
+  collection without unbounded rehydration growth — the single most frequently
+  requested item ("how do I write an UPSERT in Materialize?").
 - **Non-deterministic / external enrichment (UDFs).** Geocode, fraud-score,
-  currency-convert, classify-with-an-LLM, or otherwise call a function whose
-  result is non-deterministic and/or side-effecting, exactly once per row, and
-  persist the answer so a restart reuses it rather than re-calling.
+  currency-convert, classify-with-an-LLM: call a function whose result is
+  non-deterministic and/or side-effecting, once per row, and persist the answer.
 - **Idempotency / dedup within a window, metrics downsampling, tumbling/session
-  window finalization, audit logs (internal sinks), webhook demultiplexing,
-  stateless source transforms** too large to maintain as an MV.
+  window finalization, audit logs, webhook demultiplexing, stateless source
+  transforms** too large to maintain as an MV.
 
-The common shape: a transformation that is **triggered by input changes**,
-whose output **depends on when it ran** (so it is not a deterministic function
-of inputs at a logical time), and whose result must be **durably recorded**.
-Recomputation-from-scratch is not just unnecessary here — for the
-non-deterministic cases it would produce a *different* answer, so it must be
-avoided. And because we give up recomputation, **bounding the growth** of the
-recorded output (and the engine's internal state) becomes a first-class problem,
-not an afterthought.
+The common shape: a transformation **triggered by input changes**, whose output
+**depends on when it ran** (not a deterministic function of inputs at a logical
+time), and whose result must be **durably recorded** — recomputation would
+produce a *different* answer, so it must be avoided. And because we give up
+recomputation, **bounding the growth** of the recorded output is a first-class
+problem, not an afterthought.
 
-We shipped a predecessor for exactly this — **Continual Tasks (CTs)** — in
-`v0.127.0`, flag-gated it off in `v26.21.0`, and removed it in `v26.23.0`
-(PR #35967). The removal rationale (database-issues#9694) was explicit:
-*"Implementation isn't done, and there is no consensus whether it's the right
-design or not,"* alongside a general push to burn down codebase complexity.
-**It was not removed because the model is unsound or impossible.** The use cases
-remain, the demand is real, and — critically — two new primitives now exist that
-did not when CTs were first designed: the `CHANGES` table function (#36869) and
-the OCC read-then-write commit substrate (`20260210_incremental_occ_read_then_write.md`).
-This document proposes reviving the capability by **distilling it to a minimal
-set of orthogonal primitives** designed to avoid the lack-of-consensus that
-killed CTs.
+We shipped a predecessor — **Continual Tasks (CTs)** — in `v0.127.0`, flag-gated
+it off in `v26.21.0`, and removed it in `v26.23.0` (PR #35967). The removal
+rationale (database-issues#9694) was explicit: *"Implementation isn't done, and
+there is no consensus whether it's the right design or not,"* plus a push to burn
+down complexity. **It was not removed because the model is unsound.** The use
+cases remain, and two new primitives now exist that did not when CTs were
+designed: the `CHANGES` table function (#36869) and the OCC timestamped-write
+substrate (`20260210_incremental_occ_read_then_write.md`). This document revives
+the capability by **distilling it to a small calculus** (`differentiate` /
+`integrate` / `record` / `freeze`) and a concrete surface (a **`RECORDER`**
+object writing **`DELTA TABLE`s**).
 
 ## Success Criteria
 
-A solution is successful if:
-
 - A user can express a **stream-table/enrichment join** that freezes the
-  dimension value as of processing time, append-only, without indexing the
-  stream.
-- A user can express **finalization** — record a result and stop maintaining
-  the inputs that produced it — without leaving Materialize (no Kafka loopback,
-  no external Postgres).
+  dimension value as of processing time, without indexing the stream.
+- A user can express **finalization** — record a result and stop maintaining its
+  inputs — without leaving Materialize.
 - A user can express **upsert in compute** with bounded state, recovering exact
   semantics, without unbounded rehydration cost.
-- A transformation body may invoke **non-deterministic / side-effecting
-  functions (UDFs)**, with each invocation's result **recorded once** and reused
-  across restarts and replicas rather than recomputed.
-- **The output collection has a bounded size** under an explicit retention or
-  keying contract, and **the engine's internal/working state and the underlying
-  persist shards are physically reclaimed** (no unbounded growth from
-  superseded rows whose retractions never consolidate).
+- A body may invoke **non-deterministic / side-effecting functions (UDFs)**, each
+  result **recorded once** and reused across restarts/replicas, not recomputed.
+- **The recorded output and the engine's internal state stay bounded** under an
+  explicit retention contract, and the underlying persist shards are **physically
+  reclaimed**.
 - **A recorded row's value can be frozen at processing time while its existence
-  stays tied to a referenced entity** — so deleting a user **physically erases**
-  their recorded rows (compliance), even though the recorded values do not
-  recompute when the source changes.
-- The design **reduces to a small set of orthogonal primitives** that compose to
-  cover every use case; richer behaviors (stream-table join, upsert, retention,
-  compliance cascade, the correctness tiers, the surface syntaxes) are
-  compositions, not bespoke features.
-- The feature does **not** reintroduce the open-ended complexity that blocked
-  consensus on CTs: the high-demand cases must be free of the hardest semantic
-  questions (self-reference / read-your-own-writes / input reclocking).
+  stays tied to a referenced entity** — deleting a user **physically erases**
+  their recorded rows (compliance), without the values recomputing.
+- The design **reduces to a small set of orthogonal operations** that compose;
+  richer behaviors (stream-table join, upsert, retention, cascade, the tiers, the
+  surfaces) are compositions, not bespoke features.
+- It does **not** reintroduce the complexity that blocked CTs: the high-demand
+  cases stay free of self-reference / read-your-own-writes / input reclocking.
 
 ## Out of Scope
 
-- **Exactly-once delivery to external systems.** Effects that leave Materialize
-  are at-least-once with idempotency keys; true 2PC with external systems is not
-  a goal.
-- **High write throughput under heavy contention.** Like the OCC read-then-write
-  work, this serializes conflicting commits via retries; it is not a
-  high-contention OLTP write path.
-- **Event-time / partially-ordered time semantics.** We assume the existing
-  totally-ordered logical-time model. (Event-time imports — e.g. via an Iceberg
-  source — are a separate, complementary effort.)
-- **General multi-output atomic tasks** beyond what the commit substrate
-  naturally supports; the first increment targets a single output collection.
-- **Replacing materialized views.** This is for transformations that must record
-  a non-deterministic/processing-time decision; deterministic IVM stays in MVs.
+- **Exactly-once delivery to external systems.** External effects are
+  at-least-once with idempotency keys; no 2PC.
+- **High write throughput under heavy contention.** Conflicting commits serialize
+  via OCC retries; not an OLTP write path.
+- **Event-time / partially-ordered time.** We assume the existing totally-ordered
+  logical-time model (event-time imports are a separate effort).
+- **General multi-output atomic tasks** beyond what the commit substrate gives;
+  the first increment targets few outputs.
+- **Replacing materialized views.** Deterministic IVM stays in MVs; this is for
+  recording non-deterministic/processing-time decisions.
 
 ## Solution Proposal
 
 ### Summary
 
-The feature reduces to **three orthogonal primitives**, plus `CHANGES` (the
-already-shipped read-side primitive, #36869) and ordinary SQL/dataflow. Every
-use case — and every richer concept below (stream-table join, upsert, retention,
-compliance cascade, the correctness tiers, the surface syntaxes) — is a
-**composition** of these, not a bespoke feature:
+The feature is a small calculus over two kinds of collection, plus a standing
+object that applies it.
 
-- **P1 — RECORD**: a derived collection that is *definite by persistence*, never
-  recomputed. Its contents are the bytes that were written; it survives restart
-  and replicas as data, not as a re-evaluated function. (Every MV today is
-  definite-by-*recomputation*; this is the new dual.)
-- **P2 — COMMIT@T**: an input-triggered, timestamped write. It runs a body when
-  the input advances and atomically commits the resulting diffs into a RECORD
-  output at the commit time `T` (racing replicas resolved by compare-and-append).
-  This binds a computation to *when it ran* and makes that binding the durable
-  fact — the only source of processing-time dependence, and the only writer of
-  P1. (Reuses the OCC timestamped-write substrate.)
-- **P3 — FROZEN(expr)**: a read-side cut. Evaluate `expr` once at processing
-  time and treat the result as constant thereafter; later changes to its inputs
-  do not flow. This severs *value*-dependence on a source while leaving the
-  row's relational *existence* live.
+- A **TVC** (time-varying collection) is a normal collection — change is implicit.
+- A **dTVC** (delta-TVC) carries its change *as data*: rows with `mz_timestamp`
+  and `mz_diff` columns. Its value is the integral of those rows.
 
-A fourth concept, **DELIVERED-THROUGH-`T`** (governing at-least-once external
-effects), is itself P1+P2 applied to a frontier value (a recorded
-"emitted-through-`T`" marker), so the irreducible core is the three above.
+Four operations move between them:
 
-### The basis in one picture: stream/table duality + sample-and-hold
+| operation | signature | surface |
+|---|---|---|
+| **differentiate** | TVC → dTVC | `CHANGES(x AS OF …)` (shipped, #36869) |
+| **integrate** | dTVC → TVC | `INTEGRATE r AS v` |
+| **record** | dTVC → durable dTVC | `RECORD r INTO delta_table` |
+| **bound** | keep a dTVC finite | temporal filter, or `DELETE r FROM delta_table` |
 
-The three primitives are the missing operators of stream/table duality:
+plus **freeze**, which is not a keyword but falls out of typing (below).
 
-- `CHANGES` is table→stream (`differentiate`): turn a collection's diffs into
-  data (`mz_timestamp`/`mz_diff` as columns).
-- **RECORD (P1)** is stream→table (`integrate`) **made durable and
-  authoritative**: the integral *is* the state, not a recomputable view.
-- **FROZEN (P3)** is the `sample-and-hold` that other engines (Flink's
-  temporal/lookup join, Kafka Streams' stream-table join) bury *inside* a join
-  operator. Pulling it out as a first-class, per-value scalar is the key move: it
-  lets one row freeze some columns while keeping others (and the row's existence)
-  live — which a join-level freeze cannot express, and which makes us strictly
-  more expressive than Flink/Kafka (the currency-conversion-with-compliance case)
-  with *fewer* operators.
+A **`RECORDER`** is the standing object that runs a body on each input change and
+**commits its `RECORD`/`INTEGRATE`/`DELETE` actions atomically at the commit time
+`T`** (reusing the OCC timestamped-write substrate). Everything else —
+stream-table join, upsert, retention, the compliance cascade, the correctness
+tiers — is a *composition* of these, not a separate feature.
 
-**COMMIT@T (P2)** binds a result to the instant it was produced.
+### The conceptual basis: TVC ↔ dTVC duality
+
+`differentiate` turns a *mutable* TVC into an **append-only log of immutable
+change-records**: each `(row, mz_timestamp, mz_diff)` is permanent and
+self-describing, so it is independent of system/processing time — *when* you read
+it, or how the source mutates afterward, cannot change it. `mz_timestamp` /
+`mz_diff` are meaningful **only on a dTVC**; `differentiate` introduces them,
+`integrate` consumes them.
+
+In stream/table-duality terms: **`CHANGES` is `differentiate`** (`D = 1 − z⁻¹`),
+**`INTEGRATE`/`RECORD` are `integrate`** (`I = D⁻¹`) made *durable and
+authoritative* — the integral *is* the state, not a recomputable view — and
+**`freeze` is `sample-and-hold`** (a projection: idempotent, with `D(freeze x) =
+0`), the operator other engines bury inside their join. All three are faces of
+the single delay operator `z⁻¹`.
+
+`record` and `integrate` are the two durable shapes: `record` persists a dTVC
+*as deltas* (a `DELTA TABLE` — a log); `integrate` persists it *as state* (a TVC
+— self-correcting, MV-like).
 
 ### The determinism boundary (why composition stays sound)
 
-Materialize's soundness rests on definiteness. The basis confines
-non-definiteness to exactly two primitives and then *absorbs* it:
+Non-definiteness enters at exactly two points — **the commit picks `T`** and **a
+frozen value samples a non-tracked source at `T`** — and is then **absorbed**:
+the moment a result is `RECORD`ed/`INTEGRATE`d it is definite-by-persistence, so
+downstream MVs read a definite collection and never see the non-determinism.
+`differentiate`, `integrate`, `JOIN`, `reduce`, and temporal filters introduce
+none. The single enforceable rule: **freezing (and processing-time writes) are
+legal only inside a `RECORDER`'s recorded output**; a frozen lookup in a plain MV
+taints it and is rejected at plan time.
 
-- **P2 chooses the instant** (commit `T`, replica race, `now()`); **P3 freezes
-  what was true at that instant.** Together they are the entire non-determinism
-  boundary — `JOIN`/`reduce`/temporal-filter introduce none.
-- **P1 absorbs it**: the moment a non-definite result is written it becomes
-  definite-by-persistence. Downstream MVs read a *recorded, definite* collection
-  and never see the non-determinism, so ordinary IVM composes on top without
-  taint.
-- The one place this weakens is the external boundary
-  (DELIVERED-THROUGH-`T`): the effect has already left Materialize, so
-  absorption is at-least-once, not exactly-once.
+### The surface: `DELTA TABLE` and `RECORDER`
 
-This yields a single enforceable rule that keeps non-determinism in the box:
-**`FROZEN(...)` and processing-time writes are legal only inside a RECORD
-output.** A `FROZEN()` in a plain MV taints it and is rejected at plan time.
+A **`DELTA TABLE`** is a table typed as a dTVC: it has implicit
+`mz_timestamp mz_timestamp` and `mz_diff bigint` columns, and its rows are
+*deltas* (its value is their integral). It is *not* append-only — it can be
+pruned/compacted — which is why "delta" (what the rows are), not "journal" (an
+append-only promise we don't keep), is the right name.
 
-### Everything else is composition
+```sql
+CREATE DELTA TABLE enriched (a, b, c, val);   -- implicit mz_timestamp, mz_diff
+```
 
-`Δ(X)` = `CHANGES(X)`. Body = ordinary SQL. (Reference freshness defaults are
-below.)
+A **`RECORDER`** binds named relations and a set of actions:
 
-| Concept / use case | Composition |
-|---|---|
-| **Stream-table / enrichment join** | RECORD ← COMMIT@T over `Δ(stream)`, `FROZEN` on the looked-up dimension values. `STREAM JOIN` is *sugar* for exactly this. |
-| **Currency-conversion + compliance** | as above with `FROZEN(convert(amt, fx.rate))`, `FROZEN(u.name)`, but **no** `FROZEN` on the `users` join ⇒ existence stays live ⇒ a `users` delete cascades a retraction; output indexed by `user_id`. |
-| **Upsert in compute** | RECORD ← COMMIT@T, body `SELECT DISTINCT ON (key) … ORDER BY seq DESC` over `Δ(input)`. No new primitive — `top-1` is plain SQL; the "transform-ness" is P1+P2 (listen-only input, output = rehydrated reduce state). |
-| **Dedup-in-window** | upsert pattern + temporal filter in the live structure. |
-| **Retention window** | RECORD + temporal filter (`mz_now() < ts + W`); no `DELETE`, self-finalizing. |
-| **Metrics rollup / finalization** | RECORD + reducing body; window close = react to `mz_diff = -1` in `Δ(input)`. |
-| **Internal sink/audit, stateless transform, webhook demux** | RECORD ← COMMIT@T, body is a projection/route. |
-| **Non-det / UDF enrichment, recorded once** | RECORD + COMMIT@T + `FROZEN(udf(...))` — P2 ensures one write per `T`, P3 ensures the value never re-derives. |
-| **Reverse-ETL / outbox** | DELIVERED-THROUGH-`T` (= RECORD frontier) gating emission. |
+```sql
+CREATE RECORDER rec1 WITH
+  rel1 AS (
+    SELECT e.*, d.val
+    FROM CHANGES(events AS OF AT LEAST mz_now() - INTERVAL '1 hour') e
+    JOIN dim d ON e.fk = d.key          -- dim is a TVC reference ⇒ frozen lookup
+  ),
+  rel2 AS (
+    SELECT DISTINCT ON (a, b, c) *      -- first value seen per key
+    FROM enriched WHERE mz_diff > 0 ORDER BY a, b, c, mz_timestamp ASC
+  ),
+  rel3 AS ( SELECT * FROM enriched ANTI JOIN rel2 )  -- the non-first-seen rows
+AS
+  RECORD    rel1 INTO enriched,         -- append frozen enriched deltas
+  INTEGRATE rel2 AS  first_seen,        -- maintain a deduped TVC
+  DELETE    rel3 FROM enriched;         -- prune superseded rows (bound the dTVC)
+```
 
-No use case needs a primitive outside `{P1, P2, P3}` (+ the derived
-DELIVERED-THROUGH-`T`). Reclassifying the concepts this doc went through:
-**CHANGES** is a boxed dependency; **RECORD** and **COMMIT@T** are primitive;
-**"frozen value vs. live existence"** is the *single* primitive `FROZEN` plus
-ordinary joins (live existence = the *absence* of `FROZEN` on the join);
-**eviction rules**, **`STREAM JOIN`**, the **surface altitudes**, and the
-**correctness ladder** are all derived (below).
+This records enriched events into a `DELTA TABLE`, integrates a first-seen
+(deduped) TVC out of it, and prunes the table to one row per key. The actions
+commit atomically at `T`.
 
-### Reference freshness defaults
+- **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to `d`.
+- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC. Because a
+  TVC cannot be written below its `upper`, past-dated deltas are written at
+  `max(r.mz_timestamp, mz_now())` and consolidated (drop non-positive
+  multiplicity). Consequence: `v`'s *current contents* are definite, but its
+  *history* is integration-order-dependent — fine for present-time reads, a
+  caveat if `RETAIN HISTORY` is set on `v`.
+- **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
-Because `FROZEN` is a per-value scalar, a body needs a default for references it
-does not mark. Inside a stream context (`FROM CHANGES(...)`) the default is
-**frozen**: a referenced dimension is looked up once at `T` and not maintained —
-the cheap stream-table-join behavior that never indexes the stream. **Live**
-behavior (existence cascade, or a value that tracks its source) is the explicit
-opt-in, and it is what costs an index on the output's liveness key. This keeps
-the common case cheap and makes the expensive case visible.
+### Freeze is typing, not a keyword
 
-### Keeping P1 and P2 orthogonal: why this avoids the CT pain
+A `RECORDER` body re-evaluates only on **driver** deltas (its dTVC inputs:
+`CHANGES(...)` or `DELETE TABLE`s). A **TVC reference** joined in (`JOIN dim d`)
+is therefore looked up **once per driver-delta and recorded** — a later change to
+`dim` produces no driver-delta, so the recorded row never moves. **Recording a
+join against a bare TVC reference *is* the freeze**; no marker is needed.
 
-The removed CTs fused trigger + reclock + commit into one object. Their Decision
-Log spent nearly all its effort on problems that came *from the fusion* —
-specifically from **reclocking the input from `T` to `T-1`** so a task could
-read-then-write while reading its own output:
+The rule: **`CHANGES(x)` / `DELTA TABLE` = tracked (deltas flow); bare TVC =
+frozen reference (sampled at lookup).** Tracking is the opt-in; freeze is the
+default. (A per-value `FROZEN(expr)` survives only as a rare fine-grained tool —
+freeze *some* columns of a tracked relation — and is likely droppable for v1.)
 
-1. **Input/reference inconsistency** — inputs read at `T-1`, references at `T`.
-2. **UPSERT impossibility under `reads@T-1`**, which forced the "controlled
-   iteration" mechanism.
+This makes the **compliance cascade compose** rather than needing a bespoke
+`ON DELETE CASCADE`: make the dimension a *driver* via a second action.
 
-Keeping the primitives orthogonal dissolves both. `CHANGES` feeds the body the
-changelog as data (the timestamp is a *column*, not a read frontier), so the body
-reads references at the genuine `T` (no skew), COMMIT@T writes the output at `T`,
-and "consumed through `T`" is the output's own progress frontier — no holding-pen
-`DELETE`+`INSERT` to make atomic. The reclocking simply does not exist.
+```sql
+  DELETE (SELECT * FROM enriched e WHERE e.user_id IN
+            (SELECT user_id FROM CHANGES(users) WHERE mz_diff < 0))
+    FROM enriched
+```
 
-### Bounding output growth is a P1 invariant
+Frozen value + live existence = two driver-actions in one recorder.
 
-The central hard problem — keeping a never-recomputed output and its working
-state bounded — is a property **P1 must guarantee**, not a separate feature.
-*Record-don't-recompute* wants to keep data; *bounded resources* wants to forget
-it; they reconcile only if forgetting is **explicit, part of the output's
-contract, and (because the result is non-deterministic) irreversible**. That is
-exactly "finalization": keep the answers, drop the working state.
+### The evaluation rule (the key semantic)
 
-Eviction is "a row's lifetime condition ceased to hold", composed from the
-primitives + boxed SQL:
+The example reads and writes `enriched` in the same recorder (`rel2`/`rel3` read
+it; `RECORD`/`DELETE` write it). Left unspecified, that is the
+Continual-Tasks Decision-Log problem (reads@`T-1` vs `T`, "controlled
+iteration"). We avoid it with one rule:
 
-- **Age** — temporal filter; clock-driven, self-finalizing, no index.
-- **Referential / ownership** (compliance) — *absence* of `FROZEN` on a join ⇒
-  IVM retracts the row when the parent is deleted; a **physical** retraction, not
-  a read-time filter; costs an index on the output's liveness key.
-- **Supersession** — a `top-k` body; the reduce emits the exact
+> **All reads in a recorder observe the pre-commit snapshot; all writes apply
+> atomically at `T`; there is no intra-commit fixpoint.**
+
+Consequences: a row recorded at `T` is visible to `rel2`/`rel3` only at `T+1`, so
+pruning lags recording by one tick — **eventual convergence**, which is exactly
+the relaxed bar these use cases accept. There is no read-your-own-writes, hence
+none of the `T-1`-reclocking machinery that sank CTs. (In the example the
+`DELETE` is fixpoint-stable anyway — deleting non-first-seen rows cannot change
+which row is first-seen — but the rule is what guarantees that in general.)
+
+### Stream-table join: there are two freezes
+
+For `events` (→ `CHANGES`, carrying `mz_timestamp = t_e`) joined to a dimension:
+
+1. **As of the event's logical time `t_e` — DEFINITE.** Because `t_e` is data,
+   "the dim value at `t_e`" is an ordinary relational join against the
+   dimension's *changelog* (the version whose validity interval contains `t_e`).
+   It does **not** backfill (a later dim change adds a new version; it doesn't
+   change which version covered `t_e`), is fully recomputable, and needs **no
+   freeze** — the inequality on the timestamp columns *is* the freeze. Cost: the
+   dimension must retain history back to the oldest live event. This is nearly
+   expressible today with `CHANGES` + `RETAIN HISTORY` + SQL.
+2. **As of processing time — NON-DEFINITE.** Attach whatever the dimension was
+   when the event was processed, recorded once. Used when you do not want to keep
+   dimension history, or the value is not in Materialize (external UDF, `now()`).
+   This is the case that needs `record` (and the type-based freeze above).
+
+> **Recording the frozen value is the dual of retaining the input's history.**
+> Either keep the inputs' history and recompute the as-of join (definite), or
+> record the output and forget the inputs (non-definite). `record`/freeze is the
+> second — it buys "forget the upstream state" (finalization) at the price of
+> "not recomputable," and it is the only way to attach a value not derivable from
+> retained Materialize data.
+
+### Bounding growth = bounding a dTVC
+
+A dTVC is append-only by nature, so the central growth problem is exactly
+**keeping a dTVC finite**. `record`-don't-recompute wants to keep data; bounded
+resources wants to forget it; they reconcile only if forgetting is **explicit,
+part of the contract, and (being non-deterministic) irreversible** — i.e.
+finalization. The ways to bound, composed from the operations:
+
+- **Age** — a temporal filter (`mz_now() < mz_timestamp + W`) on the dTVC;
+  clock-driven, self-finalizing (insert@`T`/retract@`T+W` consolidate as `since`
+  advances), no index. Reuses the `CHANGES` maintained-MV machinery.
+- **Referential / ownership** (compliance) — a `DELETE` action driven by
+  `CHANGES(dimension) WHERE mz_diff < 0`; a **physical** retraction, not a
+  read-time filter; costs an index on the dTVC's liveness key.
+- **Supersession** — a `top-k`/`reduce` body; the reduce emits exact
   retract-old/insert-new diffs (O(live keys)).
-- **Arbitrary predicate** — escape hatch: explicit `DELETE` in the imperative
-  surface, documented as a read-then-write.
+- **Arbitrary** — an explicit `DELETE` action (read-then-write; documented cost).
 
-Two physical invariants P1 must hold for space to actually be reclaimed:
+Two physical invariants the engine must hold for space to be reclaimed:
 
 1. **Retractions must consolidate with their inserts** — a `-1` cancels a `+1`
-   only if it is the *exact same row*. The `top-k` reduce and the IVM cascade
-   emit exact retractions by construction; hand-written `DELETE`s may not (e.g.
-   retracting `max(value)` without the stored value), which is the "careful
-   re-integration" hazard.
-2. **Bounded growth ⇔ bounded `since` lag ⇔ bounded retention window** — space is
+   only if it is the *exact same row*. `reduce` and the cascade emit exact
+   retractions; hand-written `DELETE`s may not (the "careful re-integration"
+   hazard).
+2. **Bounded growth ⇔ bounded `since` lag ⇔ bounded retention** — space is
    reclaimed only once compaction advances `since` past a retraction, so
-   `RETAIN HISTORY` trades off directly against bounded growth. The engine must
-   own the read policy / compaction on its P1 output.
+   `RETAIN HISTORY` trades off directly against bounded growth. The engine owns
+   the read policy / compaction on its outputs.
 
-The reason this is a *transform* and not a plain `top-k` MV (which would also
-bound the output) is the **input** side: P1+P2 consume the input as a listen-only
-changelog and persist the reduce's state *as* the output (rehydrated on restart),
-so the upstream input can be forgotten without a rehydration snapshot. The only
-"self-reference" is standard operator-state persistence.
+Note that the input window (`CHANGES(events AS OF AT LEAST mz_now() - '1 hour')`)
+and the output `DELTA TABLE` are **two independent dTVCs with two independent
+bounds**: the window bounds the `differentiate` state; the `DELETE`/dedup bounds
+the recorded output.
 
-### Surfaces (derived ergonomics, not capability)
+### Surfaces / altitudes
 
-The same three primitives are exposed at altitudes that trade safety for
-generality; none adds capability.
+Same operations, two altitudes; neither adds capability.
 
-1. **Declarative recorded collection** — the safe default. No self-reference;
-   structurally free of every Decision-Log question.
-
-    ```sql
-    CREATE CONTINUAL TRANSFORM enriched
-      FROM CHANGES(orders)
-      AS SELECT o.*, c.tier, FROZEN(geocode(o.addr)) AS geo
-         FROM changes o JOIN customers c ON o.cust_id = c.id
-      INTO append enriched_out;
-    ```
-
-2. **`BEGIN CONTINUAL TRANSACTION` … `COMMIT EVERY`** — Aljoscha's prototype:
-   arbitrary bundled read-then-write statements over the same engine, fed from
-   `CHANGES` rather than a holding pen. Power-user surface; self-referential
-   bodies allowed with documented footguns.
-
-    ```sql
-    BEGIN CONTINUAL TRANSACTION;
-      INSERT INTO output
-        SELECT e.id, FROZEN(dim.v) FROM CHANGES(events) e JOIN dim ON …;
-    COMMIT EVERY '1s';
-    ```
-
-3. **`STREAM JOIN`** (candidate) — sugar for `JOIN over CHANGES` with `FROZEN`
-   on the looked-up side; worth a keyword only to make the asymmetry/cost
-   explicit and to *imply* a RECORD output (it is non-definite and would taint an
-   MV). See Open Questions.
+1. **`RECORDER`** (declarative, durable object) — the safe default shown above.
+   No self-reference beyond the pre-commit-read rule; structurally free of the
+   Decision-Log questions.
+2. **`BEGIN CONTINUAL TRANSACTION … COMMIT EVERY`** (imperative) — Aljoscha's
+   prototype: arbitrary bundled read-then-write statements over the same engine,
+   fed from `CHANGES`. The power-user surface; self-referential bodies allowed
+   with documented footguns. ("Continual transaction" is reserved for this
+   imperative form; the durable object is a `RECORDER`.)
 
 ### The correctness ladder is a classification of compositions
 
-The tiers are not primitives; they fall out of *which* primitives a body uses:
+The tiers are not primitives; they fall out of which operations a body uses:
 
 | Tier | Composition | Semantics |
 |---|---|---|
-| **1. Recorded append** | P1 + P2 (+ `FROZEN`) | **exactly-once into persist** |
-| **2. General read-then-write** | P2 with a self-referential body | exactly-once into persist per commit |
-| **3. Eventual / stateful** | P1 + P2 + `reduce`/`top-k` | **at-least-once / eventual**; exact once caught up |
-| **4. External effects** | DELIVERED-THROUGH-`T` (= P1+P2) | **at-least-once + idempotency key** |
+| **1. Recorded append** | `RECORD` over `CHANGES` (frozen refs) | **exactly-once into persist** |
+| **2. General read-then-write** | imperative bundle, self-referential body | exactly-once per commit |
+| **3. Eventual / stateful** | `RECORD`/`INTEGRATE` + `reduce`/`top-k` | **at-least-once / eventual**; exact once caught up |
+| **4. External effects** | recorded "delivered-through-`T`" frontier | **at-least-once + idempotency key** |
+
+### Restart behavior
+
+- **`RECORD INTO delta_table`**: resume appending from the table's `upper`; no
+  snapshot, no recompute. The "consumed-through-`T`" frontier *is* the output's
+  `upper`. Definite-by-persistence; the impl-drift risk is acceptable because the
+  rows are frozen.
+- **`INTEGRATE`**: an MV over the durable `DELTA TABLE`, so it recomputes and
+  self-corrects — modulo the history caveat above (current contents definite).
 
 ### Dependencies / things that may change
 
-- Builds on `CHANGES` (#36869) and the OCC timestamped-write substrate
-  (`20260210_incremental_occ_read_then_write.md`); needs the "commit a bundle of
-  diffs atomically at `T`" capability the prototype flagged as missing.
-- Needs an owned-output / progress-frontier concept (P1), and the engine to own
-  the read policy / compaction on it.
-- Time-based retention reuses the temporal-filter / lagged-read-hold mechanism
-  from the CHANGES maintained-MV mode.
+- Builds on `CHANGES` (#36869) and the OCC timestamped-write substrate; needs the
+  "commit a bundle of actions atomically at `T`" capability the prototype flagged
+  as missing.
+- Needs `DELTA TABLE` as a typed object (implicit `mz_timestamp`/`mz_diff`), and
+  recorder-owned outputs with an engine-driven read policy / compaction.
+- Time-based bounding reuses the `CHANGES` maintained-MV temporal-filter /
+  lagged-read-hold mechanism.
 - Multi-replica race-to-commit (compare-and-append, losers discard).
 
 ## Minimal Viable Prototype
 
-Two prototypes already substantially de-risk this:
-
-1. **`CHANGES`** (#36869) — the read side, implemented and tested (one-off and
-   maintained sliding-window MV modes), including restart-exact reproduction.
-2. **`BEGIN CONTINUAL TRANSACTION`** (Aljoscha, Feb 2026) — a working demo of
-   the imperative surface and the data-plane/control-plane commit split,
-   including a live stream-table join via a holding pen.
-
-The MVP for *this* design is to connect them as the three primitives: a RECORD
-output written by COMMIT@T over `CHANGES(input)`, demonstrated end-to-end on
-(a) the stream-table join / UDF enrichment with `FROZEN` (Tier 1), and (b) the
-`top-1` eventual upsert with input forgetting (Tier 3). The
-currency-conversion-with-compliance case (frozen value + live-existence cascade)
-is the stretch goal that validates per-value `FROZEN` and the lint rule.
+Two prototypes already de-risk this: `CHANGES` (#36869, the `differentiate` side,
+including restart-exact reproduction) and `BEGIN CONTINUAL TRANSACTION` (Feb
+2026, the imperative surface + the data-plane/control-plane commit split). The
+MVP is to connect them as a `RECORDER`: a `RECORD` into a `DELTA TABLE` plus an
+`INTEGRATE`, over `CHANGES(input)`, demonstrated on (a) the stream-table join /
+UDF enrichment with type-based freeze (Tier 1) and (b) the `top-1` eventual
+upsert with input forgetting (Tier 3). The currency-conversion-with-compliance
+case (frozen value + a `DELETE`-driven cascade) is the stretch goal that
+validates the freeze typing and the lint rule.
 
 ## Alternatives
 
-- **Bespoke features per use case** (a separate stream-join feature, an upsert
-  feature, a retention feature). Rejected: this is what bloated and stalled CTs.
-  Distilling to `{P1, P2, P3}` makes the surface small and the features fall out
-  as compositions.
+- **Bespoke features per use case** (separate stream-join, upsert, retention
+  features). Rejected: this is what bloated and stalled CTs. The calculus makes
+  the surface small and the features fall out as compositions.
 - **Revive Continual Tasks as-is.** Rejected: removed for lack of consensus and
-  incompleteness, and its core mechanism (input reclocking to `T-1`) is the
-  source of the input/reference inconsistency and the UPSERT impossibility —
-  exactly what keeping P1/P2 orthogonal avoids.
-- **Imperative-only (`BEGIN CONTINUAL TRANSACTION` alone).** Rejected as the
-  *sole* surface: session-scoped (not a durable object), and its generality
-  exposes self-reference footguns to every user. Kept as the power-user altitude.
-- **Declarative-only (recorded collection alone).** Rejected as the sole
-  surface: cannot express general bundled read-then-write (upsert, rollup)
-  without contortions. Kept as the safe default altitude.
-- **`FROZEN` as a join-level modifier instead of a scalar.** Rejected: it cannot
-  express "this column frozen, that column live in the same row" — the
-  currency-conversion-with-compliance case. The scalar is the orthogonal basis
-  vector; a `STREAM JOIN` keyword can still expand to it.
-- **Solve finalization with Iceberg source + sink (+ append-only sink mode).**
-  Genuinely complementary (temporal filter on the *input*, teeing hot data to IVM
-  and cold data to Iceberg, per Frank's note), but it addresses *archival/offload*,
-  not in-Materialize recorded transforms or non-deterministic enrichment.
-- **External Postgres / Kafka loopback (status quo).** Rejected: expensive at
-  scale and operationally heavy; the point is to keep this inside Materialize.
-- **Distributed locking instead of OCC commit.** Rejected for the same reasons as
-  in the OCC read-then-write design (latency, brittleness, scalability).
+  incompleteness; its core mechanism (input reclocking to `T-1`) is the source of
+  the input/reference inconsistency and the UPSERT impossibility — which the
+  pre-commit-read rule and the `differentiate` framing avoid.
+- **Imperative-only / declarative-only.** Rejected as *sole* surfaces: imperative
+  alone is session-scoped and exposes self-reference to everyone; declarative
+  alone cannot express general bundled read-then-write. Kept as two altitudes.
+- **`journal table` instead of `delta table`.** Rejected: "journal" promises
+  append-only immutability we do not keep (the recorder prunes/compacts it);
+  "delta" names what the rows are (`mz_diff`) and is consistent with dTVC /
+  `differentiate`.
+- **A `FROZEN()` keyword as the primary freeze.** Rejected as primary: freeze
+  falls out of TVC-vs-dTVC typing, so a keyword is redundant for the common case
+  (kept only as an optional fine-grained tool).
+- **Iceberg source + sink for finalization.** Complementary (archival/offload),
+  not a substitute for in-Materialize recorded transforms / non-det enrichment.
+- **External Postgres / Kafka loopback (status quo).** Rejected: expensive and
+  operationally heavy; the point is to stay inside Materialize.
+- **Distributed locking instead of OCC commit.** Rejected (latency, brittleness,
+  scalability), per the OCC read-then-write design.
 
 ## Open questions
 
-- **P1 object model & syntax.** `CREATE CONTINUAL TRANSFORM`? Reuse/extend
-  `CONTINUAL TASK` naming? How is the trigger cadence expressed declaratively
-  (vs `COMMIT EVERY`)? How do the declarative object and `BEGIN CONTINUAL
-  TRANSACTION` visibly share the same primitives?
-- **P2 commit-timestamp policy.** "Every timestamp" vs "timestamps where the
-  input is non-empty" (the Decision Log's open question) — the `INSERT … VALUES`
-  footgun, exposing millisecond granularity, and whether time-driven (not
-  input-driven) bodies are allowed.
-- **P3 `FROZEN` surface & cascade atomicity.** Confirm scalar `FROZEN(expr)` with
-  frozen-by-default in a stream context. Can the same dimension supply a frozen
-  *value* and also anchor *lifetime*? How is the liveness-key index costed and
-  made explicit? What is the cascade's atomicity story (a dimension delete and the
-  resulting recorded-row retractions committed at one `T`)?
-- **`STREAM JOIN` keyword — yes or no?** It is sugar (`JOIN over CHANGES` +
-  `FROZEN`), but the asymmetry/cost want to be explicit, with prior art (Flink
-  temporal/lookup join `FOR SYSTEM_TIME AS OF`, Kafka stream-table join). The
-  classic stream-table join freezes *everything* (no cascade), which we extend
-  with per-value `FROZEN` + live existence. Open: adopt the keyword as the
-  fully-frozen floor, and is it body-only or a standalone operator that *implies*
-  a RECORD output?
-- **`DELETE` vs. automatic phase-out.** Proposal: age → temporal filter;
-  ownership → cascade; supersession → `top-k`; arbitrary → explicit `DELETE`
-  (imperative only). Right split? Should the declarative surface accept a
-  restricted predicate-eviction policy? Should time-predicate `DELETE` be linted?
-- **Retention / keying syntax & compaction SLO.** How is the contract expressed
-  (`RETAIN '30 days'`, count-based `KEEP LAST n PER key`)? How do we guarantee
-  compaction keeps up so reclamation happens, and surface it when it falls behind?
-- **Rehydrating reduce state from the output.** What must the output retain (and
-  at what `since`) for a `top-k`/reducing body to resume *without* re-snapshotting
-  the input, and how does that interact with a time-based retention on the same
-  output?
-- **Read-your-own-writes within a commit.** How much of "controlled iteration" is
-  needed for Tier 2, given Tiers 1/3 avoid it? Can we ship Tiers 1 + 3 first?
-- **Multi-output & observability.** Multi-output P1 (webhook demux); surfacing
-  committed/delivered-through frontiers; behavior under replica churn.
+- **`RECORDER` object model & syntax.** Confirm `CREATE RECORDER WITH <rels> AS
+  <actions>`. How is the trigger cadence expressed (vs `COMMIT EVERY`)? Are the
+  bundled actions always one atomic commit at `T`?
+- **Commit-timestamp policy.** "Every timestamp" vs "timestamps where a driver is
+  non-empty" (the Decision Log's question) — the `INSERT … VALUES` footgun,
+  exposing millisecond granularity, whether time-driven bodies are allowed.
+- **Freeze typing & per-value `FROZEN`.** Confirm bare-TVC-reference = frozen,
+  `CHANGES`/`DELTA TABLE` = tracked. Is a per-value `FROZEN(expr)` needed at all,
+  or only the typing? Can one dimension supply a frozen value *and* anchor
+  lifetime (via a separate `CHANGES(dim)` driver-action)?
+- **Cascade atomicity & cost.** A dimension delete and the resulting recorded-row
+  retractions committed at one `T`; how is the liveness-key index costed and made
+  explicit?
+- **`INTEGRATE` past-dated deltas.** Confirm `max(mz_timestamp, mz_now())` +
+  consolidation; the history caveat under `RETAIN HISTORY`; behavior of
+  retractions for already-clamped rows.
+- **`DELETE` from a `DELTA TABLE` semantics.** Physical removal vs appending a
+  `-1`; how reclamation is guaranteed and surfaced when compaction lags.
+- **Stream-table join: which freeze is the default?** As-of-event-time (definite,
+  needs dim history) vs as-of-processing-time (the `record` route). Do we offer
+  the definite temporal join as first-class sugar, given it is nearly expressible
+  today?
+- **Output ownership & multi-output.** Recorder-owned vs user-writable `DELTA
+  TABLE`s; multi-output recorders (webhook demux); `RETAIN HISTORY` interaction.
+- **Read-your-own-writes.** Is the pre-commit-read rule sufficient for all
+  intended bodies, or do some need controlled iteration (imperative surface)?
+- **Naming.** `RECORDER` / `DELTA TABLE` / `RECORD`-`INTEGRATE`-`DELETE`; is
+  "recorder" the right object noun, or should it follow the artifact (e.g.
+  `JOURNAL`)? Is the `STREAM JOIN` keyword worth adding as sugar for the
+  as-of-event-time join?
+- **Non-deterministic function story.** Explicit `VOLATILE` marker + memoization,
+  or is "recorded once" sufficient?
 - **Relationship to standing queries (PR #35347)** — overlap or composition?
-- **Non-deterministic function story.** Do we need an explicit `VOLATILE` marker
-  and engine-side memoization, or is "recorded once via P1+P3" sufficient?
