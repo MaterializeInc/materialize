@@ -1988,6 +1988,12 @@ impl<'a> Parser<'a> {
                 self.parse_create_table()
                     .map_parser_err(StatementKind::CreateTable)
             }
+        } else if self.peek_keywords(&[DELTA, TABLE]) {
+            self.parse_create_delta_table()
+                .map_parser_err(StatementKind::CreateTable)
+        } else if self.peek_keyword(RECORDER) {
+            self.parse_create_recorder()
+                .map_parser_err(StatementKind::CreateRecorder)
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
                 .map_parser_err(StatementKind::CreateSecret)
@@ -4696,6 +4702,11 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(OWNED) {
             self.parse_drop_owned()
                 .map_parser_err(StatementKind::DropOwned)
+        } else if self.parse_keyword(RECORDER) {
+            // Recorder prototype: not a catalog object, bespoke drop path.
+            self.parse_item_name()
+                .map(|name| Statement::DropRecorder(DropRecorderStatement { name }))
+                .map_parser_err(StatementKind::DropRecorder)
         } else {
             self.parse_drop_objects()
                 .map_parser_err(StatementKind::DropObjects)
@@ -4947,6 +4958,111 @@ impl<'a> Parser<'a> {
             if_not_exists,
             temporary,
             with_options,
+        }))
+    }
+
+    /// Parses `CREATE DELTA TABLE <name> (<cols>)` (recorder prototype).
+    ///
+    /// Desugars at parse time into a plain `CREATE TABLE` with implicit
+    /// `mz_timestamp mz_timestamp` and `mz_diff int8` columns appended, so the
+    /// rest of the system needs no new collection kind.
+    fn parse_create_delta_table(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(DELTA)?;
+        let stmt = self.parse_create_table()?;
+        let Statement::CreateTable(mut stmt) = stmt else {
+            unreachable!("parse_create_table returns CreateTable")
+        };
+        for (name, type_name) in [("mz_timestamp", "mz_timestamp"), ("mz_diff", "int8")] {
+            stmt.columns.push(ColumnDef {
+                name: Ident::new_unchecked(name),
+                data_type: RawDataType::Other {
+                    name: RawItemName::Name(UnresolvedItemName::unqualified(Ident::new_unchecked(
+                        type_name,
+                    ))),
+                    typ_mod: vec![],
+                },
+                collation: None,
+                options: vec![],
+            });
+        }
+        Ok(Statement::CreateTable(stmt))
+    }
+
+    /// Parses a parenthesized query, returning its raw SQL text (recorder
+    /// prototype). The query is parsed for syntax validation only.
+    fn parse_recorder_query_sql(&mut self) -> Result<String, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let body_start = self.peek_pos();
+        let _ = self.parse_query()?;
+        let body_end = self.peek_pos();
+        let body_sql = self.sql[body_start..body_end].trim().to_string();
+        self.expect_token(&Token::RParen)?;
+        Ok(body_sql)
+    }
+
+    /// Parses `CREATE RECORDER <name> [WITH <rel> AS (<query>), ...] AS
+    /// <action>, ...` (recorder prototype), where an action is one of
+    /// `RECORD <rel | (query)> INTO <table>`, `INTEGRATE <rel> AS <view>`, or
+    /// `DELETE <rel> FROM <table>`. Queries are captured as raw SQL text.
+    fn parse_create_recorder(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(RECORDER)?;
+        let name = self.parse_item_name()?;
+        let mut rels = Vec::new();
+        if self.parse_keyword(WITH) {
+            loop {
+                let rel_name = self.parse_identifier()?;
+                self.expect_keyword(AS)?;
+                let body_sql = self.parse_recorder_query_sql()?;
+                rels.push(RecorderRelation {
+                    name: rel_name,
+                    body_sql,
+                });
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect_keyword(AS)?;
+        let mut actions = Vec::new();
+        loop {
+            let action = match self.expect_one_of_keywords(&[RECORD, INTEGRATE, DELETE])? {
+                RECORD => {
+                    let (rel, query_sql) = if self.peek_token() == Some(Token::LParen) {
+                        (None, Some(self.parse_recorder_query_sql()?))
+                    } else {
+                        (Some(self.parse_identifier()?), None)
+                    };
+                    self.expect_keyword(INTO)?;
+                    let into = self.parse_item_name()?;
+                    RecorderAction::Record {
+                        rel,
+                        query_sql,
+                        into,
+                    }
+                }
+                INTEGRATE => {
+                    let rel = self.parse_identifier()?;
+                    self.expect_keyword(AS)?;
+                    let view = self.parse_item_name()?;
+                    RecorderAction::Integrate { rel, view }
+                }
+                DELETE => {
+                    let rel = self.parse_identifier()?;
+                    self.expect_keyword(FROM)?;
+                    let from = self.parse_item_name()?;
+                    RecorderAction::Delete { rel, from }
+                }
+                _ => unreachable!(),
+            };
+            actions.push(action);
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+        Ok(Statement::CreateRecorder(CreateRecorderStatement {
+            name,
+            rels,
+            actions,
         }))
     }
 

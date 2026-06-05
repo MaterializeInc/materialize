@@ -55,17 +55,21 @@ pub(crate) fn validate_read_then_write_dependencies(
                     let valid_id = id.is_user() || matches!(typ, Func);
                     valid_id
                 }
-                Source | Secret | Connection => false,
+                // Recorder prototype: sources (and source-export tables,
+                // below) are readable in read-then-write. Their frontiers move
+                // independently of the write timestamp, so the read may block
+                // until the source catches up and writes may land between the
+                // read and the write — the at-least-once semantics the
+                // recorder design accepts. Restore `false` outside the
+                // prototype.
+                Source => true,
+                Secret | Connection => false,
                 // Cannot select from sinks or indexes.
                 Sink | Index => unreachable!(),
                 Table => {
-                    if !id.is_user() {
-                        // We can't read from non-user tables
-                        false
-                    } else {
-                        // We can't read from tables that are source-exports
-                        entry.source_export_details().is_none()
-                    }
+                    // We can't read from non-user tables, but (recorder
+                    // prototype) source-export tables are allowed; see above.
+                    id.is_user()
                 }
                 Type => true,
             }

@@ -1324,6 +1324,8 @@ impl Coordinator {
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
                     | Statement::Comment(_)
+                    | Statement::CreateRecorder(_)
+                    | Statement::DropRecorder(_)
                     | Statement::ExecuteUnitTest(_) => {
                         let txn_status = ctx.session_mut().transaction_mut();
 

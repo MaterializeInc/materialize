@@ -218,6 +218,7 @@ pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod read_policy;
 pub(crate) mod read_then_write;
+pub(crate) mod recorder;
 pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
@@ -1881,6 +1882,9 @@ pub struct Coordinator {
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
+    /// Active recorders (prototype): name to polling-task handle; dropping a
+    /// handle aborts the task. Not catalog-backed, lost on restart.
+    recorders: BTreeMap<String, mz_ore::task::AbortOnDropHandle<()>>,
     /// A map of active `COPY FROM` statements. The Coordinator waits for `clusterd`
     /// to stage Batches in Persist that we will then link into the shard.
     active_copies: BTreeMap<ConnectionId, ActiveCopyFrom>,
@@ -4712,6 +4716,7 @@ pub fn serve(
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
+                    recorders: BTreeMap::new(),
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),

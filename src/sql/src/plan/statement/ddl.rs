@@ -58,27 +58,27 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
     CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRecorderStatement,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, DropRecorderStatement,
+    Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
     IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
     MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RecorderAction,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
@@ -154,11 +154,12 @@ use crate::plan::{
     ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
+    CreateNetworkPolicyPlan, CreateRecorderPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, DropRecorderPlan,
+    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
+    RecorderActionPlan, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
     WebhookValidation, literal, plan_utils, query, transform_ast,
 };
@@ -5189,6 +5190,74 @@ pub fn describe_create_secret(
     _: CreateSecretStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
+}
+
+// Recorder prototype: the recorder is not a catalog item; the body and target
+// are carried as raw SQL for re-execution by the coordinator's recorder task.
+
+pub fn describe_create_recorder(
+    _: &StatementContext,
+    _: CreateRecorderStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_recorder(
+    _scx: &StatementContext,
+    stmt: CreateRecorderStatement,
+) -> Result<Plan, PlanError> {
+    let CreateRecorderStatement {
+        name,
+        rels,
+        actions,
+    } = stmt;
+    let rels = rels
+        .into_iter()
+        .map(|r| (r.name.to_ast_string_simple(), r.body_sql))
+        .collect();
+    let actions = actions
+        .into_iter()
+        .map(|a| match a {
+            RecorderAction::Record {
+                rel,
+                query_sql,
+                into,
+            } => RecorderActionPlan::Record {
+                rel: rel.map(|r| r.to_ast_string_simple()),
+                query_sql,
+                into: into.to_ast_string_simple(),
+            },
+            RecorderAction::Integrate { rel, view } => RecorderActionPlan::Integrate {
+                rel: rel.to_ast_string_simple(),
+                view: view.to_ast_string_simple(),
+            },
+            RecorderAction::Delete { rel, from } => RecorderActionPlan::Delete {
+                rel: rel.to_ast_string_simple(),
+                from: from.to_ast_string_simple(),
+            },
+        })
+        .collect();
+    Ok(Plan::CreateRecorder(CreateRecorderPlan {
+        name: name.to_ast_string_simple(),
+        rels,
+        actions,
+    }))
+}
+
+pub fn describe_drop_recorder(
+    _: &StatementContext,
+    _: DropRecorderStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_recorder(
+    _scx: &StatementContext,
+    stmt: DropRecorderStatement,
+) -> Result<Plan, PlanError> {
+    Ok(Plan::DropRecorder(DropRecorderPlan {
+        name: stmt.name.to_ast_string_simple(),
+    }))
 }
 
 pub fn plan_create_secret(

@@ -212,6 +212,8 @@ pub enum Plan {
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
+    CreateRecorder(CreateRecorderPlan),
+    DropRecorder(DropRecorderPlan),
 }
 
 impl Plan {
@@ -261,6 +263,8 @@ impl Plan {
             ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
+            StatementKind::CreateRecorder => &[PlanKind::CreateRecorder],
+            StatementKind::DropRecorder => &[PlanKind::DropRecorder],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
             StatementKind::Copy => &[
                 PlanKind::CopyFrom,
@@ -472,6 +476,8 @@ impl Plan {
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
             Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
+            Plan::CreateRecorder(_) => "create recorder",
+            Plan::DropRecorder(_) => "drop recorder",
         }
     }
 
@@ -700,6 +706,54 @@ pub struct CreateConnectionPlan {
     pub if_not_exists: bool,
     pub connection: Connection,
     pub validate: bool,
+}
+
+/// Prototype: a recorder periodically re-executes its actions through an
+/// internal SQL connection. Relations and names are carried as raw SQL
+/// strings.
+#[derive(Debug)]
+pub struct CreateRecorderPlan {
+    /// Name of the recorder.
+    pub name: String,
+    /// Named relations: `(name, raw SQL body)`, in declaration order.
+    pub rels: Vec<(String, String)>,
+    /// The actions, executed sequentially per tick.
+    pub actions: Vec<RecorderActionPlan>,
+}
+
+/// Prototype: one action of a recorder.
+#[derive(Debug, Clone)]
+pub enum RecorderActionPlan {
+    /// Append the relation's deltas to a delta table.
+    Record {
+        /// A named relation, or ...
+        rel: Option<String>,
+        /// ... an inline query (raw SQL).
+        query_sql: Option<String>,
+        /// The target delta table (raw SQL name).
+        into: String,
+    },
+    /// Maintain the relation as a view.
+    Integrate {
+        /// The named relation to integrate.
+        rel: String,
+        /// The view name (raw SQL name).
+        view: String,
+    },
+    /// Delete the relation's rows from a delta table.
+    Delete {
+        /// The named relation selecting rows to delete.
+        rel: String,
+        /// The delta table to delete from (raw SQL name).
+        from: String,
+    },
+}
+
+/// Prototype: drop an in-memory recorder by name.
+#[derive(Debug)]
+pub struct DropRecorderPlan {
+    /// Name of the recorder.
+    pub name: String,
 }
 
 #[derive(Debug)]

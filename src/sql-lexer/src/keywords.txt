@@ -242,6 +242,7 @@ Inspect
 Instance
 Int
 Integer
+Integrate
 Internal
 Intersect
 Interval
@@ -381,6 +382,8 @@ Read
 Ready
 Real
 Reassign
+Record
+Recorder
 Recursion
 Recursive
 Redacted
