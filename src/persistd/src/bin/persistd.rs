@@ -79,6 +79,16 @@ struct Args {
     )]
     stats_heartbeat_interval: Duration,
 
+    /// When > 0, coalesce concurrent CaS requests into batched backing
+    /// statements of at most this many elements. 0 disables coalescing.
+    #[clap(long, env = "COALESCE_MAX_BATCH", default_value = "0")]
+    coalesce_max_batch: usize,
+
+    /// Maximum number of coalesced batches in flight against the backing
+    /// store at once. Only meaningful with `--coalesce-max-batch > 0`.
+    #[clap(long, env = "COALESCE_CONCURRENCY", default_value = "8")]
+    coalesce_concurrency: usize,
+
     #[clap(flatten)]
     tracing: TracingCliArgs,
 }
@@ -195,6 +205,8 @@ async fn run(args: Args, metrics_registry: MetricsRegistry) -> Result<(), anyhow
         listen_addr: args.listen_addr,
         max_cached_shards: args.max_cached_shards,
         heartbeat_interval: args.stats_heartbeat_interval,
+        coalesce_max_batch: args.coalesce_max_batch,
+        coalesce_concurrency: args.coalesce_concurrency,
     };
     let _handle = start_committer(consensus, committer_metrics, committer_config)
         .context("starting committer")?;
@@ -301,6 +313,16 @@ impl Consensus for SelfHealingConsensus {
     ) -> Result<CaSResult, ExternalError> {
         match self.inner.compare_and_set(key, new.clone()).await {
             Err(e) if self.maybe_heal(&e).await => self.inner.compare_and_set(key, new).await,
+            other => other,
+        }
+    }
+
+    async fn compare_and_set_multi(
+        &self,
+        batch: Vec<(String, VersionedData)>,
+    ) -> Result<Vec<CaSResult>, ExternalError> {
+        match self.inner.compare_and_set_multi(batch.clone()).await {
+            Err(e) if self.maybe_heal(&e).await => self.inner.compare_and_set_multi(batch).await,
             other => other,
         }
     }

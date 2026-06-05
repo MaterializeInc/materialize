@@ -456,6 +456,29 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError>;
 
+    /// Perform a [Self::compare_and_set] for every `(key, new)` element of
+    /// `batch`, returning one [CaSResult] per element, in order.
+    ///
+    /// Keys in `batch` must be distinct; implementations are allowed to
+    /// execute the batch as a single atomic statement, in which case two
+    /// writes to the same key could not both observe their expected
+    /// predecessor.
+    ///
+    /// The default implementation loops over [Self::compare_and_set] and
+    /// fails on the first error. Implementations that batch into a single
+    /// backing operation fail the whole batch on error; callers must treat
+    /// an `Err` as indeterminate for every element.
+    async fn compare_and_set_multi(
+        &self,
+        batch: Vec<(String, VersionedData)>,
+    ) -> Result<Vec<CaSResult>, ExternalError> {
+        let mut results = Vec::with_capacity(batch.len());
+        for (key, new) in batch {
+            results.push(self.compare_and_set(&key, new).await?);
+        }
+        Ok(results)
+    }
+
     /// Return `limit` versions of data stored for this `key` at sequence numbers >= `from`,
     /// in ascending order of sequence number.
     ///
@@ -508,6 +531,18 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
         mz_ore::task::spawn(
             || "persist::task::cas",
             async move { backing.compare_and_set(&key, new).await }.instrument(Span::current()),
+        )
+        .await
+    }
+
+    async fn compare_and_set_multi(
+        &self,
+        batch: Vec<(String, VersionedData)>,
+    ) -> Result<Vec<CaSResult>, ExternalError> {
+        let backing = self.clone_backing();
+        mz_ore::task::spawn(
+            || "persist::task::cas_multi",
+            async move { backing.compare_and_set_multi(batch).await }.instrument(Span::current()),
         )
         .await
     }
@@ -1066,6 +1101,87 @@ pub mod tests {
             Ok(CaSResult::Committed),
         );
         assert_ok!(consensus.truncate(&key, SeqNo(3)).await);
+
+        // compare_and_set_multi: one element per shard, mixed outcomes.
+        // `key` is at seqno 3, `other_key` at seqno 0; a third key is fresh.
+        let multi_key = Uuid::new_v4().to_string();
+        let results = consensus
+            .compare_and_set_multi(vec![
+                // Correct expected predecessor: commits.
+                (
+                    key.clone(),
+                    VersionedData {
+                        seqno: SeqNo(4),
+                        data: Bytes::from("multi"),
+                    },
+                ),
+                // Wrong expected predecessor (other_key is at 0): mismatch.
+                (
+                    other_key.clone(),
+                    VersionedData {
+                        seqno: SeqNo(7),
+                        data: Bytes::from("multi"),
+                    },
+                ),
+                // First write to a fresh key: commits.
+                (
+                    multi_key.clone(),
+                    VersionedData {
+                        seqno: SeqNo(0),
+                        data: Bytes::from("multi"),
+                    },
+                ),
+            ])
+            .await?;
+        assert_eq!(
+            results,
+            vec![
+                CaSResult::Committed,
+                CaSResult::ExpectationMismatch,
+                CaSResult::Committed,
+            ],
+        );
+        assert_eq!(
+            consensus.head(&key).await?.expect("key exists").seqno,
+            SeqNo(4)
+        );
+        assert_eq!(
+            consensus.head(&other_key).await?.expect("key exists").seqno,
+            SeqNo(0)
+        );
+        assert_eq!(
+            consensus.head(&multi_key).await?.expect("key exists").seqno,
+            SeqNo(0)
+        );
+
+        // compare_and_set_multi without any first-write elements exercises
+        // the batched statement path in implementations that have one.
+        let results = consensus
+            .compare_and_set_multi(vec![
+                (
+                    key.clone(),
+                    VersionedData {
+                        seqno: SeqNo(5),
+                        data: Bytes::from("multi2"),
+                    },
+                ),
+                (
+                    multi_key.clone(),
+                    VersionedData {
+                        seqno: SeqNo(2),
+                        data: Bytes::from("multi2"),
+                    },
+                ),
+            ])
+            .await?;
+        assert_eq!(
+            results,
+            vec![CaSResult::Committed, CaSResult::ExpectationMismatch],
+        );
+        assert_eq!(
+            consensus.head(&key).await?.expect("key exists").seqno,
+            SeqNo(5)
+        );
 
         Ok(())
     }

@@ -42,6 +42,10 @@ pub struct CommitterMetrics {
     /// completing. If consistently slower than the client's retry interval,
     /// retries will see stale cache and may loop.
     pub cas_refresh_lag_seconds: Histogram,
+    /// Number of CaS requests coalesced into each backing
+    /// `compare_and_set_multi` call. Only populated when coalescing is
+    /// enabled; a distribution stuck at 1 means no concurrency to harvest.
+    pub coalesce_batch_size: Histogram,
 }
 
 impl CommitterMetrics {
@@ -92,6 +96,11 @@ impl CommitterMetrics {
                 help: "Time from CaS mismatch to background head() refresh \
                        completion.",
                 buckets: prometheus::exponential_buckets(0.0001, 2.0, 18).expect("valid buckets"),
+            )),
+            coalesce_batch_size: registry.register(metric!(
+                name: "mz_persist_committer_coalesce_batch_size",
+                help: "CaS requests coalesced per backing compare_and_set_multi call.",
+                buckets: prometheus::exponential_buckets(1.0, 2.0, 12).expect("valid buckets"),
             )),
         }
     }

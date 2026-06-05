@@ -49,6 +49,15 @@ pub struct CommitterConfig {
     /// Periodic stats-log interval. `Duration::ZERO` disables the heartbeat
     /// entirely; the task is still spawned but exits immediately.
     pub heartbeat_interval: Duration,
+    /// When > 0, coalesce concurrent CaS requests into batched backing
+    /// `compare_and_set_multi` calls of at most this size. 0 disables
+    /// coalescing (each CaS performs its own backing round trip).
+    pub coalesce_max_batch: usize,
+    /// Maximum number of coalesced batches in flight against the backing
+    /// store at once. Only meaningful when `coalesce_max_batch > 0`. A
+    /// single in-flight batch caps throughput at
+    /// `coalesce_max_batch / batch_latency`.
+    pub coalesce_concurrency: usize,
 }
 
 /// Build a `PersistCommitter` from `consensus`, start its gRPC server on the
@@ -68,6 +77,20 @@ pub fn start_committer(
         config.max_cached_shards,
         metrics.cached_shards.clone(),
     ));
+    // When coalescing is enabled, interpose a `CoalescingConsensus` between
+    // the committer and the backing store: concurrent `compare_and_set`
+    // calls batch into single backing statements, invisibly to the
+    // committer's caching logic.
+    let consensus: Arc<dyn Consensus + Send + Sync> = if config.coalesce_max_batch > 0 {
+        Arc::new(mz_persist::coalesce::CoalescingConsensus::new(
+            consensus,
+            config.coalesce_max_batch,
+            config.coalesce_concurrency,
+            Some(metrics.coalesce_batch_size.clone()),
+        ))
+    } else {
+        consensus
+    };
     let committer = Arc::new(PersistCommitter::new(
         Arc::clone(&consensus),
         Arc::clone(&cache),

@@ -50,6 +50,8 @@ struct Snapshot {
     cached_shards: i64,
     refresh_lag_count: u64,
     refresh_lag_sum: f64,
+    coalesce_batch_count: u64,
+    coalesce_batch_sum: f64,
 }
 
 fn snapshot(metrics: &CommitterMetrics) -> Snapshot {
@@ -110,6 +112,8 @@ fn snapshot(metrics: &CommitterMetrics) -> Snapshot {
         cached_shards: metrics.cached_shards.get(),
         refresh_lag_count: metrics.cas_refresh_lag_seconds.get_sample_count(),
         refresh_lag_sum: metrics.cas_refresh_lag_seconds.get_sample_sum(),
+        coalesce_batch_count: metrics.coalesce_batch_size.get_sample_count(),
+        coalesce_batch_sum: metrics.coalesce_batch_size.get_sample_sum(),
     }
 }
 
@@ -172,6 +176,17 @@ fn emit(prev: &Snapshot, curr: &Snapshot, interval: Duration) {
         .refresh_lag_count
         .saturating_sub(prev.refresh_lag_count);
     let refresh_mean = mean_ms(refresh_count, curr.refresh_lag_sum - prev.refresh_lag_sum);
+    // Mean number of CaS requests folded into one backing statement over the
+    // interval. 0 batches means coalescing is disabled (or saw no traffic);
+    // a mean stuck at 1.00 means it is enabled but found no concurrency.
+    let coalesce_batches = curr
+        .coalesce_batch_count
+        .saturating_sub(prev.coalesce_batch_count);
+    let coalesce_mean = if coalesce_batches == 0 {
+        0.0
+    } else {
+        (curr.coalesce_batch_sum - prev.coalesce_batch_sum) / f64::cast_lossy(coalesce_batches)
+    };
     info!(
         interval_s = interval.as_secs(),
         inflight_total = curr.inflight_total,
@@ -179,6 +194,8 @@ fn emit(prev: &Snapshot, curr: &Snapshot, interval: Duration) {
         cached_shards = curr.cached_shards,
         refresh_lag_count = refresh_count,
         refresh_lag_mean_ms = refresh_mean,
+        coalesce_batches,
+        coalesce_batch_mean = coalesce_mean,
         "persist committer stats:{per_op}",
     );
 }

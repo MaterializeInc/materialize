@@ -145,6 +145,26 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     internal_persist_committer_listen_addr: SocketAddr,
+    /// When > 0, the in-envd persist committer coalesces concurrent CaS
+    /// requests into batched backing statements of at most this many
+    /// elements. 0 disables coalescing.
+    #[clap(
+        long,
+        env = "INTERNAL_PERSIST_COMMITTER_COALESCE_MAX_BATCH",
+        default_value = "0",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_coalesce_max_batch: usize,
+    /// Maximum number of coalesced CaS batches in flight against the backing
+    /// store at once. Only meaningful with a nonzero
+    /// `--internal-persist-committer-coalesce-max-batch`.
+    #[clap(
+        long,
+        env = "INTERNAL_PERSIST_COMMITTER_COALESCE_CONCURRENCY",
+        default_value = "8",
+        action = ArgAction::Set,
+    )]
+    internal_persist_committer_coalesce_concurrency: usize,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -1108,6 +1128,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 .get(&persist_clients.cfg().configs),
             heartbeat_interval: mz_persist_client::cfg::PERSIST_COMMITTER_STATS_HEARTBEAT_INTERVAL
                 .get(&persist_clients.cfg().configs),
+            coalesce_max_batch: args.internal_persist_committer_coalesce_max_batch,
+            coalesce_concurrency: args.internal_persist_committer_coalesce_concurrency,
         };
         let _tokio_guard = runtime.enter();
         let handle = mz_persist_committer::start_committer(consensus, metrics, config)?;
