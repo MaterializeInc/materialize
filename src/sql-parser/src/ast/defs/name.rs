@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, SOME};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, PREPARE, SOME};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -317,6 +317,12 @@ impl Ident {
                         // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
                         // subscript.)
                         || kw == LIST
+                        // `DEALLOCATE [PREPARE] <name>` accepts an optional
+                        // `PREPARE` keyword before the name, so a bare `prepare`
+                        // name is consumed as that keyword on reparse, leaving no
+                        // name (`DEALLOCATE prepare` -> `DEALLOCATE` + the optional
+                        // keyword + a missing name).
+                        || kw == PREPARE
                 })
                 .unwrap_or(false)
     }

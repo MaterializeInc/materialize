@@ -449,6 +449,19 @@ fn test_quantifier_keyword_bare_identifier_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_deallocate_keyword_name_display_roundtrip() {
+    // `DEALLOCATE [PREPARE] <name>` accepts an optional `PREPARE` keyword before
+    // the name, so a bare `prepare` name is consumed as that keyword on reparse
+    // (`DEALLOCATE prepare` -> `DEALLOCATE` + the optional keyword + a missing
+    // name). `can_be_printed_bare` must force `prepare` quoted. Regression for
+    // the parse_display_roundtrip finding `DEALLOCATE PREPARE PREPARE`.
+    assert_display_roundtrips("DEALLOCATE PREPARE PREPARE");
+    assert_display_roundtrips("DEALLOCATE foo");
+    assert_display_roundtrips("DEALLOCATE ALL");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_cast_over_low_precedence_display_roundtrip() {
     // `CAST(X AS t)` prints as the Postgres `X::t` form, so a low-precedence `X`
     // (a comparison, a quantified comparison) must be parenthesized or the `::`
