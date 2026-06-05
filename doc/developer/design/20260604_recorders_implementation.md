@@ -169,47 +169,40 @@ works over arrangements) is **net-new optimizer work** in `src/sql/src/plan` +
 ### MED — M2: `DELTA TABLE` as a typed collection
 Persist stores `(SourceData, (), Timestamp, Diff)` — ts/diff are *physical*
 coordinates, not row data. A `DELTA TABLE` wants them as **logical columns**,
-where the row's `mz_timestamp` value (event time) need not equal the shard
-write-ts `t'` (system time) — two timestamps on one timeline. This is a
+where the row's `mz_timestamp` value (arbitrary data) need not equal the shard
+write-ts `t'` (system time) — two distinct timelines. This is a
 new collection kind in the catalog and `storage-types` plus planner support for
 the implicit columns and a write path that materializes the embedded ts/diff
 (`20250707_persist_schemas.md`). Not enormous, but genuinely new; CTs never had
 it (CT outputs were plain `Table`s).
 
 ### MED — M4: output frontier advancement (data vs. progress)
-Row `mz_timestamp` is *data* and does not set an output's `upper`; the `upper`
-must advance with the recorder's **input progress** (the meet of input frontiers,
-lagged by any `AS OF AT LEAST` window), like an MV. Two requirements: (a) advance
-the `upper` past `t` only after integrating all input through `t`, so placement
-at `mz_timestamp` is always `≥ upper` and **no clamp is needed** (a well-formed
-input frontier means late data below the frontier cannot occur — do **not**
-clamp/"logically compact," which silently splits retract/insert pairs); (b)
-**idle liveness** — outputs must keep
-advancing their `upper` even with no data, or downstream reads of an idle output
-stall. The mechanism exists: `append_table(write_ts, advance_to, appends)`
+Row `mz_timestamp` is *data* and does not set an output's `upper`. The output is
+on the **system timeline**; its `upper` advances with the recorder's
+write/commit progress (the meet of input frontiers, lagged by any `AS OF AT
+LEAST` window), like an MV. `INTEGRATE` must **clamp** writes to
+`max(mz_timestamp, upper)` (the two are distinct timelines — `mz_timestamp` is
+arbitrary data), placing below-frontier data at the frontier (logical
+compaction); this is sound (same-row `+1`/`-1` accumulate correctly regardless of
+times). **Idle liveness:** outputs must keep advancing their `upper` even with no
+data, or downstream reads of an idle output stall — including for time-based
+aging, which fires as `mz_now()` (= system time) advances. The mechanism exists:
+`append_table(write_ts, advance_to, appends)`
 (`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
 independently of `appends`, so a frontier-only commit is a no-new-machinery
-operation. The recorder's commit loop must therefore **downgrade output `upper`s
-on a clock** (frontier-only commits) decoupled from data writes — the frontier
-face of the commit-cadence question. This is straightforward given `advance_to`,
-but must be explicitly wired into the Phase-0 commit loop (it is easy to forget,
-which is how the conceptual design originally missed it).
+operation; it must be wired into the Phase-0 commit loop (easy to forget).
 
-### MED — M3: dual frontier (event-time placement vs. system-time aging) + compaction
-`INTEGRATE` places deltas at their event time and advances its `upper` with input
-event-time completeness; it relies on the engine owning the read policy /
-compaction so a `-1` consolidates with its `+1` and `since` advances (design
-"Bounding growth" invariants). But **time-based aging cannot ride the event-time
-frontier** — that frontier stalls when the input goes quiet, so a retention
-`DELETE`/window would never fire once events pause. Aging needs a **separate
-system/wall-clock frontier** on the output, advanced on a clock independent of
-input, distinct from the event-time frontier governing placement/queries (a
-dual-frontier model). `mz_now()` inside a body resolves to processing time. Read
-policies live in
-`src/adapter/src/coord/read_policy.rs`; today they are user/MV-driven. Making a
-recorder *own* and continuously advance them is plausible but interacts sharply
-with `RETAIN HISTORY` (the design's history caveat) and with the "exact-row
-retraction or it never consolidates" invariant, which is **unenforceable** for
+### MED — M3: engine-owned compaction / read policy
+`INTEGRATE` relies on the engine owning the read policy / compaction so a `-1`
+consolidates with its `+1` and `since` advances (design "Bounding growth"
+invariants). Time-based aging (`mz_now() < mz_timestamp + W`) works as an ordinary
+temporal filter on the system-timeline output — `mz_now()` advances on the clock,
+so it fires even when input is idle (no separate frontier needed). Read policies
+live in `src/adapter/src/coord/read_policy.rs`; today they are user/MV-driven.
+Making a recorder *own* and continuously advance them is plausible but interacts
+sharply with `RETAIN HISTORY` (the history/queryability caveat) and with the
+"exact-row retraction or it never consolidates" invariant (about matching the
+stored row *value*, not the timestamp), which is **unenforceable** for
 hand-written `DELETE`s. Feasible, with a sharp user-facing edge.
 
 ### LOW–MED — L1: planning / parser / sequencing / restart
@@ -283,32 +276,26 @@ recorder design tries to sidestep (and, per H2, only partly does).
    reclaimed?
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
-7. **Bitemporality via a recorded reclock (supersedes "reclock to `T`").** A fact
-   definite at event time `t` is recorded at system time `t' ≥ t`. Rather than
-   collapse outputs to `t'` (which loses consistency and stable history), record
-   a **durable reclock** `t → t'` (event-time completeness vs. system-time write
-   frontier) and use it to drive the integrated collection's frontier —
-   the **source reclock/remap pattern** (`src/storage*` reclock machinery) applied
-   to a recorder output; reuse it. Consequences for the implementation:
-   - The `RECORD` step (writing the `DELTA TABLE` + the reclock) is the **only**
-     non-deterministic boundary; the `DELTA TABLE` is authoritative (the
-     optimizer must **not** treat it as recomputable from the original inputs).
-   - `INTEGRATE` and everything downstream **are** definite functions of the
-     `DELTA TABLE` + reclock, placed at event time (no clamp; frontier = input
-     completeness) — so the optimizer *may* treat them as definite/recomputable
-     over the recorded data. Event time `t` and system time `t'` are two
-     timestamps on the **same** timeline (`t' ≥ t`), so a recorder output is a
-     lagged system-timeline collection — cross-table joins/transactions work
-     (no separate timeline).
-   - New component: a durable **reclock/remap collection per recorder** relating
-     the `DELTA TABLE`'s system-time write frontier to its event-time
-     completeness (so the integrator can advance its event-time `upper` on
-     restart). With no late-data clamping this relates two *monotone* frontiers.
-   - Self-referential prune (a `DELETE` reading the recorder's own output) must
-     read the **system-time** (real-time) recorded state, not the lagged
-     event-time frontier, or it converges only at the processing-skew rate and
-     the dTVC grows during catch-up (the "one-tick" claim holds only on system
-     time).
+7. **Two distinct timelines + the clamp.** `mz_timestamp` is *arbitrary data* (a
+   distinct "data timeline"); the table's time is the system/write timeline. They
+   cannot substitute for each other, so `INTEGRATE` **must clamp** writes to
+   `max(mz_timestamp, upper)` (logical compaction of below-frontier data) to hold
+   the TVC invariant. This is sound — same-row `+1`/`-1` accumulate correctly
+   regardless of times — so it is *not* the "split retract/insert" bug a naive
+   reading suggests. Consequences:
+   - The output lives on the **system timeline**, so it is a lagged collection
+     there — cross-table joins/transactions work (no separate-timeline wall);
+     event-time answers come from filtering the `mz_timestamp` column.
+   - The `RECORD` step is the **only** non-deterministic boundary; the `DELTA
+     TABLE` is authoritative (the optimizer must **not** treat it as recomputable
+     from the original inputs). `INTEGRATE` and downstream **are** definite
+     functions of the recorded data (the clamp is reproducible because the `DELTA
+     TABLE` records each row's write time alongside its `mz_timestamp` — the
+     reclock), so the optimizer *may* treat them as recomputable over it.
+   - The data↔write-time correspondence (the **reclock**) is what makes the
+     clamped history reproducible; it is inherent in the `DELTA TABLE` (each row
+     carries both times). Replicas race to commit and may record different
+     correspondences — the winning commit is authoritative.
    - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
      `since` to physically drop history, which forfeits `AS OF`/replay in the
      erased range. It is mutually exclusive with stable history there; scope it
