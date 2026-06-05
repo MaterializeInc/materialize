@@ -8,6 +8,115 @@
 // by the Apache License, Version 2.0.
 
 //! A source that reads from a persist shard.
+//!
+//! # For consumers
+//!
+//! [shard_source] renders a set of timely operators that continuously read a
+//! persist shard and emit its contents as a stream of [FetchedBlob]s: parts
+//! that have been downloaded from blob storage but not yet decoded. Callers
+//! decode them (e.g. via [FetchedBlob::parse]) downstream, typically on the
+//! same worker, so that decode cost scales with the number of workers.
+//!
+//! The source observes the following contract:
+//!
+//! * **Times**: all emitted times are advanced by the given `as_of`. With
+//!   [SnapshotMode::Include], the contents of the shard as of `as_of` are
+//!   emitted at the `as_of`; with [SnapshotMode::Exclude], only subsequent
+//!   updates are emitted.
+//! * **Frontier**: the output frontier tracks the shard's `upper`. It is
+//!   eagerly downgraded to the `as_of` before the snapshot is available, so
+//!   downstream consumers (e.g. `persist_sink`) can rely on close frontier
+//!   tracking. When `until` is non-empty, parts whose contents lie entirely
+//!   at or beyond `until` are dropped and the source eventually completes;
+//!   fine-grained filtering of individual updates against `until` is the
+//!   caller's responsibility.
+//! * **Distribution**: parts are distributed across all workers of the
+//!   dataflow, regardless of which worker coordinates the read.
+//! * **Filter pushdown**: `filter_fn` is consulted with each part's stats and
+//!   may keep the part, discard it without fetching, or replace its contents
+//!   with a single-row constant ([FilterResult]). A random sample of
+//!   discarded parts is fetched anyway to audit the decision.
+//! * **Backpressure**: each fetch acquires permits from the process-wide
+//!   persist fetch semaphore, sized from the process memory limit. The permit
+//!   travels inside the [FetchedBlob] (and any [ShardSourcePart] parsed from
+//!   it), so fetched-but-undecoded bytes are bounded until the caller drops
+//!   the data. A slow consumer therefore slows down fetching, not memory.
+//! * **Errors**: conditions that are neither data-plane errors nor bugs (an
+//!   unserveable `as_of`, a missing blob after a lease timeout) are reported
+//!   to the given [ErrorHandler]. The source then freezes: it stops doing
+//!   work but retains its capabilities, so the frontier never advances past
+//!   unproduced data while a halt or dataflow restart is pending.
+//! * **Shutdown**: dropping the returned [PressOnDropButton] tokens shuts the
+//!   source down, dropping all held capabilities and abandoning in-flight
+//!   work.
+//!
+//! [ShardSourcePart]: crate::fetch::ShardSourcePart
+//!
+//! # For implementors
+//!
+//! The source is split into two synchronous timely operators, each paired
+//! with a tokio task that owns all async persist work. Operators and tasks
+//! communicate over channels; tasks wake their operator through a
+//! [SyncActivator]-backed [ArcActivator], which also unparks a parked worker.
+//!
+//! ```text
+//!  tokio: listen task ──(parts+leases, progress, mpsc)──> [shard_source_descs]
+//!  (chosen worker only)                                        │ exchange by part hash
+//!         ▲ oneshot: drop listen                               ▼
+//!         └──────────────────────────────────────────── [shard_source_fetch] (per worker)
+//!                            completed_fetches feedback        │ ▲
+//!                                                       desc   │ │ FetchedBlob
+//!                                                       (mpsc) ▼ │ (mpsc)
+//!                                                    tokio: fetch task (per worker)
+//! ```
+//!
+//! **`shard_source_descs`** runs on all workers, but only the chosen worker
+//! (hash of the name) spawns a listen task and holds capabilities. The task
+//! opens a leased reader, waits for the `start_signal`, resolves the `as_of`,
+//! and then walks snapshot + listen, applying `filter_fn` and the audit
+//! budget to each part. It splits each [LeasedBatchPart] into an
+//! [ExchangeableBatchPart] plus its [Lease] and sends both to the operator,
+//! along with progress updates that drive the operator's capability
+//! downgrades. The operator emits `(worker_idx, part)` pairs — exchanged by
+//! index — and parks each lease in a `LeaseManager` keyed by the part's time.
+//!
+//! **`shard_source_fetch`** forwards each incoming desc to its fetch task and
+//! retains a *pair* of capabilities for it: one for the data output, one for
+//! the `completed_fetches` output. The task downloads parts in order
+//! (acquiring fetch-semaphore permits inside
+//! [BatchFetcher::fetch_leased_part]); the operator matches results to
+//! capabilities FIFO, emits the [FetchedBlob] at the first capability, and
+//! drops the second.
+//!
+//! **Lease lifecycle**: dropping the completed-fetches capability advances a
+//! feedback loop back into `shard_source_descs`, whose frontier advances the
+//! `LeaseManager` and drops the leases for fetched parts. The listen task —
+//! and with it the reader and its SeqNo hold, which is what actually
+//! protects unfetched parts' blobs from GC — must outlive all in-flight
+//! fetches: the operator releases it through a oneshot only once the
+//! completed-fetches frontier is empty. If the dataflow is dropped instead,
+//! the tasks are aborted via their [AbortOnDropHandle]s.
+//!
+//! Subtleties worth knowing before changing this code:
+//!
+//! * [LeasedBatchPart]s panic on drop while leased; only the lease-split
+//!   [ExchangeableBatchPart] representation may cross channels, where it can
+//!   be dropped harmlessly on shutdown.
+//! * Emitting data at a part's original capability *before* any capability
+//!   downgrade in the same scheduling is what keeps `send_time <=
+//!   record_time`; the message channels are FIFO, so a `Parts` message is
+//!   always drained before the `Progress` that may supersede its time.
+//! * The fetch task processes descs strictly in order; the FIFO capability
+//!   matching in the fetch operator is only sound because of this.
+//! * Tests that step workers manually must not park indefinitely while
+//!   polling state that does not activate the worker: with the listen moved
+//!   to a task, a fully caught-up source produces no activations at all.
+//!
+//! [SyncActivator]: timely::scheduling::SyncActivator
+//! [ArcActivator]: mz_timely_util::activator::ArcActivator
+//! [LeasedBatchPart]: crate::fetch::LeasedBatchPart
+//! [BatchFetcher::fetch_leased_part]: crate::fetch::BatchFetcher::fetch_leased_part
+//! [AbortOnDropHandle]: mz_ore::task::AbortOnDropHandle
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, VecDeque};
