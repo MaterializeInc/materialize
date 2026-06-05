@@ -36,17 +36,19 @@ class SmokeTest(unittest.TestCase):
                 row = cur.fetchone()
                 self.assertEqual(row, ("{a=>1,b=>2}",))
 
-            # ...but binary encoding is not.
+            # ...but binary encoding is not. As in PostgreSQL, the absence of a
+            # binary output function is reported as an undefined_function error
+            # (SQLSTATE 42883).
             with conn.cursor(binary=True) as cur:
                 with self.assertRaisesRegex(
-                    psycopg.errors.ProtocolViolation,
-                    "binary encoding of list types is not implemented",
+                    psycopg.errors.UndefinedFunction,
+                    "no binary output function available for type list",
                 ):
                     cur.execute("SELECT LIST[1, 2, 3]")
 
                 with self.assertRaisesRegex(
-                    psycopg.errors.ProtocolViolation,
-                    "binary encoding of map types is not implemented",
+                    psycopg.errors.UndefinedFunction,
+                    "no binary output function available for type map",
                 ):
                     cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
 
