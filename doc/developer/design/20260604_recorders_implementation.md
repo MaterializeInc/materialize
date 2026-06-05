@@ -169,8 +169,8 @@ works over arrangements) is **net-new optimizer work** in `src/sql/src/plan` +
 ### MED — M2: `DELTA TABLE` as a typed collection
 Persist stores `(SourceData, (), Timestamp, Diff)` — ts/diff are *physical*
 coordinates, not row data. A `DELTA TABLE` wants them as **logical columns**,
-where the row's `mz_timestamp` value need not equal the shard write-ts
-(`INTEGRATE` writes past-dated deltas at `max(mz_timestamp, upper)`). This is a
+where the row's `mz_timestamp` value (event time) need not equal the shard
+write-ts `t'` (system time) — two timestamps on one timeline. This is a
 new collection kind in the catalog and `storage-types` plus planner support for
 the implicit columns and a write path that materializes the embedded ts/diff
 (`20250707_persist_schemas.md`). Not enormous, but genuinely new; CTs never had
@@ -179,9 +179,12 @@ it (CT outputs were plain `Table`s).
 ### MED — M4: output frontier advancement (data vs. progress)
 Row `mz_timestamp` is *data* and does not set an output's `upper`; the `upper`
 must advance with the recorder's **input progress** (the meet of input frontiers,
-lagged by any `AS OF AT LEAST` window), like an MV. Two requirements: (a) the
-write-time clamp `max(mz_timestamp, upper)` guarantees writes land `≥ upper` so
-the frontier can advance monotonically; (b) **idle liveness** — outputs must keep
+lagged by any `AS OF AT LEAST` window), like an MV. Two requirements: (a) advance
+the `upper` past `t` only after integrating all input through `t`, so placement
+at `mz_timestamp` is always `≥ upper` and **no clamp is needed** (a well-formed
+input frontier means late data below the frontier cannot occur — do **not**
+clamp/"logically compact," which silently splits retract/insert pairs); (b)
+**idle liveness** — outputs must keep
 advancing their `upper` even with no data, or downstream reads of an idle output
 stall. The mechanism exists: `append_table(write_ts, advance_to, appends)`
 (`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
@@ -192,10 +195,17 @@ face of the commit-cadence question. This is straightforward given `advance_to`,
 but must be explicitly wired into the Phase-0 commit loop (it is easy to forget,
 which is how the conceptual design originally missed it).
 
-### MED — M3: `INTEGRATE` monotonicity + engine-owned compaction
-`INTEGRATE` writes at `max(mz_timestamp, mz_now())` and relies on the engine
-owning the read policy / compaction so a `-1` consolidates with its `+1` and
-`since` advances (design "Bounding growth" invariants). Read policies live in
+### MED — M3: dual frontier (event-time placement vs. system-time aging) + compaction
+`INTEGRATE` places deltas at their event time and advances its `upper` with input
+event-time completeness; it relies on the engine owning the read policy /
+compaction so a `-1` consolidates with its `+1` and `since` advances (design
+"Bounding growth" invariants). But **time-based aging cannot ride the event-time
+frontier** — that frontier stalls when the input goes quiet, so a retention
+`DELETE`/window would never fire once events pause. Aging needs a **separate
+system/wall-clock frontier** on the output, advanced on a clock independent of
+input, distinct from the event-time frontier governing placement/queries (a
+dual-frontier model). `mz_now()` inside a body resolves to processing time. Read
+policies live in
 `src/adapter/src/coord/read_policy.rs`; today they are user/MV-driven. Making a
 recorder *own* and continuously advance them is plausible but interacts sharply
 with `RETAIN HISTORY` (the design's history caveat) and with the "exact-row
@@ -284,10 +294,22 @@ recorder design tries to sidestep (and, per H2, only partly does).
      non-deterministic boundary; the `DELTA TABLE` is authoritative (the
      optimizer must **not** treat it as recomputable from the original inputs).
    - `INTEGRATE` and everything downstream **are** definite functions of the
-     `DELTA TABLE` + reclock, placed on the input's event-time timeline
-     (`max(mz_timestamp, upper)`, logical-compacting late data) — so the
-     optimizer *may* treat them as definite/recomputable over the recorded data.
-   - New component: a durable **reclock/remap collection per recorder** (or per
-     output), and frontier-driving logic that reads it (like source reclock).
-   - Open: the granularity/lag of the reclock; behavior for out-of-order (late)
-     data below the advanced frontier (logical compaction loses exact placement).
+     `DELTA TABLE` + reclock, placed at event time (no clamp; frontier = input
+     completeness) — so the optimizer *may* treat them as definite/recomputable
+     over the recorded data. Event time `t` and system time `t'` are two
+     timestamps on the **same** timeline (`t' ≥ t`), so a recorder output is a
+     lagged system-timeline collection — cross-table joins/transactions work
+     (no separate timeline).
+   - New component: a durable **reclock/remap collection per recorder** relating
+     the `DELTA TABLE`'s system-time write frontier to its event-time
+     completeness (so the integrator can advance its event-time `upper` on
+     restart). With no late-data clamping this relates two *monotone* frontiers.
+   - Self-referential prune (a `DELETE` reading the recorder's own output) must
+     read the **system-time** (real-time) recorded state, not the lagged
+     event-time frontier, or it converges only at the processing-skew rate and
+     the dTVC grows during catch-up (the "one-tick" claim holds only on system
+     time).
+   - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
+     `since` to physically drop history, which forfeits `AS OF`/replay in the
+     erased range. It is mutually exclusive with stable history there; scope it
+     as "definiteness holds forward of the advanced `since`."

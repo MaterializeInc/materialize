@@ -187,14 +187,15 @@ This records enriched events into a `DELTA TABLE`, integrates a first-seen
 commit atomically at `T`.
 
 - **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to `d`.
-- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC on the
-  **input's (event-time) timeline**. Each delta is written at
-  `max(r.mz_timestamp, upper)` — at its event time when not below the frontier,
-  else compacted up to the frontier (drop non-positive multiplicity) — and `v`'s
-  frontier is driven by the recorder's durable **reclock** (see "Two times"
-  below). `v` is a **definite function of the recorded data + reclock** (stable
-  history, replayable); non-determinism lives only in the recorded *values*, not
-  in the integration.
+- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC. It is an
+  **ordinary maintained dataflow over the recorded data** — each delta is placed
+  at its event time `r.mz_timestamp` (never clamped), and `v`'s frontier tracks
+  the input's event-time completeness, advancing past `t` only after all input
+  through `t` is integrated (so a write below `upper` never arises, and
+  retract/insert pairs land at their true event times and consolidate). `v` is a
+  **definite function of the recorded `DELTA TABLE` + reclock** (stable history,
+  replayable); non-determinism lives only in the recorded *values*, not in the
+  integration.
 - **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
 **Frontiers: data vs. progress.** The `mz_timestamp` written into a row is *data*;
@@ -202,55 +203,57 @@ it does **not** determine the output collection's frontier (`upper`). An output
 is "complete through `T`" iff the recorder has integrated all of its **inputs**
 through the corresponding frontier, so an output's `upper` advances with the
 **meet of its input frontiers** (lagged by any `AS OF AT LEAST` window) — exactly
-like a materialized view, and independent of the row timestamps. The write-time
-clamp is what makes this sound: because every write lands at `≥ upper`, the
-`upper` can advance monotonically with no risk of a later delta landing below it.
-Two consequences: (1) completeness is bounded by the (lagged) input frontier, not
-`mz_now()`; (2) **writing data is input-driven, but advancing the frontier is
-clock-driven** — an idle recorder must still tick its outputs' `upper`s forward
-(a frontier-only commit) or downstream reads of an idle output would stall. This
-is the frontier face of the commit-cadence question (see Open Questions).
+like a materialized view, and independent of the row timestamps. Advancing the
+`upper` past `t` only after all input through `t` is integrated is what keeps
+placement sound: a write below `upper` never arises (so no clamping is needed),
+and an idle-but-live input still ticks its frontier forward (sources emit empty
+progress), so an idle recorder's outputs stay readable at the current time.
 
-**Two times, kept consistent by a recorded reclock.** A fact definite at event
-time `t` is physically recorded at system time `t' ≥ t` (it cannot be written
-below the output `upper`, and retroactively inserting at `t` would change an
-answer a reader already got `AS OF t`). Naively collapsing the output to `t'`
-would lose consistency — the output would stop being a definite function of its
-inputs at a common time, and its history would become processing-order-dependent.
+One subtlety this exposes (see Open Questions): **time-based aging cannot ride
+the event-time frontier**, because that frontier stalls when the input goes
+quiet, so a 30-day retention would never fire once events pause. Aging therefore
+needs a **separate system/wall-clock frontier** on the output, distinct from the
+event-time frontier that governs placement and queries — a dual-frontier model.
+`mz_now()` inside a body means *processing time* (it is a processing-time
+decision, like the freeze).
 
-Instead, treat a recorder like source ingestion: **record a durable reclock
-mapping `t → t'`** — the recorded collection's *event-time completeness* as a
-function of its (system-time) write frontier — and use it to drive the integrated
-collection's frontier. Then:
+**Two times, on one timeline.** `CHANGES` surfaces *Materialize* timestamps, so
+"event time `t`" is itself a point on the system timeline, and `t' ≥ t` (when the
+fact was re-recorded) is a *later* point on the **same** timeline. So a recorder
+is not bitemporal-across-timelines; it carries **two timestamps on one timeline**.
+Its output is therefore an ordinary collection on the system timeline that simply
+**lags** wall-clock by processing latency — cross-table joins and transactions
+work like any slow materialized view (no timeline-compatibility wall).
 
-- **`INTEGRATE` places each fact at its event time `t`** (the input's timeline),
-  writing at `max(mz_timestamp, upper)` — event-time placement when not below the
-  frontier, and **logical compaction** (collapse to the frontier, bounded like
-  `since`) for any late data older than the already-advanced frontier.
-- The integrated collection's **frontier advances in event time**, held at the
-  event-time through which the recorder has processed-and-committed, and is
-  **recoverable on restart** via the recorded reclock.
-- So the integrated collection is on the **input's timeline**, a **definite
-  function of the recorded `DELTA TABLE` + reclock** — with **stable history** and
-  **consistent downstream composition** (`integrated(T)` aligns with `inputs(T)`).
+A fact definite at event time `t` becomes durable at `t' ≥ t`. The integrated
+collection places each fact at its event time `t` and advances its frontier only
+through event-time completeness (above), so `integrated(T)` is a **definite
+function of the recorded `DELTA TABLE`** — stable history, replayable, and
+consistent with sibling collections at the same `T`. A durable **reclock**
+records the relationship between the `DELTA TABLE`'s system-time write frontier
+and its event-time completeness, so that on restart the integrator knows how far
+in event time the recorded data is complete (it cannot read that off the persist
+write frontier, which is in system time). Because no late-data clamping occurs,
+this reclock relates two *monotone* frontiers and is well-formed.
 
-Non-determinism is therefore confined to the **values recorded into the `DELTA
-TABLE`** (frozen at processing time) and the reclock mapping; both are durable, so
-everything *downstream* of the `DELTA TABLE` is definite and replayable. The
-result is a proper **bitemporal** object: query it by **event time** (the
-collection's logical time) or by **system time** (the reclock — "when was this
-recorded"), both consistent. This is the source-reclock/remap pattern applied to
-a recorder output, and should reuse that machinery.
+Non-determinism is confined to the **values recorded into the `DELTA TABLE`**
+(frozen at processing time) and to the **`t'` (when-recorded) axis** — both
+durable, so everything *downstream* of the `DELTA TABLE` is definite and
+replayable. Replicas race to commit and may pick different `t'` (the when-recorded
+axis is allowed to be non-deterministic), but they all agree on event-time
+placement (it is the input's frontier), so query results `AS OF t` are stable.
 
-The write verbs then differ by *shape*, not by temporality: **`RECORD` → `DELTA
-TABLE`** keeps the per-row change log (and `mz_timestamp` as data); **`INTEGRATE`
-→ TVC** maintains integrated state on the event-time timeline. Both are
-event-time-consistent and definite given the recording.
+The write verbs differ by *shape*: **`RECORD` → `DELTA TABLE`** keeps the per-row
+change log (and `mz_timestamp` as data); **`INTEGRATE` → TVC** maintains
+integrated state. Both are event-time-consistent and definite given the recording.
 
-Residual subtleties: the integrated frontier lags wall-clock by processing
-latency (held at processed-event-time — normal for a derived collection); late
-data below the advanced frontier is logically compacted (exact placement lost
-below the frontier); and the reclock must be durable and monotone.
+Subtleties: a self-referential prune (a `DELETE` that reads the recorder's own
+output) should read the **system-time** (real-time) recorded state, not the
+lagged event-time frontier — otherwise its convergence lags by the full
+processing skew and the dTVC can grow during catch-up. And event-time queries
+(`WHERE mz_timestamp <= τ`, or time-travel into the past) are answerable only
+within the output's `RETAIN HISTORY`; the reclock must be retained at least as
+long.
 
 ### Freeze is typing, not a keyword
 
@@ -264,6 +267,16 @@ The rule: **`CHANGES(x)` / `DELTA TABLE` = tracked (deltas flow); bare TVC =
 frozen reference (sampled at lookup).** Tracking is the opt-in; freeze is the
 default. (A per-value `FROZEN(expr)` survives only as a rare fine-grained tool —
 freeze *some* columns of a tracked relation — and is likely droppable for v1.)
+
+A frozen value is sampled at **processing time `t'`** but back-stamped to the
+fact's **event time `t`**: it is a *processing-time fact recorded against event
+time `t`*, **not** the historical truth of the reference at `t`. So an event-time
+query `AS OF t` returns the value as the recorder saw it when it processed the
+fact, not what `dim` held at `t`. This is the only option for non-deterministic /
+external values (there is no historical truth at `t` for a UDF), but it means a
+frozen column must not be conflated with the *definite as-of-event-time temporal
+join* (which returns `dim`'s version covering `t`); mixing both in one row yields
+columns aligned to different times.
 
 This makes the **compliance cascade compose** rather than needing a bespoke
 `ON DELETE CASCADE`: make the dimension a *driver* via a second action.
@@ -333,7 +346,14 @@ finalization. The ways to bound, composed from the operations:
   advances), no index. Reuses the `CHANGES` maintained-MV machinery.
 - **Referential / ownership** (compliance) — a `DELETE` action driven by
   `CHANGES(dimension) WHERE mz_diff < 0`; a **physical** retraction, not a
-  read-time filter; costs an index on the dTVC's liveness key.
+  read-time filter; costs an index on the dTVC's liveness key. Note the tension
+  with stable history: a retraction placed at the deletion's *event time* leaves
+  the rows visible to `AS OF` reads *before* it (history stays stable, but the
+  data is not erased from the past — insufficient for GDPR). **True erasure**
+  requires advancing `since` to physically drop the rows, which forfeits `AS OF`
+  / replay in the erased range. The two are mutually exclusive; "compliance
+  erasure" means the latter, scoped: definiteness holds only forward of the
+  advanced `since`.
 - **Supersession** — a `top-k`/`reduce` body; the reduce emits exact
   retract-old/insert-new diffs (O(live keys)).
 - **Arbitrary** — an explicit `DELETE` action (read-then-write; documented cost).
