@@ -1,0 +1,261 @@
+# Cluster Autoscaling and Background Reconfiguration
+
+- Associated: (TBD — link epics/issues)
+
+## The Problem
+
+Two user-facing capabilities motivate this work:
+
+1. **Background graceful cluster reconfiguration.** Today, `ALTER CLUSTER ... SET (SIZE = ...)` with the graceful (zero-downtime) strategy requires the SQL session to remain open for the duration of the reconfiguration — the session holds the wait-for-hydration stage. Long-running reconfigurations are fragile: any process or session interruption — a network blip, a client timeout, an SQL tool closing, an `environmentd` restart — aborts the reconfiguration. The user experience we want is: the statement returns immediately, and the reconfiguration continues in the background, surviving restarts and disconnects.
+
+2. **Hydration burst (autoscaling for hydration).** Users want to express, at cluster creation:
+
+   ```sql
+   CREATE CLUSTER my_cluster (
+     SIZE = '100cc',                       -- steady-state replica size
+     AUTO SCALING STRATEGY = (
+       ON HYDRATION (
+         HYDRATION SIZE = '3200cc'         -- burst replica size while objects are not hydrated
+         LINGER DURATION = '600s'          -- optional duration that the burst replica stays on after steady-state replicas are hydrated
+       ),
+     )
+   );
+   ```
+
+   When the cluster has any object that is not fully hydrated, the cluster controller spins up an additional replica at the configured `HYDRATION SIZE` to accelerate hydration. Once any steady-state replica has fully hydrated all currently-existing objects on the cluster, the burst replica is shut down (after an optional `LINGER DURATION`).
+
+Beneath both capabilities is a shared architectural problem: today, cluster scheduling decisions are made in an ad-hoc fashion. `ON REFRESH` scheduling lives in a single file driven by a coordinator interval; graceful reconfiguration lives as executor stages bound to a SQL session. Adding hydration-burst as another one-off would compound the inconsistency, and the session-bound nature of graceful reconfiguration cannot deliver requirement (1) regardless. We need a coherent place for cluster autoscaling decisions to live.
+
+### Current state
+
+- **Graceful reconfiguration mechanics** live in `src/adapter/src/coord/sequencer/inner/cluster.rs` as a three-stage state machine driven by the executor. Stage 1 creates pending replicas at the new size with a durable `pending: bool` flag. Stage 2 polls for hydration of the pending replicas. Stage 3 drops the old replicas, renames the pending ones (removing the `-pending` suffix), flips `pending` to `false`, and updates the cluster's durable `size` field.
+- **The user's intent during a graceful reconfiguration is not durable.** The `Op::UpdateClusterConfig` that sets the new cluster `size` is deliberately held back until the finalization stage. Mid-reconfig, the durable catalog shows the old `size` and a pending replica at the new size; the *intent* "the user asked for size X" lives only in transient session state (the connection's pending-alter tracker and the executor stage's strategy/timeout).
+- **Existing scheduling policy lives in `cluster_scheduling.rs`.** It runs on a coordinator timer interval, computes decisions for managed clusters with `SCHEDULE = ('on-refresh', ...)`, and sends `Message::SchedulingDecisions` to the coordinator's internal message channel, which then sequences ALTER operations. Decisions are recorded in `mz_audit_events` via `SchedulingDecisionsWithReasonsV2`. Conflicts with an in-flight graceful reconfiguration are absorbed by the scheduler swallowing the planner's `AlterClusterWhilePendingReplicas` reject — an implicit coupling the controller model replaces.
+- **Hydration signal is available in-process from the controller(s).** Per-replica, per-collection hydration state is tracked in-memory by the controller(s) and updated reactively as frontier information flows in from replicas. An in-process API already exists for asking "are all of these collections hydrated on any of these replicas?" and is used today by the graceful reconfiguration wait stage.
+- **Audit log already records scheduling decisions with reasons** (`SchedulingDecisionsWithReasonsV2`). This is the natural place to record additional autoscaling events.
+- **Cluster configuration is fully durable in the catalog**, including `ClusterVariantManaged { size, replication_factor, availability_zones, schedule, logging, optimizer_feature_overrides }`.
+
+## Success Criteria
+
+- A user can issue `ALTER CLUSTER ... SET (SIZE = ...)` and the statement returns immediately. The reconfiguration continues in the background, surviving session disconnects and `environmentd` restarts, and is observable via SQL.
+- A user can bound an individual reconfiguration with the existing `WITH (WAIT ...)` options (`WAIT FOR '...'` or `WAIT UNTIL READY (TIMEOUT '...', ON TIMEOUT COMMIT|ROLLBACK)`); the deadline and the on-timeout action are enforced durably and survive session disconnect and `environmentd` restart along with the reconfiguration itself.
+- A user can specify an `AUTO SCALING STRATEGY` (with `ON HYDRATION` and its `HYDRATION SIZE`) at cluster create or alter. The burst replica is spun up when warranted and shut down when no longer needed, with no further user action.
+- The existing `SCHEDULE = ('on-refresh', ...)` behavior is preserved, ideally as one strategy within a common autoscaling framework rather than as a parallel mechanism.
+- All autoscaling decisions and replica lifecycle changes are recorded with reasons and surfaced to the user.
+- A new autoscaling strategy can be added without restructuring the framework.
+- Operators can disable the hydration-burst strategy across an environment via a break-glass flag, leaving graceful reconfiguration and `ON REFRESH` scheduling (the other strategies in the framework) untouched.
+
+## Out of Scope
+
+- `AUTO SCALING STRATEGY` combined with `SCHEDULE = ('on-refresh', ...)`.
+- More than one concurrent burst replica per cluster.
+- Dedicated push channel for reconfiguration completion (e.g., NOTICE-style).
+
+## Solution Proposal
+
+### Summary
+
+We introduce a **cluster controller** as a dedicated task inside `environmentd`. It is the single decision-maker for the replica set of every cluster. It operates as a reconciler: it reads desired cluster state from the durable catalog, observes the actual replica set and live status signals, computes a desired replica set per cluster by combining a set of **strategies**, and emits catalog-change commands to the Coordinator via a message channel. The Coordinator remains the sole writer of catalog state.
+
+ALTER CLUSTER operations are reshaped so that the user's intent is written durably and immediately to the catalog — as an in-flight target record, leaving the cluster's realized config in place until the controller cuts over; the controller then reconciles from that intent. Graceful reconfiguration becomes a strategy within the controller framework, as does hydration burst. The existing `ON REFRESH` scheduling is lifted into the framework.
+
+### Strategies
+
+A **strategy** is two functions:
+
+- `update_state` of the form `(durable config, observed status, current time) → state updates`. This allows the strategy to update durable catalog state. For example to update a timeout value or to update the durable size of a cluster once a graceful reconfiguration is considered ready.
+- `desired_replicas` of the form `(durable config, observed status, current time) → partial desired state`. This is the contribution it wants to make to the cluster's desired replica set. As of v1, the replica set is only additive, strategies cannot remove existing replicas or influence the desired state of other strategies. As we see below, dropping of existing replicas happens when no strategy "desires" them.
+
+Initial strategies. The implicit baseline is always present; the rest engage per cluster:
+
+- **Implicit baseline.** Desires the replicas implied by the realized config, `replication_factor` replicas at `cluster.size`, with the configured AZ and other cluster shape. It is what lets the policy strategies be purely additive: it holds the steady set, so they only ever add to it.
+
+- **Graceful reconfiguration.** Engaged when `ALTER` writes a durable `reconfiguration` record. This desires `replication_factor` replicas — the target's, since an `ALTER` can change it — at the record's `target` **config shape** (target size, logging, and availability-zone list). When `update_state` observes the target replicas present and hydrated, it updates the cluster configuration (`cluster.size := target`, ...) and clears the `reconfiguration` record. `update_state` also reads the `deadline` and `on_timeout`. Success takes precedence: a tick that sees the target replicas hydrated cuts over even if the deadline has passed. Otherwise, once `now > deadline` with the target not fully hydrated, `update_state` applies `on_timeout` — the default `ROLLBACK` stops contributing this reconfiguration's target replicas and keeps the record as a tombstone, so the strategy stays a no-op until another `ALTER`; `COMMIT` instead cuts over to the still-unhydrated target. Cut-over keys on **hydration** — today's graceful-reconfiguration signal — not a stronger caught-up check: hydration already guarantees correct answers, so a caught-up check would only avoid a brief post-cut-over latency bump, a possible later refinement. One consequence worth noting: an OOM- or crash-looping target replica never hydrates, so it can never cut over — the deadline fires and the default `on_timeout` reverts. No special OOM-loop detection needed.
+
+- **Hydration burst.** When the cluster's `AUTO SCALING STRATEGY` sets `ON HYDRATION (HYDRATION SIZE = ...)`, the cluster is On (`replication_factor > 0`), and no realized-config replica has all current objects hydrated, `update_state` writes a `burst` record (its size and linger duration). When that record is present this desires one extra replica at `HYDRATION SIZE`. When `update_state` notices that at least one steady-state replica is hydrated, it records that timestamp. Once time has passed that timestamp plus linger duration it removes the burst record. Additionally, when there is a burst record and we recorded successful hydration of the steady-state replicas, but the steady-state replicas become un-hydrated again, we reset burst state so that the linger duration can restart after the next successful hydration. Finally, `update_state` clears the `burst` record — regardless of linger — whenever a burst is no longer warranted by current config: the `AUTO SCALING STRATEGY` was removed or its `HYDRATION SIZE` changed, or the cluster was turned off (`replication_factor = 0`). Because `desired_replicas` keys the burst replica purely on the record's presence, this cleanup is what stops a stale record from pinning a burst replica on a cluster that is off or no longer configured for burst; on a `HYDRATION SIZE` change a fresh record is written at the new size on a later tick if a burst is still warranted.
+
+- **`ON REFRESH` scheduling.** Contributes one replica at `cluster.size` while the cluster is inside a refresh window and nothing otherwise, based on REFRESH MV write frontiers and the configured hydration-time estimate. A scheduled cluster's `replication_factor` is normalized to `0`, so the implicit baseline desires no replicas and `ON REFRESH` is the sole contributor of replicas. It does not apply to MANUAL clusters.
+
+Both functions of every strategy are pure: same inputs, same output, no side effects. The controller is the sole mutator, it applies the `update_state` results and the create/drop commands that close the gap between the combined desired set and the actual replicas.
+
+#### Combining strategy outputs
+
+Each strategy's `desired_replicas` contribution is a **multiset of replica slots keyed by config shape** — a count per shape, not a set: the implicit baseline alone wants `replication_factor` slots at one shape. Strategies name no replicas; they describe shapes and counts, and the controller assigns concrete names as it fills slots, so two strategies can never contend over a replica *name*. Contributions combine **per shape, taking the max count across strategies**, so a slot survives as long as *any* strategy desires it and overlapping requests for the same shape don't double it. Strategies are purely additive, so they cannot contradict one another. The controller diffs the combined desired set against the actual replica set and emits the gap: a create for a slot the desired set calls for but actual lacks, a drop for a replica whose shape no strategy still desires. This composes the strategies with no state-machine interaction between them. The controller retains each strategy's individual contribution, not just the merged set, so it can attribute every command it emits: a create records which strategies desired the replica ("required by graceful reconfiguration and hydration burst"), a drop records that none did. These attributions are the reasons carried on the audit events.
+
+### The cluster controller
+
+The controller runs as its own task within `environmentd`. Its inputs are:
+
+- **Durable cluster configuration**, observed via the catalog.
+- **Live status signals** from the compute and storage controllers: hydration state, current frontiers.
+- **A periodic tick**, plus an out-of-band **wake** on events that shouldn't wait for it — notably an `ALTER` that has just written a `reconfiguration` record. Each tick or wake runs one full reconcile pass (both phases); live status changes (e.g. a replica finishing hydration) are observed on the next pass rather than waking the controller themselves.
+
+v1 reads these inputs in-process; a multi-`environmentd` future would swap them for subscriptions to builtin relations exposing the same signals (see [Alternatives Considered](#alternatives-considered)).
+
+Its outputs are **decisions** sent to the Coordinator over a command channel: requests to create or drop a replica, or to update a cluster's durable state (a cut-over, a record write or clear), each with a reason. The Coordinator transacts them through the catalog and orchestrator. The channel is **request/response**: within a tick the controller awaits the Coordinator's confirmation that the `update_state` batch has been transacted before it computes `desired_replicas`.
+
+The controller is not the catalog writer. Coordinator remains the only writer.
+
+The controller does not maintain its own in-memory state, the source of truth is always the catalog plus live signals.
+
+#### Why a separate task rather than running on the coordinator's main loop
+
+The coordinator main loop is a serial command processor and a place we want to do less work in over time, not more. Periodic decision-making, polling of status signals, and computation over potentially many clusters should not block command handling. A separate task with a clean message-channel boundary also makes the controller independently testable and gives us optionality to extract it to a separate process later without further refactoring.
+
+#### Why a reconciler rather than an imperative pipeline
+
+A reconciler computes "desired replica set" purely from durable state plus observable status. This has several properties we want:
+
+- **Crash-safe by construction.** Any state needed to continue an operation across a restart is, by definition, in the catalog or derivable from it.
+- **Composable.** Multiple strategies (graceful reconfig, hydration burst, on-refresh, future ones) each contribute to the desired set; the controller merges them by union. No state-machine interactions between strategies.
+- **Deterministically auditable.** Same inputs always yield the same decisions; audit entries explain each decision from durable state plus observed status.
+
+#### The reconcile tick
+
+Each tick reconciles every cluster in two phases, separated by a barrier:
+
+1. **`update_state`.** The controller reads a fresh catalog snapshot and runs every strategy's `update_state`, collecting their durable writes: cut-overs (`cluster.size := target`), `reconfiguration` and `burst` record writes and clears. It submits that batch to the Coordinator and **awaits confirmation that it has been transacted.**
+2. **`desired_replicas`.** With those writes applied, the controller runs every strategy's `desired_replicas` against the now-current state, unions the contributions into the [combined desired set](#combining-strategy-outputs), diffs it against the actual replica set, and emits the creates and drops that close the gap.
+
+#### State convergence
+
+Each pass the controller **emits only the commands that close the gap**: a create for a replica that should exist but doesn't, a drop for one that shouldn't. It has the observed state, so it does not re-assert the full desired set every tick; it sends work only when there is a delta, keeping needless transactions off the coordinator's serial loop.
+
+Commands name **explicit replicas** — *create replica `<name>` at this config*, *drop replica `<name>`* — rather than asking the Coordinator to make some count of replicas at a config shape exist. The controller derives names deterministically from the observed actual set, picking a fresh name for each create and a specific existing replica for each drop; it never renames a replica to make the sets line up. This keeps re-emission harmless: the controller's view of the actual set lags, and across a crash or re-election a later pass can recompute the same gap, but a create of a name that already exists and a drop of one already gone are both no-ops, and a stale command is reconciled away on the next pass.
+
+Both the create/drop batch and the durable **state** writes `update_state` makes — cutting the realized config over to an in-flight target (`cluster.size := target`, clearing the `reconfiguration` record), writing or clearing the `burst` record — are applied under a **compare-and-append** guard, the pattern we know from persist: each batch carries the controller's view of the durable cluster state it was derived from (the cluster config plus the `reconfiguration` and `burst` records), and the Coordinator applies it only if that state still holds. A user `ALTER` that lands between the controller deriving its commands and the Coordinator applying them changes that state, so the guard fails, the batch is rejected, and the controller recomputes from the new state on the next tick. This is what keeps a drop derived from a pre-`ALTER` snapshot from retiring a replica the `ALTER` has since made desired.
+
+#### Example: a graceful size change
+
+Take a MANUAL cluster at `100cc`, `replication_factor = 2`, serving replicas `r1`, `r2`. The user runs `ALTER CLUSTER ... SET (SIZE = '200cc')`.
+
+1. **`ALTER` returns.** It writes `reconfiguration = { target: 200cc, deadline }` and leaves `cluster.size = 100cc`.
+2. **Reconcile.** The implicit baseline desires *2 replicas at 100cc* (the realized config); graceful reconfiguration desires *2 replicas at 200cc* (the record's target). The desired set is their union, `{2×100cc, 2×200cc}`. Actual is `{r1, r2 @ 100cc}`, matched to the 100cc slots by config; the two 200cc slots are unfilled, so the controller creates them as fresh replicas `r3`, `r4`. Actual is now `{r1, r2 @ 100cc, r3, r4 @ 200cc}` — old and new sets overlapping, all four serving.
+3. **Hydration.** While `r3`, `r4` hydrate, the desired set is unchanged, so the controller does nothing and the `100cc` replicas keep serving.
+4. **Cut-over — the tick's `update_state` phase.** On the first tick where `r3`, `r4` are present and hydrated, `update_state` commits `cluster.size := 200cc` and clears the `reconfiguration` record, and the controller awaits that write before continuing.
+5. **Old set falls out — the same tick's `desired_replicas` phase.** With the cut-over applied, the implicit baseline now desires *2 replicas at 200cc* — matched to `r3`, `r4` — and graceful reconfiguration, with no record, desires nothing. The desired set is `{2×200cc}`; `r1`, `r2` (at `100cc`) are desired by no strategy, so the controller drops them in the same tick. Actual settles at `{r3, r4 @ 200cc}`.
+
+Advancing `cluster.size` at cut-over is the single durable write that retires the old set: it flips the implicit baseline from holding the `100cc` replicas to holding the `200cc` ones, and the old replicas fall out of the union on their own. Because the desired set is matched to actual by config and count, the freshly-named `r3`, `r4` satisfy the new steady state directly. Nothing is renamed, and the cluster never drops below `replication_factor` serving replicas.
+
+### Durable state model
+
+The cluster's durable configuration represents the cluster's **realized, currently-serving state**, what is actually running at steady state. We add additional records in cluster state for use by the strategies:
+
+- `auto_scaling_strategy: Option<AutoScalingStrategy>` — the strategy block (v1: `ON HYDRATION` with its `HYDRATION SIZE` and optional `LINGER DURATION`). This is user-configured *policy*, distinct from the two transition records below, which are `ALTER`/controller-managed *runtime state*.
+- `reconfiguration: Option<ReconfigurationState>` — an in-flight graceful reconfiguration: the `target` (the size / replication-factor / availability-zones / logging the cluster is moving to), a `deadline`, and the `on_timeout` action (`COMMIT` or `ROLLBACK`) to apply if the deadline passes before the target hydrates.
+- `burst: Option<BurstState>` — the analogous record for an active hydration burst: the `burst_size` of the in-flight burst replica, a `linger_duration`, and the timestamp at which we observed the steady-state replicas as hydrated. Burst is controller-initiated (not tied to an `ALTER`), the strategy writes the record when we determine burst is needed. It is cleared when burst tears down on success.
+
+An `ALTER CLUSTER SET (...)` that changes a replica's **config shape** — `SIZE`, logging (`INTROSPECTION ...`), or `AVAILABILITY ZONES` — needs a hydrate-overlap, so it writes the `reconfiguration` record in a transaction and returns; the realized config is left untouched until the controller cuts over. When no reconfiguration is in flight, changes that need no overlap ( replication-factor-only, etc.) skip the record and update the realized config directly. But once a `reconfiguration` record is present, every further `ALTER` instead **folds into it**, overwriting its `target` and deadline. So the realized config is advanced only by the controller at cut-over, and no direct config write ever races an in-flight transition; re-targeting and ALTER-back are an overwrite of the record's `target`. The controller's job is to converge the actual replica set onto the target and, at cut-over, advance the realized config to match.
+
+**Scheduled clusters and `replication_factor`.** For a cluster with a non-MANUAL `schedule`, `replication_factor` is not a user-facing capacity knob: it is held at `0`, and the controller is the sole authority over the replica set. `CREATE CLUSTER` and `ALTER CLUSTER ... SET (SCHEDULE = ...)` both normalize `replication_factor` to `0` when the schedule is non-MANUAL. Otherwise a stale non-zero value would have bootstrap provision a replica the controller immediately drops, a restart-time flap. As a result `mz_clusters.replication_factor` reads `0` for a scheduled cluster even while a replica runs inside a refresh window; `mz_cluster_replicas` is authoritative for what is actually running.
+
+### SQL surface
+
+**Reshaped: `ALTER CLUSTER ... SET (...)`.** Writes the durable `reconfiguration` record when needed and kicks the controller; the realized `cluster.size` is left in place until cut-over. In the default (background) mode, the statement returns immediately and the reconfiguration runs to completion in the background. While the new mode is being rolled out behind a dyncfg gate, the foreground experience is preserved as a thin session-side wait shim over the same mechanism: the session blocks polling the new introspection view until the controller reports reconciliation complete (or hits a timeout). Notably, under this model session disconnect during the wait does *not* abort the reconfiguration. The durable target is already set and the controller carries on. Deprecating the foreground experience after rollout means removing the wait shim, not unwinding any parallel machinery.
+
+**Per-`ALTER` timeout:** The current `ALTER CLUSTER ... SET (...) WITH (WAIT ...)` syntax is retained unchanged and repurposed to drive the durable mechanism. Two forms:
+
+- `WAIT UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT|ROLLBACK)` — the hydration-aware form. `TIMEOUT` is added to the transaction timestamp and written as the `reconfiguration` record's `deadline`; `ON TIMEOUT` is written as its `on_timeout`. The controller cuts over once the target replicas hydrate; only if the deadline passes un-hydrated does it apply `on_timeout`.
+- `WAIT FOR '<dur>'` — retained as sugar for `WAIT UNTIL READY (TIMEOUT '<dur>', ON TIMEOUT COMMIT)`. Its legacy contract was "wait the fixed duration, then cut over regardless of hydration"; a change from the legacy behavior is that the controller cuts over the instant the target hydrates, so we drop the "wait the *full* duration even when ready early" property, which carries no value in a background model. The blind cut-over-at-the-deadline it implied is exactly `ON TIMEOUT COMMIT`. A `WAIT FOR '0s'` (equivalently `TIMEOUT '0s'` with `ON TIMEOUT COMMIT`) thus requests an immediate cut-over: the deadline is already past, so the controller commits on its first pass without ever provisioning overlap replicas — the non-graceful, drop-and-recreate resize, now an explicit opt-in rather than the no-`WAIT` default.
+
+`ON TIMEOUT` defaults to **`ROLLBACK`** when omitted — the safe, conservative choice that never surprises a user with downtime by cutting over to a not-yet-hydrated target. This is a change from today's implicit `COMMIT` default, applied uniformly (the foreground wait shim picks it up too). Omitting `WITH (WAIT ...)` entirely on a reconfiguring `ALTER` falls back to the `default_cluster_reconfiguration_timeout` dyncfg for the deadline (so a transition is never unbounded) and the default `ROLLBACK` action. The session-side wait shim does not run a timer of its own; it watches the durable outcome and returns when the controller resolves — a completed cut-over or a rolled-back tombstone — so the in-session UX of "ALTER returns or errors within the timeout" is preserved without the shim and controller ever disagreeing. There is no shim-side timeout at all: the controller resolves the reconfiguration by its deadline, and the shim simply waits for that.
+
+**New cluster option: `AUTO SCALING STRATEGY = (...)`.** Available at `CREATE CLUSTER` and `ALTER CLUSTER ... SET (...)`. The value is a paren-enclosed list mixing strategy specs (currently only `ON HYDRATION (HYDRATION SIZE = '...', LINGER DURATION = '...')`, where `LINGER DURATION` is optional — the dyncfg default applies when it is omitted). The whole block is set or replaced atomically; specifying an empty list — or `ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY)` — disables auto-scaling for the cluster. Fine-grained ALTERs that change one sub-parameter are out of scope for v1.
+
+**Cancellation.** v1 uses ALTER-back semantics: a user cancels an in-flight reconfiguration by issuing another `ALTER CLUSTER` with the original (or any other) size. The new `ALTER` overwrites the `reconfiguration` record's target and deadline; the controller converges on the new target — and if it equals the still-realized `cluster.size` (a true cancel-back), convergence is just dropping the in-flight new replicas and clearing the record.
+
+We may add explicit `ALTER CLUSTER ... CANCEL ALTER` (or equivalent) syntax later; this is not strictly necessary for v1 because the ALTER-back path covers the same need.
+
+**Rejected combinations** (error at parse/plan):
+- `HYDRATION SIZE` equal to the cluster `SIZE` (no-op; rejected for clarity).
+- `AUTO SCALING STRATEGY` combined with `SCHEDULE = ('on-refresh', ...)` in v1.
+
+### Observability
+
+Two distinct surfaces, mirroring the controller's separation of "current state" from "history":
+
+- **Current state — introspection view.** A new builtin view (working name: `mz_internal.mz_cluster_reconfigurations`, naming TBD) reports, per cluster: realized vs. target config shape (size, logging, availability zones) and replication factor, presence of an in-flight reconfiguration, the active deadline (when set), currently-running burst replicas. The *target* is the `reconfiguration` record's target whenever a `reconfiguration` record is present (including a timed-out tombstone), otherwise `cluster.size` itself. During a graceful reconfiguration the two differ; at cut-over `cluster.size` advances to the target and they coincide again. A timed-out reconfiguration shows as a tombstoned record (deadline in the past) with `cluster.size` still at the realized value, and the abandoned target visible in the record.
+
+- **`SHOW CLUSTERS` surfaces in-flight reconfigurations.** Today's `SHOW CLUSTERS` is implemented as SQL over `mz_clusters` and related views; we extend that SQL to join with the new introspection view so a user sees, per cluster, both the current size (the realized `cluster.size`) and the target size (the `reconfiguration` record's target, when one is in flight), plus an indication of whether a reconfiguration is in flight. The exact column set is left to implementation, but the design requires that a single `SHOW CLUSTERS` answers the questions "what did I ask for", "what's actually there now", and "is something in progress, done, or timed out" without requiring the user to know about the introspection view.
+
+- **History — audit log.** Audit events come from three places: the `ALTER` that writes or overwrites a `reconfiguration` record (a graceful reconfiguration *started*, or *cancelled* via ALTER-back), the durable transitions `update_state` commits within a tick (cut-over, timeout-fired, and burst *started* — burst is controller-initiated, so `update_state` writes its record), and the create/drop commands the controller derives from the `desired_replicas` diff. `desired_replicas` itself records nothing directly — it touches the log only through the replica-lifecycle commands its output induces. Extend the existing `SchedulingDecisionsWithReasonsV2` event family (or add closely-related event variants) to cover:
+  - Graceful reconfiguration: started, replica created, replica dropped, finalized, cancelled, timeout fired (for stuck reconfigurations).
+  - Hydration burst: started, replica created, replica dropped.
+
+All audit entries record the cluster, and identifiers of the replicas involved. Reconfiguration start and timeout-fired events also record the active deadline so an operator can correlate "timeout fired" with the originating `ALTER`.
+
+### Failure handling and safety rails
+
+- **Stuck reconfiguration.** The `reconfiguration` record's `deadline` and `on_timeout` come from the `ALTER`'s `WITH (WAIT ...)` (or the `default_cluster_reconfiguration_timeout` dyncfg + default `ROLLBACK` when no `WAIT` is given). *Success precedence* always applies first: if the target replicas all hydrate at or before the deadline, the controller cuts over normally regardless of `on_timeout`. When `now` exceeds the deadline with the target **not** fully hydrated, the controller applies `on_timeout`:
+
+  - **`ROLLBACK` (the default).** The controller **drops all of this reconfiguration's target replicas — including any that did hydrate — reverting to the pre-reconfiguration replica set.** Dropping the whole target set, not just the un-hydrated ones, is deliberate: `replication_factor > 1` is a high-availability requirement, and a partial cutover (some target-size replicas, the rest still old) would satisfy it at no single size — so the cluster stays fully on the old set, which does meet HA at the realized size, until the new set can hydrate completely. The `reconfiguration` record is **retained with the past deadline as a tombstone**: it surfaces the abandoned target in `SHOW CLUSTERS` and the introspection view, and its past deadline keeps the strategy backed off (suppresses re-adding the target replicas), so this is a stable state, not a retry loop. It persists until the user issues another `ALTER` — back to the realized size (overwrite-and-converge, which just confirms the current state and clears the record), forward to a new one, or a re-issue to grant a fresh deadline.
+  - **`COMMIT`.** The controller advances the realized `cluster.size` to the target and clears the record even though the target replicas are not all hydrated — the explicit "I'd rather take the new shape now than keep waiting" choice, accepting that queries may be served from a not-yet-hydrated replica until it catches up.
+
+  An audit event records the timeout and the action taken.
+
+- **Hysteresis.** The only bit of light hysteresis we have is the linger duration on burst clusters. This makes it so we don't rapidly thrash when a user is slowly creating new objects. We deliberately don't add more elaborate schemes and cooldowns that prevent firing up a burst replica. The initial user-facing goal is: there should be a burst replica when steady-state replicas are not hydrated, and it's okay to have a burst replica around for quite a while because it might be the only thing that makes it so we can continue serving requests. Which latter means we don't want to have a timeout/ttl on how long a burst replica can be up. Two consequences fall out of having no TTL and re-arming on un-hydration, both accepted: if the steady-state replicas can never hydrate at `cluster.size` (e.g. a dataflow that only fits at the burst size), the burst replica stays up indefinitely and the cluster runs permanently oversized, visible only through billing and the audit log; and a cluster with steady object churn keeps re-arming the linger and so keeps a burst replica alive.
+
+- **Break-glass dyncfg.** A dedicated flag disables the hydration-burst strategy environment-wide without disabling graceful reconfiguration or `ON REFRESH`. Operations can flip this if burst behavior misfires.
+
+- **Feature gate.** Three distinct knobs gate this work, by necessity. (1) `AUTO SCALING STRATEGY` **SQL acceptance** must be a `feature_flags!` flag (`enable_for_item_parsing: true`): the gate has to hold when stored `CREATE CLUSTER` statements are re-parsed at catalog rehydration, where dyncfgs aren't consulted — otherwise a stored statement could fail to re-parse after the flag is turned off. (2) **Background reconfiguration** (vs. the foreground wait shim) is gated by its own dyncfg. (3) The **hydration-burst strategy** is gated by the break-glass dyncfg above. The two runtime dyncfgs are independent — background reconfiguration and burst roll out, and can be disabled, separately — and burst additionally requires (1), since a cluster can only carry an `AUTO SCALING STRATEGY` while SQL acceptance is on.
+
+- **Interaction with blue-green and 0dt upgrades.** A burst replica is a fully-hydrated, serving replica that does not tear down until a steady-state replica has hydrated, so a blue-green cutover firing while burst is up is safe — service is continuous across the burst→steady handoff, just faster. During a 0dt upgrade the new env's controller provisions nothing (its catalog writes are gated in read-only mode), so burst does not fire there; using burst to accelerate upgrade hydration is possible future work.
+
+### Dyncfgs
+
+Keys TBD. The dyncfgs in play: background-reconfiguration gate, default timeout (the deadline written when no explicit timeout was given — by a reconfiguring `ALTER` without `WITH (WAIT ...)`), burst disable (break-glass).
+
+### Behavior across restarts
+
+Because all relevant state is durable, restart behavior is trivial:
+
+- On controller startup, it reads the catalog and live status signals, computes desired replica sets, diffs against actual, and emits whatever decisions are needed. A reconfiguration mid-flight at the moment of restart resumes from wherever the durable state landed — the `reconfiguration` record (target + deadline) is durable, so the controller knows both what it was converging on and by when: if the new replicas were already created and partially hydrated, it waits for them; if they had hydrated and the cut-over had already committed, there is no record and `cluster.size` is already the new size, so the controller sees a settled cluster and does nothing; if the timeout had already fired, the tombstoned record keeps the strategy parked until another `ALTER`.
+- No bootstrap cleanup of "pending" replicas is needed (there are no pending-flagged replicas; the diff drives convergence).
+
+### Migration
+
+- **Add `auto_scaling_strategy: Option<AutoScalingStrategy>`** to the durable cluster configuration, durably capturing whatever the user expressed in the `AUTO SCALING STRATEGY` SQL block. Standard catalog migration with `None` default for existing clusters.
+- **Add the in-flight records** — `reconfiguration: Option<ReconfigurationState>` (the in-flight target plus its deadline) and `burst: Option<BurstState>` (burst size plus linger duration) to the durable cluster configuration. These are **two separate fields**: a burst can run while a reconfiguration is in flight, so they are not mutually exclusive. Standard catalog migration with `None` default for existing clusters.
+- **Record the provisioned availability-zone list on managed replicas.** The controller tells realized-config replicas from in-flight target replicas by config shape — size, logging, and the AZ list a replica was provisioned under — so that list must be durable on the replica. Today's durable managed-replica location records only a *single* AZ: the user pin for a replica of an unmanaged cluster, while for a replica of a managed cluster the placement pool is virtual — re-derived from the cluster config at runtime and never stored — so it cannot express an `AVAILABILITY ZONES` divergence. Extend that field into an `availability_zones` list recording the zones the replica was provisioned under (the cluster's pool for a managed replica, the single pin as a zero-/one-element list for an unmanaged one), and backfill existing replicas accordingly. Standard catalog migration. Without it, AZ changes could not be reconstructed across a restart and would have to fall back to the non-graceful immediate path (drop the old replicas and recreate at the new shape, with a rehydration gap).
+- **Normalize `replication_factor` for existing scheduled clusters.** Today the `ON REFRESH` scheduler toggles a scheduled cluster's `replication_factor` between `0` and `1` as its on/off mechanism, so an existing scheduled cluster can carry a non-zero durable value. The new model holds it at `0` and lets the `ON REFRESH` strategy own the replica set, so migrate existing non-MANUAL-schedule clusters to `replication_factor = 0`. An in-window replica that is currently running is re-desired by the strategy and matches the existing replica, so it does not flap.
+- **Remove `pending: bool`** from the durable replica location.
+
+## Notable user-facing changes
+
+The following behaviors fall out of the design rather than being its headline outcomes. They are user-observable and worth flagging in release notes and user-facing documentation.
+
+- **Burst and reconfiguration-transient replicas appear in billing and metering identically to ordinary replicas.** A user with an `AUTO SCALING STRATEGY` set sees additional billing during hydration windows (at the configured `HYDRATION SIZE`); a user issuing a background `ALTER CLUSTER` sees additional billing during the overlap between the old and new replica sets. This is not new, replicas are always billed except if we create them as unbilled replicas. Just calling out for completeness, to make it clear that burst or reconfiguration replicas are not free.
+- **Background `ALTER CLUSTER` returns immediately** after writing the in-flight `reconfiguration` record to the catalog. The actual replica transition happens asynchronously and is observable via the new introspection view. Note a deliberate difference from how some other async DDL reads back: the cluster's realized config (`cluster.size`, `SHOW CREATE CLUSTER`, `mz_clusters.size`) keeps showing the **pre-reconfiguration** config until the controller cuts over; the realized config is the committed steady-state config, not a target, and the pending target is surfaced separately (the introspection view, `SHOW CLUSTERS`).
+- **A plain `ALTER CLUSTER SET (SIZE = ...)` (no `WITH (WAIT ...)`) is now graceful and non-disruptive by default.** Today a bare config-shape `ALTER` without `WITH (WAIT ...)` tears the cluster's replicas down and recreates them at the new shape, so the cluster is unavailable while the new replicas rehydrate. The new model runs the graceful overlap path instead — old replicas keep serving until the new ones hydrate and cut over — at the cost of the transient double billing noted above. This flip should be called out in release notes. A user who wants the old immediate behavior — cut over at once and accept the rehydration gap, avoiding the overlap cost — can request it explicitly with `WITH (WAIT FOR '0s')` (equivalently `WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT COMMIT)`): the deadline is already in the past, so the controller commits the cut-over on its first pass without provisioning overlap replicas.
+- **`SHOW CLUSTERS` gains in-flight visibility.** The command is extended to surface both the current size (the realized `cluster.size`) and the target size (the in-flight `reconfiguration` record, when one is pending), plus an indication of whether a reconfiguration is in progress. This is a change from today's behavior, where `SHOW CLUSTERS` shows only the old size until the graceful reconfiguration finalizes and there is no in-band way to ask "is a reconfig in flight". See [Observability](#observability).
+- **`WITH (WAIT ...)` is now durable, and the implicit `ON TIMEOUT` default flips from `COMMIT` to `ROLLBACK`.** Today's `WAIT UNTIL READY (TIMEOUT ...)` was session-bound: closing the session aborted the reconfiguration. In the new model the deadline and the `ON TIMEOUT` action are written to the catalog as the `reconfiguration` record's `deadline` and `on_timeout`; closing the session no longer aborts anything, and the controller enforces both regardless of session lifetime. The session-side wait shim reflects the controller's durable outcome rather than running its own timer, so the in-session UX of "ALTER returns or errors within the timeout" is unchanged. Two changes worth release-noting: (1) the implicit `ON TIMEOUT` default is now **`ROLLBACK`** rather than `COMMIT` — a timed-out reconfiguration with no explicit action reverts to the pre-reconfiguration shape instead of cutting over to a possibly-unhydrated target; this is the safe default that never silently induces downtime, and it applies to the foreground path too. (2) On a `ROLLBACK` expiry the controller drops all of this reconfiguration's target replicas (including any that already hydrated); the cluster keeps running at its pre-reconfiguration size (the realized `cluster.size`, which never moved) with the abandoned target retained in the tombstoned record. `SHOW CLUSTERS` shows the current/target split and a timed-out indicator, and the user re-issues `ALTER` to retry or change course. Completion (or timeout) is read from the introspection view (or the absence of a pending record), not assumed from the `SIZE` the `ALTER` requested.
+
+## Alternatives Considered
+
+- **Inline expansion of `cluster_scheduling.rs` with two additional policies.** Rejected. The durability-of-intent problem persists (background ALTER still needs catalog state to express intent), strategy composition gets ad-hoc, and the coordinator-main-loop placement is exactly what we want to move away from.
+
+- **`cluster.size` as the immediately-written declared target (deriving "current" from the replica set).** Considered and rejected. In this alternative `ALTER` writes the new size straight into `cluster.size` and the controller diffs against it, with "what is actually serving" derived from the replica set. It is appealing — `cluster.size` is the obvious home for "the target," re-targeting is just another write, and the cut-over needs no config write (only dropping the old replicas). We rejected it because it makes `cluster.size` a *wish* rather than a *fact*: mid-reconfiguration `mz_clusters.size` shows a size with no committed replicas behind it, and a **timed-out** reconfiguration leaves it showing the unrealized target *indefinitely* (until the user `ALTER`s again) while the cluster serves the old size. Every reader then has to derive "what is actually running" from the replica set and is told never to trust `cluster.size` alone, and the timeout-park state needs a tombstone precisely to hold that persistent divergence stable. Instead we keep `cluster.size` the **realized fact** and put the in-flight target in the `reconfiguration` record. This costs the "see the new size in `SHOW CREATE` the instant `ALTER` returns" property, which we judged the lesser concern.
+
+- **Keep `pending: bool` on replicas.** Considered. Removed because, in the reconciler model, it carries no information not already present in the diff between cluster config and actual replicas, and its presence implies semantics (lifecycle marker) that the controller already owns. The implementation cost of removing it (verifying no other consumers, removing bootstrap cleanup) is one-time; carrying it forward indefinitely is ongoing complexity.
+
+- **Cluster controller as a separate process / multi-envd inputs.** Deferred. v1 runs the controller as a task inside `environmentd` and reads inputs in-process from the catalog and compute/storage controllers. Extracting to a separate process is a localized refactor at the outbound message channel; swapping inputs to subscriptions on builtin relations is a localized refactor at the input adapter. The latter presupposes the signals (hydration, frontiers, durable cluster config) exist as builtin relations — partly true today, partly future work.
+
+## Open Questions
+
+1. **`AUTO SCALING STRATEGY` + `SCHEDULE = ('on-refresh', ...)` combination.** v1 rejects this combination. Semantically the combination is interesting (every refresh window, burst comes up first to accelerate hydration, steady catches up, then the schedule turns the cluster off), but our strong recommendation is to keep this rejected indefinitely: there is currently no appetite to invest further in the `SCHEDULE` syntax, and supporting the combination would expand its surface area.
+
+2. **Multiple burst replicas (one per steady replica vs. one total).** v1 supports exactly one burst replica per cluster regardless of replication factor. Our strong recommendation is to keep it that way: the burst replica is by design transient, and provisioning N burst replicas to mirror an N-replica steady set would multiply cost for diminishing benefit — burst tear-down only requires one steady replica to have caught up. Revisit only if real-world usage proves the single-burst model insufficient.
+
+3. **Cancellation syntax.** v1 uses ALTER-back. Do we want explicit `ALTER CLUSTER ... CANCEL ALTER` syntax for clarity? We are leaning no for v1.
+
+4. **Strategy roadmap.** No concrete next strategies are committed. Our strong recommendation is to keep the strategy interface minimal — sufficient for graceful reconfiguration, hydration burst, and `ON REFRESH` — and resist extending it preemptively. Capability gets added when concrete needs arrive.
+
+5. **Introspection view naming and exact column layout.** Working name `mz_internal.mz_cluster_reconfigurations` is a placeholder.
+
+6. **Foreground/synchronous graceful reconfiguration retention.** Our strong recommendation is to deprecate the current foreground (session-bound) mechanism in favor of the background model. During rollout, the foreground experience is preserved as a thin session-side wait shim over the background mechanism (see [SQL surface](#sql-surface)) — *not* by retaining the existing parallel state machine. This means the `pending: bool` flag on replicas and the associated three-stage machinery can be removed up front; deprecating the foreground experience later is simply deleting the wait shim. The one behavioral difference vs. today is that session disconnect during the wait no longer aborts the reconfiguration (arguably a feature; the durable target stays set and the controller continues).
+
+7. **Naming: "cluster controller."** "Controller" is heavily overloaded in the codebase (compute controller, storage controller, `mz_controller`). The term is descriptively correct but collides at the type/module layer. Leaning toward keeping "cluster controller"; alternatives considered: `ClusterReconciler` (matches the reconciler framing), `ClusterScheduler` (continuity with `cluster_scheduling.rs`).
+
+8. **Transient replicas and HA placement.** A burst (or reconfiguration-overlap) replica currently counts toward a cluster's topology spread / min-domains, so it can skew where a subsequently-added steady replica lands. Low-likelihood; excluding transient replicas from spread accounting is follow-up work.
+
+9. **Config-shape `ALTER` on a scheduled cluster.** A non-MANUAL (scheduled) cluster holds `replication_factor = 0` and lets the `ON REFRESH` strategy own the replica set, which does not compose cleanly with the rule that every config-shape change writes a `reconfiguration` record (see [Durable state model](#durable-state-model)): graceful reconfiguration would desire `0` target replicas, so the cut-over degenerates to a vacuous one (advance `cluster.size`, clear the record) and any replica running inside a refresh window is then swapped for one at the new size — a disruptive mid-window resize. The likely intent is that a size change writes `cluster.size` directly and the next refresh window brings a replica up at the new size; v1 leaves this unresolved, with the direct (non-record) path the safe stopgap.
