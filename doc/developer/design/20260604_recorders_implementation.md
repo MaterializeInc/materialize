@@ -295,15 +295,16 @@ recorder design tries to sidestep (and, per H2, only partly does).
      functions of the `DELTA TABLE` + reclock (the reclock makes the clamped
      integration reproducible), so the optimizer *may* treat them as recomputable
      over the recorded data.
-   - The **reclock** (A→B) is best represented **in-band** as progress markers in
-     the `DELTA TABLE` — `SUBSCRIBE`'s `mz_progressed` rows — so a `DELTA TABLE`
-     is a persisted subscribe stream (data + progress). This keeps `RECORD` to a
-     **single shard / single CAS**: data and reclock cannot diverge and a delta
-     cannot be double-recorded (exactly-once), with no multi-shard atomicity for
-     the reclock. (A separate reclock collection is the alternative, but needs a
-     combined CAS across two shards.) `INTEGRATE` replays the stream, advancing
-     `v`'s domain-A frontier on each progress marker. Reuses the subscribe
-     `mz_progressed` machinery and the reclock framework (`20210714_reclocking.md`).
+   - The **reclock** (A→B) drives `v`'s domain-A frontier and is recovered on
+     restart. Representation is an open choice that does not change the model:
+     *in-band* as `SUBSCRIBE` `mz_progressed` markers in the `DELTA TABLE` (a
+     persisted subscribe — single-shard CAS, but progress-marker noise for
+     consumers) vs. a *separate collection* (clean data, but a combined CAS with
+     the data — nearly free since the multi-output bundle already needs a
+     multi-shard txn). Leaning separate for data cleanliness. Either way, exactly-
+     once (no double-recording) is guarded by the CAS on the recording commit; it
+     is not a determinism problem. Reuses the reclock framework
+     (`20210714_reclocking.md`).
    - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
      `since` to physically drop history, which forfeits `AS OF`/replay in the
      erased range. It is mutually exclusive with stable history there; scope it
