@@ -195,17 +195,21 @@ liveness:** outputs must keep advancing their `upper` even with no data;
 `append_table(write_ts, advance_to, appends)`
 (`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
 independently of `appends`, so a frontier-only commit is a no-new-machinery
-operation; wire it into the Phase-0 commit loop (easy to forget). **Open:**
-whether the aging/`mz_now()` domain is A (event-age, stalls on idle input) or B
-(wall-clock) is a semantic choice, not a frontier detail.
+operation; wire it into the Phase-0 commit loop (easy to forget). **Multi-writer:**
+with several `RECORD` writers, `v`'s domain-A `upper` is the **meet over active
+writers'** reclocked committed-through A-times — an idle-but-live writer advances
+(idle liveness above), a dropped writer leaves the meet (which may jump forward), a
+stalled one holds it back; the standard multi-input frontier rule over reclocks.
+**Decided:** the aging/`mz_now()` domain defaults to B (wall-clock), A (event-age)
+opt-in (conceptual doc), pulled to Phase 1.
 
 ### MED — M3: engine-owned compaction / read policy
 `INTEGRATE` relies on the engine owning the read policy / compaction so a `-1`
 consolidates with its `+1` and `since` advances (design "Bounding growth"
 invariants). Time-based aging via a temporal filter (`mz_now() < mz_timestamp +
-W`) depends on the unresolved domain question (M4): event-age (domain A) stalls
-when the input idles, wall-clock age (domain B) needs a system-time reference —
-the two are different retention semantics and the design must pick. Read policies
+W`) uses the **decided default of wall-clock (domain B)** — event-age (domain A)
+is opt-in (see M4 / conceptual doc) — so it needs a system-time reference by
+default. Read policies
 live in `src/adapter/src/coord/read_policy.rs`; today they are user/MV-driven.
 Making a recorder *own* and continuously advance them is plausible but interacts
 sharply with `RETAIN HISTORY` (the history/queryability caveat) and with the
@@ -290,36 +294,24 @@ recorder design tries to sidestep (and, per H2, only partly does).
    reclaimed? (Plus data-domain compaction as a deferred dual.)
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
-7. **Two time domains + reclock (A → B → A).** Domain A = the input timeline
-   (`mz_timestamp`); domain B = the `DELTA TABLE`'s system/write frontier.
-   `RECORD` reads A, writes data into the `DELTA TABLE` (B), and notes the A→B
-   mapping (the reclock). `INTEGRATE` reads the `DELTA TABLE` (B), places output
-   by `mz_timestamp` (A) — clamped to `max(mz_timestamp, upper)` for arbitrary /
-   below-frontier data (logical compaction; sound, same-row `+1`/`-1` accumulate
-   correctly, so *not* the "split retract/insert" bug a naive reading suggests) —
-   and drives `v`'s frontier into A via the reclock. Consequences:
-   - `v` lives in **domain A**: an event at input-time `t` is at `t`, consistent
-     with the input and sibling collections (the round-trip A→B→A, not stop-at-B).
-   - The `RECORD` step is the **only** non-deterministic boundary; the `DELTA
-     TABLE` is authoritative (the optimizer must **not** treat it as recomputable
-     from the original inputs). `INTEGRATE` and downstream **are** definite
-     functions of the `DELTA TABLE` + reclock (the reclock makes the clamped
-     integration reproducible), so the optimizer *may* treat them as recomputable
-     over the recorded data.
-   - The **reclock** (A→B) is **engine-owned metadata owned by the `DELTA TABLE`**
-     (decided) — the source-remap pattern (`20210714_reclocking.md`), not data in
-     the table. It drives `v`'s domain-A frontier and is recovered on restart; its
-     invariants are engine-maintained and *assumed* (no user tampering, no
-     read-time validation), and it can be retained independently of the data. Each
-     `RECORD` write commits the delta table **and** its reclock entry together (one
-     writer's commit, two shards), so they cannot diverge; multiple writers
-     interleave and the reclock recovers the merged A→B mapping — no cross-object
-     bundle needed.
-     Exactly-once (no double-recording) is guarded by the CAS on that commit; not
-     a determinism problem. (In-band `mz_progressed` markers were the
-     considered-and-rejected alternative — user data → tampering/validation +
-     consumption noise — see the design doc.)
-   - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
-     `since` to physically drop history, which forfeits `AS OF`/replay in the
-     erased range. It is mutually exclusive with stable history there; scope it
-     as "definiteness holds forward of the advanced `since`."
+7. **Two time domains + reclock (A → B → A).** The full model is in the conceptual
+   doc ("Time domains and reclocking", "determinism boundary") and is not restated
+   here. Implementation-relevant consequences:
+   - **Optimizer barrier (hard invariant).** The `DELTA TABLE` is authoritative and
+     must **not** be treated as recomputable from the `RECORD` body's inputs (that
+     would re-sample frozen / non-deterministic values); `INTEGRATE` and downstream
+     **are** definite over the delta table + reclock and *may* be recomputed. The
+     planner/optimizer must enforce this barrier.
+   - **Reclock is engine-owned metadata on the `DELTA TABLE`.** Each `RECORD` write
+     commits the data shard and its reclock entry together (one commit, two shards);
+     multiple writers interleave and the reclock recovers the merged A→B mapping (no
+     cross-object bundle). `v`'s domain-A `upper` is the meet over active writers'
+     reclocks (M4); recovered on restart. Exactly-once is the per-commit CAS, not a
+     determinism concern. (In-band `mz_progressed` markers: considered and rejected.)
+   - **`mz_now()`/aging domain decided B (wall-clock) by default**, A (event-age)
+     opt-in (M3/M4).
+   - **Compliance erasure = consolidating `DELETE` + advancing `since`** (forfeits
+     `AS OF`/replay forward of the new `since`); a cascade `DELETE` alone is not GDPR
+     erasure.
+   - **Persist-schema divergence** (embedded `mz_timestamp` ≠ physical commit ts) is
+     Q6 / M2.
