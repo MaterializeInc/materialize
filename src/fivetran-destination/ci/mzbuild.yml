@@ -10,4 +10,4 @@
 name: fivetran-destination
 pre-image:
   - type: cargo-build
-    bin: mz-fivetran-destination
+    bin: fivetran-destination
