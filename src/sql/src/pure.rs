@@ -2051,9 +2051,7 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                }
+                text_cols_option.value = gen_text_columns.map(WithOptionValue::Sequence);
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
@@ -2106,9 +2104,7 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                }
+                text_cols_option.value = gen_text_columns.map(WithOptionValue::Sequence);
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
@@ -2161,9 +2157,7 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::TextColumns)
             {
-                if let Some(gen_text_columns) = gen_text_columns {
-                    text_cols_option.value = Some(WithOptionValue::Sequence(gen_text_columns));
-                }
+                text_cols_option.value = gen_text_columns.map(WithOptionValue::Sequence);
             }
             if let Some(exclude_cols_option) = with_options
                 .iter_mut()
