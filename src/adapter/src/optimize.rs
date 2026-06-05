@@ -223,7 +223,7 @@ impl PeekOptimizer {
 /// paths. The `resolve` closure attaches the timestamp/session/stats context to
 /// the local plan; it is path-specific only in the concrete plan type it
 /// operates on.
-fn optimize_oneshot<O, LocalPlan, ResolvedPlan, GlobalPlan>(
+pub(crate) fn optimize_oneshot<O, LocalPlan, ResolvedPlan, GlobalPlan>(
     optimizer: &mut O,
     raw_expr: HirRelationExpr,
     resolve: impl FnOnce(LocalPlan) -> ResolvedPlan,
