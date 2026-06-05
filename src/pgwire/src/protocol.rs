@@ -1457,32 +1457,15 @@ where
         }) {
             if let Some(desc) = stmt.desc().relation_desc.clone() {
                 for (format, ty) in result_formats.iter().zip_eq(desc.iter_types()) {
-                    match (format, &ty.scalar_type) {
-                        (Format::Binary, mz_repr::SqlScalarType::List { .. }) => {
+                    if let Format::Binary = format {
+                        if let Err(msg) = mz_pgrepr::Value::binary_encoding_error(&ty.scalar_type) {
                             return self
                                 .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of list types is not implemented",
+                                    msg,
                                 ))
                                 .await;
                         }
-                        (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
-                            return self
-                                .send_error_and_get_state(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of map types is not implemented",
-                                ))
-                                .await;
-                        }
-                        (Format::Binary, mz_repr::SqlScalarType::AclItem) => {
-                            return self
-                                .send_error_and_get_state(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of aclitem types does not exist",
-                                ))
-                                .await;
-                        }
-                        _ => (),
                     }
                 }
             }
@@ -2619,6 +2602,35 @@ where
                     .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
             }
         };
+
+        // Binary encoding is not implemented for some types (e.g., list, map,
+        // and aclitem). Unlike the extended query protocol's Bind handler, COPY
+        // does not validate this when binding the portal: the portal's result
+        // formats describe the `CopyData` wrapper, not the COPY format itself,
+        // so the Bind handler explicitly skips `COPY TO` statements. We must
+        // therefore check here, before streaming any rows, otherwise
+        // `encode_binary` would panic mid-stream (SQL-323).
+        if let CopyFormat::Binary = format {
+            if let Some(msg) = row_desc
+                .iter_types()
+                .find_map(|ty| mz_pgrepr::Value::binary_encoding_error(&ty.scalar_type).err())
+            {
+                return self
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
+                    .await
+                    .map(|state| {
+                        (
+                            state,
+                            SendRowsEndedReason::Errored {
+                                error: msg.to_string(),
+                            },
+                        )
+                    });
+            }
+        }
 
         let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
             mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
