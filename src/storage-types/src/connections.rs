@@ -915,6 +915,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     GCS_CREDENTIALS_JSON.to_owned(),
                     base64::engine::general_purpose::STANDARD.encode(creds_json),
                 );
+                // We supplied a service account key. Don't look elsewhere for GCP credentials.
                 props.insert(GCS_DISABLE_VM_METADATA.to_owned(), "true".to_owned());
                 props.insert(GCS_DISABLE_CONFIG_LOAD.to_owned(), "true".to_owned());
                 if let Some(project_id) = service_account.project_id() {

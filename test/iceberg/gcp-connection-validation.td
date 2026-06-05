@@ -37,7 +37,7 @@ $ set gcp-ssrf-key="-----BEGIN PRIVATE KEY-----\\nMIIEvAIBADANBgkqhkiG9w0BAQEFAA
     GCP CONNECTION = gcpconn,
     WAREHOUSE = 'gs://anything'
   )
-contains:must point URL at a *.googleapis.com host
+contains:GCP connection can only be used with 'https://biglake.googleapis.com/iceberg/v1/restcatalog'
 
 # Positive control: a real BigLake host is accepted, so the allowlist doesn't
 # break the feature.
