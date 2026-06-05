@@ -89,7 +89,7 @@ EOF
 query error binary encoding of list types is not implemented
 SELECT ROW(1, LIST[1, 2])
 
-query error binary encoding of aclitem types does not exist
+query error binary encoding of aclitem type does not exist
 SELECT ROW(1, makeaclitem(1, 2, 'CREATE', false))
 
 query T

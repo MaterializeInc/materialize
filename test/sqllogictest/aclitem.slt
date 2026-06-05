@@ -195,7 +195,7 @@ SELECT a::text from t
 statement ok
 DROP TABLE t
 
-query error binary encoding of aclitem types does not exist
+query error binary encoding of aclitem type does not exist
 SELECT makeaclitem(1, 2, 'CREATE', false)
 
 query T
