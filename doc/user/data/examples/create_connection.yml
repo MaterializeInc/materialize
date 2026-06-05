@@ -612,6 +612,8 @@
 
 - name: "syntax-gcp"
   code: |
+    CREATE SECRET <secret_name> AS decode('<service_account_key>', 'base64');
+
     CREATE CONNECTION <connection_name> TO GCP (
         SERVICE ACCOUNT KEY = SECRET <secret_name>
     )
@@ -620,14 +622,15 @@
     - name: "`<connection_name>`"
       description: |
         A name for the connection.
-    - name: "`SERVICE ACCOUNT KEY`"
+    - name: "`<service_account_key>`"
       description: |
-        *Value:* secret. Required.
+        *Value:* base64-encoded JSON. Required.
 
-        A secret containing a Google Cloud [service account
-        key](https://docs.cloud.google.com/iam/docs/keys-create-delete) in JSON
-        format. Materialize uses the key to authenticate to Google Cloud
-        services.
+        Create a Materialize secret with a Google Cloud [service account
+        key](https://docs.cloud.google.com/iam/docs/keys-create-delete).
+        We recommend you base64-encode the key to avoid pasting a multi-line JSON literal into SQL.
+
+        Materialize uses the key to authenticate to Google Cloud services.
     - name: "`WITH (<with_options>)`"
       description: |
         The following `<with_options>` are supported:
