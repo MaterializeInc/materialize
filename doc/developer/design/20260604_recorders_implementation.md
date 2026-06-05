@@ -176,6 +176,22 @@ the implicit columns and a write path that materializes the embedded ts/diff
 (`20250707_persist_schemas.md`). Not enormous, but genuinely new; CTs never had
 it (CT outputs were plain `Table`s).
 
+### MED — M4: output frontier advancement (data vs. progress)
+Row `mz_timestamp` is *data* and does not set an output's `upper`; the `upper`
+must advance with the recorder's **input progress** (the meet of input frontiers,
+lagged by any `AS OF AT LEAST` window), like an MV. Two requirements: (a) the
+write-time clamp `max(mz_timestamp, upper)` guarantees writes land `≥ upper` so
+the frontier can advance monotonically; (b) **idle liveness** — outputs must keep
+advancing their `upper` even with no data, or downstream reads of an idle output
+stall. The mechanism exists: `append_table(write_ts, advance_to, appends)`
+(`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
+independently of `appends`, so a frontier-only commit is a no-new-machinery
+operation. The recorder's commit loop must therefore **downgrade output `upper`s
+on a clock** (frontier-only commits) decoupled from data writes — the frontier
+face of the commit-cadence question. This is straightforward given `advance_to`,
+but must be explicitly wired into the Phase-0 commit loop (it is easy to forget,
+which is how the conceptual design originally missed it).
+
 ### MED — M3: `INTEGRATE` monotonicity + engine-owned compaction
 `INTEGRATE` writes at `max(mz_timestamp, mz_now())` and relies on the engine
 owning the read policy / compaction so a `-1` consolidates with its `+1` and

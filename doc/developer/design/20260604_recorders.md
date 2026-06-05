@@ -195,6 +195,20 @@ commit atomically at `T`.
   caveat if `RETAIN HISTORY` is set on `v`.
 - **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
+**Frontiers: data vs. progress.** The `mz_timestamp` written into a row is *data*;
+it does **not** determine the output collection's frontier (`upper`). An output
+is "complete through `T`" iff the recorder has integrated all of its **inputs**
+through the corresponding frontier, so an output's `upper` advances with the
+**meet of its input frontiers** (lagged by any `AS OF AT LEAST` window) — exactly
+like a materialized view, and independent of the row timestamps. The write-time
+clamp is what makes this sound: because every write lands at `≥ upper`, the
+`upper` can advance monotonically with no risk of a later delta landing below it.
+Two consequences: (1) completeness is bounded by the (lagged) input frontier, not
+`mz_now()`; (2) **writing data is input-driven, but advancing the frontier is
+clock-driven** — an idle recorder must still tick its outputs' `upper`s forward
+(a frontier-only commit) or downstream reads of an idle output would stall. This
+is the frontier face of the commit-cadence question (see Open Questions).
+
 ### Freeze is typing, not a keyword
 
 A `RECORDER` body re-evaluates only on **driver** deltas (its dTVC inputs:
@@ -419,9 +433,13 @@ implementation, PR #35967):
 - **`RECORDER` object model & syntax.** Confirm `CREATE RECORDER WITH <rels> AS
   <actions>`. How is the trigger cadence expressed (vs `COMMIT EVERY`)? Are the
   bundled actions always one atomic commit at `T`?
-- **Commit-timestamp policy.** "Every timestamp" vs "timestamps where a driver is
-  non-empty" (the Decision Log's question) — the `INSERT … VALUES` footgun,
-  exposing millisecond granularity, whether time-driven bodies are allowed.
+- **Commit-timestamp / frontier-advance policy.** "Every timestamp" vs
+  "timestamps where a driver is non-empty" (the Decision Log's question) — the
+  `INSERT … VALUES` footgun, exposing millisecond granularity, whether
+  time-driven bodies are allowed. Note the *frontier* side is settled (above):
+  outputs advance their `upper` with input progress on a clock, even when idle
+  (frontier-only commits), regardless of when *data* is written; the open part is
+  the cadence/granularity of those frontier ticks and the data-write trigger.
 - **Freeze typing & per-value `FROZEN`.** Confirm bare-TVC-reference = frozen,
   `CHANGES`/`DELTA TABLE` = tracked. Is a per-value `FROZEN(expr)` needed at all,
   or only the typing? Can one dimension supply a frozen value *and* anchor
