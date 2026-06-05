@@ -762,14 +762,17 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     where
         HirScalarExpr: 'a,
     {
-        VisitChildren::<HirScalarExpr>::children(&*self.args)
+        // Yield `args` itself; we must not descend into it (see the impl-level
+        // doc comment). Descending would skip `args` when it is a leaf node
+        // (e.g. `first_value(mz_now())`), breaking `contains_temporal`.
+        std::iter::once(&*self.args)
     }
 
     fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
     where
         HirScalarExpr: 'a,
     {
-        VisitChildren::<HirScalarExpr>::children_mut(&mut *self.args)
+        std::iter::once(&mut *self.args)
     }
 }
 
@@ -962,14 +965,17 @@ impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
     where
         HirScalarExpr: 'a,
     {
-        VisitChildren::<HirScalarExpr>::children(&*self.aggregate_expr.expr)
+        // Yield the aggregate's argument expression itself; we must not descend
+        // into it. Descending would skip the argument when it is a leaf node
+        // (e.g. `max(mz_now())`), breaking `contains_temporal`.
+        std::iter::once(&*self.aggregate_expr.expr)
     }
 
     fn children_mut<'a>(&'a mut self) -> impl DoubleEndedIterator<Item = &'a mut HirScalarExpr>
     where
         HirScalarExpr: 'a,
     {
-        VisitChildren::<HirScalarExpr>::children_mut(&mut *self.aggregate_expr.expr)
+        std::iter::once(&mut *self.aggregate_expr.expr)
     }
 }
 
