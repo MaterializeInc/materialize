@@ -790,6 +790,10 @@ where
             }
 
             if failed {
+                // No need to keep draining `msg_rx`: every error path in the
+                // listen task sends `Error` as its final message and returns,
+                // so once we have observed an `Error` the channel is empty
+                // forever.
                 return;
             }
 
@@ -870,8 +874,9 @@ where
     // task, fetch results flow back. The task wakes the operator through the
     // activator after each result.
     let (desc_tx, mut desc_rx) = tokio::sync::mpsc::unbounded_channel::<ExchangeableBatchPart<T>>();
-    let (blob_tx, blob_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>>();
+    let (blob_tx, blob_rx) = tokio::sync::mpsc::unbounded_channel::<
+        Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>,
+    >();
     let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
     // The fetch task owns the `BatchFetcher` and performs all async work:
