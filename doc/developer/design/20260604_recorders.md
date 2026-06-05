@@ -187,12 +187,13 @@ This records enriched events into a `DELTA TABLE`, integrates a first-seen
 commit atomically at `T`.
 
 - **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to `d`.
-- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC. Because a
-  TVC cannot be written below its `upper`, past-dated deltas are written at
-  `max(r.mz_timestamp, mz_now())` and consolidated (drop non-positive
-  multiplicity). Consequence: `v`'s *current contents* are definite, but its
-  *history* is integration-order-dependent — fine for present-time reads, a
-  caveat if `RETAIN HISTORY` is set on `v`.
+- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC. A TVC
+  cannot be written below its `upper`, and event-time data is necessarily in the
+  past, so `max(r.mz_timestamp, mz_now())` always resolves to the commit time `T`
+  — **`v` is reclocked to system time**: every delta lands at `T`, consolidated
+  (drop non-positive multiplicity). `v`'s *current contents* are definite, but
+  its *history* is integration-order-dependent, and **`mz_timestamp` (event time)
+  is discarded** unless projected as an ordinary column (see "Two times" below).
 - **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
 **Frontiers: data vs. progress.** The `mz_timestamp` written into a row is *data*;
@@ -208,6 +209,36 @@ Two consequences: (1) completeness is bounded by the (lagged) input frontier, no
 clock-driven** — an idle recorder must still tick its outputs' `upper`s forward
 (a frontier-only commit) or downstream reads of an idle output would stall. This
 is the frontier face of the commit-cadence question (see Open Questions).
+
+**Two times: system time vs. event time (the recorder is bitemporal).** A fact
+that is definite at logical time `t` in the input takes *effect* in a recorded
+output at the commit time `t' ≥ t` — it cannot be written below the output's
+`upper`, and retroactively inserting at `t` would change an answer a reader
+already got `AS OF t`. So the output carries two times: its **frontier/logical
+time is system time `t'`** (*when recorded* — what `AS OF` and downstream
+composition see), while **`mz_timestamp` is event time `t`** (*when it happened* —
+data). The defining consequence: **a recorder output is not a definite function
+of its inputs at the same logical time** — `output(T)` means *"what was recorded
+by `T`"*, not `f(inputs(T))`. (This is the same reclocking ingestion already does
+— a source stamps events with Materialize time and keeps their event-time as a
+column — except a recorder re-stamps an already-timestamped fact, so output and
+input disagree during `[t, t')`. Nothing downstream can observe the fact before
+`t'` regardless: it was not recorded until then.)
+
+This makes the two write verbs temporally different, which governs how to use
+them:
+
+- **`RECORD` → `DELTA TABLE` is bitemporal**: it keeps `mz_timestamp` as data and
+  a system-time frontier, so **event-time queries are recoverable** —
+  `… WHERE mz_timestamp <= τ` integrates by event time, definitely. Use this when
+  event time matters (enrichment you may later re-aggregate as-of an event time).
+- **`INTEGRATE` → TVC is reclocked to system time**: event time is discarded;
+  `v(T)` is "the state recorded by `T`." Use this for current reclocked state
+  (e.g. upsert latest-per-key), not for event-time questions.
+
+Downstream consumers must read a recorder output on *its* logical time and must
+not assume event-time alignment with sibling collections; for event-time
+semantics, query `mz_timestamp` on the `DELTA TABLE`.
 
 ### Freeze is typing, not a keyword
 

@@ -273,3 +273,12 @@ recorder design tries to sidestep (and, per H2, only partly does).
    reclaimed?
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
+7. **Outputs are not definite functions of inputs (bitemporality).** A recorder
+   output's logical time is *system time* ("recorded-by-`T`"), so
+   `output(T) ≠ f(inputs(T))`. The optimizer/controller must **not** treat a
+   recorder output as a recomputable view of its inputs (no
+   inputs-frontier-implies-output-contents reasoning, no fusing a downstream MV
+   "through" it as if definite); it is an authoritative collection in its own
+   right, like a source/table. `INTEGRATE` reclocks to `T` and drops event time;
+   open: should `INTEGRATE` optionally retain `mz_timestamp` as a column for
+   downstream event-time use, or is that always the `DELTA TABLE`'s job?
