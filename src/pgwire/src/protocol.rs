@@ -2272,6 +2272,8 @@ where
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
             | ExecuteResponse::CreatedNetworkPolicy
+            | ExecuteResponse::CreatedRecorder
+            | ExecuteResponse::DroppedRecorder
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)

@@ -256,6 +256,8 @@ pub fn describe(
             scl::describe_inspect_shard(&scx, stmt)?
         }
         Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
+        Statement::CreateRecorder(stmt) => ddl::describe_create_recorder(&scx, stmt)?,
+        Statement::DropRecorder(stmt) => ddl::describe_drop_recorder(&scx, stmt)?,
         Statement::ExecuteUnitTest(_) => {
             return Err(PlanError::Unsupported {
                 feature: "EXECUTE UNIT TEST statement".to_string(),
@@ -449,6 +451,8 @@ pub fn plan(
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
+        Statement::CreateRecorder(stmt) => ddl::plan_create_recorder(scx, stmt),
+        Statement::DropRecorder(stmt) => ddl::plan_drop_recorder(scx, stmt),
         Statement::ExecuteUnitTest(_) => {
             return Err(PlanError::Unsupported {
                 feature: "EXECUTE UNIT TEST statement".to_string(),
@@ -1083,6 +1087,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateWebhookSource(_) => DDL,
             Statement::CreateSource(_) => DDL,
             Statement::CreateSubsource(_) => DDL,
+            Statement::CreateRecorder(_) => DDL,
             Statement::CreateTable(_) => DDL,
             Statement::CreateTableFromSource(_) => DDL,
             Statement::CreateType(_) => DDL,
@@ -1091,6 +1096,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateNetworkPolicy(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
+            Statement::DropRecorder(_) => DDL,
 
             // `ACL` statements.
             Statement::AlterOwner(_) => ACL,

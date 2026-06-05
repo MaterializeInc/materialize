@@ -212,6 +212,8 @@ pub enum Plan {
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
+    CreateRecorder(CreateRecorderPlan),
+    DropRecorder(DropRecorderPlan),
 }
 
 impl Plan {
@@ -261,6 +263,8 @@ impl Plan {
             ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
+            StatementKind::CreateRecorder => &[PlanKind::CreateRecorder],
+            StatementKind::DropRecorder => &[PlanKind::DropRecorder],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
             StatementKind::Copy => &[
                 PlanKind::CopyFrom,
@@ -472,6 +476,8 @@ impl Plan {
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
             Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
+            Plan::CreateRecorder(_) => "create recorder",
+            Plan::DropRecorder(_) => "drop recorder",
         }
     }
 
@@ -700,6 +706,26 @@ pub struct CreateConnectionPlan {
     pub if_not_exists: bool,
     pub connection: Connection,
     pub validate: bool,
+}
+
+/// Prototype: a recorder periodically re-executes its body through an
+/// internal SQL connection and records the resulting deltas into the target
+/// delta table. Both are carried as raw SQL strings.
+#[derive(Debug)]
+pub struct CreateRecorderPlan {
+    /// Name of the recorder.
+    pub name: String,
+    /// Raw SQL text of the body query.
+    pub body_sql: String,
+    /// Raw SQL name of the target delta table.
+    pub target: String,
+}
+
+/// Prototype: drop an in-memory recorder by name.
+#[derive(Debug)]
+pub struct DropRecorderPlan {
+    /// Name of the recorder.
+    pub name: String,
 }
 
 #[derive(Debug)]

@@ -115,6 +115,8 @@ pub enum Statement<T: AstInfo> {
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
     Comment(CommentStatement<T>),
+    CreateRecorder(CreateRecorderStatement),
+    DropRecorder(DropRecorderStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -194,6 +196,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
             Statement::Comment(stmt) => f.write_node(stmt),
+            Statement::CreateRecorder(stmt) => f.write_node(stmt),
+            Statement::DropRecorder(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -278,6 +282,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
         StatementKind::Comment => "comment",
+        StatementKind::CreateRecorder => "create_recorder",
+        StatementKind::DropRecorder => "drop_recorder",
     }
 }
 
@@ -810,6 +816,48 @@ impl<T: AstInfo> AstDisplay for ValidateConnectionStatement<T> {
     }
 }
 impl_display_t!(ValidateConnectionStatement);
+
+/// `CREATE RECORDER <name> AS RECORD (<query>) INTO <table>` (prototype)
+///
+/// The body is kept as raw SQL text: the prototype recorder re-executes it
+/// verbatim through an internal SQL connection, so no name resolution or
+/// planning of the body happens at DDL time.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateRecorderStatement {
+    /// Name of the recorder.
+    pub name: UnresolvedItemName,
+    /// The raw SQL text of the body query (a dTVC over `CHANGES(...)`).
+    pub body_sql: String,
+    /// The `DELTA TABLE` the body's deltas are recorded into.
+    pub into: UnresolvedItemName,
+}
+
+impl AstDisplay for CreateRecorderStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE RECORDER ");
+        f.write_node(&self.name);
+        f.write_str(" AS RECORD (");
+        f.write_str(&self.body_sql);
+        f.write_str(") INTO ");
+        f.write_node(&self.into);
+    }
+}
+impl_display!(CreateRecorderStatement);
+
+/// `DROP RECORDER <name>` (prototype)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropRecorderStatement {
+    /// Name of the recorder to drop.
+    pub name: UnresolvedItemName,
+}
+
+impl AstDisplay for DropRecorderStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP RECORDER ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(DropRecorderStatement);
 
 /// `CREATE (SOURCE | TABLE) <name> FROM WEBHOOK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

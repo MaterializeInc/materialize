@@ -704,6 +704,14 @@ impl Coordinator {
                         ctx.retire(res);
                     });
                 }
+                Plan::CreateRecorder(plan) => {
+                    let result = self.sequence_create_recorder(plan);
+                    ctx.retire(result);
+                }
+                Plan::DropRecorder(plan) => {
+                    let result = self.sequence_drop_recorder(plan);
+                    ctx.retire(result);
+                }
             }
         }
         .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))

@@ -164,6 +164,8 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_)
         | Plan::ValidateConnection(_)
+        | Plan::CreateRecorder(_)
+        | Plan::DropRecorder(_)
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 

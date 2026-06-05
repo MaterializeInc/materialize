@@ -75,12 +75,12 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, GlobalId};
-use timely::progress::Antichain;
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::{HirRelationExpr, PlanError};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::{MaybeShouldPanic, StatisticsOracle, TransformCtx, TransformError};
+use timely::progress::Antichain;
 
 use crate::TimestampContext;
 

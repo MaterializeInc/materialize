@@ -583,6 +583,10 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The requested network policy was created.
     CreatedNetworkPolicy,
+    /// The requested recorder was created (prototype).
+    CreatedRecorder,
+    /// The requested recorder was dropped (prototype).
+    DroppedRecorder,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -749,6 +753,8 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedRecorder => Ok(ExecuteResponse::CreatedRecorder),
+            ExecuteResponseKind::DroppedRecorder => Ok(ExecuteResponse::DroppedRecorder),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -812,6 +818,8 @@ impl ExecuteResponse {
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
+            CreatedRecorder => Some("CREATE RECORDER".into()),
+            DroppedRecorder => Some("DROP RECORDER".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -940,6 +948,8 @@ impl ExecuteResponse {
             StartTransaction => &[StartedTransaction],
             SideEffectingFunc => &[SendingRowsStreaming, SendingRowsImmediate],
             ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
+            CreateRecorder => &[ExecuteResponseKind::CreatedRecorder],
+            DropRecorder => &[ExecuteResponseKind::DroppedRecorder],
         }
     }
 }

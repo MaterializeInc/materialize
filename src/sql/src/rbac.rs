@@ -456,6 +456,11 @@ fn generate_rbac_requirements(
     role_id: RoleId,
 ) -> RbacRequirements {
     match plan {
+        // Recorder prototype: superuser only.
+        Plan::CreateRecorder(_) | Plan::DropRecorder(_) => RbacRequirements {
+            superuser_action: Some("create or drop recorders (prototype)".to_string()),
+            ..Default::default()
+        },
         Plan::CreateConnection(plan::CreateConnectionPlan {
             name,
             if_not_exists: _,

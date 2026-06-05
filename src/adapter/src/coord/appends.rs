@@ -1006,6 +1006,8 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::Insert(_)
         | Plan::AlterNetworkPolicy(_)
         | Plan::AlterNoop(_)
+        | Plan::CreateRecorder(_)
+        | Plan::DropRecorder(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
