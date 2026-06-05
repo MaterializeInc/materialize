@@ -187,60 +187,65 @@ This records enriched events into a `DELTA TABLE`, integrates a first-seen
 commit atomically at `T`.
 
 - **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to `d`.
-- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC on the
-  **system timeline**. `mz_timestamp` is *arbitrary data* (it could be `0`) and
-  cannot serve as the table's time, so each delta is written at
-  `max(r.mz_timestamp, upper)` — the clamp is **required** to maintain the TVC
-  invariant (no time below the frontier); data whose `mz_timestamp` is below the
-  frontier is **logically compacted** (placed at the frontier). This is sound:
-  a same-row `+1`/`-1` at different times still accumulates correctly, so only
-  sub-frontier *placement* distinctions are lost. Because the `DELTA TABLE`
-  records each row's write time alongside its `mz_timestamp` (the reclock), the
-  clamped integration is reproducible, so `v` is a definite function of the
-  recorded data; non-determinism lives only in the recorded *values*.
+- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC reclocked
+  back onto the **input's timeline (domain A)** — see "Time domains" below. Each
+  delta is placed by its `mz_timestamp` (domain A), clamped to
+  `max(mz_timestamp, upper)` for arbitrary / below-frontier values (logical
+  compaction, required to hold the TVC invariant), and `v`'s frontier is driven
+  into domain A by the reclock. So an event at input-time `t` appears in `v` at
+  `t`. `v` is a definite function of the recorded `DELTA TABLE` + reclock;
+  non-determinism lives only in the recorded *values*.
 - **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
-**Frontiers: data vs. progress.** The `mz_timestamp` in a row is *data* and does
-**not** determine the output's frontier (`upper`). The output lives on the
-**system timeline**: its `upper` advances with the recorder's write/commit
-progress (the meet of input frontiers, lagged by any `AS OF AT LEAST` window),
-like a materialized view, and an idle-but-live recorder still ticks the `upper`
-forward (a frontier-only commit via `advance_to`) so the output stays readable at
-the current time. Because the output is on the system timeline, `mz_now()` in a
-body means *system/processing time*, and time-based aging
-(`mz_now() < mz_timestamp + W`) fires on the clock as `mz_now()` advances —
-independent of any data lull, with no separate frontier needed.
+**Frontiers: data vs. progress.** The `mz_timestamp` is *data* and does not by
+itself set the output's frontier. `INTEGRATE`'s output `v` lives in domain A (the
+input's timeline; see below), and its `upper` is driven into domain A by the
+reclock — advancing as the `DELTA TABLE`'s domain-B write frontier advances,
+gated so it never passes an input-time whose data is not yet recorded. An
+idle-but-live input still advances its domain-A frontier, so `v` stays readable.
+Whether time-based aging and `mz_now()` in a body resolve in **domain A**
+(event-age — "keep the last 30 days of *events*"; stalls if the input idles) or
+**domain B** (wall-clock age — always advances) is a real semantic choice the
+design must settle (see Open Questions).
 
-**Two distinct timelines.** A dTVC carries two times that must not be conflated:
-the **`mz_timestamp` column is data** — arbitrary, recorder- or user-controlled
-(it could be `0`) — while the **table's time** (its `upper`, what `AS OF` and
-joins use) is the **system/write timeline**. *We cannot use one for the other*:
-`mz_timestamp` cannot drive the table's frontier, and a fact cannot be written at
-its `mz_timestamp` without respecting the frontier — hence the `INTEGRATE` clamp
-(`max(mz_timestamp, upper)`), which logically compacts below-frontier data. (A
-fact is recorded at write time `t' ≥` its `mz_timestamp`; below-frontier data is
-placed at the frontier.)
+**Time domains and reclocking.** A recorder moves data between two time domains
+and reclocks back — this is what preserves consistency, since *an event at time
+`t` must happen at `t` throughout the system unless we deliberately re-timestamp
+it*.
 
-The output TVC therefore lives on the **system timeline** — an ordinary collection
-there that simply *lags* wall-clock by processing latency, so it is
-joinable/transactable with other collections like any slow materialized view (no
-timeline-compatibility wall). The `mz_timestamp` is a data column you may also
-filter on; to recover *event-time* ("as of `mz_timestamp`") answers, query the
-column (`WHERE mz_timestamp <= τ`), answerable within the output's `RETAIN
-HISTORY`.
+- **Domain A** — the input's timeline; the `mz_timestamp` values live here.
+- **Domain B** — the recorder's processing/system time; the `DELTA TABLE`'s
+  physical write frontier advances here. (That B is "system time" is incidental —
+  it is just a different domain, a durable recording layer.)
 
-A durable **reclock** — the recorded correspondence between `mz_timestamp` (data)
-and write time, inherent in the `DELTA TABLE` since each row carries both — makes
-the clamped integration **reproducible**, so `v` is a definite function of the
-recorded data rather than of the wall-clock rate at which facts were processed.
+- **`RECORD`** takes a query in domain A and writes it as data into the `DELTA
+  TABLE`, which physically advances in domain B; the `mz_timestamp` column carries
+  the domain-A times, and `RECORD` also **notes the mapping A → B** (the reclock:
+  "input time `t` was recorded at system time `t'`").
+- **`INTEGRATE`** reads the `DELTA TABLE` (domain B), **places its output by the
+  `mz_timestamp` (domain A)** — clamped to `max(mz_timestamp, upper)` for
+  arbitrary / below-frontier values (logical compaction) — and **uses the reclock
+  to drive its output frontier back into domain A**.
+
+So the integrated output `v` lives in **domain A**: an event at input-time `t`
+appears in `v` at `t`, not at the recording time `t'`. That is what lets `v`
+compose consistently with the input and sibling collections, and the reason the
+recording round-trips A → B → A rather than leaving the result at its recording
+time. (A frozen value is computed in domain B but placed at its domain-A time `t`
+— temporally consistent, though not the domain-A historical truth at `t`; see the
+freeze caveat.)
+
 Non-determinism is confined to the recorded **values** (frozen at processing
-time) and the reclock; everything downstream of the `DELTA TABLE` is definite
-given them. (Replicas race to commit and may record different correspondences;
-the winning commit is authoritative.)
+time) and the A → B reclock; the reclock makes the clamped integration
+**reproducible**, so `v` is a definite function of the `DELTA TABLE` + reclock —
+not of the wall-clock rate at which facts were processed. (Replicas race to
+commit and may record different correspondences; the winning commit is
+authoritative.) The `mz_timestamp` remains queryable as data for "as of
+input-time" questions, within `RETAIN HISTORY`.
 
 The write verbs differ by *shape*: **`RECORD` → `DELTA TABLE`** keeps the per-row
-change log (with `mz_timestamp` as data); **`INTEGRATE` → TVC** maintains
-integrated state on the system timeline.
+change log in domain B (with `mz_timestamp` as data); **`INTEGRATE` → TVC**
+maintains integrated state reclocked onto domain A.
 
 ### Freeze is typing, not a keyword
 
@@ -483,13 +488,18 @@ implementation, PR #35967):
 - **`RECORDER` object model & syntax.** Confirm `CREATE RECORDER WITH <rels> AS
   <actions>`. How is the trigger cadence expressed (vs `COMMIT EVERY`)? Are the
   bundled actions always one atomic commit at `T`?
+- **Which domain does `mz_now()` / aging resolve in?** With `INTEGRATE`'s output
+  reclocked onto the input timeline (domain A), time-based aging and `mz_now()`
+  in a body could mean **domain A** (event-age — "last 30 days of *events*";
+  stalls when the input idles) or **domain B** (wall-clock — always advances).
+  These are different semantics; the design must pick (perhaps per use:
+  event-age vs. wall-clock retention), and the input `AS OF AT LEAST mz_now()`
+  window has the same A/B question.
 - **Commit-timestamp / frontier-advance policy.** "Every timestamp" vs
   "timestamps where a driver is non-empty" (the Decision Log's question) — the
   `INSERT … VALUES` footgun, exposing millisecond granularity, whether
-  time-driven bodies are allowed. Note the *frontier* side is settled (above):
-  outputs advance their `upper` with input progress on a clock, even when idle
-  (frontier-only commits), regardless of when *data* is written; the open part is
-  the cadence/granularity of those frontier ticks and the data-write trigger.
+  time-driven bodies are allowed; the cadence/granularity of frontier ticks and
+  the data-write trigger.
 - **Freeze typing & per-value `FROZEN`.** Confirm bare-TVC-reference = frozen,
   `CHANGES`/`DELTA TABLE` = tracked. Is a per-value `FROZEN(expr)` needed at all,
   or only the typing? Can one dimension supply a frozen value *and* anchor

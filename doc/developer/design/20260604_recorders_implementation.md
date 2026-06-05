@@ -7,6 +7,7 @@
   - Removed Continual Tasks (CT): PR #35967 (removal); implementation recoverable from its base commit `add050bf8`
   - txn-wal multi-shard atomic writes: `src/txn-wal/`
   - Multi-output catalog precedent: `20240625_source_versioning__table_from_sources.md`
+  - Reclocking framework: `20210714_reclocking.md` (converting between time gauges, incl. out of the system timeline — the A↔B reclock)
 
 ## Context
 
@@ -176,28 +177,30 @@ the implicit columns and a write path that materializes the embedded ts/diff
 (`20250707_persist_schemas.md`). Not enormous, but genuinely new; CTs never had
 it (CT outputs were plain `Table`s).
 
-### MED — M4: output frontier advancement (data vs. progress)
-Row `mz_timestamp` is *data* and does not set an output's `upper`. The output is
-on the **system timeline**; its `upper` advances with the recorder's
-write/commit progress (the meet of input frontiers, lagged by any `AS OF AT
-LEAST` window), like an MV. `INTEGRATE` must **clamp** writes to
-`max(mz_timestamp, upper)` (the two are distinct timelines — `mz_timestamp` is
-arbitrary data), placing below-frontier data at the frontier (logical
-compaction); this is sound (same-row `+1`/`-1` accumulate correctly regardless of
-times). **Idle liveness:** outputs must keep advancing their `upper` even with no
-data, or downstream reads of an idle output stall — including for time-based
-aging, which fires as `mz_now()` (= system time) advances. The mechanism exists:
+### MED — M4: output frontier advancement (reclock-driven, domain A)
+Row `mz_timestamp` is *data* and does not set an output's `upper`. `INTEGRATE`'s
+output is **reclocked onto the input timeline (domain A)**: it places each delta
+by its `mz_timestamp` (clamped to `max(mz_timestamp, upper)` for arbitrary /
+below-frontier data — logical compaction, sound because same-row `+1`/`-1`
+accumulate correctly), and **drives `v`'s frontier into domain A via the reclock**
+(translating the `DELTA TABLE`'s domain-B write frontier into domain-A
+completeness). The recorder must record the A→B mapping (`RECORD`) for the
+integrator to advance the A-frontier and to recover it on restart. **Idle
+liveness:** outputs must keep advancing their `upper` even with no data;
 `append_table(write_ts, advance_to, appends)`
 (`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
 independently of `appends`, so a frontier-only commit is a no-new-machinery
-operation; it must be wired into the Phase-0 commit loop (easy to forget).
+operation; wire it into the Phase-0 commit loop (easy to forget). **Open:**
+whether the aging/`mz_now()` domain is A (event-age, stalls on idle input) or B
+(wall-clock) is a semantic choice, not a frontier detail.
 
 ### MED — M3: engine-owned compaction / read policy
 `INTEGRATE` relies on the engine owning the read policy / compaction so a `-1`
 consolidates with its `+1` and `since` advances (design "Bounding growth"
-invariants). Time-based aging (`mz_now() < mz_timestamp + W`) works as an ordinary
-temporal filter on the system-timeline output — `mz_now()` advances on the clock,
-so it fires even when input is idle (no separate frontier needed). Read policies
+invariants). Time-based aging via a temporal filter (`mz_now() < mz_timestamp +
+W`) depends on the unresolved domain question (M4): event-age (domain A) stalls
+when the input idles, wall-clock age (domain B) needs a system-time reference —
+the two are different retention semantics and the design must pick. Read policies
 live in `src/adapter/src/coord/read_policy.rs`; today they are user/MV-driven.
 Making a recorder *own* and continuously advance them is plausible but interacts
 sharply with `RETAIN HISTORY` (the history/queryability caveat) and with the
@@ -276,26 +279,26 @@ recorder design tries to sidestep (and, per H2, only partly does).
    reclaimed?
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
-7. **Two distinct timelines + the clamp.** `mz_timestamp` is *arbitrary data* (a
-   distinct "data timeline"); the table's time is the system/write timeline. They
-   cannot substitute for each other, so `INTEGRATE` **must clamp** writes to
-   `max(mz_timestamp, upper)` (logical compaction of below-frontier data) to hold
-   the TVC invariant. This is sound — same-row `+1`/`-1` accumulate correctly
-   regardless of times — so it is *not* the "split retract/insert" bug a naive
-   reading suggests. Consequences:
-   - The output lives on the **system timeline**, so it is a lagged collection
-     there — cross-table joins/transactions work (no separate-timeline wall);
-     event-time answers come from filtering the `mz_timestamp` column.
+7. **Two time domains + reclock (A → B → A).** Domain A = the input timeline
+   (`mz_timestamp`); domain B = the `DELTA TABLE`'s system/write frontier.
+   `RECORD` reads A, writes data into the `DELTA TABLE` (B), and notes the A→B
+   mapping (the reclock). `INTEGRATE` reads the `DELTA TABLE` (B), places output
+   by `mz_timestamp` (A) — clamped to `max(mz_timestamp, upper)` for arbitrary /
+   below-frontier data (logical compaction; sound, same-row `+1`/`-1` accumulate
+   correctly, so *not* the "split retract/insert" bug a naive reading suggests) —
+   and drives `v`'s frontier into A via the reclock. Consequences:
+   - `v` lives in **domain A**: an event at input-time `t` is at `t`, consistent
+     with the input and sibling collections (the round-trip A→B→A, not stop-at-B).
    - The `RECORD` step is the **only** non-deterministic boundary; the `DELTA
      TABLE` is authoritative (the optimizer must **not** treat it as recomputable
      from the original inputs). `INTEGRATE` and downstream **are** definite
-     functions of the recorded data (the clamp is reproducible because the `DELTA
-     TABLE` records each row's write time alongside its `mz_timestamp` — the
-     reclock), so the optimizer *may* treat them as recomputable over it.
-   - The data↔write-time correspondence (the **reclock**) is what makes the
-     clamped history reproducible; it is inherent in the `DELTA TABLE` (each row
-     carries both times). Replicas race to commit and may record different
-     correspondences — the winning commit is authoritative.
+     functions of the `DELTA TABLE` + reclock (the reclock makes the clamped
+     integration reproducible), so the optimizer *may* treat them as recomputable
+     over the recorded data.
+   - The **reclock** (A→B) is a recorded mapping the integrator needs to advance
+     `v`'s domain-A frontier and recover it on restart — this is the source
+     reclock/remap pattern, used in reverse. Replicas race and may record
+     different correspondences — the winning commit is authoritative.
    - **Compliance erasure vs. stable history**: true GDPR erasure = advancing
      `since` to physically drop history, which forfeits `AS OF`/replay in the
      erased range. It is mutually exclusive with stable history there; scope it
