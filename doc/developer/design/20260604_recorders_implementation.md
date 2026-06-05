@@ -273,12 +273,21 @@ recorder design tries to sidestep (and, per H2, only partly does).
    reclaimed?
 6. **`mz_timestamp` row-value vs shard write-ts divergence** — persist-schema and
    read semantics of a row whose embedded ts ≠ its physical commit ts.
-7. **Outputs are not definite functions of inputs (bitemporality).** A recorder
-   output's logical time is *system time* ("recorded-by-`T`"), so
-   `output(T) ≠ f(inputs(T))`. The optimizer/controller must **not** treat a
-   recorder output as a recomputable view of its inputs (no
-   inputs-frontier-implies-output-contents reasoning, no fusing a downstream MV
-   "through" it as if definite); it is an authoritative collection in its own
-   right, like a source/table. `INTEGRATE` reclocks to `T` and drops event time;
-   open: should `INTEGRATE` optionally retain `mz_timestamp` as a column for
-   downstream event-time use, or is that always the `DELTA TABLE`'s job?
+7. **Bitemporality via a recorded reclock (supersedes "reclock to `T`").** A fact
+   definite at event time `t` is recorded at system time `t' ≥ t`. Rather than
+   collapse outputs to `t'` (which loses consistency and stable history), record
+   a **durable reclock** `t → t'` (event-time completeness vs. system-time write
+   frontier) and use it to drive the integrated collection's frontier —
+   the **source reclock/remap pattern** (`src/storage*` reclock machinery) applied
+   to a recorder output; reuse it. Consequences for the implementation:
+   - The `RECORD` step (writing the `DELTA TABLE` + the reclock) is the **only**
+     non-deterministic boundary; the `DELTA TABLE` is authoritative (the
+     optimizer must **not** treat it as recomputable from the original inputs).
+   - `INTEGRATE` and everything downstream **are** definite functions of the
+     `DELTA TABLE` + reclock, placed on the input's event-time timeline
+     (`max(mz_timestamp, upper)`, logical-compacting late data) — so the
+     optimizer *may* treat them as definite/recomputable over the recorded data.
+   - New component: a durable **reclock/remap collection per recorder** (or per
+     output), and frontier-driving logic that reads it (like source reclock).
+   - Open: the granularity/lag of the reclock; behavior for out-of-order (late)
+     data below the advanced frontier (logical compaction loses exact placement).

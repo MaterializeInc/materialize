@@ -187,13 +187,14 @@ This records enriched events into a `DELTA TABLE`, integrates a first-seen
 commit atomically at `T`.
 
 - **`RECORD r INTO d`**: `r` must be a dTVC; its deltas are appended to `d`.
-- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC. A TVC
-  cannot be written below its `upper`, and event-time data is necessarily in the
-  past, so `max(r.mz_timestamp, mz_now())` always resolves to the commit time `T`
-  — **`v` is reclocked to system time**: every delta lands at `T`, consolidated
-  (drop non-positive multiplicity). `v`'s *current contents* are definite, but
-  its *history* is integration-order-dependent, and **`mz_timestamp` (event time)
-  is discarded** unless projected as an ordinary column (see "Two times" below).
+- **`INTEGRATE r AS v`**: `r` must be a dTVC; `v` is a maintained TVC on the
+  **input's (event-time) timeline**. Each delta is written at
+  `max(r.mz_timestamp, upper)` — at its event time when not below the frontier,
+  else compacted up to the frontier (drop non-positive multiplicity) — and `v`'s
+  frontier is driven by the recorder's durable **reclock** (see "Two times"
+  below). `v` is a **definite function of the recorded data + reclock** (stable
+  history, replayable); non-determinism lives only in the recorded *values*, not
+  in the integration.
 - **`DELETE r FROM d`**: removes rows from a `DELTA TABLE` (one way to `bound` it).
 
 **Frontiers: data vs. progress.** The `mz_timestamp` written into a row is *data*;
@@ -210,35 +211,46 @@ clock-driven** — an idle recorder must still tick its outputs' `upper`s forwar
 (a frontier-only commit) or downstream reads of an idle output would stall. This
 is the frontier face of the commit-cadence question (see Open Questions).
 
-**Two times: system time vs. event time (the recorder is bitemporal).** A fact
-that is definite at logical time `t` in the input takes *effect* in a recorded
-output at the commit time `t' ≥ t` — it cannot be written below the output's
-`upper`, and retroactively inserting at `t` would change an answer a reader
-already got `AS OF t`. So the output carries two times: its **frontier/logical
-time is system time `t'`** (*when recorded* — what `AS OF` and downstream
-composition see), while **`mz_timestamp` is event time `t`** (*when it happened* —
-data). The defining consequence: **a recorder output is not a definite function
-of its inputs at the same logical time** — `output(T)` means *"what was recorded
-by `T`"*, not `f(inputs(T))`. (This is the same reclocking ingestion already does
-— a source stamps events with Materialize time and keeps their event-time as a
-column — except a recorder re-stamps an already-timestamped fact, so output and
-input disagree during `[t, t')`. Nothing downstream can observe the fact before
-`t'` regardless: it was not recorded until then.)
+**Two times, kept consistent by a recorded reclock.** A fact definite at event
+time `t` is physically recorded at system time `t' ≥ t` (it cannot be written
+below the output `upper`, and retroactively inserting at `t` would change an
+answer a reader already got `AS OF t`). Naively collapsing the output to `t'`
+would lose consistency — the output would stop being a definite function of its
+inputs at a common time, and its history would become processing-order-dependent.
 
-This makes the two write verbs temporally different, which governs how to use
-them:
+Instead, treat a recorder like source ingestion: **record a durable reclock
+mapping `t → t'`** — the recorded collection's *event-time completeness* as a
+function of its (system-time) write frontier — and use it to drive the integrated
+collection's frontier. Then:
 
-- **`RECORD` → `DELTA TABLE` is bitemporal**: it keeps `mz_timestamp` as data and
-  a system-time frontier, so **event-time queries are recoverable** —
-  `… WHERE mz_timestamp <= τ` integrates by event time, definitely. Use this when
-  event time matters (enrichment you may later re-aggregate as-of an event time).
-- **`INTEGRATE` → TVC is reclocked to system time**: event time is discarded;
-  `v(T)` is "the state recorded by `T`." Use this for current reclocked state
-  (e.g. upsert latest-per-key), not for event-time questions.
+- **`INTEGRATE` places each fact at its event time `t`** (the input's timeline),
+  writing at `max(mz_timestamp, upper)` — event-time placement when not below the
+  frontier, and **logical compaction** (collapse to the frontier, bounded like
+  `since`) for any late data older than the already-advanced frontier.
+- The integrated collection's **frontier advances in event time**, held at the
+  event-time through which the recorder has processed-and-committed, and is
+  **recoverable on restart** via the recorded reclock.
+- So the integrated collection is on the **input's timeline**, a **definite
+  function of the recorded `DELTA TABLE` + reclock** — with **stable history** and
+  **consistent downstream composition** (`integrated(T)` aligns with `inputs(T)`).
 
-Downstream consumers must read a recorder output on *its* logical time and must
-not assume event-time alignment with sibling collections; for event-time
-semantics, query `mz_timestamp` on the `DELTA TABLE`.
+Non-determinism is therefore confined to the **values recorded into the `DELTA
+TABLE`** (frozen at processing time) and the reclock mapping; both are durable, so
+everything *downstream* of the `DELTA TABLE` is definite and replayable. The
+result is a proper **bitemporal** object: query it by **event time** (the
+collection's logical time) or by **system time** (the reclock — "when was this
+recorded"), both consistent. This is the source-reclock/remap pattern applied to
+a recorder output, and should reuse that machinery.
+
+The write verbs then differ by *shape*, not by temporality: **`RECORD` → `DELTA
+TABLE`** keeps the per-row change log (and `mz_timestamp` as data); **`INTEGRATE`
+→ TVC** maintains integrated state on the event-time timeline. Both are
+event-time-consistent and definite given the recording.
+
+Residual subtleties: the integrated frontier lags wall-clock by processing
+latency (held at processed-event-time — normal for a derived collection); late
+data below the advanced frontier is logically compacted (exact placement lost
+below the frontier); and the reclock must be durable and monotone.
 
 ### Freeze is typing, not a keyword
 
