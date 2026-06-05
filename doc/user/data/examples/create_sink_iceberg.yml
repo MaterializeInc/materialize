@@ -131,6 +131,57 @@
       WITH (COMMIT INTERVAL = '1m');
   testable: false
 
+- name: "tutorial-create-sink-intro"
+  description: |
+    In Materialize, you can sink from a materialized view, table, or source. Use
+    [`CREATE SINK`](/sql/create-sink/iceberg) to create an Iceberg sink, replacing:
+
+    - `<sink_name>` with a name for your sink.
+    - `<sink_cluster>` with the name of your sink cluster.
+    - `<my_materialize_object>` with the name of your materialized view, table, or source.
+    - `<my_iceberg_namespace>` with your catalog namespace.
+    - `<my_iceberg_table>` with the name of your Iceberg table. If the Iceberg table
+      does not exist, Materialize creates the table. For details, see [`CREATE SINK`
+      reference page](/sql/create-sink/iceberg/#iceberg-table-creation).
+    - `<commit_interval>` with your commit interval (e.g., `60s`). The commit
+      interval specifies how frequently Materialize commits snapshots to Iceberg.
+      The minimum commit interval is `1s`. See [Commit interval
+      tradeoffs](#commit-interval-tradeoffs) below.
+
+    For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
+
+- name: "tutorial-create-sink-upsert-mode"
+  description: |
+    In upsert mode, replace `<key>` with the column(s) that uniquely identify rows.
+  code: |
+    CREATE SINK <sink_name>
+      IN CLUSTER <sink_cluster>
+      FROM <my_materialize_object>
+      INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+        NAMESPACE = '<my_iceberg_namespace>',
+        TABLE = '<my_iceberg_table>'
+      )
+      KEY (<key>)
+      MODE UPSERT
+      WITH (COMMIT INTERVAL = '<commit_interval>');
+  testable: false
+
+- name: "tutorial-create-sink-append-mode"
+  description: |
+    In append mode, no `KEY` clause is used. The Iceberg table includes all source
+    columns plus `_mz_diff` (`int`) and `_mz_timestamp` (`long`).
+  code: |
+    CREATE SINK <sink_name>
+      IN CLUSTER <sink_cluster>
+      FROM <my_materialize_object>
+      INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+        NAMESPACE = '<my_iceberg_namespace>',
+        TABLE = '<my_iceberg_table>'
+      )
+      MODE APPEND
+      WITH (COMMIT INTERVAL = '<commit_interval>');
+  testable: false
+
 - name: "restrictions-limitations-regions"
   content: |
     Your S3 Tables bucket must be in the same AWS region as your Materialize
