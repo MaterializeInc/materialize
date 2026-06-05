@@ -1102,18 +1102,18 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             collections,
         };
 
-        // Every persisted state maintains the invariant that it has at least one
-        // rollup (see `State::latest_rollup`, which `.expect()`s this). A proto
-        // that violates it is malformed, so reject it here rather than panicking
-        // on `latest_rollup` below (or later, when this `Rollup` is re-encoded).
-        if state.collections.rollups.is_empty() {
-            return Err(TryFromProtoError::InvalidPersistState(
-                "rollup state has no rollups".into(),
-            ));
-        }
-
         let diffs: Option<InlinedDiffs> = x.diffs.map(|diffs| diffs.into_rust()).transpose()?;
         if let Some(diffs) = &diffs {
+            // The diff bounds are validated against the latest rollup, which
+            // `State::latest_rollup` `.expect()`s to exist. A proto that carries
+            // diffs but no rollups is malformed, so reject it here rather than
+            // panicking. (A rollup-less state with no diffs — e.g. a freshly
+            // initialized state — is fine and must still decode.)
+            if state.collections.rollups.is_empty() {
+                return Err(TryFromProtoError::InvalidPersistState(
+                    "rollup state has diffs but no rollups".into(),
+                ));
+            }
             if diffs.lower != state.latest_rollup().0.next() {
                 return Err(TryFromProtoError::InvalidPersistState(format!(
                     "diffs lower ({}) should match latest rollup's successor: ({})",
@@ -2265,12 +2265,14 @@ mod tests {
         );
     }
 
-    /// A rollup proto whose state has no rollups violates the "every state has at
-    /// least one rollup" invariant. Decoding it must return an error rather than
-    /// panicking in `latest_rollup` (or later, on re-encode). Regression for a
+    /// A rollup proto that carries diffs but whose state has no rollups is
+    /// malformed: the diff bounds are validated against the latest rollup, which
+    /// `latest_rollup` `.expect()`s to exist. Decoding it must return an error
+    /// rather than panicking. (A rollup-less state *without* diffs is legitimate
+    /// — see `applier_version_state` — and must still decode.) Regression for a
     /// rollup_proto_roundtrip fuzz crash.
     #[mz_ore::test]
-    fn rollup_proto_without_rollups_is_rejected() {
+    fn rollup_proto_with_diffs_but_no_rollups_is_rejected() {
         let shard_id = ShardId::new();
         let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -2278,23 +2280,26 @@ mod tests {
             "host".to_owned(),
             0,
         );
+        // Anchor a rollup at the state's seqno so `Rollup::from` accepts the
+        // (empty) diff range, producing a proto that does carry diffs.
+        let seqno = state.state.seqno;
         state.state.collections.rollups.insert(
-            SeqNo(1),
+            seqno,
             HollowRollup {
                 key: PartialRollupKey("foo".to_owned()),
                 encoded_size_bytes: None,
             },
         );
-        let mut proto = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
+        let mut proto = Rollup::from(state.into(), Vec::new()).into_proto();
 
-        // Strip every rollup, leaving a state that claims a seqno but no rollups.
+        // Strip every rollup, leaving a proto that has diffs but no rollups.
         proto.rollups.clear();
         proto.deprecated_rollups.clear();
 
         let result: Result<Rollup<u64>, _> = proto.into_rust();
         assert!(
             result.is_err(),
-            "decoding a rollup proto with no rollups must error, not panic"
+            "a rollup proto with diffs but no rollups must error, not panic"
         );
     }
 
