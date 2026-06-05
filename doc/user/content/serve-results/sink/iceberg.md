@@ -242,10 +242,7 @@ In Materialize, create a **GCP connection** that holds the service account key.
    base64 < key.json
    ```
 
-   The `decode(..., 'base64')` form below lets you paste the encoded value
-   into SQL without worrying about embedded newlines or quotes in the JSON.
-
-2. Store the key in a Materialize [secret](/sql/create-secret/):
+2. Store the base64-encoded key in a Materialize [secret](/sql/create-secret/):
 
    ```mzsql
    CREATE SECRET gcp_service_account_key
