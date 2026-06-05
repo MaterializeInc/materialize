@@ -230,11 +230,11 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
-/// The block ordering inside the schedule closure is load-bearing: buffered
-/// passthrough data is emitted at the pre-activation capability BEFORE any
+/// The block ordering inside the schedule closure is load-bearing: pending
+/// passthrough input is emitted at the pre-activation capability BEFORE any
 /// capability downgrade, which keeps the differential invariant `send_time <=
-/// record_time` and avoids dropping buffered rows when the passthrough frontier
-/// crosses `until` in the same activation (SQL-299). Do not reorder.
+/// record_time` and avoids dropping in-flight rows when the passthrough
+/// frontier crosses `until` in the same activation (SQL-299). Do not reorder.
 fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
     remap: StreamVec<'scope, T, DataRemapEntry<T>>,
     passthrough: StreamVec<'scope, T, P>,
@@ -275,9 +275,9 @@ where
     let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
     let mut passthrough_input = builder.new_input_connection(passthrough, Pipeline, []);
 
-    let (shutdown_handle, shutdown_button) = button(scope, info.address);
+    let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
 
-    builder.build(move |capabilities| {
+    builder.build_reschedule(move |capabilities| {
         // The output capability's time tracks how far we've progressed in
         // copying along the passthrough input. `None` indicates that we've
         // dropped the capability to shut down.
@@ -296,8 +296,27 @@ where
         let mut remap_closed = false;
 
         move |frontiers| {
+            // If our worker pressed the button we stop producing data and
+            // frontier updates downstream, but mirror `builder_async`: hold the
+            // capability and stop draining the inputs until ALL workers have
+            // pressed. Dropping the capability on the local press alone would
+            // let the downstream frontier advance during cross-worker teardown
+            // skew, past times whose data this worker has discarded, while
+            // other workers' operator instances still feed downstream.
             if shutdown_handle.local_pressed() {
-                capability = None;
+                return if shutdown_handle.all_pressed() {
+                    // All workers pressed: drop the capability and drain the
+                    // inputs so teardown does not stall the dataflow.
+                    capability = None;
+                    remap_input.for_each(|_input_cap, _data| {});
+                    passthrough_input.for_each(|_input_cap, _data| {});
+                    false
+                } else {
+                    // Wedge: keep the capability, leave the inputs undrained
+                    // (their pending messages hold the frontier), and ask to be
+                    // rescheduled until the remaining workers press.
+                    true
+                };
             }
 
             // Fold new DataRemapEntries, keeping the one with the largest
@@ -341,13 +360,14 @@ where
 
             debug!("{} remap {:?} remap_closed={}", name, remap, remap_closed);
 
-            // Emit buffered passthrough data at the current (pre-downgrade)
-            // capability, BEFORE any downgrade below. `cap.time()` here equals
-            // the pre-activation frontier, which is `<=` every buffered
-            // record's time, so the differential invariant `send_time <=
-            // record_time` holds. Doing this before the `until`-driven drop is
-            // the SQL-299 fix. NB: nothing to do for `until` because the
-            // shard_source (before) and mfp_and_decode (after) filter.
+            // Pass through any data the passthrough input has pending, at the
+            // current (pre-downgrade) capability, BEFORE any downgrade below.
+            // `cap.time()` here equals the pre-activation frontier, which is
+            // `<=` every pending record's time, so the differential invariant
+            // `send_time <= record_time` holds. Doing this before the
+            // `until`-driven drop is the SQL-299 fix. NB: nothing to do for
+            // `until` because the shard_source (before) and mfp_and_decode
+            // (after) filter.
             if let Some(cap) = capability.as_ref() {
                 let mut output = passthrough_output.activate();
                 passthrough_input.for_each(|_input_cap, data| {
@@ -412,8 +432,8 @@ where
 
             // If we've copied passthrough data to at least `physical_upper`, we
             // can artificially advance the output to `logical_upper`. By the
-            // emptiness of `[physical_upper, logical_upper)`, no buffered record
-            // lies below `logical_upper`, so this never strands data.
+            // emptiness of `[physical_upper, logical_upper)`, no record still in
+            // flight lies below `logical_upper`, so this never strands data.
             if let Some(cap) = capability.as_mut() {
                 assert!(remap.physical_upper <= remap.logical_upper);
                 let phys_reached = remap.physical_upper.less_equal(cap.time());
@@ -422,6 +442,8 @@ where
                     cap.downgrade(&remap.logical_upper);
                 }
             }
+
+            false
         }
     });
 

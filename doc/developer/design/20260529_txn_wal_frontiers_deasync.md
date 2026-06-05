@@ -89,7 +89,15 @@ So the remap-driven downgrade never strands a record below the new cap.
 ### Per-activation algorithm
 
 ```text
-1. if shutdown button pressed         -> capability = None
+1. if shutdown button pressed locally -> wedge (keep capability, leave inputs
+                                          undrained, reschedule) until ALL
+                                          workers pressed; then capability =
+                                          None and drain inputs
+                                          (mirrors builder_async two-phase
+                                          shutdown; early local drop would let
+                                          the downstream frontier advance past
+                                          this worker's discarded input during
+                                          cross-worker teardown skew)
 2. drain remap_input.for_each         -> fold into `remap`:
                                           keep larger logical_upper, assert physical monotone
 3. fold remap frontier:                  Some(l) -> bump remap.logical_upper
