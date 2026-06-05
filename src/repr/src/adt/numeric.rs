@@ -399,6 +399,14 @@ pub fn twos_complement_be_to_numeric(
 pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
+    if input.is_empty() {
+        // An empty byte string is not a valid two's-complement integer. Our own
+        // encoder never emits one (zero is the single byte `0x00`), so this only
+        // arises from untrusted input — e.g. an Avro `decimal` field whose
+        // unscaled value was encoded as zero-length `bytes`. Reject it rather
+        // than indexing `input[0]` below and panicking.
+        bail!("cannot parse a numeric value from an empty byte string");
+    }
     let is_neg = if (input[0] & 0x80) != 0 {
         // byte-level negate all negative values, guaranteeing all bytes are
         // readable as unsigned.
@@ -467,6 +475,21 @@ fn test_twos_complement_roundtrip() {
     inner("-999999999999999999999999999999999999999");
     inner("-7.2e35");
     inner("-7.2e-35");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_twos_complement_empty_is_error() {
+    // An empty byte string is not a valid two's-complement integer and used to
+    // panic with an out-of-bounds index. It only arrives from untrusted input
+    // (e.g. an Avro `decimal` encoded as zero-length `bytes`), so it must be a
+    // clean error, not a panic. Regression test for that fix.
+    for scale in [0u8, 1, 38] {
+        assert!(twos_complement_be_to_numeric(&mut [], scale).is_err());
+    }
+    assert!(
+        twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(&mut []).is_err()
+    );
 }
 
 #[mz_ore::test]
