@@ -81,15 +81,15 @@ Target cluster: quickstart
 
 EOF
 
-# Binary encoding is not implemented for list, map, and aclitem types, and this
-# is checked recursively for container types. A record containing such a type
-# must return a clean error over the binary result format rather than panicking
-# the server (SQL-323). Casting the offending field to text avoids the error.
+# Binary encoding is not available for list, map, and aclitem types, and this is
+# checked recursively for container types. A record containing such a type must
+# return a clean error over the binary result format rather than panicking the
+# server (SQL-323). Casting the offending field to text avoids the error.
 
-query error binary encoding of list types is not implemented
+query error no binary output function available for type list
 SELECT ROW(1, LIST[1, 2])
 
-query error binary encoding of aclitem type does not exist
+query error no binary output function available for type aclitem
 SELECT ROW(1, makeaclitem(1, 2, 'CREATE', false))
 
 query T

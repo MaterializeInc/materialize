@@ -1461,7 +1461,7 @@ where
                         if let Err(msg) = mz_pgrepr::Value::binary_encoding_error(&ty.scalar_type) {
                             return self
                                 .send_error_and_get_state(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
+                                    SqlState::UNDEFINED_FUNCTION,
                                     msg,
                                 ))
                                 .await;
@@ -2617,7 +2617,7 @@ where
             {
                 return self
                     .send_error_and_get_state(ErrorResponse::error(
-                        SqlState::PROTOCOL_VIOLATION,
+                        SqlState::UNDEFINED_FUNCTION,
                         msg,
                     ))
                     .await

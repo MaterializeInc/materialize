@@ -1,9 +1,9 @@
-# Binary encoding is not implemented for list, map, and aclitem types. COPY ...
-# TO STDOUT WITH (FORMAT binary) must return a clean error rather than panicking
-# (SQL-323). This is Materialize-specific behavior: list/map don't exist in
-# PostgreSQL, and our aclitem error message/SQLSTATE differs from PostgreSQL's
-# "no binary output function available for type aclitem" (42883), so this lives
-# in pgtest-mz rather than pgtest.
+# Binary encoding is not available for list, map, and aclitem types. COPY ... TO
+# STDOUT WITH (FORMAT binary) must return a clean error rather than panicking
+# (SQL-323). The error matches PostgreSQL's diagnostic for the same condition:
+# `no binary output function available for type <t>` with SQLSTATE 42883
+# (undefined_function). This lives in pgtest-mz rather than pgtest because
+# list/map don't exist in PostgreSQL (so the queries don't parse there).
 
 send
 Query {"query": "COPY (SELECT LIST[1, 2, 3]) TO STDOUT WITH (FORMAT binary)"}
@@ -12,7 +12,7 @@ Query {"query": "COPY (SELECT LIST[1, 2, 3]) TO STDOUT WITH (FORMAT binary)"}
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of list types is not implemented"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42883"},{"typ":"M","value":"no binary output function available for type list"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -22,7 +22,7 @@ Query {"query": "COPY (SELECT '{a=>b}'::map[text=>text]) TO STDOUT WITH (FORMAT 
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of map types is not implemented"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42883"},{"typ":"M","value":"no binary output function available for type map"}]}
 ReadyForQuery {"status":"I"}
 
 # aclitem also has no binary encoding.
@@ -33,7 +33,7 @@ Query {"query": "COPY (SELECT makeaclitem(1, 2, 'CREATE', false)) TO STDOUT WITH
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of aclitem type does not exist"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42883"},{"typ":"M","value":"no binary output function available for type aclitem"}]}
 ReadyForQuery {"status":"I"}
 
 # Container types are checked recursively: a record containing a list is also
@@ -45,7 +45,7 @@ Query {"query": "COPY (SELECT ROW(1, LIST[1, 2])) TO STDOUT WITH (FORMAT binary)
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"08P01"},{"typ":"M","value":"binary encoding of list types is not implemented"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42883"},{"typ":"M","value":"no binary output function available for type list"}]}
 ReadyForQuery {"status":"I"}
 
 # The text format still works for these types.

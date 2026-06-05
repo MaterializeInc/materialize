@@ -593,6 +593,11 @@ impl Value {
     /// types) supports binary encoding, or `Err(reason)` describing the first
     /// unsupported type encountered. Container types are checked recursively, so
     /// e.g. a record or array that contains a `list` is rejected.
+    ///
+    /// The error messages mirror PostgreSQL's `no binary output function
+    /// available for type <t>` so that drivers and users see a familiar
+    /// diagnostic. Callers should report these errors with the SQLSTATE
+    /// PostgreSQL uses for the same condition, `42883` (undefined_function).
     pub fn binary_encoding_error(typ: &SqlScalarType) -> Result<(), &'static str> {
         match typ {
             SqlScalarType::Bool => Ok(()),
@@ -612,7 +617,7 @@ impl Value {
             SqlScalarType::Numeric { .. } => Ok(()),
             SqlScalarType::MzTimestamp => Ok(()),
             SqlScalarType::MzAclItem => Ok(()),
-            SqlScalarType::AclItem => Err("binary encoding of aclitem type does not exist"),
+            SqlScalarType::AclItem => Err("no binary output function available for type aclitem"),
             SqlScalarType::Date => Ok(()),
             SqlScalarType::Time => Ok(()),
             SqlScalarType::Timestamp { .. } => Ok(()),
@@ -627,8 +632,8 @@ impl Value {
             SqlScalarType::Uuid => Ok(()),
             SqlScalarType::Array(elem_type) => Self::binary_encoding_error(elem_type),
             SqlScalarType::Int2Vector => Ok(()),
-            SqlScalarType::List { .. } => Err("binary encoding of list types is not implemented"),
-            SqlScalarType::Map { .. } => Err("binary encoding of map types is not implemented"),
+            SqlScalarType::List { .. } => Err("no binary output function available for type list"),
+            SqlScalarType::Map { .. } => Err("no binary output function available for type map"),
             SqlScalarType::Record { fields, .. } => fields
                 .iter()
                 .try_for_each(|(_, ty)| Self::binary_encoding_error(&ty.scalar_type)),
