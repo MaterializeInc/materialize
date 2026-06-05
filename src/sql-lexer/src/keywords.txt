@@ -242,6 +242,7 @@ Inspect
 Instance
 Int
 Integer
+Integrate
 Internal
 Intersect
 Interval

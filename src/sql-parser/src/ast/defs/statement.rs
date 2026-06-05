@@ -817,32 +817,119 @@ impl<T: AstInfo> AstDisplay for ValidateConnectionStatement<T> {
 }
 impl_display_t!(ValidateConnectionStatement);
 
-/// `CREATE RECORDER <name> AS RECORD (<query>) INTO <table>` (prototype)
+/// `CREATE RECORDER <name> [WITH <rel> AS (<query>), ...] AS <action>, ...`
+/// (prototype)
 ///
-/// The body is kept as raw SQL text: the prototype recorder re-executes it
-/// verbatim through an internal SQL connection, so no name resolution or
-/// planning of the body happens at DDL time.
+/// Relation bodies are kept as raw SQL text: the prototype recorder
+/// re-executes them verbatim through an internal SQL connection, so no name
+/// resolution or planning of the bodies happens at DDL time.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateRecorderStatement {
     /// Name of the recorder.
     pub name: UnresolvedItemName,
-    /// The raw SQL text of the body query (a dTVC over `CHANGES(...)`).
-    pub body_sql: String,
-    /// The `DELTA TABLE` the body's deltas are recorded into.
-    pub into: UnresolvedItemName,
+    /// Named relations the actions may reference (`WITH r AS (...)`).
+    pub rels: Vec<RecorderRelation>,
+    /// The actions, committed (sequentially, in this prototype) per tick.
+    pub actions: Vec<RecorderAction>,
 }
 
 impl AstDisplay for CreateRecorderStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE RECORDER ");
         f.write_node(&self.name);
-        f.write_str(" AS RECORD (");
-        f.write_str(&self.body_sql);
-        f.write_str(") INTO ");
-        f.write_node(&self.into);
+        if !self.rels.is_empty() {
+            f.write_str(" WITH ");
+            f.write_node(&display::comma_separated(&self.rels));
+        }
+        f.write_str(" AS ");
+        f.write_node(&display::comma_separated(&self.actions));
     }
 }
 impl_display!(CreateRecorderStatement);
+
+/// A named relation in a `CREATE RECORDER` statement (prototype).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RecorderRelation {
+    /// The relation's name, referenced by actions and other relations.
+    pub name: Ident,
+    /// The raw SQL text of the relation's body.
+    pub body_sql: String,
+}
+
+impl AstDisplay for RecorderRelation {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" AS (");
+        f.write_str(&self.body_sql);
+        f.write_str(")");
+    }
+}
+impl_display!(RecorderRelation);
+
+/// An action of a `CREATE RECORDER` statement (prototype).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RecorderAction {
+    /// `RECORD <rel | (query)> INTO <delta table>`: append the relation's
+    /// deltas to a delta table.
+    Record {
+        /// A named relation (`rels` entry), ...
+        rel: Option<Ident>,
+        /// ... or an inline query (raw SQL).
+        query_sql: Option<String>,
+        /// The target delta table.
+        into: UnresolvedItemName,
+    },
+    /// `INTEGRATE <rel> AS <view>`: maintain the relation as a TVC.
+    Integrate {
+        /// The named relation to integrate.
+        rel: Ident,
+        /// The name of the maintained view.
+        view: UnresolvedItemName,
+    },
+    /// `DELETE <rel> FROM <delta table>`: prune the relation's rows.
+    Delete {
+        /// The named relation selecting the rows to delete.
+        rel: Ident,
+        /// The delta table to delete from.
+        from: UnresolvedItemName,
+    },
+}
+
+impl AstDisplay for RecorderAction {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RecorderAction::Record {
+                rel,
+                query_sql,
+                into,
+            } => {
+                f.write_str("RECORD ");
+                if let Some(rel) = rel {
+                    f.write_node(rel);
+                } else if let Some(query_sql) = query_sql {
+                    f.write_str("(");
+                    f.write_str(query_sql);
+                    f.write_str(")");
+                }
+                f.write_str(" INTO ");
+                f.write_node(into);
+            }
+            RecorderAction::Integrate { rel, view } => {
+                f.write_str("INTEGRATE ");
+                f.write_node(rel);
+                f.write_str(" AS ");
+                f.write_node(view);
+            }
+            RecorderAction::Delete { rel, from } => {
+                f.write_str("DELETE ");
+                f.write_node(rel);
+                f.write_str(" FROM ");
+                f.write_node(from);
+            }
+        }
+    }
+}
+impl_display!(RecorderAction);
 
 /// `DROP RECORDER <name>` (prototype)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -708,17 +708,45 @@ pub struct CreateConnectionPlan {
     pub validate: bool,
 }
 
-/// Prototype: a recorder periodically re-executes its body through an
-/// internal SQL connection and records the resulting deltas into the target
-/// delta table. Both are carried as raw SQL strings.
+/// Prototype: a recorder periodically re-executes its actions through an
+/// internal SQL connection. Relations and names are carried as raw SQL
+/// strings.
 #[derive(Debug)]
 pub struct CreateRecorderPlan {
     /// Name of the recorder.
     pub name: String,
-    /// Raw SQL text of the body query.
-    pub body_sql: String,
-    /// Raw SQL name of the target delta table.
-    pub target: String,
+    /// Named relations: `(name, raw SQL body)`, in declaration order.
+    pub rels: Vec<(String, String)>,
+    /// The actions, executed sequentially per tick.
+    pub actions: Vec<RecorderActionPlan>,
+}
+
+/// Prototype: one action of a recorder.
+#[derive(Debug, Clone)]
+pub enum RecorderActionPlan {
+    /// Append the relation's deltas to a delta table.
+    Record {
+        /// A named relation, or ...
+        rel: Option<String>,
+        /// ... an inline query (raw SQL).
+        query_sql: Option<String>,
+        /// The target delta table (raw SQL name).
+        into: String,
+    },
+    /// Maintain the relation as a view.
+    Integrate {
+        /// The named relation to integrate.
+        rel: String,
+        /// The view name (raw SQL name).
+        view: String,
+    },
+    /// Delete the relation's rows from a delta table.
+    Delete {
+        /// The named relation selecting rows to delete.
+        rel: String,
+        /// The delta table to delete from (raw SQL name).
+        from: String,
+    },
 }
 
 /// Prototype: drop an in-memory recorder by name.

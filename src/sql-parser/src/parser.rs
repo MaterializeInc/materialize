@@ -4988,25 +4988,81 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateTable(stmt))
     }
 
-    /// Parses `CREATE RECORDER <name> AS RECORD (<query>) INTO <table>`
-    /// (recorder prototype). The body query is captured as raw SQL text.
-    fn parse_create_recorder(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(RECORDER)?;
-        let name = self.parse_item_name()?;
-        self.expect_keywords(&[AS, RECORD])?;
+    /// Parses a parenthesized query, returning its raw SQL text (recorder
+    /// prototype). The query is parsed for syntax validation only.
+    fn parse_recorder_query_sql(&mut self) -> Result<String, ParserError> {
         self.expect_token(&Token::LParen)?;
         let body_start = self.peek_pos();
-        // Parse the query for syntax validation, but keep only the raw text.
         let _ = self.parse_query()?;
         let body_end = self.peek_pos();
         let body_sql = self.sql[body_start..body_end].trim().to_string();
         self.expect_token(&Token::RParen)?;
-        self.expect_keyword(INTO)?;
-        let into = self.parse_item_name()?;
+        Ok(body_sql)
+    }
+
+    /// Parses `CREATE RECORDER <name> [WITH <rel> AS (<query>), ...] AS
+    /// <action>, ...` (recorder prototype), where an action is one of
+    /// `RECORD <rel | (query)> INTO <table>`, `INTEGRATE <rel> AS <view>`, or
+    /// `DELETE <rel> FROM <table>`. Queries are captured as raw SQL text.
+    fn parse_create_recorder(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(RECORDER)?;
+        let name = self.parse_item_name()?;
+        let mut rels = Vec::new();
+        if self.parse_keyword(WITH) {
+            loop {
+                let rel_name = self.parse_identifier()?;
+                self.expect_keyword(AS)?;
+                let body_sql = self.parse_recorder_query_sql()?;
+                rels.push(RecorderRelation {
+                    name: rel_name,
+                    body_sql,
+                });
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect_keyword(AS)?;
+        let mut actions = Vec::new();
+        loop {
+            let action = match self.expect_one_of_keywords(&[RECORD, INTEGRATE, DELETE])? {
+                RECORD => {
+                    let (rel, query_sql) = if self.peek_token() == Some(Token::LParen) {
+                        (None, Some(self.parse_recorder_query_sql()?))
+                    } else {
+                        (Some(self.parse_identifier()?), None)
+                    };
+                    self.expect_keyword(INTO)?;
+                    let into = self.parse_item_name()?;
+                    RecorderAction::Record {
+                        rel,
+                        query_sql,
+                        into,
+                    }
+                }
+                INTEGRATE => {
+                    let rel = self.parse_identifier()?;
+                    self.expect_keyword(AS)?;
+                    let view = self.parse_item_name()?;
+                    RecorderAction::Integrate { rel, view }
+                }
+                DELETE => {
+                    let rel = self.parse_identifier()?;
+                    self.expect_keyword(FROM)?;
+                    let from = self.parse_item_name()?;
+                    RecorderAction::Delete { rel, from }
+                }
+                _ => unreachable!(),
+            };
+            actions.push(action);
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
         Ok(Statement::CreateRecorder(CreateRecorderStatement {
             name,
-            body_sql,
-            into,
+            rels,
+            actions,
         }))
     }
 

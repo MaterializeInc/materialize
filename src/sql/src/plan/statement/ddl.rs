@@ -73,12 +73,12 @@ use mz_sql_parser::ast::{
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
     MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RecorderAction,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
@@ -159,9 +159,9 @@ use crate::plan::{
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, DropRecorderPlan,
     HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
     NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
-    ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View,
-    WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
-    plan_utils, query, transform_ast,
+    RecorderActionPlan, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -5208,13 +5208,39 @@ pub fn plan_create_recorder(
 ) -> Result<Plan, PlanError> {
     let CreateRecorderStatement {
         name,
-        body_sql,
-        into,
+        rels,
+        actions,
     } = stmt;
+    let rels = rels
+        .into_iter()
+        .map(|r| (r.name.to_ast_string_simple(), r.body_sql))
+        .collect();
+    let actions = actions
+        .into_iter()
+        .map(|a| match a {
+            RecorderAction::Record {
+                rel,
+                query_sql,
+                into,
+            } => RecorderActionPlan::Record {
+                rel: rel.map(|r| r.to_ast_string_simple()),
+                query_sql,
+                into: into.to_ast_string_simple(),
+            },
+            RecorderAction::Integrate { rel, view } => RecorderActionPlan::Integrate {
+                rel: rel.to_ast_string_simple(),
+                view: view.to_ast_string_simple(),
+            },
+            RecorderAction::Delete { rel, from } => RecorderActionPlan::Delete {
+                rel: rel.to_ast_string_simple(),
+                from: from.to_ast_string_simple(),
+            },
+        })
+        .collect();
     Ok(Plan::CreateRecorder(CreateRecorderPlan {
         name: name.to_ast_string_simple(),
-        body_sql,
-        target: into.to_ast_string_simple(),
+        rels,
+        actions,
     }))
 }
 
