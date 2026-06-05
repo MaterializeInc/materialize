@@ -612,7 +612,7 @@ impl Value {
             SqlScalarType::Numeric { .. } => Ok(()),
             SqlScalarType::MzTimestamp => Ok(()),
             SqlScalarType::MzAclItem => Ok(()),
-            SqlScalarType::AclItem => Err("binary encoding of aclitem types does not exist"),
+            SqlScalarType::AclItem => Err("binary encoding of aclitem type does not exist"),
             SqlScalarType::Date => Ok(()),
             SqlScalarType::Time => Ok(()),
             SqlScalarType::Timestamp { .. } => Ok(()),
