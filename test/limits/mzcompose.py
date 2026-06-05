@@ -1902,6 +1902,8 @@ def make_materialized(
     use_committer: bool = True,
     memory: str = "8G",
     extra_system_params: dict[str, str] | None = None,
+    persistd_coalesce_max_batch: int = 0,
+    persistd_coalesce_concurrency: int = 8,
 ) -> Materialized:
     """Construct the limits `Materialized` service.
 
@@ -1961,6 +1963,8 @@ def make_materialized(
         external_metadata_store=True,
         metadata_store=metadata_store,
         external_persist_committer=external_persist_committer,
+        persistd_coalesce_max_batch=persistd_coalesce_max_batch,
+        persistd_coalesce_concurrency=persistd_coalesce_concurrency,
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
         support_external_clusterd=True,
     )
@@ -2444,22 +2448,60 @@ def workflow_committer_comparison(
         default="committer_comparison.csv",
         help="CSV output path (relative to repo root)",
     )
+    parser.add_argument(
+        "--coalesce-max-batch",
+        type=int,
+        default=0,
+        help="when > 0, add a 'persistd coalesce' variant per store where the "
+        "committer batches concurrent CaS requests into single backing "
+        "statements of at most this many elements",
+    )
+    parser.add_argument(
+        "--coalesce-concurrency",
+        type=int,
+        default=8,
+        help="maximum number of coalesced batches in flight against the "
+        "backing store at once (only meaningful with --coalesce-max-batch)",
+    )
+    parser.add_argument(
+        "--skip-baselines",
+        action="store_true",
+        help="run only the coalesce variants (requires --coalesce-max-batch); "
+        "useful when baseline CSVs already exist",
+    )
     args = parser.parse_args()
 
     sizes = sorted(int(s) for s in args.sizes.split(","))
     mvs = args.mvs_per_cluster
     max_objects = max(sizes) * mvs
 
-    # (label, metadata_store service name, committer). committer=False is the
-    # baseline: no committer, clusterds compare_and_append directly to
-    # consensus (persist_consensus_use_committer off). committer=True runs the
-    # committer in a persistd companion.
+    # (label, metadata_store service name, committer, coalesce_max_batch).
+    # committer=False is the baseline: no committer, clusterds
+    # compare_and_append directly to consensus
+    # (persist_consensus_use_committer off). committer=True runs the
+    # committer in a persistd companion; coalesce_max_batch > 0 additionally
+    # batches concurrent CaS requests inside that persistd.
     variants = [
-        ("crdb / no committer", "cockroach", False),
-        ("crdb / persistd", "cockroach", True),
-        ("psql / no committer", "postgres-metadata", False),
-        ("psql / persistd", "postgres-metadata", True),
+        ("crdb / no committer", "cockroach", False, 0),
+        ("crdb / persistd", "cockroach", True, 0),
+        ("psql / no committer", "postgres-metadata", False, 0),
+        ("psql / persistd", "postgres-metadata", True, 0),
     ]
+    if args.skip_baselines:
+        assert (
+            args.coalesce_max_batch > 0
+        ), "--skip-baselines needs --coalesce-max-batch"
+        variants = []
+    if args.coalesce_max_batch > 0:
+        variants += [
+            ("crdb / persistd coal", "cockroach", True, args.coalesce_max_batch),
+            (
+                "psql / persistd coal",
+                "postgres-metadata",
+                True,
+                args.coalesce_max_batch,
+            ),
+        ]
     wanted_stores = {s.strip() for s in args.stores.split(",")}
     variants = [v for v in variants if v[1] in wanted_stores]
 
@@ -2467,6 +2509,7 @@ def workflow_committer_comparison(
         "variant",
         "metadata_store",
         "committer",
+        "coalesce_max_batch",
         "n_clusters",
         "mvs_per_cluster",
         "n_objects",
@@ -2480,6 +2523,12 @@ def workflow_committer_comparison(
         "lag_ms_p95",
     ]
     results: list[dict] = []
+    # Write rows incrementally so a mid-run crash (e.g. envd dying in one
+    # variant) doesn't lose the completed variants' data.
+    csv_file = open(args.output, "w", newline="")
+    csv_writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+    csv_writer.writeheader()
+    csv_file.flush()
 
     def run_all(stmts: list[str]) -> None:
         """Run a batch of statements on one short-lived mz_system connection.
@@ -2501,8 +2550,12 @@ def workflow_committer_comparison(
             cur.execute(sql.encode())
             return cur.fetchall()
 
-    for label, store, committer in variants:
-        print(f"--- Variant: {label} (store={store}, committer={committer})")
+    for label, store, committer, coalesce in variants:
+        print(
+            f"--- Variant: {label} (store={store}, committer={committer}, "
+            f"coalesce={coalesce})",
+            flush=True,
+        )
         # Clean slate: each variant gets a fresh metadata store and mzdata so
         # state from a prior variant can't leak in.
         c.down(destroy_volumes=True)
@@ -2534,6 +2587,8 @@ def workflow_committer_comparison(
                 external_persist_committer=committer,
                 use_committer=committer,
                 memory=args.memory,
+                persistd_coalesce_max_batch=coalesce,
+                persistd_coalesce_concurrency=args.coalesce_concurrency,
             ),
             fail_on_new_service=False,
         ):
@@ -2627,6 +2682,7 @@ def workflow_committer_comparison(
                     "variant": label,
                     "metadata_store": store,
                     "committer": committer,
+                    "coalesce_max_batch": coalesce,
                     "n_clusters": n,
                     "mvs_per_cluster": mvs,
                     "n_objects": n_objects,
@@ -2642,17 +2698,17 @@ def workflow_committer_comparison(
                     "lag_ms_p95": round(_percentile(lag, 95), 1),
                 }
                 results.append(row)
+                csv_writer.writerow(row)
+                csv_file.flush()
                 print(
                     f"    n={n} objects={n_objects} hydrate_ok={hydrate_ok} "
                     f"wall={row['batch_hydrate_wall_s']}s "
                     f"hyd_max={row['hydration_ms_max']}ms "
-                    f"lag_max={row['lag_ms_max']}ms lag_p95={row['lag_ms_p95']}ms"
+                    f"lag_max={row['lag_ms_max']}ms lag_p95={row['lag_ms_p95']}ms",
+                    flush=True,
                 )
 
-    with open(args.output, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
+    csv_file.close()
     print(f"\nWrote {len(results)} rows to {args.output}\n")
 
     # Summary table.

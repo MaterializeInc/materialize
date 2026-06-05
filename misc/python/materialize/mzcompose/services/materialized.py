@@ -109,6 +109,8 @@ class Materialized(Service):
         config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
         external_persist_committer: bool = True,
+        persistd_coalesce_max_batch: int = 0,
+        persistd_coalesce_concurrency: int = 8,
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
         ) = None,
@@ -463,6 +465,10 @@ class Materialized(Service):
                     name=persistd_name,
                     consensus_url=persistd_consensus_url,
                     depends_on=metadata_depends,
+                    environment_extra=[
+                        f"MZ_COALESCE_MAX_BATCH={persistd_coalesce_max_batch}",
+                        f"MZ_COALESCE_CONCURRENCY={persistd_coalesce_concurrency}",
+                    ],
                 )
             )
 
