@@ -231,8 +231,11 @@ iteration"). We avoid it with one rule:
 
 Consequences: a row recorded at `T` is visible to `rel2`/`rel3` only at `T+1`, so
 pruning lags recording by one tick — **eventual convergence**, which is exactly
-the relaxed bar these use cases accept. There is no read-your-own-writes, hence
-none of the `T-1`-reclocking machinery that sank CTs. (In the example the
+the relaxed bar these use cases accept. There is no read-your-own-writes *within
+a commit*, hence none of the intra-commit *fixpoint* that CTs never finished —
+though reading a recorder's own output across commits still needs the CT
+`step_forward` / read-hold machinery (see Implementation feasibility). (In the
+example the
 `DELETE` is fixpoint-stable anyway — deleting non-first-seen rows cannot change
 which row is first-seen — but the rule is what guarantees that in general.)
 
@@ -349,6 +352,39 @@ UDF enrichment with type-based freeze (Tier 1) and (b) the `top-1` eventual
 upsert with input forgetting (Tier 3). The currency-conversion-with-compliance
 case (frozen value + a `DELETE`-driven cascade) is the stretch goal that
 validates the freeze typing and the lint rule.
+
+## Implementation feasibility
+
+A separate implementation design doc will cover this in depth. The gating
+findings from a codebase pass (against the recovered Continual Tasks (CT)
+implementation, PR #35967):
+
+- **Gating dependency.** The atomic "commit a bundle of actions at exactly `T`,
+  retry on conflict" the design relies on is the OCC timestamped-write substrate
+  (`20260210_incremental_occ_read_then_write.md`), which is **unbuilt** — none of
+  its symbols exist in the tree. The *storage* primitive does exist: group commit
+  already writes multiple persist shards atomically at a supplied `T` via txn-wal
+  (`commit_at(write_ts)` fails on `UpperMismatch`), so multi-action atomicity is
+  reachable **if every output is a txns-registered shard**. The net-new work is
+  the adapter-level target-`T`/retry loop and the **data-plane → control-plane
+  hand-off**. CTs used a bespoke compute sink that wrote a single shard and
+  bypassed txn-wal — which is exactly why they could not commit multiple outputs
+  atomically, confirming this control-plane path is mandatory, not optional.
+- **Known sharp edges, all hit by CTs.** (a) *Self-reference reclocking* — the
+  "no fixpoint / `T+1` visibility" rule avoids the fixpoint CTs never finished,
+  but the lagged self-read still needs the CT `step_forward` / since-held-below-
+  output-upper machinery (reusable, hardest-won). (b) *Multi-output* — CTs were
+  structurally single-output (a one-sink-per-dataflow assertion); recorders most
+  likely model each `DELTA TABLE`/`INTEGRATE` view as an independent catalog item
+  with the `RECORDER` as orchestrator (the tables-from-sources pattern), which is
+  new catalog + controller machinery. (c) *Freeze-by-typing* — CTs did it as a
+  persist-source renderer trick (inputs fed as insert-then-retract diffs) with a
+  known gap; first-class HIR/MIR support is new optimizer work. (d) *`DELTA
+  TABLE`* is a new collection kind (rows embedding `mz_timestamp`/`mz_diff` while
+  written at system `T`).
+- **Reusable from CT history:** body rendering, restart-cheap rehydration
+  (resume from output `upper`, snapshot-exclude), and self-reference bootstrap.
+  **Not reusable:** the commit path and the multi-output model.
 
 ## Alternatives
 
