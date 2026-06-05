@@ -5993,7 +5993,11 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         c.kill("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM RESET memory_limiter_enforce",
+            """
+            ALTER SYSTEM RESET memory_limiter_usage_bias;
+            ALTER SYSTEM RESET memory_limiter_burst_factor;
+            ALTER SYSTEM RESET memory_limiter_enforce;
+            """,
             port=6877,
             user="mz_system",
         )

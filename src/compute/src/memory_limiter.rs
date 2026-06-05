@@ -156,6 +156,11 @@ struct LimiterTask {
     config: LimiterConfig,
     /// The amount of burst budget remaining.
     burst_budget_remaining: usize,
+    /// Whether we have already logged that the limit was exceeded.
+    ///
+    /// Used to log only on the transition to over-limit, rather than at every check interval
+    /// while enforcement is disabled.
+    limit_exceeded_logged: bool,
     /// The time of the last check.
     last_check: Instant,
     /// Metrics tracked by the limiter task.
@@ -169,6 +174,7 @@ impl LimiterTask {
         let mut task = Self {
             config: LimiterConfig::disabled(),
             burst_budget_remaining: 0,
+            limit_exceeded_logged: false,
             last_check: Instant::now(),
             metrics,
         };
@@ -254,10 +260,13 @@ impl LimiterTask {
             } else {
                 // Burst budget exhausted.
                 self.burst_budget_remaining = 0;
-                warn!(
-                    memory_usage,
-                    memory_limit, "memory utilization exceeded configured limits",
-                );
+                if !self.limit_exceeded_logged {
+                    warn!(
+                        memory_usage,
+                        memory_limit, "memory utilization exceeded configured limits",
+                    );
+                    self.limit_exceeded_logged = true;
+                }
                 if self.config.enforce {
                     // We terminate with a recognizable exit code so the orchestrator knows the
                     // termination was caused by exceeding memory limits, as opposed to another,
@@ -268,6 +277,7 @@ impl LimiterTask {
         } else {
             // Reset burst budget if under limit.
             self.burst_budget_remaining = self.config.burst_budget;
+            self.limit_exceeded_logged = false;
         }
 
         self.last_check = Instant::now();
@@ -283,6 +293,7 @@ impl LimiterTask {
         info!(?config, "applying memory limiter config");
         self.config = config;
         self.burst_budget_remaining = config.burst_budget;
+        self.limit_exceeded_logged = false;
         // Reset `last_check` so the next `check` measures the excess interval
         // against the new config, not against a stale checkpoint left over from
         // a period when the limiter was disabled or running with a different
@@ -356,6 +367,7 @@ mod tests {
         LimiterTask {
             config: LimiterConfig::disabled(),
             burst_budget_remaining: 0,
+            limit_exceeded_logged: false,
             last_check: Instant::now(),
             metrics,
         }
@@ -409,6 +421,10 @@ mod tests {
 
     /// In observe-only mode (no memory limit), `check` must never terminate the
     /// process, regardless of memory usage.
+    //
+    // Linux only: on other platforms `current_utilization` falls back to all-zero
+    // proc stats, so the usage metric assertion below would fail.
+    #[cfg(target_os = "linux")]
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // reads /proc/self/status
     fn check_without_limit_observes_only() {
@@ -430,6 +446,10 @@ mod tests {
 
     /// With enforcement disabled, exceeding the limit with an exhausted burst
     /// budget must not terminate the process.
+    //
+    // Linux only: on other platforms `current_utilization` falls back to all-zero
+    // proc stats, so the zero limit would not be exceeded.
+    #[cfg(target_os = "linux")]
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // reads /proc/self/status
     fn check_without_enforce_does_not_terminate() {
@@ -446,6 +466,12 @@ mod tests {
         task.check().unwrap();
 
         assert_eq!(task.burst_budget_remaining, 0);
+        assert!(task.limit_exceeded_logged);
+
+        // Repeated checks while over limit must not terminate either, and must
+        // not re-log the exceeded warning.
+        task.check().unwrap();
+        assert!(task.limit_exceeded_logged);
     }
 }
 
