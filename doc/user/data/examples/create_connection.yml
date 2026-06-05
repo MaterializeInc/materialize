@@ -692,8 +692,7 @@
         URL = '<catalog_url>',
         WAREHOUSE = '<warehouse>',
         AWS CONNECTION = <aws_connection>,
-        GCP CONNECTION = <gcp_connection>,
-        SCOPE = '<scope>'
+        GCP CONNECTION = <gcp_connection>
     );
   syntax_elements:
     - name: "`<connection_name>`"
