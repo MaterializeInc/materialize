@@ -61,12 +61,15 @@ const McpConnectInstructions = ({
 
   if (!envAddress) return null;
 
-  // Cloud: HTTPS with the environment's HTTP address hostname.
-  // Self-managed: Use a placeholder since the MCP endpoint may be behind a
-  // load balancer or custom domain that we can't determine from the console.
+  const balancerdHost =
+    appConfig.mode === "self-managed"
+      ? appConfig.balancerdDnsNames?.[0]
+      : undefined;
   const baseUrl = isCloud
     ? `https://${envAddress.split(":")[0]}`
-    : "<your-materialize-host>";
+    : balancerdHost
+      ? `https://${balancerdHost}`
+      : "<your-materialize-host>";
 
   const user = userStr || "<user>";
   const base64Command = `printf '${user}:<password>' | base64 -w0`;

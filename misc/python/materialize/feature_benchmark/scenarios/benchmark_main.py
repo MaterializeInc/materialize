@@ -947,6 +947,157 @@ class DifferentialJoin(Dataflow):
 """)
 
 
+class DifferentialJoinColumnPaged(Dataflow):
+    """Same shape as `DifferentialJoin`, but with the column-paged merge
+    batcher enabled for the linear-join arrange stage.
+
+    Compare against `DifferentialJoin` to gauge the steady-state overhead of
+    the paged path (resident chunks plus byte-budget bookkeeping) when no
+    pressure forces spill. To measure spill cost, see
+    `DifferentialJoinHydrationFile`.
+    """
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # Requires `enable_column_paged_batcher`, introduced in the merge
+        # batcher rework that lands in 26.28.0. Skips on both sides while
+        # we're still on `26.28.0-dev.0` because `MzVersion` strips the git
+        # hash and can't distinguish dev builds with the dyncfg from dev
+        # builds without it.
+        return version > MzVersion.create(26, 28, 0)
+
+    def init(self) -> list[Action]:
+        return [
+            self.view_ten(),
+            TdAction(f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_column_paged_batcher = true;
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> SELECT 1;
+  /* A */
+1
+
+
+> SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
+  /* B */
+{self.n()}
+""")
+
+
+class DifferentialJoinHydration(Dataflow):
+    """Non-leaf parent for the linear-join hydration benchmark family.
+
+    Holds the shared `init` / `benchmark` (replica-toggle hydration loop) so
+    Baseline and File variants only need to override `shared()` with the
+    dyncfgs they want set. Has subclasses, so the feature-benchmark runner
+    treats it as non-leaf and never executes it directly — pick one of the
+    leaf classes via `--root-scenario`.
+
+    Run both leaves under a memory-capped Materialized (`--this-memory=2g`)
+    so the baseline has to swap and the paged-file variant has somewhere
+    predictable to spill.
+    """
+
+    # SCALE=8 → 100M rows per side, ~1.6 GiB per side input. Two sides plus
+    # the join arrangement (typically 2–4× input) reliably exceeds a few
+    # GiB total; a 2g container cap forces real swap pressure on the
+    # baseline. File variant's 16 MiB per-worker + 128 MiB shared budget
+    # means almost everything spills under that cap.
+    SCALE = 8
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # Both leaf variants set `enable_column_paged_batcher` (baseline =
+        # false, file = true), so gate on the dyncfg's introduction in
+        # 26.28.0. Comment in `DifferentialJoinColumnPaged.can_run` explains
+        # why dev versions can't distinguish the dyncfg's presence.
+        return version > MzVersion.create(26, 28, 0)
+
+    def init(self) -> list[Action]:
+        # `v1` lives on the default cluster, not `join_cluster`, so the
+        # replication-factor toggle in `benchmark` only tears down `v2`'s
+        # dataflow. Keeps the measurement scoped to the join-arrangement
+        # rebuild we're trying to measure.
+        return [
+            self.view_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW v1
+  AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+> SELECT COUNT(*) FROM v1
+{self.n()}
+
+> CREATE CLUSTER join_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        # Match HydrateIndex's pattern: take the cluster offline *before*
+        # defining the object so the dataflow doesn't pre-hydrate. The
+        # `REPLICATION FACTOR 1` flip after `/* A */` is the actual
+        # hydration trigger we want to time.
+        return Td(f"""
+> DROP MATERIALIZED VIEW IF EXISTS v2
+
+> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 0)
+
+> CREATE MATERIALIZED VIEW v2
+  IN CLUSTER join_cluster
+  AS SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
+
+> SELECT 1
+  /* A */
+1
+> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 1)
+> SET CLUSTER = join_cluster
+> SELECT * FROM v2
+  /* B */
+{self.n()}
+> SET CLUSTER = default
+""")
+
+
+class DifferentialJoinHydrationBaseline(DifferentialJoinHydration):
+    """Hydration measurement with the paged batcher disabled (current
+    production path). Compare against `DifferentialJoinHydrationFile` to
+    see if user-space file-backed spill beats OS swap under pressure.
+    """
+
+    def shared(self) -> Action:
+        return TdAction("""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_column_paged_batcher = false;
+""")
+
+
+class DifferentialJoinHydrationFile(DifferentialJoinHydration):
+    """Hydration time with the column-paged batcher on, file backend, and
+    a tight budget fraction so the merge-batcher transient spills rather
+    than competing with the spine for RAM.
+
+    `budget_fraction = 0.01` (1% of announced memory limit) lands in the
+    clamp floors of the worker-init derivation (per-worker 16 MiB,
+    shared 128 MiB), giving us the same effective sizing we benchmarked
+    before the fraction-knob refactor.
+    """
+
+    def shared(self) -> Action:
+        return TdAction("""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_column_paged_batcher = true;
+ALTER SYSTEM SET enable_column_paged_batcher_spill = true;
+ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
+""")
+
+
 class FullOuterJoin(Dataflow):
     def benchmark(self) -> BenchmarkingSequence:
         columns_select = ", ".join(

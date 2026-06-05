@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/notice.rs
-revision: 4267863081
+revision: c0559e3dbe
 ---
 
 # mz-transform::notice

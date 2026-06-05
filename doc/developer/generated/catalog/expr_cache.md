@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/expr_cache.rs
-revision: 52af3ba2a1
+revision: f2024af35d
 ---
 
 # catalog::expr_cache

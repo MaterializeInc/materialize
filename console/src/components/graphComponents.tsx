@@ -129,6 +129,8 @@ export const GraphEventOverlay = (props: {
   height: number;
   onPointerMove: (event: React.PointerEvent<SVGRectElement>) => void;
   onPointerLeave: (event: React.PointerEvent<SVGRectElement>) => void;
+  onClick?: (event: React.MouseEvent<SVGRectElement>) => void;
+  style?: React.CSSProperties;
   x: number;
   y: number;
 }) => {

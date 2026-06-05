@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
-use mz_expr::RowSetFinishing;
+use mz_expr::{ColumnOrder, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -66,9 +66,7 @@ use crate::plan::{
     QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
 use crate::plan::{CopyFromSource, with_options};
-use crate::session::vars::{
-    self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
-};
+use crate::session::vars::{self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -620,12 +618,10 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             types: v.types,
             // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
-                enable_guard_subquery_tablefunc: Default::default(),
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
-                enable_consolidate_after_union_negate: Default::default(),
                 enable_reduce_mfp_fusion: Default::default(),
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
@@ -641,6 +637,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_case_literal_transform: Default::default(),
                 enable_simplify_quantified_comparisons: Default::default(),
                 enable_coalesce_case_transform: Default::default(),
+                enable_will_distinct_propagation: Default::default(),
             },
         })
     }
@@ -891,12 +888,22 @@ pub fn plan_explain_analyze_object(
         .full_name_str();
     let explainee = plan_explainee(scx, statement.explainee, params)?;
 
-    match explainee {
-        plan::Explainee::Index(_index_id) => (),
-        plan::Explainee::MaterializedView(_item_id) => (),
-        _ => {
-            return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",));
+    let check_ownership = |item_id: &CatalogItemId, item_type: &str| -> Result<(), PlanError> {
+        if scx.catalog.restrict_to_user_objects() {
+            let item = scx.catalog.get_item(item_id);
+            if item.owner_id() != *scx.catalog.active_role_id() {
+                let full_name = scx.catalog.resolve_full_name(item.name());
+                return Err(sql_err!("must be owner of {item_type} {full_name}"));
+            }
         }
+        Ok(())
+    };
+    match &explainee {
+        plan::Explainee::Index(item_id) => check_ownership(item_id, "INDEX")?,
+        plan::Explainee::MaterializedView(item_id) => {
+            check_ownership(item_id, "MATERIALIZED VIEW")?
+        }
+        _ => return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",)),
     };
 
     // generate SQL query
@@ -1097,7 +1104,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
@@ -1469,7 +1477,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
@@ -1714,6 +1723,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeUpsert {
                 order_by_keys: order_by,
             }
@@ -1739,6 +1749,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeDebezium);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeDebezium {
                 order_by_keys: order_by,
             }
@@ -1790,6 +1801,23 @@ pub fn plan_subscribe(
         emit_progress: progress.unwrap_or(false),
         output,
     }))
+}
+
+/// Ensures each `ColumnOrder` in `order_by` references a distinct column,
+/// returning `DuplicateKeyColumnInSubscribeEnvelope` on the first repeat.
+fn check_distinct_key_columns(
+    order_by: &[ColumnOrder],
+    output_columns: &[(usize, &mz_repr::ColumnName)],
+) -> Result<(), PlanError> {
+    let mut seen = BTreeSet::new();
+    for co in order_by {
+        if !seen.insert(co.column) {
+            return Err(PlanError::DuplicateKeyColumnInSubscribeEnvelope {
+                column_name: output_columns[co.column].1.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn describe_copy_from_table(
@@ -1936,8 +1964,6 @@ fn plan_copy_from(
     let source = match target {
         CopyTarget::Stdin => CopyFromSource::Stdin,
         CopyTarget::Expr(from) => {
-            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
-
             // Converting the expr to an HirScalarExpr
             let mut from_expr = from.clone();
             transform_ast::transform(scx, &mut from_expr)?;
@@ -2124,14 +2150,6 @@ pub fn plan_copy(
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
-            // System users are always allowed to use this feature, even when
-            // the flag is disabled, so that we can dogfood for analytics in
-            // production environments. The feature is stable enough that we're
-            // not worried about it crashing.
-            if !scx.catalog.active_role_id().is_system() {
-                scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
-            }
-
             let format = match format {
                 Some(inner) => inner,
                 _ => sql_bail!("COPY TO <expr> requires a FORMAT option"),

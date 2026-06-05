@@ -31,6 +31,7 @@
 //! not support this `$format`.
 
 use itertools::Itertools;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -648,9 +649,21 @@ where
     I: Iterator<Item = T> + Clone;
 
 pub trait ScalarOps {
+    /// If this expression is a column-reference, return the column referenced.
     fn match_col_ref(&self) -> Option<usize>;
 
+    /// Returns true if this expression is a reference to the given column.
     fn references(&self, col_ref: usize) -> bool;
+}
+
+impl ScalarOps for usize {
+    fn match_col_ref(&self) -> Option<usize> {
+        Some(*self)
+    }
+
+    fn references(&self, col_ref: usize) -> bool {
+        *self == col_ref
+    }
 }
 
 /// A somewhat ad-hoc way to keep carry a plan with a set
@@ -812,7 +825,6 @@ impl UsedIndexes {
 #[derive(
     Debug,
     Clone,
-    Arbitrary,
     Serialize,
     Deserialize,
     Eq,
@@ -821,6 +833,7 @@ impl UsedIndexes {
     PartialOrd,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -867,7 +880,6 @@ pub enum IndexUsageType {
 #[derive(
     Debug,
     Clone,
-    Arbitrary,
     Serialize,
     Deserialize,
     Eq,
@@ -876,6 +888,7 @@ pub enum IndexUsageType {
     PartialOrd,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DeltaJoinIndexUsageType {
     Unknown,
     Lookup,

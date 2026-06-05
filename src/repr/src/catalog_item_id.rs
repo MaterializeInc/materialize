@@ -13,6 +13,7 @@ use std::str::FromStr;
 use anyhow::{Error, anyhow};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +21,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -33,6 +33,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
     Deserialize,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum CatalogItemId {
     /// System namespace.
     System(u64),

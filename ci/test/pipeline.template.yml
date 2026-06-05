@@ -127,6 +127,14 @@ steps:
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
+        retry:
+          automatic:
+            - signal_reason: agent_stop
+              limit: 2
+            - exit_status: 128
+              limit: 2
+            - exit_status: 199
+              limit: 2
 
       - id: devel-docker-tags
         label: Tag development docker images
@@ -445,6 +453,17 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: kafka-low-watermark
+        label: Kafka low watermark
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-low-watermark
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 

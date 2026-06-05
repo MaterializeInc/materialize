@@ -34,12 +34,16 @@ use mz_persist_types::stats::{
     StructStats,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
+use mz_repr::arb_row_for_relation;
 use mz_repr::{
     CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
+    RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::Strategy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -880,6 +884,7 @@ impl crate::AlterCompatible for SourceExportDetails {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
             (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
             _ => Err(AlterError { id }),
         };
@@ -1130,6 +1135,7 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_source_data_for_relation_desc(
     desc: &RelationDesc,
 ) -> impl Strategy<Value = SourceData> + use<> {

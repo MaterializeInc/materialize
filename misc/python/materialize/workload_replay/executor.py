@@ -108,7 +108,7 @@ def test(
                 elif connection["type"] == "sql-server":
                     services.add("sql-server")
                 elif connection["type"] in ("kafka", "confluent-schema-registry"):
-                    services.update(["kafka", "schema-registry", "zookeeper"])
+                    services.update(["kafka", "schema-registry"])
                 elif connection["type"] == "ssh-tunnel":
                     services.add("ssh-bastion-host")
                 elif connection["type"] == "iceberg-catalog":
@@ -307,7 +307,6 @@ def benchmark(
         "sql-server",
         "kafka",
         "schema-registry",
-        "zookeeper",
         "ssh-bastion-host",
         "testdrive",
     ]

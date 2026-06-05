@@ -55,8 +55,8 @@ mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 native-tls.workspace = true
 openssl.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 prost.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
@@ -79,6 +79,9 @@ iceberg-catalog-rest.workspace = true
 criterion.workspace = true
 insta.workspace = true
 mz-persist = { path = "../persist" }
+mz-storage-types = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
 rand.workspace = true
 
 [build-dependencies]
@@ -87,3 +90,4 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest", "mz-expr/proptest"]

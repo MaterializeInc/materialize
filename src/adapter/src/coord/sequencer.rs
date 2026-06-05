@@ -26,7 +26,7 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
 use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
-use mz_expr::{MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
+use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;

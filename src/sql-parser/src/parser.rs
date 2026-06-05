@@ -2462,6 +2462,9 @@ impl<'a> Parser<'a> {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
                     CreateConnectionType::AwsPrivatelink
+                } else if self.parse_keyword(GLUE) {
+                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    CreateConnectionType::GlueSchemaRegistry
                 } else {
                     CreateConnectionType::Aws
                 }
@@ -2792,6 +2795,7 @@ impl<'a> Parser<'a> {
                 PUBLIC,
                 PROGRESS,
                 REGION,
+                REGISTRY,
                 ROLE,
                 SASL,
                 SCOPE,
@@ -2862,6 +2866,7 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::SecurityProtocol
                 }
                 REGION => ConnectionOptionName::Region,
+                REGISTRY => ConnectionOptionName::Registry,
                 SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
                     MECHANISMS => ConnectionOptionName::SaslMechanisms,
                     PASSWORD => ConnectionOptionName::SaslPassword,

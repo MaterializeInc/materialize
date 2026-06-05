@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/case_literal.rs
-revision: 1c2d0f12f2
+revision: 5d046b3ab6
 ---
 
 # mz-transform::case_literal

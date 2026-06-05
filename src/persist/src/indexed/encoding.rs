@@ -132,6 +132,8 @@ impl Arbitrary for BatchColumnarFormat {
             Just(BatchColumnarFormat::Row).boxed(),
             Just(BatchColumnarFormat::Both(0)).boxed(),
             Just(BatchColumnarFormat::Both(1)).boxed(),
+            Just(BatchColumnarFormat::Both(2)).boxed(),
+            Just(BatchColumnarFormat::Structured).boxed(),
         ])
         .boxed()
     }

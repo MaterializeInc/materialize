@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/sql.rs
-revision: 07858c9fd7
+revision: 226fb0ccda
 ---
 
 # testdrive::action::sql

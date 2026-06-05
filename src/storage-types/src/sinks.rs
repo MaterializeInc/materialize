@@ -18,6 +18,7 @@ use mz_expr::MirScalarExpr;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -683,7 +684,8 @@ pub fn iceberg_type_overrides(
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog_connection_id: CatalogItemId,
     pub catalog_connection: C::IcebergCatalog,

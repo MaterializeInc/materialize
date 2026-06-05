@@ -34,7 +34,6 @@ SERVICES = [
     Materialized(
         depends_on=["minio"],
         sanity_restart=False,
-        system_parameter_defaults={"enable_iceberg_sink": "true"},
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::sink::iceberg=debug",
         },
@@ -274,4 +273,20 @@ def workflow_large_upsert_batch(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "large-upsert-batch.td",
+    )
+
+
+def workflow_range_noncanonical(c: Composition) -> None:
+    """Regression test for database-issues#11330: COPY FROM PARQUET must
+    canonicalize range values reconstructed from external Parquet, otherwise
+    non-canonical encodings written by other engines land verbatim in MZ rows
+    and break equality against values constructed inside MZ. DuckDB authors the
+    Parquet file directly in minio so the bytes are not something MZ's sink
+    produced."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "range-noncanonical.td",
     )

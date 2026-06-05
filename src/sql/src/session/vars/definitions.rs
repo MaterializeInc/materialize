@@ -39,8 +39,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
-    ValueConstraint,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -1436,19 +1436,13 @@ pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
-    true,
-);
-
 pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "default_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
     "The interval at which timestamps are assigned to data from sources and tables.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
@@ -1773,12 +1767,6 @@ feature_flags!(
     },
     // Actual feature flags
     {
-        name: enable_guard_subquery_tablefunc,
-        desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,
@@ -1948,6 +1936,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_glue_schema_registry,
+        desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
@@ -2093,12 +2087,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_copy_to_expr,
-        desc: "COPY ... TO 's3://...'",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
@@ -2153,12 +2141,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_aws_msk_iam_auth,
-        desc: "Enable AWS MSK IAM authentication for Kafka connections",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2171,21 +2153,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_copy_from_remote,
-        desc: "Whether to allow COPY FROM <url>.",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_sql_server_source,
-        desc: "Creating a SQL SERVER source",
-        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2222,12 +2192,6 @@ feature_flags!(
         name: enable_with_ordinality_legacy_fallback,
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_iceberg_sink,
-        desc: "Whether to enable the Iceberg sink.",
-        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2275,13 +2239,18 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
@@ -2301,6 +2270,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
         }
     }
 }
@@ -2325,8 +2295,6 @@ mod tests {
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
-            enable_guard_subquery_tablefunc,
-            enable_consolidate_after_union_negate,
             enable_eager_delta_joins,
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
@@ -2344,6 +2312,7 @@ mod tests {
             enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2356,8 +2325,6 @@ mod tests {
         }
 
         set_var!(enable_eq_classes_withholding_errors);
-        set_var!(enable_guard_subquery_tablefunc);
-        set_var!(enable_consolidate_after_union_negate);
         set_var!(enable_eager_delta_joins);
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
@@ -2375,6 +2342,7 @@ mod tests {
         set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

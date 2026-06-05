@@ -2695,12 +2695,24 @@ fn test_metrics_public_endpoint() {
         .start_blocking();
 
     let cluster_name = "test_cluster_1";
-    let label = format!("cluster_name=\"{cluster_name}\"");
+    let cluster_label = format!("cluster_name=\"{cluster_name}\"");
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute(&format!(
             "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    // Create a materialized view on the cluster so a compute dataflow runs and
+    // reports `mz_dataflow_wallclock_lag_seconds`. That metric carries a
+    // `collection_id` label, which the federated endpoint resolves to a
+    // `collection_name` via the metric's advertised `ObjectNameLookup` rule.
+    let view_name = "test_mv_1";
+    let collection_label = format!("collection_name=\"{view_name}\"");
+    client
+        .batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {view_name} IN CLUSTER {cluster_name} AS SELECT 1"
         ))
         .unwrap();
 
@@ -2715,25 +2727,35 @@ fn test_metrics_public_endpoint() {
         res.text().unwrap()
     };
 
-    // Retry the scrape until the replica's `http` listener is up;
-    // until then `/metrics/public` only returns env's local metrics with no
-    // cluster_name labels.
+    // Retry the scrape until the replica's `http` listener is up and the
+    // wallclock-lag dataflow has reported. Until then `/metrics/public` only
+    // returns env's local metrics, without the cluster_name/collection_name
+    // labels resolved from the replica's metrics.
     Retry::default()
         .max_duration(Duration::from_secs(60))
         .retry(|_| {
-            if fetch_body().contains(label.as_str()) {
-                Ok(())
-            } else {
-                Err(format!("{label} not yet in /metrics/public"))
+            let body = fetch_body();
+            match (
+                body.contains(cluster_label.as_str()),
+                body.contains(collection_label.as_str()),
+            ) {
+                (true, true) => Ok(()),
+                (cluster, collection) => Err(format!(
+                    "labels not yet in /metrics/public \
+                     (cluster_name={cluster}, collection_name={collection})"
+                )),
             }
         })
         .unwrap();
 
+    // Dropping the cluster (and its dependent view) removes both labels.
     client
-        .batch_execute(&format!("DROP CLUSTER {cluster_name}"))
+        .batch_execute(&format!("DROP CLUSTER {cluster_name} CASCADE"))
         .unwrap();
 
-    assert!(!fetch_body().contains(label.as_str()));
+    let body = fetch_body();
+    assert!(!body.contains(cluster_label.as_str()));
+    assert!(!body.contains(collection_label.as_str()));
 }
 
 #[mz_ore::test]
@@ -4189,13 +4211,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
@@ -4224,13 +4240,7 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err)
-                    if err
-                        .to_string_with_causes()
-                        .contains("dependency was removed") =>
-                {
-                    Ok(())
-                }
+                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
                 Err(err) => Err(err.to_string_with_causes()),
             }
         })
@@ -5093,26 +5103,25 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
     });
 }
 
-/// Tests the MCP agent endpoint with default feature flags
-/// (enable_mcp_agent=true, enable_mcp_agent_query_tool=false).
+/// Tests the MCP agent endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
 fn test_mcp_agent() {
-    let harness = test_util::TestHarness::default()
-        .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
-}
-
-/// Tests the MCP agent endpoint with the query tool enabled.
-#[mz_ore::test]
-fn test_mcp_agent_query_tool() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
             "enable_mcp_agent_query_tool".to_string(),
-            "true".to_string(),
+            "false".to_string(),
         );
+    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
+}
+
+/// Tests the MCP agent endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_agent_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
 }
 
@@ -5547,6 +5556,52 @@ fn test_mcp_agent_with_data_product() {
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
     assert!(body["error"].is_null());
 
+    // Each row carries a `hydration` field (5th cell). For an MV that has
+    // had time to hydrate on a single-replica `quickstart` cluster, expect
+    // `hydrated: true` with 1/1 replicas.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty(), "details should return at least one row");
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(
+            row.len(),
+            5,
+            "each details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {:?}",
+            row,
+        );
+        let hydration = &row[4];
+        assert!(
+            hydration.is_object(),
+            "hydration cell should be a JSON object, got: {hydration}",
+        );
+        assert!(
+            hydration.get("hydrated").is_some_and(|v| v.is_boolean()),
+            "hydration.hydrated should be a bool, got: {hydration}",
+        );
+        let replica_count = hydration
+            .get("replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.replica_count should be an int, got: {hydration}")
+            });
+        let hydrated_replica_count = hydration
+            .get("hydrated_replica_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| {
+                panic!("hydration.hydrated_replica_count should be an int, got: {hydration}")
+            });
+        assert!(
+            replica_count >= 0 && hydrated_replica_count >= 0,
+            "replica counts must be non-negative, got: {hydration}",
+        );
+        assert!(
+            hydrated_replica_count <= replica_count,
+            "hydrated_replica_count ({hydrated_replica_count}) cannot exceed replica_count ({replica_count}): {hydration}",
+        );
+    }
+
     // get_data_product_details should also resolve the indexed view, proving
     // the filter change is applied consistently to mz_mcp_data_product_details.
     let indexed_view_name = find_product("test_indexed_view").as_array().unwrap()[0]
@@ -5571,6 +5626,16 @@ fn test_mcp_agent_with_data_product() {
         "indexed view should be resolvable via get_data_product_details, got: {body}"
     );
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    // Indexed view should also report a hydration object.
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    let rows = rows.as_array().expect("details should return rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        let row = row.as_array().expect("each row should be an array");
+        assert_eq!(row.len(), 5, "row should include hydration cell: {row:?}");
+        assert!(row[4].is_object(), "hydration cell should be an object");
+    }
 
     // read_data_product should return the row from the view.
     let (status, body) = mcp_post(
@@ -5613,6 +5678,67 @@ fn test_mcp_agent_with_data_product() {
     let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
 
+    // DEX-27: an MV whose home cluster is NOT the HTTP session's default
+    // (`quickstart`) must still be readable without the caller passing a
+    // `cluster` argument. Before the auto-routing change the read would
+    // execute against `quickstart`, missing the index. Reading without an
+    // override must still succeed and return the row.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE CLUSTER dex27_other_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_off_default IN CLUSTER dex27_other_cluster \
+                 AS SELECT 42::int AS id, 'off_default'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_off_default TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON CLUSTER dex27_other_cluster TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+    // The MV was created after the cached `get_data_products` snapshot, so
+    // build the qualified name directly rather than re-querying.
+    let off_default_name = r#""materialize"."public"."test_off_default""#.to_string();
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": off_default_name, "limit": 10}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "no-override read on off-default cluster should auto-route, got: {body}",
+    );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0][0].as_str().unwrap(), "42");
+    assert_eq!(rows[0][1].as_str().unwrap(), "off_default");
+
     // read_data_product with limit 0 should return no rows.
     let (status, body) = mcp_post(
         &agents_url,
@@ -5636,7 +5762,9 @@ fn test_mcp_agent_with_data_product() {
         "limit 0 should return no rows"
     );
 
-    // read_data_product with limit > MAX_READ_LIMIT (1000) should be clamped, not error.
+    // read_data_product with a large `limit` is not clamped or rejected: the
+    // response is bounded only by the size cap, matching the SQL HTTP layer.
+    // The test data product has 1 row, so LIMIT 9999 just returns that 1 row.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
@@ -5652,8 +5780,11 @@ fn test_mcp_agent_with_data_product() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"].is_null(),
-        "limit above max should be clamped, not rejected"
+        "large limit should succeed; size cap is the only guard"
     );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
 
     // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
     let (status, body) = mcp_post(
@@ -5721,6 +5852,172 @@ fn test_mcp_agent_with_data_product() {
     );
 }
 
+/// Verifies that MCP requests update the Prometheus counters and that
+/// tool calls record a histogram observation.
+#[mz_ore::test]
+fn test_mcp_metrics() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    // Exercise three distinct request shapes:
+    //   1. `initialize`: succeeds.
+    //   2. `tools/list`: succeeds.
+    //   3. `tools/call` for `read_data_product` with a nonexistent name:
+    //      the request itself completes with an MCP error
+    //      (`DataProductNotFound`), which both `requests_total` and
+    //      `tool_calls_total` should reflect via the status label.
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "metrics-test", "version": "0"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "nonexistent_product"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    // Helper: look up a counter value by exact (endpoint, method/tool, status)
+    // label combination. Panics with a helpful message if not found, so test
+    // failures point at the missing label set rather than a generic `None`.
+    fn find_counter(
+        gathered: &[prometheus::proto::MetricFamily],
+        metric_name: &str,
+        labels: &[(&str, &str)],
+    ) -> f64 {
+        let family = gathered
+            .iter()
+            .find(|m| m.name() == metric_name)
+            .unwrap_or_else(|| panic!("metric family {} should be present", metric_name));
+        for metric in family.get_metric() {
+            let matches_all = labels.iter().all(|(name, want)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|l| l.name() == *name && l.value() == *want)
+            });
+            if matches_all {
+                return metric.get_counter().value();
+            }
+        }
+        panic!(
+            "no {} entry matching labels {:?} in {:?}",
+            metric_name,
+            labels,
+            family
+                .get_metric()
+                .iter()
+                .map(|m| m
+                    .get_label()
+                    .iter()
+                    .map(|l| (l.name().to_string(), l.value().to_string()))
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let gathered = server.metrics_registry().gather();
+
+    // requests_total: one entry per (endpoint, method, status). The
+    // tools/call request failed at the tool level, so its status label is
+    // the McpRequestError error_type, not "ok".
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "initialize"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/list"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/call"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_calls_total: one entry per (endpoint, tool_name, status).
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_tool_calls_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("tool_name", "read_data_product"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_call_duration_seconds: the single tools/call above should
+    // produce exactly one histogram observation.
+    let duration = gathered
+        .iter()
+        .find(|m| m.name() == "mz_mcp_tool_call_duration_seconds")
+        .expect("mz_mcp_tool_call_duration_seconds should be present");
+    let total_samples: u64 = duration
+        .get_metric()
+        .iter()
+        .map(|m| m.get_histogram().get_sample_count())
+        .sum();
+    assert_eq!(
+        total_samples, 1,
+        "tool_call_duration_seconds should record exactly 1 sample",
+    );
+}
+
 /// Tests runtime toggling of MCP feature flags.
 #[mz_ore::test]
 fn test_mcp_agent_runtime_flag_toggle() {
@@ -5772,7 +6069,7 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "agent should work again after re-enabling"
     );
 
-    // Test query tool toggling: initially disabled.
+    // Test query tool toggling: enabled by default.
     let query_call = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -5785,21 +6082,8 @@ fn test_mcp_agent_runtime_flag_toggle() {
     let (status, body) = mcp_post(&agents_url, query_call.clone());
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("query tool is not available"),
-        "query tool should be disabled by default"
-    );
-
-    // Enable query tool at runtime.
-    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
-
-    let (status, body) = mcp_post(&agents_url, query_call.clone());
-    assert_eq!(status, StatusCode::OK);
-    assert!(
         body["error"].is_null(),
-        "query tool should work after enabling"
+        "query tool should be enabled by default"
     );
     let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
@@ -5807,15 +6091,31 @@ fn test_mcp_agent_runtime_flag_toggle() {
         "query should return result with 1"
     );
 
-    // Disable query tool again.
+    // Disable query tool at runtime.
     server.disable_feature_flags(&["enable_mcp_agent_query_tool"]);
-    let (_, body) = mcp_post(&agents_url, query_call.clone());
+
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("query tool is not available"),
-        "query tool should be disabled again"
+        "query tool should be disabled after disabling"
+    );
+
+    // Re-enable query tool.
+    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should work after re-enabling"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1 after re-enabling"
     );
 }
 

@@ -50,9 +50,15 @@
 //! ```
 //!
 //! The "chain invariant" states that each chain has at least `chain_proportionality` times as
-//! many chunks as the next one. This means that chain sizes will often be powers of
+//! many updates as the next one. This means that chain sizes will often be powers of
 //! `chain_proportionality`, but they don't have to be. For example, for a proportionality of 2,
 //! the chain sizes `[11, 5, 2, 1]` would satisfy the chain invariant.
+//!
+//! Note that the invariant is maintained on update counts, not chunk counts. Chunks are
+//! byte-bounded (see [`ChunkBuilder`]), so chunk count is not proportional to update count and
+//! would be a poor proxy: any chain below the chunk byte boundary is a single chunk regardless
+//! of how many updates it holds, which would let the geometric invariant collapse and break the
+//! O(log N) amortization of inserts.
 //!
 //! Choosing the `chain_proportionality` value allows tuning the trade-off between memory and CPU
 //! resources required to maintain corrections. A higher proportionality forces more frequent chain
@@ -123,30 +129,41 @@
 //!   chain 2.a: [(b, 2, +1)],
 //!   chain 2.b: [(a, 2, +1), (c, 2, -1)]
 
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
-use columnation::Columnation;
-use differential_dataflow::trace::implementations::BatchContainer;
+use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::columnation::ColumnationStack;
+use mz_timely_util::columnar::Column;
 use timely::PartialOrder;
+use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{ChannelLogging, SizeMetrics};
 
 /// Convenient alias for use in data trait bounds.
+///
+/// `D` is constrained to be `Columnar`, so that updates can be stored in a single columnar
+/// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
+/// allocation as the rest of the chunk. The `Ref`-level `Eq + Ord` bounds let the merge/heap
+/// code compare updates directly through the columnar borrow, avoiding `into_owned` clones
+/// on the hot path.
 pub trait Data:
-    differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync
+    differential_dataflow::Data
+    + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+    + Send
+    + Sync
 {
 }
-impl<D: differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync> Data
-    for D
+impl<D> Data for D where
+    D: differential_dataflow::Data
+        + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+        + Send
+        + Sync
 {
 }
 
@@ -164,8 +181,6 @@ pub(super) struct CorrectionV2<D: Data> {
     since: Antichain<Timestamp>,
     /// The size factor of subsequent chains required by the chain invariant.
     chain_proportionality: f64,
-    /// The capacity of each [`Chunk`].
-    chunk_capacity: usize,
 
     /// Total count of updates in the correction buffer.
     ///
@@ -200,7 +215,6 @@ impl<D: Data> CorrectionV2<D> {
             stage: Stage::new(logging.clone(), chunk_capacity),
             since: Antichain::from_elem(Timestamp::MIN),
             chain_proportionality,
-            chunk_capacity,
             prev_update_count: 0,
             prev_size: Default::default(),
             metrics,
@@ -254,8 +268,8 @@ impl<D: Data> CorrectionV2<D> {
             let prop = self.chain_proportionality;
             let merge_needed = |chains: &[Chain<_>]| match chains {
                 [.., prev, last] => {
-                    let last_len = f64::cast_lossy(last.len());
-                    let prev_len = f64::cast_lossy(prev.len());
+                    let last_len = f64::cast_lossy(last.update_count);
+                    let prev_len = f64::cast_lossy(prev.update_count);
                     last_len * prop > prev_len
                 }
                 _ => false,
@@ -319,7 +333,7 @@ impl<D: Data> CorrectionV2<D> {
         // consolidated result is correct.
         chains.iter().for_each(|c| self.log_chain_dropped(c));
 
-        chains.extend(self.stage.flush());
+        Extend::extend(&mut chains, self.stage.flush());
 
         if chains.is_empty() {
             // We can only get here if the stage contained updates but they all got consolidated
@@ -348,13 +362,13 @@ impl<D: Data> CorrectionV2<D> {
         while i > 0 {
             let needs_merge = self.chains.get(i).is_some_and(|a| {
                 let b = &self.chains[i - 1];
-                let a_len = f64::cast_lossy(a.len());
-                let b_len = f64::cast_lossy(b.len());
+                let a_len = f64::cast_lossy(a.update_count);
+                let b_len = f64::cast_lossy(b.update_count);
                 a_len * self.chain_proportionality > b_len
             });
             if needs_merge {
                 let a = self.chains.remove(i);
-                let b = std::mem::replace(&mut self.chains[i - 1], Chain::new(0));
+                let b = std::mem::replace(&mut self.chains[i - 1], Chain::new());
                 let merged = self.merge_chains([a, b]);
                 self.chains[i - 1] = merged;
             } else {
@@ -405,7 +419,7 @@ impl<D: Data> CorrectionV2<D> {
     fn update_metrics(&mut self) {
         let mut new_size = self.stage.get_size();
         let mut new_length = self.stage.data.len();
-        for chain in &mut self.chains {
+        for chain in &self.chains {
             new_size += chain.get_size();
             new_length += chain.update_count;
         }
@@ -438,7 +452,7 @@ impl<D: Data> CorrectionV2<D> {
     /// Merge the given chains, advancing times by the current `since` in the process.
     fn merge_chains(&self, chains: impl IntoIterator<Item = Chain<D>>) -> Chain<D> {
         let Some(&since_ts) = self.since.as_option() else {
-            return Chain::new(self.chunk_capacity);
+            return Chain::new();
         };
 
         let mut to_merge = Vec::new();
@@ -462,7 +476,7 @@ impl<D: Data> CorrectionV2<D> {
         upper: &Antichain<Timestamp>,
     ) -> (Chain<D>, Vec<Chain<D>>) {
         let Some(&since_ts) = self.since.as_option() else {
-            return (Chain::new(self.chunk_capacity), Vec::new());
+            return (Chain::new(), Vec::new());
         };
         let Some(&upper_ts) = upper.as_option() else {
             let merged = self.merge_chains(chains);
@@ -471,7 +485,7 @@ impl<D: Data> CorrectionV2<D> {
 
         if since_ts >= upper_ts {
             // After advancing by `since` there will be no updates before `upper`.
-            return (Chain::new(self.chunk_capacity), chains);
+            return (Chain::new(), chains);
         }
 
         let mut to_merge = Vec::new();
@@ -491,7 +505,7 @@ impl<D: Data> CorrectionV2<D> {
         let merged = self.merge_cursors(to_merge);
         let remains = to_keep
             .into_iter()
-            .map(|c| c.try_unwrap(self.chunk_capacity).expect("unwrapable"))
+            .map(|c| c.try_unwrap().expect("unwrapable"))
             .collect();
 
         (merged, remains)
@@ -500,10 +514,10 @@ impl<D: Data> CorrectionV2<D> {
     /// Merge the given cursors into one chain.
     fn merge_cursors(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
         match cursors.len() {
-            0 => Chain::new(self.chunk_capacity),
+            0 => Chain::new(),
             1 => {
                 let [cur] = cursors.try_into().unwrap();
-                cur.into_chain(self.chunk_capacity)
+                cur.into_chain()
             }
             2 => {
                 let [a, b] = cursors.try_into().unwrap();
@@ -519,7 +533,7 @@ impl<D: Data> CorrectionV2<D> {
     fn merge_2(&self, cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
         let mut rest1 = Some(cursor1);
         let mut rest2 = Some(cursor2);
-        let mut merged = Chain::new(self.chunk_capacity);
+        let mut merged = ChainBuilder::default();
 
         loop {
             match (rest1, rest2) {
@@ -529,19 +543,19 @@ impl<D: Data> CorrectionV2<D> {
 
                     match (t1, d1).cmp(&(t2, d2)) {
                         Ordering::Less => {
-                            merged.push((d1, t1, r1));
+                            merged.push_ref((d1, t1, r1));
                             rest1 = c1.step();
                             rest2 = Some(c2);
                         }
                         Ordering::Greater => {
-                            merged.push((d2, t2, r2));
+                            merged.push_ref((d2, t2, r2));
                             rest1 = Some(c1);
                             rest2 = c2.step();
                         }
                         Ordering::Equal => {
                             let r = r1 + r2;
                             if r != Diff::ZERO {
-                                merged.push((d1, t1, r));
+                                merged.push_ref((d1, t1, r));
                             }
                             rest1 = c1.step();
                             rest2 = c2.step();
@@ -556,13 +570,13 @@ impl<D: Data> CorrectionV2<D> {
             }
         }
 
-        merged
+        merged.finish()
     }
 
     /// Merge the given cursors using a k-way merge with a binary heap.
     fn merge_many(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
         let mut heap = MergeHeap::from_iter(cursors);
-        let mut merged = Chain::new(self.chunk_capacity);
+        let mut merged = ChainBuilder::default();
         while let Some(cursor1) = heap.pop() {
             let (data, time, mut diff) = cursor1.get();
 
@@ -574,14 +588,14 @@ impl<D: Data> CorrectionV2<D> {
             }
 
             if diff != Diff::ZERO {
-                merged.push((data, time, diff));
+                merged.push_ref((data, time, diff));
             }
             if let Some(cursor1) = cursor1.step() {
                 heap.push(cursor1);
             }
         }
 
-        merged
+        merged.finish()
     }
 }
 
@@ -602,55 +616,22 @@ impl<D: Data> Drop for CorrectionV2<D> {
 struct Chain<D: Data> {
     /// The contained chunks.
     chunks: Vec<Chunk<D>>,
-    /// The number of updates contained in all chunks, for efficient updating of metrics.
+    /// The number of updates contained in all chunks.
     update_count: usize,
-    /// Cached value of the current chain size, for efficient updating of metrics.
-    cached_size: Option<SizeMetrics>,
-    /// The capacity of each contained [`Chunk`].
-    chunk_capacity: usize,
 }
 
 impl<D: Data> Chain<D> {
-    /// Construct an empty chain whose chunks have the given capacity.
-    fn new(chunk_capacity: usize) -> Self {
+    /// Construct an empty chain.
+    fn new() -> Self {
         Self {
             chunks: Default::default(),
             update_count: 0,
-            cached_size: None,
-            chunk_capacity,
         }
     }
 
     /// Return whether the chain is empty.
     fn is_empty(&self) -> bool {
         self.chunks.is_empty()
-    }
-
-    /// Return the length of the chain, in chunks.
-    fn len(&self) -> usize {
-        self.chunks.len()
-    }
-
-    /// Push an update onto the chain.
-    ///
-    /// The update must sort after all updates already in the chain, in (time, data)-order, to
-    /// ensure the chain remains sorted.
-    fn push<DT: Borrow<D>>(&mut self, update: (DT, Timestamp, Diff)) {
-        let (d, t, r) = update;
-        let update = (d.borrow(), t, r);
-
-        debug_assert!(self.can_accept(update));
-
-        match self.chunks.last_mut() {
-            Some(c) if c.len() < self.chunk_capacity => c.push(update),
-            Some(_) | None => {
-                let chunk = Chunk::from_update(update, self.chunk_capacity);
-                self.push_chunk(chunk);
-            }
-        }
-
-        self.update_count += 1;
-        self.invalidate_cached_size();
     }
 
     /// Push a chunk onto the chain.
@@ -662,26 +643,12 @@ impl<D: Data> Chain<D> {
 
         self.update_count += chunk.len();
         self.chunks.push(chunk);
-        self.invalidate_cached_size();
-    }
-
-    /// Push the updates produced by a cursor onto the chain.
-    ///
-    /// All updates produced by the cursor must sort after all updates already in the chain, in
-    /// (time, data)-order, to ensure the chain remains sorted.
-    fn push_cursor(&mut self, cursor: Cursor<D>) {
-        let mut rest = Some(cursor);
-        while let Some(cursor) = rest.take() {
-            let update = cursor.get();
-            self.push(update);
-            rest = cursor.step();
-        }
     }
 
     /// Return whether the chain can accept the given update.
     ///
     /// A chain can accept an update if pushing it at the end upholds the (time, data)-order.
-    fn can_accept(&self, update: (&D, Timestamp, Diff)) -> bool {
+    fn can_accept<'a>(&'a self, update: Ref<'a, (D, Timestamp, Diff)>) -> bool {
         self.last().is_none_or(|(dc, tc, _)| {
             let (d, t, _) = update;
             (tc, dc) < (t, d)
@@ -689,12 +656,12 @@ impl<D: Data> Chain<D> {
     }
 
     /// Return the first update in the chain, if any.
-    fn first(&self) -> Option<(&D, Timestamp, Diff)> {
+    fn first(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.first().map(|c| c.first())
     }
 
     /// Return the last update in the chain, if any.
-    fn last(&self) -> Option<(&D, Timestamp, Diff)> {
+    fn last(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.last().map(|c| c.last())
     }
 
@@ -706,39 +673,88 @@ impl<D: Data> Chain<D> {
 
     /// Return an iterator over the contained updates.
     fn iter(&self) -> impl Iterator<Item = (D, Timestamp, Diff)> + '_ {
-        self.chunks
-            .iter()
-            .flat_map(|c| c.data.iter().map(|(d, t, r)| (d.clone(), *t, *r)))
+        self.chunks.iter().flat_map(|c| {
+            (0..c.len()).map(move |i| {
+                let (d, t, r) = c.index(i);
+                (D::into_owned(d), t, r)
+            })
+        })
     }
 
     /// Return the size of the chain, for use in metrics.
-    fn get_size(&mut self) -> SizeMetrics {
-        // This operation can be expensive as it requires inspecting the individual chunks and
-        // their backing regions. We thus cache the result to hopefully avoid the cost most of the
-        // time.
-        if self.cached_size.is_none() {
-            let mut metrics = SizeMetrics::default();
-            for chunk in &mut self.chunks {
-                metrics += chunk.get_size();
-            }
-            self.cached_size = Some(metrics);
+    fn get_size(&self) -> SizeMetrics {
+        let mut metrics = SizeMetrics::default();
+        for chunk in &self.chunks {
+            metrics += chunk.get_size();
         }
-
-        self.cached_size.unwrap()
-    }
-
-    /// Invalidate the cached chain size.
-    ///
-    /// This method must be called every time the size of the chain changed.
-    fn invalidate_cached_size(&mut self) {
-        self.cached_size = None;
+        metrics
     }
 }
 
-impl<D: Data> Extend<(D, Timestamp, Diff)> for Chain<D> {
+/// A builder that constructs a [`Chain`] from a stream of updates.
+///
+/// Wraps a [`ChunkBuilder`] and drains its minted chunks into a [`Chain`]. Pushed updates must
+/// arrive in (time, data) sorted order.
+struct ChainBuilder<D: Data> {
+    builder: ChunkBuilder<D>,
+    chain: Chain<D>,
+}
+
+impl<D: Data> Default for ChainBuilder<D> {
+    fn default() -> Self {
+        Self {
+            builder: Default::default(),
+            chain: Chain::new(),
+        }
+    }
+}
+
+impl<D: Data> ChainBuilder<D> {
+    /// Push a reference-form update into the builder.
+    fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
+        self.builder.push(update);
+        self.drain();
+    }
+
+    /// Push an owned-form update into the builder.
+    fn push_owned(&mut self, update: &(D, Timestamp, Diff)) {
+        self.builder.push(update);
+        self.drain();
+    }
+
+    /// Push the updates produced by a cursor into the builder.
+    fn push_cursor(&mut self, cursor: Cursor<D>) {
+        let mut rest = Some(cursor);
+        while let Some(cursor) = rest.take() {
+            let update = cursor.get();
+            self.push_ref(update);
+            rest = cursor.step();
+        }
+    }
+
+    /// Move any minted chunks from the builder into the chain.
+    fn drain(&mut self) {
+        while let Some(chunk) = self.builder.pop() {
+            self.chain.push_chunk(chunk);
+        }
+    }
+
+    /// Finish building, returning the assembled [`Chain`].
+    fn finish(self) -> Chain<D> {
+        let Self { builder, mut chain } = self;
+        for chunk in builder.finish() {
+            if chunk.len() > 0 {
+                chain.push_chunk(chunk);
+            }
+        }
+        chain
+    }
+}
+
+impl<D: Data> Extend<(D, Timestamp, Diff)> for ChainBuilder<D> {
     fn extend<I: IntoIterator<Item = (D, Timestamp, Diff)>>(&mut self, iter: I) {
         for update in iter {
-            self.push(update);
+            self.push_owned(&update);
         }
     }
 }
@@ -817,7 +833,7 @@ impl<D: Data> Cursor<D> {
     }
 
     /// Get a reference to the current update.
-    fn get(&self) -> (&D, Timestamp, Diff) {
+    fn get(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         let chunk = self.get_chunk();
         let (d, t, r) = chunk.index(self.chunk_offset);
         let t = self.overwrite_ts.unwrap_or(t);
@@ -961,13 +977,13 @@ impl<D: Data> Cursor<D> {
     /// Drain the cursor into a [`Chain`].
     ///
     /// This reuses the underlying chunks if possible, and writes new ones otherwise.
-    fn into_chain(self, chunk_capacity: usize) -> Chain<D> {
-        match self.try_unwrap(chunk_capacity) {
+    fn into_chain(self) -> Chain<D> {
+        match self.try_unwrap() {
             Ok(chain) => chain,
             Err((_, cursor)) => {
-                let mut chain = Chain::new(chunk_capacity);
-                chain.push_cursor(cursor);
-                chain
+                let mut builder = ChainBuilder::default();
+                builder.push_cursor(cursor);
+                builder.finish()
             }
         }
     }
@@ -981,7 +997,7 @@ impl<D: Data> Cursor<D> {
     /// the cursor has unique references to its chunks. If the unwrap fails, this method returns an
     /// `Err` containing the cursor in an unchanged state, allowing the caller to convert it into a
     /// chain by copying chunks rather than reusing them.
-    fn try_unwrap(self, chunk_capacity: usize) -> Result<Chain<D>, (&'static str, Self)> {
+    fn try_unwrap(self) -> Result<Chain<D>, (&'static str, Self)> {
         if self.limit.is_some() {
             return Err(("cursor with limit", self));
         }
@@ -992,7 +1008,7 @@ impl<D: Data> Cursor<D> {
             return Err(("cursor on shared chunks", self));
         }
 
-        let mut chain = Chain::new(chunk_capacity);
+        let mut builder = ChainBuilder::default();
         let mut remaining = Some(self);
 
         // We might be partway through the first chunk, in which case we can't reuse it but need to
@@ -1003,10 +1019,11 @@ impl<D: Data> Cursor<D> {
                 break;
             }
             let update = cursor.get();
-            chain.push(update);
+            builder.push_ref(update);
             remaining = cursor.step();
         }
 
+        let mut chain = builder.finish();
         if let Some(cursor) = remaining {
             for chunk in cursor.chunks {
                 let chunk = Rc::into_inner(chunk).expect("checked above");
@@ -1018,19 +1035,17 @@ impl<D: Data> Cursor<D> {
     }
 }
 
-/// A non-empty chunk of updates, backed by a columnation region.
+/// A non-empty chunk of updates, backed by a columnar region.
 ///
 /// All updates in a chunk are sorted by (time, data) and consolidated.
 ///
-/// We would like all chunks to have the same fixed size, to make it easy for the allocator to
-/// re-use chunk allocations. Unfortunately, the current `ColumnationStack`/`ChunkedStack` API doesn't
-/// provide a convenient way to pre-size regions, so chunks are currently only fixed-size in
-/// spirit.
+/// Chunks are immutable once created. They are produced by [`ChunkBuilder`], which mints a
+/// new chunk whenever its in-progress columnar container reaches a fixed serialized byte
+/// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
+/// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: ColumnationStack<(D, Timestamp, Diff)>,
-    /// Cached value of the current chunk size, for efficient updating of metrics.
-    cached_size: Option<SizeMetrics>,
+    data: Column<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1040,22 +1055,14 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Create a new chunk containing a single update.
-    fn from_update<DT: Borrow<D>>(update: (DT, Timestamp, Diff), chunk_capacity: usize) -> Self {
-        let (d, t, r) = update;
-
-        let mut chunk = Self {
-            data: ColumnationStack::with_capacity(chunk_capacity),
-            cached_size: None,
-        };
-        chunk.data.copy_destructured(d.borrow(), &t, &r);
-
-        chunk
+    /// Wrap the given column into a chunk.
+    fn from_column(data: Column<(D, Timestamp, Diff)>) -> Self {
+        Self { data }
     }
 
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
-        self.data.len()
+        self.data.borrow().len()
     }
 
     /// Return the update at the given index.
@@ -1063,27 +1070,18 @@ impl<D: Data> Chunk<D> {
     /// # Panics
     ///
     /// Panics if the given index is not populated.
-    fn index(&self, idx: usize) -> (&D, Timestamp, Diff) {
-        let (d, t, r) = self.data.index(idx);
-        (d, *t, *r)
+    fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
+        self.data.borrow().get(idx)
     }
 
     /// Return the first update in the chunk.
-    fn first(&self) -> (&D, Timestamp, Diff) {
+    fn first(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(0)
     }
 
     /// Return the last update in the chunk.
-    fn last(&self) -> (&D, Timestamp, Diff) {
+    fn last(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(self.len() - 1)
-    }
-
-    /// Push an update onto the chunk.
-    fn push<DT: Borrow<D>>(&mut self, update: (DT, Timestamp, Diff)) {
-        let (d, t, r) = update;
-        self.data.copy_destructured(d.borrow(), &t, &r);
-
-        self.invalidate_cached_size();
     }
 
     /// Return the index of the first update at a time greater than `time`, or `None` if no such
@@ -1108,29 +1106,75 @@ impl<D: Data> Chunk<D> {
     }
 
     /// Return the size of the chunk, for use in metrics.
-    fn get_size(&mut self) -> SizeMetrics {
-        if self.cached_size.is_none() {
-            let mut size = 0;
-            let mut capacity = 0;
-            self.data.heap_size(|sz, cap| {
-                size += sz;
-                capacity += cap;
-            });
-            self.cached_size = Some(SizeMetrics {
-                size,
-                capacity,
-                allocations: 1,
-            });
+    fn get_size(&self) -> SizeMetrics {
+        let bytes = self.data.length_in_bytes();
+        SizeMetrics {
+            size: bytes,
+            capacity: bytes,
+            allocations: 1,
         }
+    }
+}
 
-        self.cached_size.unwrap()
+/// Builder that produces a stream of fixed-size [`Chunk`]s.
+///
+/// Wraps [`mz_timely_util::columnar::builder::ColumnBuilder`], which mints a new
+/// [`Column::Align`] chunk whenever its in-progress columnar container reaches a fixed
+/// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
+/// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
+struct ChunkBuilder<D: Data> {
+    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
+}
+
+impl<D: Data> Default for ChunkBuilder<D> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<D: Data> ChunkBuilder<D> {
+    /// Push an update into the builder.
+    ///
+    /// Accepts whatever the inner [`ColumnBuilder`]'s [`PushInto`] impl accepts — both the
+    /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
+    /// tuples drained from the staging buffer.
+    ///
+    /// [`ColumnBuilder`]: mz_timely_util::columnar::builder::ColumnBuilder
+    /// [`PushInto`]: timely::container::PushInto
+    #[inline]
+    fn push<T>(&mut self, item: T)
+    where
+        mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>:
+            timely::container::PushInto<T>,
+    {
+        timely::container::PushInto::push_into(&mut self.inner, item);
     }
 
-    /// Invalidate the cached chunk size.
-    ///
-    /// This method must be called every time the size of the chunk changed.
-    fn invalidate_cached_size(&mut self) {
-        self.cached_size = None;
+    /// Pop a finished chunk, if one is available.
+    fn pop(&mut self) -> Option<Chunk<D>> {
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::extract` stashes the popped chunk in its `finished` slot so the
+        // caller can read it through `&mut`; move it out with `mem::take` so we own it
+        // (leaves `Column::Typed(Default::default())` behind, which the next `extract`
+        // overwrites).
+        self.inner
+            .extract()
+            .map(|c| Chunk::from_column(std::mem::take(c)))
+    }
+
+    /// Finalize the builder: flush any in-progress updates as a typed chunk and drain pending.
+    fn finish(mut self) -> impl Iterator<Item = Chunk<D>> {
+        use timely::container::ContainerBuilder;
+        // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
+        // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
+        // the rest until `None`. Translate that into an owning iterator.
+        std::iter::from_fn(move || {
+            self.inner
+                .finish()
+                .map(|c| Chunk::from_column(std::mem::take(c)))
+        })
     }
 }
 
@@ -1194,15 +1238,15 @@ impl<D: Data> Stage<D> {
 
             consolidate(&mut buffer);
 
-            let mut chain = Chain::new(chunk_capacity);
+            let mut chain = ChainBuilder::default();
             chain.extend(buffer);
-            Some(chain)
+            Some(chain.finish())
         } else {
             None
         };
 
         // Stage the remaining updates.
-        self.data.extend(new_updates);
+        Extend::extend(&mut self.data, new_updates);
 
         self.log_length_diff(self.ilen() - prev_length);
 
@@ -1219,10 +1263,9 @@ impl<D: Data> Stage<D> {
             return None;
         }
 
-        let chunk_capacity = self.data.capacity();
-        let mut chain = Chain::new(chunk_capacity);
+        let mut chain = ChainBuilder::default();
         chain.extend(self.data.drain(..));
-        Some(chain)
+        Some(chain.finish())
     }
 
     /// Advance the times of staged updates by the given `since`.
@@ -1319,6 +1362,22 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     updates.truncate(offset);
 }
 
+/// Compare two columnar refs that have unrelated input lifetimes.
+///
+/// `<D::Container as Borrow>::Ref<'a>` is an associated-type projection through a trait, so
+/// the compiler treats it as invariant in `'a` and won't auto-shorten the inputs by variance.
+/// We instead explicitly reborrow both to a fresh, local lifetime `'x` via
+/// [`Columnar::reborrow`] before letting the inner `==` pick up the `for<'a> Ref<'a>: Eq`
+/// bound on [`Data`].
+#[inline]
+fn refs_eq<D: Data>(a: Ref<'_, D>, b: Ref<'_, D>) -> bool {
+    #[inline]
+    fn eq<'x, D: Data>(a: Ref<'x, D>, b: Ref<'x, D>) -> bool {
+        a == b
+    }
+    eq::<D>(D::reborrow(a), D::reborrow(b))
+}
+
 /// A binary heap specialized for merging [`Cursor`]s.
 struct MergeHeap<D: Data>(BinaryHeap<MergeCursor<D>>);
 
@@ -1339,15 +1398,17 @@ impl<D: Data> MergeHeap<D> {
     /// equal to the given values.
     ///
     /// Returns both the cursor and the diff corresponding to `data` and `time`.
-    fn pop_equal(&mut self, data: &D, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
-        let MergeCursor(cursor) = self.0.peek()?;
-        let (d, t, r) = cursor.get();
-        if d == data && t == time {
-            let cursor = self.pop().expect("checked above");
-            Some((cursor, r))
-        } else {
-            None
-        }
+    fn pop_equal(&mut self, data: Ref<'_, D>, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
+        let r = {
+            let MergeCursor(cursor) = self.0.peek()?;
+            let (d, t, r) = cursor.get();
+            if t != time || !refs_eq::<D>(d, data) {
+                return None;
+            }
+            r
+        };
+        let cursor = self.pop().expect("checked above");
+        Some((cursor, r))
     }
 
     /// Push a cursor onto the heap.
@@ -1380,5 +1441,66 @@ impl<D: Data> Ord for MergeCursor<D> {
         let (d1, t1, _) = self.0.get();
         let (d2, t2, _) = other.0.get();
         (t1, d1).cmp(&(t2, d2)).reverse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Diff, Timestamp};
+
+    use super::ChainBuilder;
+
+    #[mz_ore::test]
+    fn chain_builder_update_count_matches_items() {
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..10_u64 {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+        assert_eq!(chain.update_count, chain.iter().count());
+    }
+
+    /// Push enough updates to cross at least one `mint()` boundary, forcing the
+    /// `Align` encode -> `from_bytes` decode roundtrip (the spilling path this data
+    /// structure exists to support), and assert `iter()` roundtrips values, order,
+    /// and diffs across the spill boundary.
+    #[mz_ore::test]
+    fn chain_builder_roundtrips_across_mint_boundary() {
+        // A single `mint()` fires near the ~2 MiB (`SHIP_WORDS`) serialized boundary. With
+        // three 8-byte columns per update that's tens of thousands of updates; pushing 200k
+        // comfortably forces multiple mints.
+        let count = 200_000_u64;
+
+        let mut builder = ChainBuilder::<i64>::default();
+        for i in 0..count {
+            let d = i64::try_from(i).expect("fits");
+            builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+        }
+        let chain = builder.finish();
+
+        // At least one chunk must have been minted into `Column::Align` form, otherwise the
+        // spill path wouldn't be exercised.
+        let align_chunks = chain
+            .chunks
+            .iter()
+            .filter(|c| matches!(c.data, mz_timely_util::columnar::Column::Align(_)))
+            .count();
+        assert!(
+            align_chunks > 0,
+            "expected at least one spilled (Align) chunk, got chunks: {:?}",
+            chain.chunks,
+        );
+
+        // `iter()` must roundtrip every update, in order, with correct diffs.
+        assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+        let mut expected = 0_u64;
+        for (d, t, r) in chain.iter() {
+            assert_eq!(d, i64::try_from(expected).expect("fits"));
+            assert_eq!(t, Timestamp::new(expected));
+            assert_eq!(r, Diff::ONE);
+            expected += 1;
+        }
+        assert_eq!(expected, count);
     }
 }

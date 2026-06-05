@@ -254,6 +254,7 @@ impl ConnectionContext {
 pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaConnection<C>),
     Csr(CsrConnection<C>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<C>),
     Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
     Aws(AwsConnection),
@@ -270,6 +271,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
         match self {
             Connection::Kafka(kafka) => Connection::Kafka(kafka.into_inline_connection(r)),
             Connection::Csr(csr) => Connection::Csr(csr.into_inline_connection(r)),
+            Connection::GlueSchemaRegistry(glue) => {
+                Connection::GlueSchemaRegistry(glue.into_inline_connection(r))
+            }
             Connection::Postgres(pg) => Connection::Postgres(pg.into_inline_connection(r)),
             Connection::Ssh(ssh) => Connection::Ssh(ssh),
             Connection::Aws(aws) => Connection::Aws(aws),
@@ -291,6 +295,7 @@ impl<C: ConnectionAccess> Connection<C> {
         match self {
             Connection::Kafka(conn) => conn.validate_by_default(),
             Connection::Csr(conn) => conn.validate_by_default(),
+            Connection::GlueSchemaRegistry(conn) => conn.validate_by_default(),
             Connection::Postgres(conn) => conn.validate_by_default(),
             Connection::Ssh(conn) => conn.validate_by_default(),
             Connection::Aws(conn) => conn.validate_by_default(),
@@ -312,6 +317,9 @@ impl Connection<InlinedConnection> {
         match self {
             Connection::Kafka(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Csr(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::GlueSchemaRegistry(conn) => {
+                conn.validate(id, storage_configuration).await?
+            }
             Connection::Postgres(conn) => {
                 conn.validate(id, storage_configuration).await?;
             }
@@ -375,6 +383,15 @@ impl Connection<InlinedConnection> {
         match self {
             Self::Csr(conn) => conn,
             o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
+
+    pub fn unwrap_glue_schema_registry(
+        self,
+    ) -> <InlinedConnection as ConnectionAccess>::GlueSchemaRegistry {
+        match self {
+            Self::GlueSchemaRegistry(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS Glue Schema Registry connection"),
         }
     }
 
@@ -1478,9 +1495,9 @@ impl CsrConnection {
                     .connect(
                         storage_configuration,
                         host,
-                        // Default to the default http port, but this
-                        // could default to 8081...
-                        self.url.port().unwrap_or(80),
+                        // Honor the URL scheme's default port (443 for https,
+                        // 80 for http) if no explicit port was provided.
+                        self.url.port_or_known_default().unwrap_or(80),
                         in_task,
                     )
                     .await
@@ -1574,6 +1591,92 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
             if !compatible {
                 tracing::warn!(
                     "CsrConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A connection to an AWS Glue Schema Registry.
+///
+/// AWS credentials, region, and endpoint are inherited from the referenced
+/// [`AwsConnection`]; this struct only carries the per-registry settings.
+///
+/// NOTE: Stage 1 of the GSR rollout. The client crate
+/// (`mz-aws-glue-schema-registry`) does not exist yet; `validate` is a
+/// no-op until Stage 3 retrofits a real `GetRegistry` ping. The connection
+/// can be created and inspected, but cannot yet be attached to a source or
+/// sink.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct GlueSchemaRegistryConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The referenced AWS connection that supplies credentials, region, and
+    /// (optional) endpoint.
+    pub aws_connection: AwsConnectionReference<C>,
+    /// The Glue Schema Registry name within the AWS account/region.
+    pub registry_name: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<GlueSchemaRegistryConnection, R>
+    for GlueSchemaRegistryConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> GlueSchemaRegistryConnection {
+        let GlueSchemaRegistryConnection {
+            aws_connection,
+            registry_name,
+        } = self;
+        GlueSchemaRegistryConnection {
+            aws_connection: aws_connection.into_inline_connection(&r),
+            registry_name,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> GlueSchemaRegistryConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        // Stage 1 of the AWS Glue Schema Registry rollout: the client crate
+        // does not exist yet, and the no-op `validate` below succeeds
+        // unconditionally. Default-validating preserves the API contract so
+        // that Stage 3's real `GetRegistry` ping slots in without
+        // behavioral change.
+        true
+    }
+}
+
+impl GlueSchemaRegistryConnection {
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        _storage_configuration: &StorageConfiguration,
+    ) -> Result<(), anyhow::Error> {
+        // Stage 1: no-op. Real validation arrives in Stage 3 when the
+        // Glue client crate exists. Until then a `CREATE CONNECTION`
+        // succeeds even against a registry that doesn't exist; the
+        // failure will surface on first use (which is itself gated until
+        // source/sink integration lands in Stages 4/5).
+        std::future::ready(Ok(())).await
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for GlueSchemaRegistryConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let GlueSchemaRegistryConnection {
+            registry_name,
+            // The referenced AWS connection itself may be swapped; matches
+            // the permissive policy of MySqlConnection / SqlServerConnection.
+            aws_connection: _,
+        } = self;
+
+        let compatibility_checks = [(registry_name == &other.registry_name, "registry_name")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "GlueSchemaRegistryConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );

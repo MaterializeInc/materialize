@@ -355,6 +355,7 @@ impl CatalogState {
             prepared_statements: Some(session.prepared_statements()),
             portals: Some(session.portals()),
             notices_tx: session.retain_notice_transmitter(),
+            restrict_to_user_objects: session.vars().restrict_to_user_objects(),
         }
     }
 
@@ -378,6 +379,7 @@ impl CatalogState {
             prepared_statements: None,
             portals: None,
             notices_tx,
+            restrict_to_user_objects: false,
         }
     }
 
@@ -2770,6 +2772,7 @@ impl ConnectionResolver for CatalogState {
             Kafka(conn) => Kafka(conn.into_inline_connection(self)),
             Postgres(conn) => Postgres(conn.into_inline_connection(self)),
             Csr(conn) => Csr(conn.into_inline_connection(self)),
+            GlueSchemaRegistry(conn) => GlueSchemaRegistry(conn.into_inline_connection(self)),
             Ssh(conn) => Ssh(conn),
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),

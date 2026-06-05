@@ -71,8 +71,6 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_from_remote = true
-
 > CREATE TABLE copy_ssrf_target (a text, b text)
 
 # COPY FROM rejects non-http(s) schemes outright.
@@ -98,6 +96,41 @@ contains:Address resolved to a private IP
 # Cloud instance metadata service is the canonical SSRF target. 169.254/16 is
 # link-local and must be rejected.
 ! COPY INTO copy_ssrf_target FROM 'http://169.254.169.254/latest/meta-data/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# Alternative encodings of 169.254.169.254. The WHATWG URL Standard normalizes
+# decimal-integer, hex, octal, and mixed-notation IPv4 literals, so they all
+# resolve to the same link-local address and must be blocked.
+! COPY INTO copy_ssrf_target FROM 'http://2852039166/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://0xa9fea9fe/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://025177524776/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://0251.0376.0251.0376/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://0xa9.0xfe.0xa9.0xfe/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://169.16689662/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://169.254.0xa9fe/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# IPv6-mapped forms of the metadata IP
+! COPY INTO copy_ssrf_target FROM 'http://[::ffff:a9fe:a9fe]/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://[::ffff:169.254.169.254]/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# EC2 metadata alternate IPv6 address (falls in fc00::/7 ULA range)
+! COPY INTO copy_ssrf_target FROM 'http://[fd00:ec2::254]/' (FORMAT CSV);
 contains:Address resolved to a private IP
 
 # Hostname resolving to loopback exercises the reqwest custom DNS resolver
@@ -135,6 +168,47 @@ contains:Address resolved to a private IP
     ACCESS KEY ID = 'unused',
     SECRET ACCESS KEY = SECRET aws_ssrf_secret,
     ENDPOINT = 'http://169.254.169.254/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+# Alternative metadata IP encodings via AWS endpoint
+! CREATE CONNECTION aws_ssrf_endpoint_decimal TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://2852039166/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_hex TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://0xa9fea9fe/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_octal TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://025177524776/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_ipv6_mapped TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://[::ffff:a9fe:a9fe]/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_ec2_v6 TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://[fd00:ec2::254]/',
     REGION = 'us-east-1'
   ) WITH (VALIDATE = true);
 contains:Address resolved to a private IP

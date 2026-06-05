@@ -29,10 +29,11 @@
   content: |
     ### Install using Terraform Modules
 
-    {{< tip >}}
-    The Terraform modules are provided as examples. They are not required for
-    installing Materialize.
-    {{< /tip >}}
+    {{< note >}}
+
+    {{< self-managed/terraform-disclaimer >}}
+
+    {{< /note >}}
 
     |  Guide         | Description  |
     | ------------- | -------|
@@ -46,10 +47,11 @@
 
     ### Install using Legacy Terraform Modules
 
-    {{< tip >}}
-    The Terraform modules are provided as examples. They are not required for
-    installing Materialize.
-    {{< /tip >}}
+    {{< note >}}
+
+    {{< self-managed/terraform-disclaimer >}}
+
+    {{< /note >}}
 
     |  Guide         | Description  |
     | -------------  | ----------- |

@@ -712,6 +712,7 @@ async fn test_auth_base_require_tls_frontegg() {
         permissions: Vec::new(),
         token_type: ClaimTokenType::UserToken,
         metadata: None,
+        unknown_claims: Default::default(),
     };
     let frontegg_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
@@ -1390,7 +1391,12 @@ async fn test_auth_base_require_tls_oidc() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
@@ -1404,7 +1410,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1434,7 +1440,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Disable,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -1457,9 +1463,11 @@ async fn test_auth_base_require_tls_oidc() {
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
-                password: Some(Cow::Borrowed("invalid-jwt-token")),
+                password: Some(Cow::Borrowed(
+                    "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LTEifQ.eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0.invalidsig",
+                )),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "failed to validate JWT");
@@ -1472,7 +1480,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&expired_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "authentication credentials have expired");
@@ -1485,7 +1493,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_user_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "wrong user");
@@ -1498,7 +1506,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_issuer_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid issuer");
@@ -1584,6 +1592,7 @@ async fn test_auth_oidc_audience_validation() {
             Some(oidc_server.issuer),
             Some("sub".to_string()),
             Some(expected_audiences.clone()),
+            None,
         )
         .start()
         .await;
@@ -1598,7 +1607,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_all_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1608,7 +1617,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_one_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1618,7 +1627,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid audience");
@@ -1649,7 +1658,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid audience");
@@ -1715,7 +1724,12 @@ async fn test_auth_oidc_audience_optional() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
@@ -1729,7 +1743,7 @@ async fn test_auth_oidc_audience_optional() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1739,7 +1753,7 @@ async fn test_auth_oidc_audience_optional() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_aud_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1748,10 +1762,12 @@ async fn test_auth_oidc_audience_optional() {
     .await;
 }
 
-/// Tests OIDC password fallback.
+/// Tests password authentication when OIDC system parameters are also configured.
 ///
-/// This test verifies that when oidc_auth_enabled is false or not set,
-/// the OIDC authenticator falls back to password authentication.
+/// The harness `with_password_auth` call configures the SQL listener as
+/// `AuthenticatorKind::Password` even though OIDC issuer/claim system params are
+/// set; this test verifies that password auth still works in that combined
+/// configuration.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 async fn test_auth_oidc_password_fallback() {
@@ -1776,9 +1792,12 @@ async fn test_auth_oidc_password_fallback() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
-        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
-        .with_password_auth(Password("mz_system_password".to_owned()))
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            Some(Password("mz_system_password".to_owned())),
+        )
         .start()
         .await;
 
@@ -1803,26 +1822,16 @@ async fn test_auth_oidc_password_fallback() {
     let oidc_header_basic = make_header(Authorization::basic(oidc_user, user_password));
 
     run_tests(
-        "OIDC Password Fallback (oidc_auth_enabled=false or not set)",
+        "Password auth with OIDC params configured",
         &server,
         &[
-            // Password auth should work (oidc_auth_enabled not set, defaults to false)
+            // SQL Password auth should work when password isn't a JWT.
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(user_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Success,
-            },
-            // Explicitly set to false
-            TestCase::Pgwire {
-                user_to_auth_as: oidc_user,
-                user_reported_by_system: oidc_user,
-                password: Some(Cow::Borrowed(user_password)),
-                ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=false"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1926,6 +1935,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
             Some(oidc_server1.issuer.clone()),
             Some("sub".to_string()),
             Some(vec![audience1.to_string()]),
+            None,
         )
         .start()
         .await;
@@ -1945,7 +1955,6 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .ssl_mode(SslMode::Require)
         .user(oidc_user)
         .password(&token1)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_tls())
         .await;
     assert!(
@@ -1961,7 +1970,6 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .ssl_mode(SslMode::Require)
         .user(oidc_user)
         .password(&token2)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_tls())
         .await;
     assert!(
@@ -1993,7 +2001,6 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .ssl_mode(SslMode::Require)
         .user(oidc_user)
         .password(&token2)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_tls())
         .await;
     assert!(
@@ -2009,7 +2016,6 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .ssl_mode(SslMode::Require)
         .user(oidc_user)
         .password(&token1)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_tls())
         .await;
     assert!(
@@ -2063,6 +2069,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
             Some(oidc_server.issuer.clone()),
             Some("sub".to_string()),
             None,
+            None,
         )
         .start()
         .await;
@@ -2078,7 +2085,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
             user_reported_by_system: sub_user,
             password: Some(Cow::Borrowed(&token)),
             ssl_mode: SslMode::Require,
-            options: Some("--oidc_auth_enabled=true"),
+            options: None,
             configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
             assert: Assert::Success,
         }],
@@ -2101,7 +2108,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
             user_reported_by_system: email_user,
             password: Some(Cow::Borrowed(&token)),
             ssl_mode: SslMode::Require,
-            options: Some("--oidc_auth_enabled=true"),
+            options: None,
             configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
             assert: Assert::Success,
         }],
@@ -2142,7 +2149,7 @@ async fn test_auth_oidc_required_issuer() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(None, Some("sub".to_string()), None)
+        .with_oidc_auth(None, Some("sub".to_string()), None, None)
         .start()
         .await;
 
@@ -2156,7 +2163,7 @@ async fn test_auth_oidc_required_issuer() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "OIDC issuer is not configured");
@@ -2211,6 +2218,7 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
             Some(oidc_server.issuer),
             Some(invalid_claim.to_string()),
             None,
+            None,
         )
         .start()
         .await;
@@ -2225,7 +2233,7 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -2303,7 +2311,7 @@ async fn test_auth_oidc_fetch_error() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(Some(issuer), Some("sub".to_string()), None, None)
         .start()
         .await;
 
@@ -2317,7 +2325,7 @@ async fn test_auth_oidc_fetch_error() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "failed to fetch OIDC provider configuration");
@@ -4972,7 +4980,12 @@ async fn test_session_auth_does_not_override_credentials() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .start()
         .await;
@@ -5258,7 +5271,12 @@ async fn test_auth_autoprovision_oidc_audit_log() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
@@ -5268,7 +5286,6 @@ async fn test_auth_autoprovision_oidc_audit_log() {
         .ssl_mode(SslMode::Require)
         .user(oidc_user)
         .password(&jwt_token)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
@@ -5356,7 +5373,12 @@ async fn test_auth_oidc_non_login_role() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(oidc_server.issuer), Some("sub".to_string()), None)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
@@ -5379,7 +5401,7 @@ async fn test_auth_oidc_non_login_role() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
-                options: Some("--oidc_auth_enabled=true"),
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "role is not allowed to login");
@@ -5421,7 +5443,7 @@ async fn test_auth_oidc_non_login_role() {
             user_reported_by_system: oidc_user,
             password: Some(Cow::Borrowed(&jwt_token)),
             ssl_mode: SslMode::Require,
-            options: Some("--oidc_auth_enabled=true"),
+            options: None,
             configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
             assert: Assert::Success,
         }],
@@ -5478,6 +5500,7 @@ async fn setup_group_sync_test() -> (
             Some(oidc_server.issuer.clone()),
             Some("sub".to_string()),
             None,
+            None,
         )
         .start()
         .await;
@@ -5523,7 +5546,6 @@ async fn oidc_connect(
         .ssl_mode(SslMode::Require)
         .user(GROUP_SYNC_USER)
         .password(token)
-        .options("--oidc_auth_enabled=true")
         .with_tls(make_insecure_tls())
         .await
         .map_err(|e| anyhow::anyhow!(e))
@@ -5781,7 +5803,6 @@ async fn test_oidc_group_sync_fail_open_sends_notice() {
         .ssl_mode(SslMode::Require)
         .user(GROUP_SYNC_USER)
         .password(&token)
-        .options("--oidc_auth_enabled=true")
         .notice_callback(move |n| notice_tx.send(n).expect("notice channel open"))
         .with_tls(make_insecure_tls())
         .await

@@ -13,21 +13,8 @@ import React from "react";
 
 import { renderComponent } from "~/test/utils";
 
-import MaintainedObjects from "./MaintainedObjects";
-import {
-  MaintainedObjectListItem,
-  UseMaintainedObjectsListResult,
-} from "./queries";
-
-vi.mock("./queries", async () => {
-  const actual = await vi.importActual<typeof import("./queries")>("./queries");
-  return {
-    ...actual,
-    useMaintainedObjectsList: vi.fn(),
-  };
-});
-
-const { useMaintainedObjectsList } = await import("./queries");
+import MaintainedObjects, { MaintainedObjectsProps } from "./MaintainedObjects";
+import { MaintainedObjectListItem } from "./queries";
 
 const buildObject = (
   overrides: Partial<MaintainedObjectListItem>,
@@ -37,6 +24,7 @@ const buildObject = (
   schemaName: "public",
   databaseName: "materialize",
   objectType: "materialized-view",
+  sourceType: null,
   cluster: { id: "u1", name: "quickstart" },
   hydratedReplicas: 1,
   totalReplicas: 1,
@@ -71,27 +59,24 @@ const eventsSrc = buildObject({
   totalReplicas: 1,
 });
 
-const buildResult = (
-  overrides?: Partial<UseMaintainedObjectsListResult>,
-): UseMaintainedObjectsListResult => ({
-  data: [ordersMv, inventoryIdx, eventsSrc],
+const buildProps = (
+  overrides?: Partial<MaintainedObjectsProps>,
+): MaintainedObjectsProps => ({
+  objects: [ordersMv, inventoryIdx, eventsSrc],
   isLoading: false,
   lagReady: true,
   hydrationReady: true,
-  isError: false,
+  lookbackMinutes: 15,
+  setLookbackMinutes: vi.fn(),
   ...overrides,
 });
 
-const renderMaintainedObjects = () =>
-  renderComponent(<MaintainedObjects />, {
+const renderMaintainedObjects = (overrides?: Partial<MaintainedObjectsProps>) =>
+  renderComponent(<MaintainedObjects {...buildProps(overrides)} />, {
     initialRouterEntries: ["/maintained-objects"],
   });
 
 describe("MaintainedObjects", () => {
-  beforeEach(() => {
-    vi.mocked(useMaintainedObjectsList).mockReturnValue(buildResult());
-  });
-
   it("renders the list of maintained objects", async () => {
     await renderMaintainedObjects();
 
@@ -155,10 +140,7 @@ describe("MaintainedObjects", () => {
   });
 
   it("handles empty list", async () => {
-    vi.mocked(useMaintainedObjectsList).mockReturnValue(
-      buildResult({ data: [] }),
-    );
-    await renderMaintainedObjects();
+    await renderMaintainedObjects({ objects: [] });
 
     expect(
       await screen.findByText("No objects match the selected filters"),

@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/refresh_schedule.rs
-revision: 4267863081
+revision: 2d7058372f
 ---
 
 # mz-repr::refresh_schedule

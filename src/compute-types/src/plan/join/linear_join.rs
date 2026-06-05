@@ -10,7 +10,7 @@
 //! Planning of linear joins.
 
 use mz_expr::{
-    JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
+    Columns, JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
     permutation_for_arrangement,
 };
 use serde::{Deserialize, Serialize};

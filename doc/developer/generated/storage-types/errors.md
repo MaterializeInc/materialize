@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/errors.rs
-revision: d7ba94d0f3
+revision: eb1148a599
 ---
 
 # storage-types::errors

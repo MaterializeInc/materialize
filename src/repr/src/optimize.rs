@@ -11,13 +11,15 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {
-        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub struct OptimizerFeatures {
             $(pub $feature: $type),*
         }
@@ -95,11 +97,6 @@ optimizer_feature_flags!({
     // Use `EquivalenceClassesWithholdingErrors` instead of raw
     // `EquivalenceClasses` during eq prop for joins.
     enable_eq_classes_withholding_errors: bool,
-    enable_guard_subquery_tablefunc: bool,
-    // Enable consolidation of unions that happen immediately after negate.
-    //
-    // The refinement happens in the LIR ⇒ LIR phase.
-    enable_consolidate_after_union_negate: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
     // Enable Lattice-based fixpoint iteration on LetRec nodes in the
@@ -138,6 +135,8 @@ optimizer_feature_flags!({
     enable_simplify_quantified_comparisons: bool,
     // See the feature flag of the same name.
     enable_coalesce_case_transform: bool,
+    // See the feature flag of the same name.
+    enable_will_distinct_propagation: bool,
 });
 
 /// A trait used to implement layered config construction.

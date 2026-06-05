@@ -32,7 +32,7 @@ import {
   PaginationState,
 } from "@tanstack/react-table";
 import React from "react";
-import { Link as RouterLink, useLocation } from "react-router-dom";
+import { Link as RouterLink, useLocation, useNavigate } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
@@ -47,7 +47,6 @@ import {
 } from "~/components/Table/useUniversalTable";
 import TextLink from "~/components/TextLink";
 import { useSyncObjectToSearchParams } from "~/hooks/useSyncObjectToSearchParams";
-import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import { ChevronDownIcon, ClockIcon } from "~/icons";
 import {
   MainContentContainer,
@@ -65,6 +64,7 @@ import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { formatIntervalShort } from "~/utils/format";
 
+import { LOOKBACK_OPTIONS } from "./constants";
 import { FilterChips } from "./FilterChips";
 import {
   ClusterFilterPanel,
@@ -83,22 +83,9 @@ import {
   objectTypeFilterFn,
   STATUS_COLOR_SCHEMES,
 } from "./filters";
-import { MaintainedObjectListItem, useMaintainedObjectsList } from "./queries";
+import { MaintainedObjectListItem } from "./queries";
 
 const PAGE_SIZE = 25;
-
-// `mz_wallclock_global_lag_recent_history` retains up to 24 hours.
-// "Live" is its own option (>1min / mz_now()-filtered), keyed at 1 minute.
-const LOOKBACK_OPTIONS: Record<string, string> = {
-  "1": "Live",
-  "5": "Past 5 minutes",
-  "15": "Past 15 minutes",
-  "30": "Past 30 minutes",
-  "60": "Past 1 hour",
-  "180": "Past 3 hours",
-  "360": "Past 6 hours",
-  "1440": "Past 24 hours",
-};
 
 /** Compact label for the Live tag, mirroring the selected lookback window. */
 const LOOKBACK_SHORT_LABELS: Record<string, string> = {
@@ -232,7 +219,15 @@ const ClusterCell = ({
   if (!row.cluster) return "-";
   const path = absoluteClusterPath(regionSlug, row.cluster);
   return (
-    <TextLink as={RouterLink} to={path} textStyle="text-ui-med" noOfLines={1}>
+    <TextLink
+      as={RouterLink}
+      to={path}
+      target="_blank"
+      rel="noopener noreferrer"
+      textStyle="text-ui-med"
+      noOfLines={1}
+      onClick={(e) => e.stopPropagation()}
+    >
       {row.cluster.name}
     </TextLink>
   );
@@ -369,24 +364,26 @@ const columns = [
   }),
 ];
 
-const MaintainedObjects = () => {
+export interface MaintainedObjectsProps {
+  objects: MaintainedObjectListItem[];
+  isLoading: boolean;
+  lagReady: boolean;
+  hydrationReady: boolean;
+  lookbackMinutes: number;
+  setLookbackMinutes: React.Dispatch<React.SetStateAction<number>>;
+}
+
+const MaintainedObjects = ({
+  objects,
+  isLoading,
+  lagReady,
+  hydrationReady,
+  lookbackMinutes: timePeriodMinutes,
+  setLookbackMinutes: setTimePeriodMinutes,
+}: MaintainedObjectsProps) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const regionSlug = useRegionSlug();
-
-  const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
-    localStorageKey: "maintained-objects-time-period",
-    defaultValue: "1",
-    timePeriodOptions: LOOKBACK_OPTIONS,
-  });
-
-  const {
-    data: objects,
-    isLoading,
-    lagReady,
-    hydrationReady,
-  } = useMaintainedObjectsList({
-    lookbackMinutes: timePeriodMinutes,
-  });
 
   const [initialState] = React.useState(() =>
     getInitialTableState(location.search),
@@ -510,6 +507,7 @@ const MaintainedObjects = () => {
                 table={table}
                 variant="linkable"
                 rowSx={{ cursor: "pointer" }}
+                onRowClick={(row) => navigate(row.id)}
                 data-testid="maintained-objects-table"
               />
             </Box>

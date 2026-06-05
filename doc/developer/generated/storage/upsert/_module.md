@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/upsert.rs
-revision: 3da45d073d
+revision: 9727769b0d
 ---
 
 # mz-storage::upsert

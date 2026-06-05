@@ -6,7 +6,7 @@ menu:
     parent: integrations
     name: "`mz-debug` Debug tool"
     identifier: mz-debug
-    weight: 7
+    weight: 90
 disable_list: true
 ---
 

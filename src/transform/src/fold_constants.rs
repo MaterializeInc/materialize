@@ -16,7 +16,7 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, RowComparator,
+    AggregateExpr, ColumnOrder, Eval, EvalError, MirRelationExpr, MirScalarExpr, RowComparator,
     TableFunc, UnaryFunc,
 };
 use mz_repr::{Datum, Diff, ReprRelationType, Row, RowArena};

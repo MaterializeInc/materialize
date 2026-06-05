@@ -22,7 +22,7 @@ elements within each group according to some ordering.
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
+{{% include-headless "/headless/materialize-window-functions" %}}
 
 {{</ callout >}}
 
@@ -47,20 +47,7 @@ with another subquery that specifies the ordering and the limit K.
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a subquery to
-[SELECT DISTINCT](/sql/select/#select-distinct) on the grouping key (e.g.,
-`fieldA`), and perform a [LATERAL](/sql/select/join/#lateral-subqueries) join
-(by the grouping key `fieldA`) with another subquery that specifies the ordering
-(e.g., `fieldZ [ASC|DESC]`) and the limit K.
-
-```mzsql
-SELECT fieldA, fieldB, ...
-FROM (SELECT DISTINCT fieldA FROM tableA) grp,
-     LATERAL (SELECT fieldB, ... , fieldZ FROM tableA
-        WHERE fieldA = grp.fieldA
-        ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
-ORDER BY fieldA, fieldZ ... ;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-ge-1" field="syntax_idiomatic" %}}
 
 </td>
 </tr>
@@ -68,24 +55,8 @@ ORDER BY fieldA, fieldZ ... ;
 <td><red>Anti-pattern</red></td>
 <td>
 
-<red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-ge-1" field="syntax_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT fieldA, fieldB, ...
-FROM (
-   SELECT fieldA, fieldB, ... , fieldZ,
-      ROW_NUMBER() OVER (PARTITION BY fieldA
-      ORDER BY fieldZ ... ) as rn
-   FROM tableA)
-WHERE rn <= K     -- K is a number >= 1
-ORDER BY fieldA, fieldZ ...;
-```
-
-</div>
 </td>
 </tr>
 </tbody>
@@ -132,13 +103,8 @@ pattern, specifying 1 as the limit.
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-```mzsql
-SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
-FROM tableA
-ORDER BY fieldA, fieldZ ... ;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-eq-1" field="syntax_idiomatic" %}}
 
-</div>
 </td>
 </tr>
 
@@ -146,24 +112,8 @@ ORDER BY fieldA, fieldZ ... ;
 <td><red>Anti-pattern</red></td>
 <td>
 
-<red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-eq-1" field="syntax_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT fieldA, fieldB, ...
-FROM (
-   SELECT fieldA, fieldB, ... , fieldZ,
-      ROW_NUMBER() OVER (PARTITION BY fieldA
-      ORDER BY fieldZ ... ) as rn
-   FROM tableA)
-WHERE rn = 1
-ORDER BY fieldA, fieldZ ...;
-```
-
-</div>
 </td>
 </tr>
 </tbody>
@@ -215,14 +165,7 @@ DESC`) and limits its results to 3 (`LIMIT 3`).
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-```mzsql
-SELECT order_id, item, subtotal
-FROM (SELECT DISTINCT order_id FROM orders_view) grp,
-     LATERAL (SELECT item, subtotal FROM orders_view
-        WHERE order_id = grp.order_id
-        ORDER BY subtotal DESC LIMIT 3)
-ORDER BY order_id, subtotal DESC;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-ge-1" field="example_idiomatic" %}}
 
 </td>
 </tr>
@@ -231,23 +174,8 @@ ORDER BY order_id, subtotal DESC;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-ge-1" field="example_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern --
-SELECT order_id, item, subtotal
-FROM (
-   SELECT order_id, item, subtotal,
-      ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY subtotal DESC) as rn
-   FROM orders_view)
-WHERE rn <= 3
-ORDER BY order_id, subtotal DESC;
-```
-
-</div>
 </td>
 </tr>
 
@@ -274,11 +202,7 @@ ON`/grouping key, then the descending subtotal). [^1]
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-```mzsql
-SELECT DISTINCT ON(order_id) order_id, item, subtotal
-FROM orders_view
-ORDER BY order_id, subtotal DESC;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-eq-1" field="example_idiomatic" %}}
 
 </td>
 </tr>
@@ -286,23 +210,8 @@ ORDER BY order_id, subtotal DESC;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="top-k-k-eq-1" field="example_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern --
-SELECT order_id, item, subtotal
-FROM (
-   SELECT order_id, item, subtotal,
-      ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY subtotal DESC) as rn
-   FROM orders_view)
-WHERE rn = 1
-ORDER BY order_id, subtotal DESC;
-```
-
-</div>
 </td>
 </tr>
 </tbody>

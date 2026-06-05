@@ -17,6 +17,10 @@ import {
   useAuthUser,
   type User,
 } from "~/external-library-wrappers/frontegg";
+import {
+  useAuth as useOidcAuth,
+  useOidcManagerQuery,
+} from "~/external-library-wrappers/oidc";
 
 import { CloudAppConfig, SelfManagedAppConfig } from "./AppConfig";
 import { useAppConfig } from "./useAppConfig";
@@ -36,6 +40,19 @@ export type CloudRuntimeConfig =
   | CloudFronteggRuntimeConfig
   | CloudImpersonationRuntimeConfig;
 
+type SelfManagedOidcAvailableRuntimeConfig = {
+  isOidcAvailable: true;
+  auth: NonNullable<ReturnType<typeof useOidcAuth>>;
+};
+
+type SelfManagedOidcUnavailableRuntimeConfig = {
+  isOidcAvailable: false;
+};
+
+export type SelfManagedRuntimeConfig =
+  | SelfManagedOidcAvailableRuntimeConfig
+  | SelfManagedOidcUnavailableRuntimeConfig;
+
 type CloudConfigElementRenderProps = {
   appConfig: Readonly<CloudAppConfig>;
   runtimeConfig: CloudRuntimeConfig;
@@ -43,6 +60,7 @@ type CloudConfigElementRenderProps = {
 
 type SelfManagedConfigElementRenderProps = {
   appConfig: Readonly<SelfManagedAppConfig>;
+  runtimeConfig: SelfManagedRuntimeConfig;
 };
 
 type CloudConfigElementFunction = (
@@ -97,6 +115,47 @@ const CloudImpersonationConfigElementWrapper = ({
   });
 };
 
+// Only mounted when the OIDC manager has initialized, which implies
+// OidcProviderWrapper has mounted an AuthProvider in scope.
+const SelfManagedOidcAvailableConfigElementWrapper = ({
+  selfManagedAppConfig,
+  selfManagedConfigElement,
+}: {
+  selfManagedAppConfig: Readonly<SelfManagedAppConfig>;
+  selfManagedConfigElement: SelfManagedConfigElementFunction;
+}) => {
+  const auth = useOidcAuth();
+
+  return selfManagedConfigElement({
+    appConfig: selfManagedAppConfig,
+    runtimeConfig: { isOidcAvailable: true, auth },
+  });
+};
+
+const SelfManagedConfigElementWrapper = ({
+  selfManagedAppConfig,
+  selfManagedConfigElement,
+}: {
+  selfManagedAppConfig: Readonly<SelfManagedAppConfig>;
+  selfManagedConfigElement: SelfManagedConfigElementFunction;
+}) => {
+  const { data: oidcManager } = useOidcManagerQuery();
+
+  if (!oidcManager) {
+    return selfManagedConfigElement({
+      appConfig: selfManagedAppConfig,
+      runtimeConfig: { isOidcAvailable: false },
+    });
+  }
+
+  return (
+    <SelfManagedOidcAvailableConfigElementWrapper
+      selfManagedAppConfig={selfManagedAppConfig}
+      selfManagedConfigElement={selfManagedConfigElement}
+    />
+  );
+};
+
 // A component that controls which component to render based on the deployment mode.
 // This is used to avoid having to do a discriminant check throughout the application.
 //
@@ -136,7 +195,12 @@ export const AppConfigSwitch = ({
   }
 
   if (typeof selfManagedConfigElement === "function") {
-    return selfManagedConfigElement({ appConfig });
+    return (
+      <SelfManagedConfigElementWrapper
+        selfManagedAppConfig={appConfig}
+        selfManagedConfigElement={selfManagedConfigElement}
+      />
+    );
   }
 
   return selfManagedConfigElement;

@@ -3,7 +3,6 @@ source: src/expr/src/scalar/func/binary.rs
 expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError> {\n    Ok(Some(a + b))\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible3(a: f32, 
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Fallible3;
 impl crate::func::binary::EagerBinaryFunc for Fallible3 {
     type Input<'a> = (f32, f32);

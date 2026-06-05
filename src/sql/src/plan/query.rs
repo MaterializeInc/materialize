@@ -52,8 +52,8 @@ use mz_expr::func::variadic::{
 };
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME, RowSetFinishing,
-    TableFunc, func as expr_func,
+    Eval, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME,
+    RowSetFinishing, TableFunc, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -3978,10 +3978,22 @@ fn plan_using_constraint(
                 column_name.clone().to_string(),
             ));
 
-            // Should be safe to use either `lhs` or `rhs` here since the column
-            // is available in both scopes and must have the same type of the new item.
-            // We (arbitrarily) choose the left name.
-            map_exprs.push(HirScalarExpr::named_column(lhs, Arc::clone(&lhs_name)));
+            // The aliased column `alias.col` must take the same value as the
+            // unqualified join output column `col`. For INNER and LEFT joins
+            // that's the LHS value, for RIGHT joins it's the RHS value, and
+            // for FULL OUTER joins it's COALESCE(lhs, rhs). Using `lhs`
+            // unconditionally produces wrong results for RIGHT/FULL joins on
+            // rows where the LHS side is NULL.
+            let alias_expr = match kind {
+                JoinKind::LeftOuter { .. } | JoinKind::Inner { .. } => {
+                    HirScalarExpr::named_column(lhs, Arc::clone(&lhs_name))
+                }
+                JoinKind::RightOuter => HirScalarExpr::named_column(rhs, Arc::clone(&rhs_name)),
+                JoinKind::FullOuter => {
+                    HirScalarExpr::call_variadic(Coalesce, vec![expr1.clone(), expr2.clone()])
+                }
+            };
+            map_exprs.push(alias_expr);
         }
 
         join_exprs.push(expr1.call_binary(expr2, expr_func::Eq));

@@ -38,11 +38,9 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     SshBastionHost(allow_any_key=True),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
@@ -200,7 +198,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "postgres",
         "mysql",
         "minio",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "ssh-bastion-host",

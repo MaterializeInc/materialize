@@ -91,6 +91,7 @@ members = [
     "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -215,6 +216,7 @@ default-members = [
     "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -258,7 +260,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -270,7 +272,7 @@ arrayvec = "0.7.6"
 arrow = { version = "57", default-features = false }
 arrow-ipc = "57"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -302,12 +304,12 @@ bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stabl
 byteorder = "1.5"
 bytes = "1.11.1"
 bytesize = "2.3.1"
-cc = "1.2.59"
+cc = "1.2.62"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
-clap = { version = "4.5.60", features = ["derive"] }
-columnar = "0.12.1"
+clap = { version = "4.6.1", features = ["derive"] }
+columnar = "0.13.0"
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
@@ -326,14 +328,14 @@ datadriven = "0.9.0"
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.23.0"
-differential-dogs3 = "0.23.0"
+differential-dataflow = "0.24.0"
+differential-dogs3 = "0.24.0"
 digest = "0.10.7"
 dirs = "6.0.0"
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
 dynfmt = { version = "0.1.5", features = ["curly"] }
-either = "1.15.0"
+either = "1.16.0"
 encoding = "0.2.0"
 enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
@@ -343,9 +345,9 @@ fancy-regex = "0.17.0"
 flate2 = "1.1.9"
 foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
 futures = "0.3.32"
-futures-core = "0.3.31"
-futures-task = "0.3.31"
-futures-util = "0.3.31"
+futures-core = "0.3.32"
+futures-task = "0.3.32"
+futures-util = "0.3.32"
 glob = "0.3.3"
 globset = "0.4.18"
 governor = "0.10.1"
@@ -383,8 +385,9 @@ k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
 kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 lgalloc = "0.6.0"
-libc = "0.2.184"
+libc = "0.2.186"
 lru = "0.16.3"
+lz4_flex = { version = "0.12.1", default-features = false, features = ["frame", "std"] }
 maplit = "1.0.2"
 mappings = "0.7.2"
 md-5 = "0.10.6"
@@ -392,16 +395,19 @@ mime = "0.3.16"
 murmur2 = "0.1.0"
 mysql_async = { version = "0.36.2", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
-native-tls = { version = "0.2.14", features = ["alpn"] }
-nix = { version = "0.31.2", features = ["fs", "signal"] }
+# Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
+# 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
+# the `mz` CLI and with `system-configuration` (used by `hyper-util`).
+native-tls = { version = "=0.2.15", features = ["alpn"] }
+nix = { version = "0.31.3", features = ["fs", "signal"] }
 num = "0.4.3"
 num-traits = "0.2.15"
 num_cpus = "1.17.0"
 num_enum = "0.7.6"
-open = "5.3.4"
+open = "5.3.5"
 openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
-openssl = { version = "0.10.79", features = ["vendored"] }
+openssl = { version = "0.10.80", features = ["vendored"] }
 openssl-probe = "0.1.6"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
@@ -410,11 +416,11 @@ opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
-paste = "1.0.11"
+paste = "1.0.15"
 pem = "3.0.6"
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_codegen = "0.13.1"
-pin-project = "1.1.11"
+pin-project = "1.1.13"
 postgres = "0.19.12"
 postgres-openssl = "0.5.2"
 postgres-protocol = "0.6.9"
@@ -460,13 +466,13 @@ scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
 semver = "1.0.28"
-sentry = { version = "0.46.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = "0.46.1"
-sentry-tracing = "0.46.1"
+sentry = { version = "0.48.2", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
+sentry-panic = "0.48.2"
+sentry-tracing = "0.48.2"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
 serde_bytes = "0.11.19"
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 serde_plain = "1.0.2"
 serde_repr = "0.1.20"
 serde_urlencoded = "0.7.1"
@@ -484,11 +490,11 @@ stacker = "0.1.24"
 static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
-syn = { version = "2.0.106", features = ["extra-traits", "full", "parsing", "printing"] }
+syn = { version = "2.0.117", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.20.0"
-tar = "0.4.44"
+tar = "0.4.46"
 tempfile = "3.27.0"
 termcolor = "1.4.1"
 thiserror = "2.0.18"
@@ -496,8 +502,8 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.29.0"
-tokio = { version = "1.52.1", features = ["full", "test-util"] }
+timely = "0.30.0"
+tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
@@ -507,11 +513,11 @@ tokio-test = "0.4.5"
 tokio-util = "0.7.18"
 toml = "0.8.22"
 toml_edit = { version = "0.22.26", features = ["serde"] }
-tonic = { version = "0.14.2", features = ["gzip", "transport"] }
-tonic-prost = "0.14.5"
-tonic-prost-build = "0.14.5"
+tonic = { version = "0.14.6", features = ["gzip", "transport"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
-tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
 tower-sessions = "0.14.0"
 tower-sessions-memory-store = "0.14.0"
@@ -521,8 +527,8 @@ tracing-core = "0.1.35"
 tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
 tungstenite = "0.28.0"
-turmoil = "0.7.1"
-uncased = "0.9.7"
+turmoil = "0.7.2"
+uncased = "0.9.10"
 unicode-normalization = "0.1.25"
 unicode-width = "0.2.2"
 url = "2.5.8"

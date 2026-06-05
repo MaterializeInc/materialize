@@ -3,7 +3,6 @@ source: src/expr/src/scalar/func/binary.rs
 expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {\n    a.unwrap_or_default() + b.unwrap_or_default()\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn infallible2(a: Opt
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Infallible2;
 impl crate::func::binary::EagerBinaryFunc for Infallible2 {
     type Input<'a> = (Option<f32>, Option<f32>);

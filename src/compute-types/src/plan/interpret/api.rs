@@ -393,6 +393,7 @@ where
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -406,7 +407,11 @@ where
                         mfp_after,
                     ))
                 }
-                TopK { input, top_k_plan } => {
+                TopK {
+                    input,
+                    top_k_plan,
+                    temporal_bucketing_strategy: _,
+                } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -430,6 +435,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
+                    temporal_bucketing_strategies: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs = inputs
@@ -676,6 +682,7 @@ where
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -693,7 +700,11 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                TopK { input, top_k_plan } => {
+                TopK {
+                    input,
+                    top_k_plan,
+                    temporal_bucketing_strategy: _,
+                } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -731,6 +742,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
+                    temporal_bucketing_strategies: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs

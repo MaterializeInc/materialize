@@ -20,18 +20,20 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
-    TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Eval, Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -46,10 +48,10 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
+use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -921,7 +923,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             return self.as_specific_collection(key.as_deref(), config_set);
         }
 
-        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
+        let max_demand = mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
         mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
@@ -1004,7 +1006,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
-        // Track whether we applied temporal bucketing, to avoid double-bucketing.
+        // Track whether we already applied temporal bucketing in this call, to
+        // avoid bucketing the same updates twice.
         let mut bucketed = false;
 
         // True iff at least one new arrangement will actually be built below. Bucketing only
@@ -1023,8 +1026,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
-            let oks = if will_create_arrangement
-                && matches!(strategy, ArrangementStrategy::TemporalBucketing)
+            let effective_strategy = if will_create_arrangement {
+                strategy
+            } else {
+                ArrangementStrategy::Direct
+            };
+            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
                 && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
             {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
@@ -1051,8 +1058,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP
                 // → ArrangeBy flows.
-                let oks = if !bucketed
-                    && matches!(strategy, ArrangementStrategy::TemporalBucketing)
+                let effective_strategy = if bucketed {
+                    ArrangementStrategy::Direct
+                } else {
+                    strategy
+                };
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
                     && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
                 {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
@@ -1064,12 +1075,23 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     oks
                 };
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
+                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
+                    &name,
+                    oks,
+                    key.clone(),
+                    thinning.clone(),
+                    use_paged_path,
+                );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
-                    errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    errs_concat.mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >(
                         &format!("{}-errors", name),
                     );
                 self.arranged
@@ -1094,6 +1116,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
+        use_paged_path: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -1145,18 +1168,25 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             }
         });
 
-        let oks = ok_stream
-            .mz_arrange_core::<
+        let exchange =
+            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
+        let oks = if use_paged_path {
+            ok_stream.mz_arrange_core::<
                 _,
+                batcher::ColumnChunker<_>,
+                Col2ValPagedBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name)
+        } else {
+            ok_stream.mz_arrange_core::<
+                _,
+                batcher::Chunker<_>,
                 Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, T, Diff>,
-                ),
-                name
-            );
+            >(exchange, name)
+        };
         (
             oks,
             err_stream.as_collection(),

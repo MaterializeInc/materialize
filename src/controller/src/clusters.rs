@@ -798,6 +798,7 @@ impl Controller {
                 labels: BTreeMap::from([
                     ("replica-id".into(), replica_id.to_string()),
                     ("cluster-id".into(), cluster_id.to_string()),
+                    ("generation".into(), self.deploy_generation.to_string()),
                     ("type".into(), "cluster".into()),
                     ("replica-role".into(), role_label.into()),
                     ("workers".into(), location.allocation.workers.to_string()),
@@ -824,6 +825,15 @@ impl Controller {
                 // This provides the orchestrator with some label selectors that
                 // are used to constraint the scheduling of replicas, based on
                 // its internal configuration.
+                //
+                // Selectors include `generation` so that scheduling constraints
+                // (anti-affinity, topology spread) only consider pods of the same
+                // deploy generation. Otherwise, during a generation rollout, the
+                // new-generation pods would be constrained by the placement of
+                // old-generation pods that are about to be torn down, which can
+                // prevent the new pods from scheduling (e.g., when only one AZ
+                // has capacity but it is already occupied by an old-generation
+                // pod).
                 other_replicas_selector: vec![
                     LabelSelector {
                         label_name: "cluster-id".to_string(),
@@ -838,14 +848,28 @@ impl Controller {
                             value: replica_id.to_string(),
                         },
                     },
-                ],
-                replicas_selector: vec![LabelSelector {
-                    label_name: "cluster-id".to_string(),
-                    // Select ALL replicas.
-                    logic: LabelSelectionLogic::Eq {
-                        value: cluster_id.to_string(),
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
                     },
-                }],
+                ],
+                replicas_selector: vec![
+                    LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    },
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
+                    },
+                ],
                 disk_limit,
                 node_selector: location.allocation.selectors,
             },

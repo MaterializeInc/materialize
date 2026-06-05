@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/lib.rs
-revision: 4f4538b61a
+revision: 09fe656a55
 ---
 
 # mz-transform

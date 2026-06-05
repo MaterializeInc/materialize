@@ -83,7 +83,7 @@ impl RefreshSchedule {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RefreshEvery {
-    pub interval: Duration,
+    pub interval: Duration, // must be at least 1 ms
     pub aligned_to: Timestamp,
 }
 

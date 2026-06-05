@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 1.9.10 - 2026-05-20
+
+* Support unmanaged clusters in `deploy_init`. The deployment cluster
+  is now created by cloning the production cluster's replicas (including
+  `SIZE` and `AVAILABILITY ZONE`).
+
+## 1.9.9 - 2026-05-18
+
+* Add support for the `partition_by` configuration in materialized views,
+  which declares the internal storage order Materialize uses to sort the
+  underlying data into parts, enabling [filter pushdown](https://materialize.com/docs/transform-data/patterns/partition-by/#filter-pushdown)
+  for queries with selective filters on the listed columns (e.g.
+  `partition_by: ['col_a']`). See [`PARTITION BY`](https://materialize.com/docs/transform-data/patterns/partition-by/)
+  for the requirements and supported column types.
+
+* Fix a bug in the `materialized_view` materialization where combining
+  `refresh_interval`, `retain_history`, and contract constraints would emit
+  multiple `WITH (...)` blocks, producing invalid SQL. The macro now collects
+  all options and emits a single `WITH (...)` block, matching Materialize's
+  `CREATE MATERIALIZED VIEW` grammar.
+
 ## 1.9.8 - 2026-05-12
 
 * Automatically retry the atomic swap transaction in `deploy_promote` when

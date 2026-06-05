@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/case_literal.rs
-revision: 1c2d0f12f2
+revision: 40e5dd1af8
 ---
 
 # mz-expr::scalar::func::impls::case_literal

@@ -35,7 +35,8 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
+    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
+    test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -248,6 +249,7 @@ pub struct ConnCatalog<'a> {
     prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
     portals: Option<&'a BTreeMap<String, Portal>>,
     notices_tx: UnboundedSender<AdapterNotice>,
+    restrict_to_user_objects: bool,
 }
 
 impl ConnCatalog<'_> {
@@ -602,6 +604,28 @@ impl Catalog {
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         let commit_ts = self.storage().await.current_upper().await;
         self.allocate_user_id(commit_ts).await
+    }
+
+    /// Allocates a single durable id for a storage usage collection batch.
+    ///
+    /// Bumps the durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator by one and
+    /// returns the previous value. The bump is committed at `commit_ts`.
+    /// One id is shared by every row produced by a collection cycle (see
+    /// `Coordinator::storage_usage_update`), so the durable cost is one
+    /// allocator round-trip per cycle, not per shard.
+    pub async fn allocate_storage_usage_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<u64, Error> {
+        use mz_ore::collections::CollectionExt;
+
+        self.storage()
+            .await
+            .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, 1, commit_ts)
+            .await
+            .maybe_terminate("allocating storage usage id")
+            .map(|ids| ids.into_element())
+            .err_into()
     }
 
     /// Get the next user item ID without allocating it.
@@ -1673,6 +1697,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self.role_id
     }
 
+    fn restrict_to_user_objects(&self) -> bool {
+        self.restrict_to_user_objects
+    }
+
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
         self.prepared_statements
             .as_ref()
@@ -2232,7 +2260,7 @@ mod tests {
     use mz_catalog::builtin::{BUILTINS, Builtin, BuiltinType};
     use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError, test_bootstrap_args};
     use mz_controller_types::{ClusterId, ReplicaId};
-    use mz_expr::MirScalarExpr;
+    use mz_expr::{Eval, MirScalarExpr};
     use mz_ore::now::to_datetime;
     use mz_ore::{assert_err, assert_ok, soft_assert_eq_or_log, task};
     use mz_persist_client::PersistClient;

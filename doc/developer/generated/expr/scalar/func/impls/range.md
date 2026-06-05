@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/range.rs
-revision: 61475c0097
+revision: 40e5dd1af8
 ---
 
 # mz-expr::scalar::func::impls::range

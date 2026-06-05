@@ -10,7 +10,7 @@
 //! Transform column references in a `Map` into a `Project`.
 
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{Columns, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformCtx;
 

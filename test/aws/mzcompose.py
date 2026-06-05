@@ -94,7 +94,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
             ],
             environment_id=AWS_ENVIRONMENT_ID,
-            system_parameter_defaults={"enable_iceberg_sink": "true"},
         )
         with c.override(materialized):
             # (Re)start Materialize and enable AWS connections.
@@ -105,7 +104,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user="mz_system",
                 sql="""
                 ALTER SYSTEM SET enable_connection_validation_syntax = true;
-                ALTER SYSTEM SET enable_iceberg_sink = true;
                 ALTER SYSTEM SET enable_s3_tables_region_check = true;
                 """,
             )

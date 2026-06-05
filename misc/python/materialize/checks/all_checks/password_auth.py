@@ -86,3 +86,50 @@ class SaslAuth(Check):
                 $ postgres-execute connection=postgres://user2:password2@${testdrive.materialize-sasl-sql-addr}
                 SELECT * FROM materialize.schema2.t1
                 """))
+
+
+class AlterRoleCatalogCheck(Check):
+    def _can_run(self, e: Executor) -> bool:
+        # validate() queries mz_internal.mz_catalog_raw, which was introduced in v26.16.0.
+        return self.base_version >= MzVersion.parse_mz("v26.16.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive("> CREATE ROLE user_alter1 WITH LOGIN PASSWORD 'password';")
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER ROLE user_alter1 SUPERUSER;
+
+                > CREATE ROLE user_alter2 WITH LOGIN PASSWORD 'password';
+                """,
+                """
+                > DROP ROLE user_alter1;
+
+                > ALTER ROLE user_alter2 SUPERUSER;
+
+                > SELECT * FROM mz_roles WHERE name = 'user_alter1';
+
+                > CREATE ROLE user_alter3 WITH LOGIN PASSWORD 'password';
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > DROP ROLE IF EXISTS user_alter2;
+
+                > ALTER ROLE user_alter3 SUPERUSER;
+
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                SELECT * FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Role';
+
+                > SELECT * FROM mz_roles WHERE name = 'user_alter1';
+
+                > SELECT * FROM mz_roles WHERE name = 'user_alter2';
+
+                > SELECT name FROM mz_roles WHERE name = 'user_alter3';
+                user_alter3
+                """))

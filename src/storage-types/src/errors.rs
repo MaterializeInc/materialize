@@ -17,6 +17,7 @@ use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use prost::Message;
 use rdkafka::error::KafkaError;
@@ -29,7 +30,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -40,6 +40,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -99,7 +100,6 @@ impl Display for DecodeError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -110,6 +110,7 @@ impl Display for DecodeError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DecodeErrorKind {
     Text(Box<str>),
     Bytes(Box<str>),
@@ -147,7 +148,6 @@ impl Display for DecodeErrorKind {
 
 /// Errors arising during envelope processing.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -158,6 +158,7 @@ impl Display for DecodeErrorKind {
     PartialEq,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum EnvelopeError {
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
@@ -204,7 +205,6 @@ impl Display for EnvelopeError {
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -215,6 +215,7 @@ impl Display for EnvelopeError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct UpsertValueError {
     /// The underlying error.
     pub inner: DecodeError,
@@ -252,7 +253,6 @@ impl Display for UpsertValueError {
 
 /// A source contained a record with a NULL key, which we don't support.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Copy,
@@ -264,6 +264,7 @@ impl Display for UpsertValueError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct UpsertNullKeyError;
 
 impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
@@ -291,7 +292,6 @@ impl Display for UpsertNullKeyError {
 
 /// An error that can be retracted by a future message using upsert logic.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -302,6 +302,7 @@ impl Display for UpsertNullKeyError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -362,7 +363,6 @@ impl Display for UpsertError {
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -373,6 +373,7 @@ impl Display for UpsertError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceError {
     pub error: SourceErrorDetails,
 }
@@ -398,7 +399,6 @@ impl Display for SourceError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -409,6 +409,7 @@ impl Display for SourceError {
     Deserialize,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum SourceErrorDetails {
     Initialization(Box<str>),
     Other(Box<str>),
@@ -471,7 +472,6 @@ impl Display for SourceErrorDetails {
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -482,6 +482,7 @@ impl Display for SourceErrorDetails {
     PartialEq,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -491,6 +492,7 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+#[cfg(any(test, feature = "proptest"))]
 mod boxed_str {
 
     use columnation::Region;
@@ -543,6 +545,7 @@ mod boxed_str {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 mod columnation {
     use std::iter::once;
 

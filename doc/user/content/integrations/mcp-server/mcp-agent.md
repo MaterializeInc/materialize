@@ -1,8 +1,7 @@
 ---
 title: MCP Server for Agents
-description: "Expose real-time data products to AI agents via Materialize's built-in MCP endpoint."
+description: "Query data products via Materialize's built-in materialize-agent MCP Server."
 make_table_row_headers_searchable: true
-draft: true
 menu:
   main:
     parent: "mcp-server"
@@ -12,263 +11,392 @@ menu:
 
 {{< public-preview />}}
 
-Materialize provides a built-in [Model Context Protocol
-(MCP)](https://modelcontextprotocol.io/) endpoint for discovery and querying of
-data products. The MCP interface is served directly by the database; no sidecar
-process or external server is required.
+Starting in v26.24, Materialize provides a built-in `materialize-agent` Model Context Protocol (MCP)
+server (`/api/mcp/agent`, port 6876) for discovering and querying data
+products. The server is provided directly by Materialize; no sidecar process or
+external server is required.
 
 ## Overview
 
-**Endpoint**: `/api/mcp/agent`
+The `materialize-agent` MCP server lets AI agents discover and query curated
+business-facing data products over HTTP. You can connect an MCP-compatible
+client (such as Claude Code, Claude Desktop, or Cursor) to the MCP server and
+ask the agent to discover and query your curated data products using either
+natural language or SQL:
 
-- Lets AI agents discover and query your real-time data products over HTTP.
+- *Via `materialize-agent`: What data products can I query?*
+- *SELECT * FROM mcp_product_performance LIMIT 5;*
+- *What's the `total_revenue` for product 42?*
+- *Perform a Pareto analysis on my products.*
 
-- Uses [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over HTTP (default
-port 6876)
+## Set up the agent query environment and data products
 
-- Supports the `initialize`, `tools/list`, and `tools/call` methods.
+In Materialize, querying data products (i.e., running [`SELECT`](/sql/select/))
+requires:
 
-## Authentication and access control {#rbac}
+- `SELECT` privileges on each directly referenced data product.
+- `USAGE` privileges on the schemas that contain the data products.
+- `USAGE` privileges on the cluster where the query runs.
 
-Accessing the MCP endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme),
-just as connecting via a SQL client (e.g. `psql`). The authenticated role
-determines which data products are visible based on RBAC privileges.
+To use the `materialize-agent` MCP server, we recommend:
 
-{{< tabs >}}
+1. Creating a dedicated query environment for agents.
+1. Defining curated data products within that environment.
 
-{{< tab "Cloud" >}}
+The examples below use the default `materialize` database.
 
-Use the credentials of a Materialize user or
-[service account](/security/cloud/users-service-accounts/create-service-accounts/):
+### Create an agent query environment
 
-* **User ID:** Your email address or service account name.
-* **Password:** An [app password](/security/cloud/users-service-accounts/create-service-accounts/).
+In general, AI agents that access the `materialize-agent` MCP server should be
+isolated to:
 
-For production use, we recommend creating a dedicated service account and
-granting it a role with limited privileges (see [Required privileges](#required-privileges)).
+| Query environment | Granted privileges |
+|---|---|
+| Serving cluster dedicated to agents | `USAGE` on this cluster only |
+| Schema dedicated to agents | `USAGE` on this schema only |
 
-{{< /tab >}}
+1. Create a dedicated cluster and schema:
 
-{{< tab "Self-Managed" >}}
+   ```mzsql
+   CREATE CLUSTER mcp_cluster SIZE '25cc';
+   CREATE SCHEMA materialize.mcp_schema;
+   ```
 
-Create a functional role for MCP privileges, then assign it to a login role:
+1. Create a functional role `mcp_agent` that can be assigned to individual
+   agents:
 
-```mzsql
-CREATE ROLE mcp_agent;
-CREATE ROLE my_agent LOGIN PASSWORD 'secret';
-GRANT mcp_agent TO my_agent;
-```
+   ```mzsql
+   CREATE ROLE mcp_agent;
+   ```
 
-Authenticate using the login role credentials (`my_agent`). You can create
-additional login roles and grant them the same `mcp_agent` role as needed.
+1. Grant privileges to the functional role:
 
-{{< /tab >}}
+   ```mzsql
+   GRANT USAGE ON CLUSTER mcp_cluster TO mcp_agent;
+   GRANT USAGE ON SCHEMA materialize.mcp_schema TO mcp_agent;
+   ```
 
-{{< /tabs >}}
+1. Set the default cluster and schema for `mcp_agent` to `mcp_cluster` and
+   `mcp_schema`:
 
-### Required privileges
+   ```mzsql
+   ALTER ROLE mcp_agent SET cluster TO mcp_cluster;
+   ALTER ROLE mcp_agent SET search_path TO mcp_schema;
+   ```
 
-The role used to authenticate with the MCP endpoint must have:
+   Later on, you will also set these role configurations on the specific agent
+   roles since role configurations are **not** inherited; only privileges are
+   inherited.
 
-- `USAGE` on the database and schema containing the view.
-- `SELECT` on the view.
-- `USAGE` on the cluster where the index is installed.
+### Define data products and grant access
 
-Lock the role to the dedicated cluster and schema so that all agent queries
-are isolated.
+The `materialize-agent` MCP server exposes two kinds of objects as discoverable
+data products:
 
-{{< tabs >}}
+- **Materialized views**.
+- **Indexed regular views**. Regular views must have an index to be
+  discoverable.
 
-{{< tab "Cloud" >}}
+Once a dedicated agent environment is set up, create the curated data products
+in the dedicated cluster and schema rather than granting access to existing
+objects in other schemas; this lets you project, mask, or filter their contents
+before exposing them to the agent.
 
-On Cloud, create a functional role and grant it to a
-[service account](/security/cloud/users-service-accounts/create-service-accounts/).
-The service account's app password is used for MCP authentication.
+{{< tip >}}
+- To expose an existing materialized view's results to the agent, create a
+  materialized view or an indexed view in the `mcp_schema` that reads from the
+  existing materialized view. Because the new object is reading from an existing
+  materialized view, it reuses the existing maintained result.
 
-```mzsql
-CREATE ROLE mcp_agent;
+- When a view (regular view or materialized view) is indexed, the indexed
+  columns are surfaced in the tool input schema as preferred lookup keys,
+  enabling [index point-lookups](/concepts/indexes/#point-lookups) instead of
+  index scans.
 
-GRANT USAGE ON DATABASE materialize TO mcp_agent;
-GRANT USAGE ON SCHEMA mcp_schema TO mcp_agent;
-GRANT SELECT ON ALL TABLES IN SCHEMA mcp_schema TO mcp_agent;
-GRANT USAGE ON CLUSTER mcp_cluster TO mcp_agent;
+- Adding [comments](/sql/comment-on/) to the data product and its columns is
+  **optional but recommended**. Comments are surfaced to the agent to help it
+  better understand **when** and **how** to use the data products:
 
--- Lock the role to the dedicated cluster and schema.
--- This ensures all queries from this role run on mcp_cluster
--- and only see objects in mcp_schema by default.
-ALTER ROLE mcp_agent SET cluster TO mcp_cluster;
-ALTER ROLE mcp_agent SET search_path TO mcp_schema;
+  - Object-level comments: When a data product is indexed, if the index also has
+    a comment, the index's comment is surfaced to the agent. Otherwise, the view
+    or materialized view's comment is surfaced.
 
--- Grant the role to your service account
-GRANT mcp_agent TO '<service-account-name>';
-```
+  - Column comments: Column comments are made on the view or materialized view.
+    Indexes do not support comments on columns.
 
-{{< /tab >}}
+{{< /tip >}}
 
-{{< tab "Self-Managed" >}}
+#### Define data products
 
-Create a functional role for privileges, then assign it to a login role:
+The following example assumes a materialized view `sales.product_performance`
+exists.
 
-```mzsql
--- Functional role (cannot log in, holds privileges)
-CREATE ROLE mcp_agent;
+1. Switch to the dedicated cluster:
 
-GRANT USAGE ON DATABASE materialize TO mcp_agent;
-GRANT USAGE ON SCHEMA mcp_schema TO mcp_agent;
-GRANT SELECT ON ALL TABLES IN SCHEMA mcp_schema TO mcp_agent;
-GRANT USAGE ON CLUSTER mcp_cluster TO mcp_agent;
+   ```mzsql
+   SET CLUSTER = mcp_cluster;
+   ```
 
--- Lock the role to the dedicated cluster and schema.
--- This ensures all queries from this role run on mcp_cluster
--- and only see objects in mcp_schema by default.
-ALTER ROLE mcp_agent SET cluster TO mcp_cluster;
-ALTER ROLE mcp_agent SET search_path TO mcp_schema;
+1. Create a materialized view in the dedicated schema. It becomes a discoverable
+   data product automatically:
 
--- Login role (used for authentication)
-CREATE ROLE my_agent LOGIN PASSWORD 'secret';
-GRANT mcp_agent TO my_agent;
-```
+   ```mzsql
+   CREATE MATERIALIZED VIEW materialize.mcp_schema.mcp_product_performance
+   IN CLUSTER mcp_cluster
+   AS
+   SELECT * FROM sales.product_performance;
+   ```
 
-You can create additional login roles and grant them the same `mcp_agent` role
-as needed.
+1. Optional but recommended. Add comments to the materialized view and
+   column(s):
 
-{{< /tab >}}
+   ```mzsql
+   COMMENT ON MATERIALIZED VIEW materialize.mcp_schema.mcp_product_performance IS
+   'Per-product performance metrics including stock status. Use this to answer
+   questions about a specific product''s sales performance or inventory.';
 
-{{< /tabs >}}
+   COMMENT ON COLUMN materialize.mcp_schema.mcp_product_performance.total_revenue IS
+   'Lifetime gross revenue for this product, computed as SUM(quantity *
+   unit_price) across all order_items. Returns 0 for products that have
+   not been ordered yet.';
 
-If any privilege is missing, the data product will not appear in the agent's
-tool list.
+   COMMENT ON COLUMN materialize.mcp_schema.mcp_product_performance.stock_status IS
+   'Derived inventory state: ''out_of_stock'' (stock_quantity = 0),
+   ''low_stock'' (< 20), or ''in_stock'' (>= 20).';
+   ```
 
-## Define and document data products for discovery
+   Comments are surfaced to the agent to help the agent better understand
+   **when** and **how** to use the data products.
 
-The MCP server allows agents to discover and query documented (i.e.,
-[commented](/sql/comment-on/)) data products. In Materialize, you can make a
-materialized view discoverable by indexing the materialized view and adding
-[comments](/sql/comment-on/) to the **index**. You can, optionally, add comments
-columns of the materialized view.
+#### Grant access
 
-- The [comments on](/sql/comment-on/) the **index** makes the materialized view
-  discoverable and becomes its description.
+1. Grant `SELECT` privilege on the data products. For each existing data
+   product, grant `SELECT` to the `mcp_agent` functional role:
 
-- The [comment on](/sql/comment-on/) the view's columns become parameter
-  descriptions.
+   ```mzsql
+   GRANT SELECT ON materialize.mcp_schema.mcp_product_performance TO mcp_agent;
+   ```
 
-### 1. Create a dedicated cluster and schema
+1. Optionally, set a [default privilege](/sql/alter-default-privileges/) to
+   automatically grant `SELECT` to the `mcp_agent` functional role for future
+   data products created in the `mcp_schema`:
 
-Use a dedicated [cluster](/concepts/clusters/) to isolate agent workloads. This
-ensures agent queries do not consume resources from your other clusters, and
-limits visibility to only the data products you choose to expose.
+   ```mzsql
+   ALTER DEFAULT PRIVILEGES
+     FOR ROLE <creator_role> -- creator of the object
+     IN SCHEMA materialize.mcp_schema
+     GRANT SELECT ON TABLES TO mcp_agent;
+   ```
 
-```mzsql
-CREATE CLUSTER mcp_cluster SIZE '25cc';
-```
+   - The `FOR ROLE <creator_role>` clause scopes the default privilege to those
+     objects created by that role. Specify the role that will actually create
+     your data products.
 
-### 2. Index a materialized view
+   - `TABLES` includes views and materialized views also.
 
-Every indexed column becomes a required input parameter in the tool's schema.
+   - [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/) only applies
+     to objects created **after** the `ALTER DEFAULT PRIVILEGES` statement runs.
+     For objects that already exist, use [`GRANT SELECT ON <object> TO
+     mcp_agent`](/sql/grant-privilege/).
 
-```mzsql
-SET CLUSTER mcp_cluster;
+## Create the specific agent role
 
-CREATE INDEX payment_status_order_id_idx ON mcp_schema.payment_status (order_id);
-```
-
-### 3. Comment on the index and columns.
-
-The [comment on](/sql/comment-on/) the **index** becomes the data product's description.
-
-The [comment on](/sql/comment-on/) the view's columns become parameter
-descriptions.
-
-Write comments that help a language model understand **when** and **how** to use
-the tool.
-
-```mzsql
-COMMENT ON INDEX mcp_schema.payment_status_order_id_idx IS
-  'Given an order ID, return the current payment status and last update time.
-   Use this tool to drive user-facing payment tracking.';
-
-COMMENT ON COLUMN mcp_schema.payment_status.order_id IS
-  'The unique identifier for the order';
-```
-
-### 4. Verify your data products
-
-To confirm which data products are visible to your agent role, run:
-
-```mzsql
-SET ROLE mcp_agent;
-SELECT * FROM mz_internal.mz_mcp_data_products;
-```
-
-If a data product is missing, check that:
-
-- The view has an index with a [comment](/sql/comment-on/).
-- The role has `USAGE` on the database, schema, and cluster.
-- The role has `SELECT` on the view.
-
-## Connect to the MCP server
-
-### Step 1. Get connection details
+For your specific agent, create the role with which the agent will connect.
 
 {{< tabs >}}
 
 {{< tab "Cloud" >}}
 
 1. Log in to the [Materialize Console](https://console.materialize.com/).
-1. Click the **Connect** link to open the [**Connect**
-    modal](/console/connect/).
-1. Click on the **MCP Server** tab.
 
-1. Select **Agent** for your Endpoint.
+1. Create a dedicated
+   [service account](/security/cloud/users-service-accounts/create-service-accounts/)
+   for your specific AI agent (only an Org admin can create service
+   accounts).[^1]
 
-1. To get your base64-encoded token:
-   - To use an existing app password, generate a base64-encoded token.
+   For example, to create a new `my_agent` service account:
 
-     ```bash
-     printf '<user>:<app_password>' | base64
+   1. Click **+ Create New** and select **App Password** to open the **New app
+      password** modal.
+
+   1. In the **New app password** modal, specify:
+
+      | Field      | Value        |
+      | ---------- | -------------|
+      | **Type**   | **Service**  |
+      | **Name**   | **MCP**      |
+      | **User**   | **my_agent** |
+      | **Roles**  | **Organization Member** |
+
+   1. Click **Create Password**. The **Password** and the **MCP Token** are
+      created.
+
+   1. Save the **MCP Token** in a secure place. Once you navigate away, the
+      password and the MCP token will not display again. You will use the **MCP
+      Token** to connect.
+
+      ![Image of Create new service app
+      flow](/images/console/console-create-new/create-app-password-mcp-token.png
+      "Materialize Console Create New Service App Password Flow")
+
+1. Ensure the corresponding database role has been created, either by:
+
+   - Manually issuing the following commands in the SQL Shell:
+
+     ```mzsql
+     CREATE ROLE my_agent;
      ```
 
-   - To create a new app password to use, click on the **Create app password**
-     to generate a new app password and token for MCP Server. **Copy the app
-     password and token** as they cannot be displayed again.
+   - Or, connecting to Materialize (not the MCP server) using the new account.
+     On first connection, Materialize automatically creates the corresponding
+     database role if it does not exist.
+
+1. Grant `mcp_agent` role to your agent:
+
+   ```mzsql
+   GRANT mcp_agent TO my_agent;
+   ```
+
+1. Set the default cluster and schema for `my_agent` to `mcp_cluster` and
+   `mcp_schema`:
+
+   ```mzsql
+   ALTER ROLE my_agent SET cluster TO mcp_cluster;
+   ALTER ROLE my_agent SET search_path TO mcp_schema;
+   ```
+
+   You set these role configurations on the individual roles as configurations are not inherited.
+
+[^1]: Avoid using a personal app account instead of a service account as a
+    personal app account would include all your roles and privileges as well.
 
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
 
-1. You can connect using either an existing or new login role with password.
+1. Create a login role for your specific AI agent, replacing
+   `<your_app_password>` with an actual password:
 
-   - To use an existing role, go to the next step.
-   - To create a new login role with password:
-
-     ```mzsql
-     CREATE ROLE my_agent LOGIN PASSWORD 'your_password_here';
-     ```
-
-1. Encode your credentials in Base64. MCP clients send credentials as a
-   Base64-encoded `user:password` string.
-
-   ```bash
-   printf '<user>:<app_password>' | base64
+   ```mzsql
+   CREATE ROLE my_agent LOGIN PASSWORD '<your_app_password>';
    ```
 
-   For example:
-   ```bash
-   printf 'svc-mcp-agent@mycompany.com:my_app_password_here' | base64
-   # Output: c3ZjLW1jcC1hZ2VudEBteWNvbXBhbnkuY29tOm15X2FwcF9wYXNzd29yZF9oZXJl
+1. Grant `mcp_agent` role to your agent:
+
+   ```mzsql
+   GRANT mcp_agent TO my_agent;
    ```
 
-1. Find your deployment's host name to use in the MCP endpoint URL; that is,
-   your MCP endpoint URL is:
+1. Set the default cluster and schema for `my_agent` to `mcp_cluster` and
+   `mcp_schema`:
+
+   ```mzsql
+   ALTER ROLE my_agent SET cluster TO mcp_cluster;
+   ALTER ROLE my_agent SET search_path TO mcp_schema;
+   ```
+
+   You set these role configurations on the individual roles as configurations
+   are not inherited.
+
+{{< /tab >}}
+
+{{< tab "Emulator" >}}
+
+1. Create a role for your specific AI agent (the Emulator does not support the
+   `LOGIN PASSWORD` option):
+
+   ```mzsql
+   CREATE ROLE my_agent;
+   ```
+
+1. Grant `mcp_agent` role to your agent:
+
+   ```mzsql
+   GRANT mcp_agent TO my_agent;
+   ```
+
+1. Set the default cluster and schema for `my_agent` to `mcp_cluster` and
+   `mcp_schema`:
+
+   ```mzsql
+   ALTER ROLE my_agent SET cluster TO mcp_cluster;
+   ALTER ROLE my_agent SET search_path TO mcp_schema;
+   ```
+
+   You set these role configurations on the individual roles as configurations
+   are not inherited.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Connect to the MCP server
+
+### Step 1. Get connection details
+
+When connecting to the MCP server, the MCP-compatible client needs:
+
+- The Base64-encoded `user:password` credentials (i.e., the MCP token) of your
+  [agent](#create-the-specific-agent-role).
+
+- The `materialize-agent` MCP server URL: `<baseURL>/api/mcp/agent`.
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+1. Log in to the Materialize Console.
+
+1. Go to **App Passwords** and for the [service account created
+   `my_agent`](#create-the-specific-agent-role), click
+   **Connect**.
+
+1. Click on the **MCP Server** tab.
+
+1. In the **Get your MCP token** section[^1],
+   - If using [`my_agent`](#create-the-specific-agent-role), use the **MCP
+     Token** that was returned when you created the service account. You can
+     skip to the next step.
+
+   - Otherwise, you can:
+     - [Create a different service account](#create-the-specific-agent-role) and
+       use the generated MCP token; or
+
+     - Use an existing service account, Base64 encoding the `role:password` to
+       generate the MCP token. Ensure the existing account does not have more
+       privileges than necessary.
+
+1. In the **Connect your client** section, click on the **Agent** tab.
+
+   You can find your `materialize-agent` MCP server URL
+   `<baseURL>/api/mcp/agent` as part of the code block.
+
+   If using Claude Code as your MCP-compatible client, you can copy the code
+   block wholesale for the next step.
+
+[^1]: Avoid using a personal app account instead of a service account as a
+    personal app account would include all your roles and privileges as well.
+
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+
+1. Encode your agent role's credentials `<role>:<password>` in Base64 to create
+   the MCP token, replacing `<your_app_password>` with the actual password:
+
+   ```bash
+   printf 'my_agent:<your_app_password>' | base64
+   ```
+
+1. Find your deployment's host name to determine your `materialize-agent` MCP
+   URL:
 
    ```
    http://<host>:6876/api/mcp/agent
    ```
 
    - For your Self-Managed Materialize deployment in AWS/GCP/Azure, the `<host>`
-   is the load balancer address. If [deployed via
-   Terraform](/self-managed-deployments/installation/#install-using-terraform-modules),
-   run the Terraform output command for your cloud provider:
+     is the load balancer address. If [deployed via
+     Terraform](/self-managed-deployments/installation/#install-using-terraform-modules),
+     run the Terraform output command for your cloud provider:
 
      ```bash
      # AWS
@@ -288,95 +416,118 @@ If a data product is missing, check that:
      ```bash
      kubectl port-forward svc/<instance-name>-balancerd 6876:6876 -n materialize-environment
      ```
+{{< /tab >}}
+{{< tab "Emulator" >}}
 
+1. Encode your agent role's credentials `<role>:<password>` in Base64 to create
+   the MCP token (the Emulator does not support passwords):
+
+   ```bash
+   printf 'my_agent:' | base64
+   ```
+
+1. For the Emulator, you will use `http://localhost:6876` as the `<baseURL>`
+   portion of the MCP URL:
+
+   ```
+   <baseURL>/api/mcp/agent
+   ```
 
 {{< /tab >}}
 
 {{< /tabs >}}
 
-
 ### Step 2. Configure your MCP client
 
-{{< tip >}}
-You can copy the `.json` content from the **MCP Server** tab in the Console's
-**Connect** modal.
-- Replace `<baseURL>` with your value.
-  - If Cloud, there is nothing to replace as the `.json` content
-    includes your specific baseURL value of the form
-    `https://<region-id>.materialize.cloud`.
-  - If Self-Managed, replace with the `http://<host>:6876` found in the previous
-    step.
-- Replace `<base64-token>` with your value.
-{{< /tip >}}
+{{< warning >}}
+When saving your credentials or other sensitive information in a config file, do
+**not** commit these files to version control or share them publicly.
+{{< /warning >}}
 
 {{< tabs >}}
-
 {{< tab "Claude Code" >}}
 
-Create a `.mcp.json` file in your project directory:
+1. Add the `materialize-agent` MCP server as [local-scoped
+   server](https://code.claude.com/docs/en/mcp#local-scope) (i.e., the
+   configurations are stored in `~/.claude.json`):
 
-```json
-{
-  "mcpServers": {
-    "materialize-agent": {
-      "type": "http",
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
-      "headers": {
-        "Authorization": "Basic <base64-token>"
-      }
-    }
-  }
-}
-```
+   ```sh
+   claude mcp add --transport http "materialize-agent" \
+     "<baseURL>/api/mcp/agent" \
+     --header "Authorization: Basic <mcp-token>"
+   ```
+
+   {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
+
+1. Restart Claude Code to pick up the new setting.
 
 {{< /tab >}}
 
 {{< tab "Claude Desktop" >}}
 
-Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
+1. Add the `materialize-agent` MCP server entry to your Claude Desktop
+   configuration (`claude_desktop_config.json`).
+   - When merging into an existing `mcpServers` object, remember to add commas
+     between entries.
+   - If the `mcpServers` field does not already exist, add it as well.
+   - For older Claude Desktop versions, you may need to include the transport
+     `"type": "http",` as well as part of the `materialize-agent` entry.
 
-```json
-{
-  "mcpServers": {
-    "materialize-agent": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
-      "headers": {
-        "Authorization": "Basic <base64-token>"
-      }
-    }
-  }
-}
-```
+   ```json {hl_lines="3-8"}
+   {
+     "mcpServers": {
+       "materialize-agent": {
+         "url": "<baseURL>/api/mcp/agent",
+         "headers": {
+           "Authorization": "Basic <mcp-token>"
+         }
+       }
+     }
+   }
+   ```
+
+   {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
+
+1. Restart Claude Desktop to pick up the new setting.
 
 {{< /tab >}}
 
 {{< tab "Cursor" >}}
 
-In Cursor's MCP settings (`.cursor/mcp.json`):
+1. Add the `materialize-agent` MCP server entry to your local MCP settings
+   file (`~/.cursor/mcp.json`).
+   - When merging into an existing `mcpServers` object, remember to add commas
+     between entries.
+   - If the `mcpServers` field does not already exist, add it as well.
 
-```json
-{
-  "mcpServers": {
-    "materialize-agent": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
-      "headers": {
-        "Authorization": "Basic <base64-token>"
-      }
-    }
-  }
-}
-```
+   ```json {hl_lines="3-8"}
+   {
+     "mcpServers": {
+       "materialize-agent": {
+         "url": "<baseURL>/api/mcp/agent",
+         "headers": {
+           "Authorization": "Basic <mcp-token>"
+         }
+       }
+     }
+   }
+   ```
+
+   {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
+
+1. Restart Cursor to pick up the new setting.
 
 {{< /tab >}}
 
 {{< tab "Generic HTTP" >}}
 
-Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
+Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests; update
+the `<baseURL>` and `<mcp-token>` placeholders with your values:
 
 ```bash
 curl -X POST <baseURL>/api/mcp/agent \
   -H "Content-Type: application/json" \
-  -H "Authorization: Basic <base64-token>" \
+  -H "Authorization: Basic <mcp-token>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -388,95 +539,36 @@ curl -X POST <baseURL>/api/mcp/agent \
 
 {{< /tabs >}}
 
+## Start querying
 
+Once connected to the MCP server, you can query your curated data products using
+either natural language or SQL:
 
-## Tools
+- *Via `materialize-agent`: What data products can I query?*
+- *SELECT * FROM mcp_product_performance LIMIT 5;*
+- *What's the `total_revenue` for product 42?*
+- *Perform a Pareto analysis on my products.*
 
-### `get_data_products`
+{{< note >}}
 
-Discover all available data products. Returns a lightweight list with name,
-cluster, and description for each product.
+By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query),
+which allows arbitrary `SELECT` queries (including joins) on **all** objects for
+which the agent has `SELECT` privileges (not just the discoverable products), is
+disabled. To enable it, set the [`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-tools/#query).
 
-**Parameters:** None.
+{{< /note >}}
 
-**Example response:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[\n  [\n    \"\\\"materialize\\\".\\\"mcp_schema\\\".\\\"payment_status\\\"\",\n    \"mcp_cluster\",\n    \"Given an order ID, return the current payment status.\"\n  ]\n]"
-      }
-    ],
-    "isError": false
-  }
-}
-```
-
-### `get_data_product_details`
-
-Get the full details for a specific data product, including its JSON schema
-with column names, types, and descriptions.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | string | Yes | Exact name from the `get_data_products` list. |
-
-**Example response:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[\n  [\n    \"\\\"materialize\\\".\\\"mcp_schema\\\".\\\"payment_status\\\"\",\n    \"mcp_cluster\",\n    \"Given an order ID, return the current payment status.\",\n    \"{\\\"order_id\\\": {\\\"type\\\": \\\"integer\\\", \\\"position\\\": 1}, \\\"status\\\": {\\\"type\\\": \\\"text\\\", \\\"position\\\": 3}}\"\n  ]\n]"
-      }
-    ],
-    "isError": false
-  }
-}
-```
-
-### `read_data_product`
-
-Read rows from a data product.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | string | Yes | Fully-qualified name, e.g. `"materialize"."public"."payment_status"`. |
-| `limit` | integer | No | Maximum rows to return. Default: 500, max: 1000. |
-| `cluster` | string | No | Cluster override. If omitted, uses the cluster from the catalog. |
-
-**Example response:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[\n  [\n    1001,\n    42,\n    \"shipped\",\n    \"2026-03-26T10:30:00Z\"\n  ]\n]"
-      }
-    ],
-    "isError": false
-  }
-}
-```
 
 ## Related pages
 
-- [MCP Server for Developers](/integrations/mcp-server/mcp-developer/)
-- [Coding Agent Skills](/integrations/coding-agent-skills/)
+- [`materialize-agent` MCP Server available
+  tools](/integrations/mcp-server/mcp-agent-tools/)
+- [`materialize-agent` MCP Server
+  configuration](/integrations/mcp-server/mcp-agent-config/)
+- [Agent Skills](/integrations/coding-agent-skills/)
 - [CREATE INDEX](/sql/create-index)
 - [COMMENT ON](/sql/comment-on)
 - [CREATE ROLE](/sql/create-role)
 - [GRANT PRIVILEGE](/sql/grant-privilege)
+- [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)

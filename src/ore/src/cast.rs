@@ -283,6 +283,8 @@ cast_lossy!(f64, i64);
 cast_lossy!(u64, f64);
 cast_lossy!(f64, u64);
 cast_lossy!(f64, u32);
+cast_lossy!(i128, f64);
+cast_lossy!(f64, f32);
 
 #[crate::test]
 fn test_try_cast_from() {

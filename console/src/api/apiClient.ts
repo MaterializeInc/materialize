@@ -202,6 +202,20 @@ export class SelfManagedApiClient
     };
   };
 
+  // Mirrors getWsAuthConfig() so HTTP and websocket auth as the same role;
+  // otherwise HTTP falls back to anonymous_http_user and role-membership
+  // checks (e.g. pg_cancel_backend) reject it.
+  #flexibleDeploymentAuthMiddleware: Middleware = (next) => {
+    return async (...fetchArgs) => {
+      const [input, options = {}] = fetchArgs;
+      const headers = copyHeaders(fetchArgs);
+      const { user, password } = FLEXIBLE_DEPLOYMENT_USER;
+      headers.set("Authorization", `Basic ${btoa(`${user}:${password}`)}`);
+      const request = new Request(input, { ...options, headers });
+      return next(request);
+    };
+  };
+
   constructor({ appConfig }: { appConfig: Readonly<SelfManagedAppConfig> }) {
     this.#appConfig = appConfig;
     this.mzHttpUrlScheme = this.#appConfig.environmentdScheme;
@@ -225,7 +239,10 @@ export class SelfManagedApiClient
         this.#oidcAuthMiddleware,
       );
     } else if (this.authMode === "None") {
-      this.mzApiFetch = globalFetch;
+      this.mzApiFetch = withMiddleware(
+        globalFetch,
+        this.#flexibleDeploymentAuthMiddleware,
+      );
     } else {
       this.mzApiFetch = this.#mzApiWithAuthRedirect;
     }

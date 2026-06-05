@@ -10,7 +10,6 @@
 # Tests for COPY TO expr.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);

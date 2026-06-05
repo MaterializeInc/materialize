@@ -48,6 +48,10 @@
 //!      cursor, emit a retraction if present, and emit the new value.
 //!    - **Ineligible** (between persist and input frontiers): persist hasn't
 //!      caught up yet. Push back into the batcher for the next iteration.
+//!    - **Already persisted** (below the persist frontier): some writer has
+//!      already advanced the shard past this time, so it is dropped. See
+//!      [`drain_sealed_input`] for why re-stashing it would strand the data
+//!      and pin the output frontier below the shard upper.
 //!
 //! 4. **Capability management.** Downgrade the output capability to the
 //!    minimum time of any remaining buffered data (in the batcher or pushed
@@ -59,25 +63,25 @@
 //! For a total-order timestamp with `input_upper = {i}` and
 //! `persist_upper = {p}`, an entry at time `ts` is eligible when
 //! `ts == p < i` — the source has finalized it and persist is exactly at
-//! that time, so the trace cursor returns the correct prior state.
+//! that time, so the trace cursor returns the correct prior state. An entry
+//! with `p < ts` is ineligible (persist hasn't caught up), and one with
+//! `ts < p` is already persisted and dropped.
 
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
-use differential_dataflow::trace::implementations::ValSpine;
+use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{
-    MergeBatcher, container::VecMerger,
-};
-use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
+use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, vec::VecMerger};
+use differential_dataflow::trace::{Batcher, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
-use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_types::errors::{DataflowError, EnvelopeError};
+use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_row_spine::{DatumSeq, ValRowBatcher, ValRowBuilder, ValRowSpine};
+use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -126,38 +130,63 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
 // Data is pushed in unsorted; the batcher maintains geometrically-sized sorted
 // chains and consolidates via the UpsertDiff Semigroup automatically.
 
-type UpsertBatcher<T, FromTime> = MergeBatcher<
-    Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
-    ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
-    VecMerger<UpsertKey, T, UpsertDiff<FromTime>>,
->;
+type UpsertBatcher<T, FromTime> = MergeBatcher<VecMerger<UpsertKey, T, UpsertDiff<FromTime>>>;
 
-/// A minimal [`Builder`] that captures sealed chains without copying.
-///
-/// Used with [`MergeBatcher::seal`] to extract sorted, consolidated chunks
-/// directly as `Vec<Vec<...>>`.
-struct CapturingBuilder<D, T>(D, PhantomData<T>);
+/// The chunker that consolidates raw `Vec` input into the chunks
+/// [`UpsertBatcher`] consumes.
+type UpsertChunker<T, FromTime> = ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>;
 
-impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
-    type Input = D;
-    type Time = T;
-    type Output = Vec<D>;
+// The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
+// land in a columnation arena (`UpsertKey` is `[u8; 32]` + `Copy`, so it uses
+// `CopyRegion`), and values are stored as packed `Row` bytes in a
+// `DatumContainer`. `UpsertValue` is `Result<Row, Box<UpsertError>>`, so we
+// still need to fold both arms into a single `Row` with a leading tag column
+// so they share the value container.
 
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        unimplemented!()
+/// Encode an [`UpsertValue`] as a `Row` with a leading tag column so both `Ok`
+/// and `Err` payloads round-trip through `Row` byte storage.
+fn upsert_value_to_row(value: &UpsertValue) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    match value {
+        Ok(ok) => {
+            packer.push(Datum::UInt8(0));
+            packer.extend(ok.iter());
+        }
+        Err(err) => {
+            packer.push(Datum::UInt8(1));
+            let bytes =
+                bincode::serialize(err.as_ref()).expect("UpsertError is serializable via bincode");
+            packer.push(Datum::Bytes(&bytes));
+        }
     }
+    row
+}
 
-    fn push(&mut self, _chunk: &mut Self::Input) {
-        unimplemented!()
-    }
-
-    fn done(self, _description: Description<Self::Time>) -> Self::Output {
-        unimplemented!()
-    }
-
-    #[inline]
-    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
-        std::mem::take(chain)
+/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
+/// `DatumSeq` view returned by a `ValRowSpine` cursor.
+fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
+    let mut iter = seq;
+    let tag = match iter.next() {
+        Some(Datum::UInt8(tag)) => tag,
+        other => panic!("upsert value missing UInt8 tag, got {:?}", other),
+    };
+    match tag {
+        0 => {
+            let mut row = Row::default();
+            row.packer().extend(iter);
+            Ok(row)
+        }
+        1 => {
+            let bytes = match iter.next() {
+                Some(Datum::Bytes(b)) => b,
+                other => panic!("upsert error tag missing Bytes payload, got {:?}", other),
+            };
+            let err: UpsertError =
+                bincode::deserialize(bytes).expect("UpsertError bincode round-trip");
+            Err(Box::new(err))
+        }
+        tag => panic!("unknown upsert value tag {tag}"),
     }
 }
 
@@ -190,6 +219,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
 where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    T: columnation::Columnation,
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     // ── Arrange persist feedback ────────────────────────────────────────
@@ -224,7 +254,20 @@ where
                 row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),
             );
         });
-    let persist_arranged = persist_keyed.arrange_by_key();
+    // Map (UpsertKey, UpsertValue) → (UpsertKey, Row) so the arrangement can
+    // use the `ValRowSpine` layout. Keys are densely packed in a columnation
+    // arena (UpsertKey is fixed-size [u8; 32]) and values land in a packed-bytes
+    // `DatumContainer`, which lets the OS evict cold value pages cleanly under
+    // swap pressure.
+    let encoded = persist_keyed.map(|(k, v)| (k, upsert_value_to_row(&v)));
+    let persist_arranged = arrange_core::<
+        _,
+        _,
+        mz_timely_util::columnation::ColumnationChunker<((UpsertKey, Row), T, Diff)>,
+        ValRowBatcher<UpsertKey, T, Diff>,
+        ValRowBuilder<UpsertKey, T, Diff>,
+        ValRowSpine<UpsertKey, T, Diff>,
+    >(encoded.inner, Pipeline, "Persist feedback");
     let mut persist_trace = persist_arranged.trace.clone();
 
     // Probe the persist arrangement's stream for frontier tracking.
@@ -270,8 +313,11 @@ where
         // UpsertDiff Semigroup as data is pushed in, bounding memory to
         // O(unique key-time pairs) even during large initial snapshots.
         let mut batcher: UpsertBatcher<T, FromTime> = Batcher::new(None, 0);
+        // The chunker consolidates raw `Vec` input into the chunks the
+        // batcher consumes.
+        let mut chunker: UpsertChunker<T, FromTime> = Default::default();
         // Scratch buffer for accumulating source events before flushing to
-        // the batcher. Drained on each iteration via `push_container`.
+        // the batcher. Drained on each iteration via the chunker.
         let mut push_buffer: Vec<(UpsertKey, T, UpsertDiff<FromTime>)> = Vec::new();
         // Capability held at the minimum time of any buffered data. When
         // Some, the operator may still produce output; when None, the
@@ -340,11 +386,15 @@ where
                 }
             }
 
-            // Flush buffered events into the batcher. This triggers the
-            // chunker + geometric chain merging, which consolidates entries
-            // for the same (key, time) via the UpsertDiff Semigroup.
+            // Flush buffered events through the chunker into the batcher. This
+            // triggers the chunker + geometric chain merging, which consolidates
+            // entries for the same (key, time) via the UpsertDiff Semigroup.
             if !push_buffer.is_empty() {
-                batcher.push_container(&mut push_buffer);
+                use timely::container::{ContainerBuilder as _, PushInto as _};
+                chunker.push_into(&mut push_buffer);
+                while let Some(chunk) = chunker.extract() {
+                    batcher.push_into(std::mem::take(chunk));
+                }
             }
 
             // ── Step 2: Read persist frontier ─────────────────────────────
@@ -425,7 +475,14 @@ where
                 && !persist_upper.less_than(cap.time())
                 && PartialOrder::less_than(&persist_upper, &input_upper)
             {
-                let sealed = batcher.seal::<CapturingBuilder<_, _>>(input_upper.clone());
+                // Flush any partial chunk into the batcher before sealing.
+                {
+                    use timely::container::{ContainerBuilder as _, PushInto as _};
+                    while let Some(chunk) = chunker.finish() {
+                        batcher.push_into(std::mem::take(chunk));
+                    }
+                }
+                let (sealed, _description) = batcher.seal(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
@@ -468,7 +525,11 @@ where
                 // input_upper) or ineligible entries being pushed back.
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
                 if !ineligible.is_empty() {
-                    batcher.push_container(&mut ineligible);
+                    use timely::container::{ContainerBuilder as _, PushInto as _};
+                    chunker.push_into(&mut ineligible);
+                    while let Some(chunk) = chunker.extract() {
+                        batcher.push_into(std::mem::take(chunk));
+                    }
                 }
 
                 let has_remaining = !remaining_frontier.is_empty() || min_ineligible_ts.is_some();
@@ -525,33 +586,56 @@ struct DrainStats {
     output_count: u64,
 }
 
-/// Process sealed chunks from the batcher. Entries at the persist frontier are
-/// eligible for processing (cursor lookup + output); all others are returned
-/// in `ineligible` for re-stashing.
+/// Process sealed chunks from the batcher, classifying each entry by its
+/// timestamp relative to `persist_upper`: entries at the frontier are eligible
+/// for processing now (cursor lookup + output), entries above it are returned
+/// in `ineligible` for re-stashing, and entries below it are already persisted
+/// and dropped (see the body for why).
 ///
-/// The sealed chunks are already sorted and consolidated by the MergeBatcher.
+/// The sealed chunks are already sorted and consolidated by the MergeBatcher,
+/// so the trace cursor walks forward through keys in order — seeks amortize.
 fn drain_sealed_input<T, FromTime>(
     sealed: Vec<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
     ineligible: &mut Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
     output: &mut Vec<(UpsertValue, T, Diff)>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValSpine<UpsertKey, UpsertValue, T, Diff>>,
+    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
     worker_id: &usize,
     source_id: &GlobalId,
 ) -> DrainStats
 where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
+    T: columnation::Columnation,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
-    // Separate eligible (at persist frontier) from ineligible.
+    // Classify each entry by its timestamp relative to `persist_upper`:
+    //
+    //   * `ts == persist_upper`: eligible for processing now.
+    //   * `ts >  persist_upper`: not yet processable; re-stashed (ineligible)
+    //     until the feedback frontier catches up to it.
+    //   * `ts <  persist_upper`: already persisted by some writer and not
+    //     relevant anymore. We DROP it. The downstream persist_sink would
+    //     filter such updates out anyway since the shard upper is further
+    //     ahead, and our state is already up-to-date to `persist_upper` so we
+    //     could not emit correct retractions for it. Re-stashing it would
+    //     strand the data forever (`persist_upper` only advances, so
+    //     `ts == persist_upper` can never again hold) and pin the operator's
+    //     output frontier below the shard upper. This mirrors v1's
+    //     `relevant = persist_upper.less_equal(ts)`.
     let mut eligible = Vec::new();
     for chunk in sealed {
         for entry in chunk {
             let (_, ref ts, _) = entry;
-            if !persist_upper.less_than(ts) && persist_upper.less_equal(ts) {
-                eligible.push(entry);
-            } else {
+            if !persist_upper.less_equal(ts) {
+                // ts < persist_upper: drop.
+                continue;
+            }
+            if persist_upper.less_than(ts) {
+                // ts > persist_upper: re-stash for later.
                 ineligible.push(entry);
+            } else {
+                // ts == persist_upper: process now.
+                eligible.push(entry);
             }
         }
     }
@@ -583,33 +667,33 @@ where
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
 
-    // Eligible entries are sorted by (key, time) from the batcher.
-    // The trace cursor moves forward through keys, matching this order.
     let (mut cursor, storage) = trace.cursor();
 
     for (key, ts, upsert_diff) in eligible {
-        // Look up the current value for this key in the persist trace.
-        // For ValSpine with Vector layout, Key<'a> = &'a UpsertKey.
+        // Look up the current value for this key in the persist trace. The
+        // spine stores keys directly in a columnation arena, so we seek by
+        // borrowed `UpsertKey`.
         cursor.seek_key(&storage, &key);
-        let old_value = if cursor.get_key(&storage) == Some(&key) {
-            let mut result = None;
-            while let Some(val) = cursor.get_val(&storage) {
-                let mut count = Diff::ZERO;
-                cursor.map_times(&storage, |_time, diff| {
-                    count += diff.clone();
-                });
-                if count.is_positive() {
-                    assert!(
-                        count == 1.into(),
-                        "unexpected multiple entries for the same key in persist trace"
-                    );
-                    result = Some(val.clone());
+        let old_value = match cursor.get_key(&storage) {
+            Some(found) if found == &key => {
+                let mut result = None;
+                while let Some(val) = cursor.get_val(&storage) {
+                    let mut count = Diff::ZERO;
+                    cursor.map_times(&storage, |_time, diff| {
+                        count += diff.clone();
+                    });
+                    if count.is_positive() {
+                        assert!(
+                            count == 1.into(),
+                            "unexpected multiple entries for the same key in persist trace"
+                        );
+                        result = Some(datum_seq_to_upsert_value(val));
+                    }
+                    cursor.step_val(&storage);
                 }
-                cursor.step_val(&storage);
+                result
             }
-            result
-        } else {
-            None
+            _ => None,
         };
 
         if old_value.is_some() {
@@ -1024,5 +1108,131 @@ mod test {
         let expected: Vec<(Result<Row, DataflowError>, _, _)> =
             vec![(Ok(val), new_ts(0), Diff::ONE)];
         assert_eq!(actual, expected);
+    }
+
+    /// Operator-level repro of the 0dt read-only-handoff stranding bug.
+    ///
+    /// Models a lagging replacement generation: the external (old) writer has
+    /// already advanced the shard — and therefore the feedback `persist_upper`
+    /// — to `T = 10`, while the operator itself has emitted nothing. The
+    /// lagging replacement now produces source data at timestamps BELOW that
+    /// upper (`ts = 5, 7`), i.e. data the external writer has already persisted.
+    ///
+    /// `drain_sealed_input` DROPS such already-persisted data (it satisfies
+    /// neither `ts == persist_upper` nor `ts > persist_upper`), mirroring v1's
+    /// `relevant = persist_upper.less_equal(ts)`. Were it instead re-stashed,
+    /// the data would be stranded forever — `persist_upper` only advances, so
+    /// `ts == persist_upper` could never again hold — and `min_ineligible_ts`
+    /// would pin the operator's output capability at `ts = 5`, BELOW the shard
+    /// upper, where it would stay for good. Dropping it lets the frontier
+    /// advance freely.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn lagging_replacement_below_upper_strands_data() {
+        let (frontier, emitted) = run_below_upper_scenario_v2();
+
+        // The below-upper data is discarded (no output) and the output frontier
+        // is not pinned below the shard upper (10); it advances to the input
+        // upper (11), matching v1's behavior.
+        assert!(
+            emitted.is_empty(),
+            "below-upper data should be dropped, not emitted; got {emitted:?}"
+        );
+        assert_eq!(
+            frontier,
+            vec![new_ts(11)],
+            "v2 output frontier should advance to the input upper, not pin below \
+             persist_upper"
+        );
+        assert!(
+            frontier[0] >= new_ts(10),
+            "v2 output frontier {frontier:?} should reach at least persist_upper (10)"
+        );
+    }
+
+    /// Shared driver for the lagging-replacement scenario against v2. Returns
+    /// `(output_frontier, consolidated_emitted_updates)`.
+    fn run_below_upper_scenario_v2() -> (Vec<Ts>, Vec<(Result<Row, DataflowError>, Ts, Diff)>) {
+        use timely::dataflow::operators::Probe;
+
+        let (frontier, capture) = timely::execute_directly(move |worker| {
+            let (mut input, mut persist, probe, capture) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<Ts, _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let source_id = GlobalId::User(0);
+
+                        let reg = MetricsRegistry::new();
+                        let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                        let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+
+                        let reg2 = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&reg2);
+
+                        let reg3 = MetricsRegistry::new();
+                        let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &stats_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+                        let source_config = SourceExportCreationConfig {
+                            id: source_id,
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                        );
+                        std::mem::forget(button);
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
+                    })
+                });
+
+            // The external writer has advanced the shard (feedback persist_upper)
+            // to T = 10 WITHOUT the operator emitting anything itself.
+            persist.advance_to(new_ts(10));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            // The lagging replacement produces source data at ts BELOW the
+            // current persist_upper (5 and 7 while persist_upper = 10).
+            input.send(((key(0), Some(Ok(row(0, 1))), 1), new_ts(5), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 2))), 2), new_ts(7), Diff::ONE));
+            input.advance_to(new_ts(11));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            (probe.with_frontier(|f| f.to_vec()), capture)
+        });
+
+        let mut emitted: Vec<_> = capture
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, c)| c)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut emitted);
+        (frontier, emitted)
     }
 }

@@ -2837,7 +2837,7 @@ pub fn plan_create_materialized_view(
                 }
                 RefreshOptionValue::AtCreation => {
                     soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
-                    sql_bail!("INTERNAL ERROR: REFRESH AT CREATION should have been purified away")
+                    bail_internal!("REFRESH AT CREATION should have been purified away")
                 }
                 RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
                     transform_ast::transform(scx, &mut time)?; // Desugar the expression
@@ -2880,6 +2880,9 @@ pub fn plan_create_materialized_view(
                     let interval = interval.duration()?;
                     if u64::try_from(interval.as_millis()).is_err() {
                         sql_bail!("REFRESH interval too large");
+                    }
+                    if interval.as_micros() < 1000 {
+                        sql_bail!("REFRESH interval must be at least 1 ms")
                     }
 
                     let mut aligned_to = match aligned_to {
@@ -3313,8 +3316,6 @@ fn plan_sink(
                             | SqlScalarType::MzAclItem
                             | SqlScalarType::AclItem
                             | SqlScalarType::Int2Vector
-                            // ranges
-                            | SqlScalarType::Range { .. }
                     );
                     if !is_valid {
                         return Err(PlanError::IcebergSinkUnsupportedKeyType {
@@ -3651,8 +3652,6 @@ fn iceberg_sink_builder(
     commit_interval: Option<Duration>,
     desc: &RelationDesc,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
-
     // Reject types that arrow-rs's parquet writer cannot handle, before
     // sink creation. Pass the iceberg overrides so types iceberg remaps
     // (e.g. interval -> string) don't trip the check.
@@ -4858,8 +4857,6 @@ pub fn unplan_create_cluster(
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
-                enable_guard_subquery_tablefunc: _,
-                enable_consolidate_after_union_negate: _,
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,
                 persist_fast_path_limit: _,
@@ -4878,6 +4875,7 @@ pub fn unplan_create_cluster(
                 enable_case_literal_transform: _,
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
+                enable_will_distinct_propagation: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -5359,8 +5357,10 @@ pub fn plan_drop_objects(
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
             UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
+                // Defer the dependency check until all names are resolved, so a
+                // dependent that is itself being dropped in this same statement
+                // does not block a non-cascade drop.
+                plan_drop_item_name(scx, object_type, if_exists, name.clone())?.map(ObjectId::Item)
             }
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
@@ -5374,6 +5374,24 @@ pub fn plan_drop_objects(
             }),
         }
     }
+
+    // Now that the full set of explicitly-named items is known, run the
+    // non-cascade dependency check. A dependent that is itself being dropped in
+    // this statement does not block the drop, matching PostgreSQL.
+    if !cascade {
+        let dropped_items: BTreeSet<CatalogItemId> = referenced_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in &dropped_items {
+            let catalog_item = scx.catalog.get_item(id);
+            ensure_no_blocking_dependents(scx, object_type, catalog_item, &dropped_items)?;
+        }
+    }
+
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan {
@@ -5510,6 +5528,25 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<CatalogItemId>, PlanError> {
+    let Some(id) = plan_drop_item_name(scx, object_type, if_exists, name)? else {
+        return Ok(None);
+    };
+    if !cascade {
+        let catalog_item = scx.catalog.get_item(&id);
+        ensure_no_blocking_dependents(scx, object_type, catalog_item, &BTreeSet::new())?;
+    }
+    Ok(Some(id))
+}
+
+/// Resolves `name` to the [`CatalogItemId`] of the item to drop, performing the
+/// system-object check but *not* the dependency check. Returns `None` if the
+/// item does not exist and `if_exists` is set.
+fn plan_drop_item_name(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5532,31 +5569,44 @@ fn plan_drop_item(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-
-            if !cascade {
-                for id in catalog_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(object_type, dep) {
-                        return Err(PlanError::DependentObjectsStillExist {
-                            object_type: catalog_item.item_type().to_string(),
-                            object_name: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            dependents: vec![(
-                                dep.item_type().to_string(),
-                                scx.catalog.minimal_qualification(dep.name()).to_string(),
-                            )],
-                        });
-                    }
-                }
-                // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                //  relies on entry. Unfortunately, we don't have that information readily available.
-            }
             Some(catalog_item.id())
         }
         None => None,
     })
+}
+
+/// Errors if dropping `catalog_item` would leave a dangling dependent, i.e. an
+/// object that depends on it and is not itself being dropped. Dependents whose
+/// ids are in `also_dropped` are ignored, since they are being dropped as part
+/// of the same statement.
+fn ensure_no_blocking_dependents(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    catalog_item: &dyn CatalogItem,
+    also_dropped: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in catalog_item.used_by() {
+        if also_dropped.contains(id) {
+            continue;
+        }
+        let dep = scx.catalog.get_item(id);
+        if dependency_prevents_drop(object_type, dep) {
+            return Err(PlanError::DependentObjectsStillExist {
+                object_type: catalog_item.item_type().to_string(),
+                object_name: scx
+                    .catalog
+                    .minimal_qualification(catalog_item.name())
+                    .to_string(),
+                dependents: vec![(
+                    dep.item_type().to_string(),
+                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                )],
+            });
+        }
+    }
+    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+    //  relies on entry. Unfortunately, we don't have that information readily available.
+    Ok(())
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
@@ -7017,6 +7067,7 @@ pub fn plan_alter_connection(
         Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
         Connection::Kafka(_) => CreateConnectionType::Kafka,
         Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::GlueSchemaRegistry(_) => CreateConnectionType::GlueSchemaRegistry,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,

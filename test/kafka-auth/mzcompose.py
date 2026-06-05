@@ -23,12 +23,10 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     TestCerts(),
     SshBastionHost(),
-    Zookeeper(),
     Kafka(
         depends_on_extra=["test-certs"],
         advertised_listeners=[
@@ -42,9 +40,10 @@ SERVICES = [
             "sasl_ssl://kafka:9096",
             "sasl_mssl://kafka:9097",
         ],
+        # Move the KRaft controller port off 9093, which is used for SSL above.
+        controller_port=29093,
         environment_extra=[
-            "ZOOKEEPER_SASL_ENABLED=FALSE",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
             "KAFKA_INTER_BROKER_LISTENER_NAME=plaintext",
             "KAFKA_SASL_ENABLED_MECHANISMS=PLAIN,SCRAM-SHA-256,SCRAM-SHA-512",
             "KAFKA_SSL_KEY_PASSWORD=mzmzmz",
@@ -55,12 +54,20 @@ SERVICES = [
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/jaas.config",
             "KAFKA_LISTENER_NAME_MSSL_SSL_CLIENT_AUTH=required",
             "KAFKA_LISTENER_NAME_SASL__MSSL_SSL_CLIENT_AUTH=required",
-            "KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer",
+            "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
             "KAFKA_SUPER_USERS=User:materialize;User:CN=materialized;User:ANONYMOUS",
+            # Bootstrap SCRAM users at storage-format time. See
+            # `misc/mzcompose/kafka/ensure-with-scram.sh` for why the runtime
+            # `kafka-configs --add-config=SCRAM-*` path is unreliable on
+            # Kafka 4.x KRaft.
+            "KAFKA_INIT_SCRAM_USERS="
+            "SCRAM-SHA-256=[name=materialize,password=sekurity];"
+            "SCRAM-SHA-512=[name=materialize,password=sekurity]",
         ],
         volumes=[
             "secrets:/etc/kafka/secrets",
             "./kafka.jaas.config:/etc/kafka/jaas.config",
+            "../../misc/mzcompose/kafka/ensure-with-scram.sh:/etc/confluent/docker/ensure",
         ],
     ),
     SchemaRegistry(
@@ -203,16 +210,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Kafka topic.
     c.up("ssh-bastion-host", "schema-registry", "materialized")
 
-    # Add `materialize` SCRAM user to Kafka.
-    c.exec(
-        "kafka",
-        "kafka-configs",
-        "--bootstrap-server=localhost:9092",
-        "--alter",
-        "--add-config=SCRAM-SHA-256=[password=sekurity],SCRAM-SHA-512=[password=sekurity]",
-        "--entity-type=users",
-        "--entity-name=materialize",
-    )
+    # The `materialize` SCRAM user is bootstrapped by Kafka's storage-format
+    # step via `KAFKA_INIT_SCRAM_USERS` (see `ensure-with-scram.sh`), so no
+    # runtime `kafka-configs` call is needed here.
 
     # Restrict the `materialize_no_describe_configs` user from running the
     # `DescribeConfigs` cluster operation, but allow it to idempotently read and

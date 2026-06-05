@@ -194,12 +194,13 @@ CREATE MATERIALIZED VIEW materialize.public.mv1
 EOF
 
 query T multiline
-SELECT pretty_sql(redacted_create_sql) FROM mz_materialized_views WHERE name = 'mv1'
+SELECT regexp_replace(pretty_sql(redacted_create_sql), 'AS OF [0-9]+', 'AS OF xxxxxxx', 'g') FROM mz_materialized_views WHERE name = 'mv1'
 ----
 CREATE MATERIALIZED VIEW materialize.public.mv1
     IN CLUSTER [u1]
     WITH (REFRESH = ON COMMIT)
-    AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t];
+    AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t]
+    AS OF xxxxxxx;
 EOF
 
 query T multiline

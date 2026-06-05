@@ -495,54 +495,6 @@ and also accessible in memory within the [cluster](/concepts/clusters/) the
 index is created in. Indexes help optimize query performance and make queries
 against materialized views faster.
 
-##### Using refresh strategies
-
-{{< tip >}}
-For guidance and best practices on how to use refresh strategies in Materialize,
-see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
-{{</ tip >}}
-
-{{< private-preview />}}
-
-For data that doesn't require up-to-the-second freshness, or that can be
-accessed using different patterns to optimize for performance and cost
-(e.g., hot vs. cold data), it might be appropriate to use a non-default
-[refresh strategy](/sql/create-materialized-view/#refresh-strategies).
-
-To configure a refresh strategy in a materialized view model, use the
-[`refresh_interval` configuration](#configuration-refresh-strategies).
-Materialized view models configured with a refresh strategy must be deployed in
-a [scheduled cluster](/sql/create-cluster/#scheduling) for cost savings to be
-significant — so you must also specify a valid scheduled `cluster` using the
-[`cluster` configuration](#configuration).
-
-**Filename:** models/materialized_view_refresh.sql
-```mzsql
-{{ config(materialized='materialized_view', cluster='my_scheduled_cluster', refresh_interval={'at_creation': True, 'every': '1 day', 'aligned_to': '2024-10-22T10:40:33+00:00'}) }}
-
-SELECT
-    col_a, ...
-FROM {{ ref('view_a') }}
-```
-
-The model above will be compiled to the following SQL statement:
-
-```mzsql
-CREATE MATERIALIZED VIEW database.schema.materialized_view_refresh
-IN CLUSTER my_scheduled_cluster
-WITH (
-  -- Refresh at creation, so the view is populated ahead of
-  -- the first user-specified refresh time
-  REFRESH AT CREATION,
-  -- Refresh every day at 10PM UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-10-22T10:40:33+00:00'
-) AS
-SELECT ...;
-```
-
-Materialized views configured with a refresh strategy are **not incrementally
-maintained** and must recompute their results from scratch on every refresh.
-
 ##### Using retain history
 
 {{< tip >}}
@@ -585,6 +537,52 @@ You can specify the retention period using common time units like:
 - `'1hr'` for one hour
 - `'1d'` for one day
 - `'1w'` for one week
+
+##### Using partition by
+
+{{< tip >}}
+For guidance and best practices on how to use `PARTITION BY` in Materialize,
+see [Partitioning and filter pushdown](/transform-data/patterns/partition-by/).
+{{</ tip >}}
+
+To control the internal storage order that Materialize uses for a
+materialized view, use the `partition_by` configuration. This declares the
+columns that Materialize should sort by when writing the underlying data into
+storage, so that rows with similar values are stored together. The main
+user-visible benefit is enabling [filter pushdown](/transform-data/patterns/partition-by/#filter-pushdown)
+for queries with selective filters on the partition columns.
+
+**Filename:** models/materialized_view_partitioned.sql
+```mzsql
+{{ config(
+    materialized='materialized_view',
+    partition_by=['col_a']
+) }}
+
+SELECT
+    col_a,
+    col_b,
+    col_c
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_partitioned
+WITH (PARTITION BY (col_a))
+AS
+SELECT
+    col_a,
+    col_b,
+    col_c
+FROM database.schema.view_a;
+```
+
+The listed columns must be a **prefix** of the relation's columns, and only
+columns with order-preserving types are supported. See the
+[`PARTITION BY` requirements](/transform-data/patterns/partition-by/#requirements)
+for the full list.
 
 ### Sinks
 
@@ -684,25 +682,6 @@ Component                            | Value     | Description
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
 ```
-
-### Configuration: refresh strategies {#configuration-refresh-strategies}
-
-{{< private-preview />}}
-
-**Minimum requirements:** `dbt-materialize` v1.7.3+
-
-Use the `refresh_interval` configuration to define [refresh strategies](#using-refresh-strategies)
-for materialized view models.
-
-The `refresh_interval` configuration can have the following components:
-
-Component       | Value    | Description
-----------------|----------|--------------------------------------------------
-`at`            | `string` | The specific time to refresh the materialized view at, using the [refresh at](/sql/create-materialized-view/#refresh-at) strategy.
-`at_creation`   | `bool`   | Default: `false`. Whether to trigger a first refresh when the materialized view is created.
-`every`         | `string` | The regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy.
-`aligned_to`    | `string` | The _phase_ of the regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy. If unspecified, defaults to the time when the materialized view is created.
-`on_commit`     | `bool`   | Default: `false`. Whether to use the default [refresh on commit](/sql/create-materialized-view/#refresh-on-commit) strategy. Setting this component to `true` is equivalent to **not specifying** `refresh_interval` in the configuration block, so we recommend only using it for the special case of parametrizing the configuration option (e.g., in macros).
 
 ### Configuration: model contracts and constraints {#configuration-contracts}
 

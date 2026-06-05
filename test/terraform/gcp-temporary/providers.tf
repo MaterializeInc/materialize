@@ -33,7 +33,7 @@ terraform {
     }
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~> 2.0"
+      version = "~> 2.4"
     }
   }
 }
@@ -68,4 +68,9 @@ provider "kubectl" {
 
   load_config_file  = false
   apply_retry_count = 30
+
+  # lazy_load defers kubeconfig resolution until first use (strict since
+  # alekc/kubectl v2.3.0); needed because the cluster and its kubectl_manifest
+  # resources are created in the same root module.
+  lazy_load = true
 }

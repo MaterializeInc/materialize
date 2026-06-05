@@ -29,8 +29,8 @@ mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
 ordered-float.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 prost.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }
@@ -45,6 +45,9 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+mz-sql-server-util = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
 tracing-subscriber.workspace = true
 
 [build-dependencies]
@@ -53,3 +56,4 @@ prost-build.workspace = true
 
 [features]
 default = []
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]

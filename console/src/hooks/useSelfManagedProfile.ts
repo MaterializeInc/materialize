@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import useCurrentUser from "~/api/materialize/useCurrentUser";
-import { useAuth } from "~/external-library-wrappers/oidc";
+import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 
 export interface SelfManagedProfile {
   name: string | undefined;
@@ -21,8 +21,9 @@ export interface SelfManagedProfile {
 
 /** Unified identity for self-managed UI: OIDC claims when present, with the
  * SQL role as the authoritative fallback. */
-export const useSelfManagedProfile = (): SelfManagedProfile => {
-  const auth = useAuth();
+export const useSelfManagedProfile = (
+  auth: AuthContextProps | undefined,
+): SelfManagedProfile => {
   const profile = auth?.user?.profile;
   const { results: sqlRole, isLoading } = useCurrentUser();
 

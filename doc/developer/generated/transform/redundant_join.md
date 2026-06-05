@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/redundant_join.rs
-revision: cc1d7672ff
+revision: 5d046b3ab6
 ---
 
 # mz-transform::redundant_join

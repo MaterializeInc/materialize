@@ -151,6 +151,30 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     Ok(ControlFlow::Continue)
 }
 
+/// Quote and escape `value` using only the escape sequences that
+/// `parser::split_line` recognises (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`).
+///
+/// Avoids `format!("{:?}", …)` because Rust's Debug impl also emits `\u{N}`
+/// for non-printable Unicode, which the parser does not understand and would
+/// silently corrupt on the next read.
+fn escape_for_parser(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\0"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn rewrite_result(
     state: &mut State,
     columns: Vec<&str>,
@@ -162,8 +186,12 @@ fn rewrite_result(
     for row in content {
         let mut formatted_row = Vec::<String>::new();
         for value in row {
-            if value.is_empty() || value.contains(|x: char| char::is_ascii_whitespace(&x)) {
-                formatted_row.push("\"".to_owned() + &value + "\"");
+            if value.is_empty()
+                || value.contains(|x: char| char::is_ascii_whitespace(&x))
+                || value.contains('"')
+                || value.contains('\\')
+            {
+                formatted_row.push(escape_for_parser(&value));
             } else {
                 formatted_row.push(value);
             }
@@ -827,7 +855,7 @@ impl Display for TestdriveRow<'_> {
 
         for col_str in &self.0[0..self.0.len()] {
             if col_str.contains(' ') || col_str.contains('"') || col_str.is_empty() {
-                cols.push(format!("{:?}", col_str));
+                cols.push(escape_for_parser(col_str));
             } else {
                 cols.push(col_str.to_string());
             }

@@ -1,6 +1,6 @@
 ---
 source: src/audit-log/src/lib.rs
-revision: aa7a1afd31
+revision: 7f722d60df
 ---
 
 # mz-audit-log
@@ -22,6 +22,7 @@ It defines two independent versioned hierarchies:
 
 Each `EventDetails` variant is a versioned struct (e.g. `CreateClusterReplicaV1` through `V4`).
 The `CreateRoleV1` variant records role creation events with an optional `auto_provision_source` field.
+The `AlterAddColumnV1` variant records `ALTER TABLE ADD COLUMN` events, carrying the table `id`, `column` name, `column_type`, and `nullable` flag.
 All types derive `Serialize`/`Deserialize` with stable JSON representations; the test in `lib.rs` hard-codes expected bytes to prevent accidental schema drift.
 
 ## Key types

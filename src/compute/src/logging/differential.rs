@@ -20,8 +20,10 @@ use differential_dataflow::logging::{
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::InputCapability;
@@ -36,8 +38,8 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
+use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -142,19 +144,22 @@ pub(super) fn construct(
             Timestamp,
             mz_timely_util::columnar::Column<((mz_repr::Row, mz_repr::Row), Timestamp, Diff)>,
         > {
-            consolidate_and_pack::<KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
-                input,
-                log,
-                move |data, packer, session| {
-                    for ((op, ()), time, diff) in data.iter() {
-                        let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(*op)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                        ]);
-                        session.give((data, *time, *diff))
-                    }
-                },
-            )
+            consolidate_and_pack::<
+                ColumnationChunker<_>,
+                KeyBatcher<_, _, _>,
+                ColumnBuilder<_>,
+                _,
+                _,
+                _,
+            >(input, log, move |data, packer, session| {
+                for ((op, ()), time, diff) in data.iter() {
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*op)),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                    ]);
+                    session.give((data, *time, *diff))
+                }
+            })
         }
         let worker_id = scope.index();
 
@@ -190,6 +195,7 @@ pub(super) fn construct(
                 let trace = collection
                     .mz_arrange_core::<
                         _,
+                        batcher::Chunker<_>,
                         Col2ValBatcher<_, _, _, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,

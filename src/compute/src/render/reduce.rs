@@ -12,7 +12,6 @@
 //! Consult [ReducePlan] documentation for details.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
 use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
@@ -23,10 +22,11 @@ use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
@@ -34,10 +34,13 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
 };
+use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -50,12 +53,12 @@ use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
-use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
-};
 use crate::typedefs::{
     ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
     RowRowSpine, RowSpine, RowValSpine,
+};
+use mz_row_spine::{
+    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -68,7 +71,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         mfp_after: Option<MapFilterProject>,
-    ) -> CollectionBundle<'scope, T> {
+        temporal_bucketing_strategy: ArrangementStrategy,
+    ) -> CollectionBundle<'scope, T>
+    where
+        T: crate::render::MaybeBucketByTime,
+    {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
@@ -156,15 +163,32 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     },
                 );
 
+            // Bucket the keyed `(key, val)` stream when lowering chose `TemporalBucketing`.
+            // `Reduce` builds its own arrangement via `KeyValPlan`, bypassing
+            // `ensure_collections`, so the strategy is plumbed through `PlanNode::Reduce`
+            // rather than inferred at the arrangement site. No-op for `Direct`.
+            let key_val_collection = key_val_input.as_collection();
+            let key_val_collection = if matches!(
+                temporal_bucketing_strategy,
+                ArrangementStrategy::TemporalBucketing
+            ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+            {
+                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                    .get(&self.config_set)
+                    .try_into()
+                    .expect("must fit");
+                T::maybe_apply_temporal_bucketing(
+                    key_val_collection.inner,
+                    self.as_of_frontier.clone(),
+                    summary,
+                )
+            } else {
+                key_val_collection
+            };
+
             // Render the reduce plan
-            self.render_reduce_plan(
-                reduce_plan,
-                key_val_input.as_collection(),
-                err,
-                key_arity,
-                mfp_after,
-            )
-            .leave_region(self.scope)
+            self.render_reduce_plan(reduce_plan, key_val_collection, err, key_arity, mfp_after)
+                .leave_region(self.scope)
         })
     }
 
@@ -189,7 +213,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             0..key_arity,
             ArrangementFlavor::Local(
                 arrangement,
-                errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange bundle err"),
+                errs.mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    "Arrange bundle err",
+                ),
             ),
         )
     }
@@ -278,7 +304,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let arranged = collection
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(
                 "Arranged DistinctBy",
             );
         let output = arranged
@@ -384,7 +415,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let arranged = differential_dataflow::collection::concatenate(input.scope(), to_collect)
-            .mz_arrange::<RowValBatcher<_, _, _>, RowValBuilder<_, _, _>, RowValSpine<_, _, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowValBatcher<_, _, _>,
+                RowValBuilder<_, _, _>,
+                RowValSpine<_, _, _>,
+            >(
             "Arranged ReduceFuseBasic input",
         );
 
@@ -534,7 +570,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             "FusedReduceUnnestList"
         };
         let arranged = partial
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(&format!(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(&format!(
                 "Arranged {name}"
             ));
         let oks = if !fused_unnest_list {
@@ -740,7 +781,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         Bu: Builder<
                 Time = T,
                 Input: Container
-                           + InternalMerge
                            + ClearContainer
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
@@ -756,7 +796,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, _>,
+            >(
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
             .mz_reduce_abelian::<_, Bu, Tr>(&output_name, move |_, source, t| {
@@ -881,7 +926,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
                 // view mz_introspection.mz_expected_group_size_advice.
                 let arranged = partial
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(
                         "Arrange ReduceMinsMaxes",
                     );
                 // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
@@ -1066,7 +1116,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         Bu: Builder<
                 Time = T,
                 Input: Container
-                           + InternalMerge
                            + ClearContainer
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
@@ -1077,7 +1126,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(
                 "Arranged MinsMaxesHierarchical input",
             );
 
@@ -1197,7 +1251,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let partial: KeyCollection<_, _, _> = partial.into();
         let arranged = partial
-            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, Vec<ReductionMonoid>>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, Vec<ReductionMonoid>>,
+            >(
                 "ArrangeMonotonic [val: empty]",
             );
         let output = arranged
@@ -1344,7 +1403,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     let value = row.iter().nth(datum_index).unwrap();
                     (pairer.merge(&key, std::iter::once(value)), ())
                 })
-                .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _>,
+                    RowSpine<_, _>,
+                >(
                     "Arranged Accumulable Distinct [val: empty]",
                 )
                 .mz_reduce_abelian::<_, RowBuilder<_, _>, RowSpine<_, _>>(
@@ -1382,7 +1446,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
         let arranged = collection
-            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, (Vec<Accum>, Diff)>>(
+            .mz_arrange::<
+                ColumnationChunker<_>,
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, (Vec<Accum>, Diff)>,
+            >(
                 "ArrangeAccumulable [val: empty]",
             );
         let arranged_output = arranged
@@ -1525,7 +1594,66 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
     }
 }
 
-static FLOAT_SCALE: LazyLock<f64> = LazyLock::new(|| f64::from(1 << 24));
+/// The number of fractional bits of binary precision retained by the
+/// fixed-point representation used to accumulate float sums. The fixed-point
+/// scale is `FLOAT_SCALE == 2^FLOAT_SCALE_EXP`.
+const FLOAT_SCALE_EXP: u32 = 24;
+
+/// The fixed-point scale applied to float sums, i.e. `2^FLOAT_SCALE_EXP`.
+#[allow(clippy::as_conversions)] // Integer-to-float cast, exact and const-evaluable.
+const FLOAT_SCALE: f64 = (1_u64 << FLOAT_SCALE_EXP) as f64;
+
+/// Maps a finite `f64` onto the fixed-point `i128` domain used to accumulate
+/// float sums, i.e. computes `trunc(n * FLOAT_SCALE)` reduced modulo `2^128`.
+///
+/// Conceptually this multiplies `n` by `FLOAT_SCALE` and truncates towards zero,
+/// but it does so using *wrapping* (modulo `2^128`) rather than *saturating*
+/// semantics, and it never forms the intermediate product `n * FLOAT_SCALE` as
+/// an `f64` (which could itself overflow to infinity for very large `n`).
+///
+/// Wrapping is what makes this conversion a group homomorphism into the additive
+/// group of `i128` (mod `2^128`), matching the wrapping arithmetic used when
+/// accumulators are combined and retracted. As a result, a set of large finite
+/// values whose *sum* is representable produces the correct result even when the
+/// individual values fall outside the representable fixed-point range. Saturating
+/// instead breaks this: e.g. `1.1e31` and `-1.1e31` both overflow the domain and
+/// would saturate to `i128::MAX` and `i128::MIN`, which sum to `-1` rather than
+/// `0` (see database-issues#11265).
+fn float_to_fixed_point(n: f64) -> i128 {
+    debug_assert!(n.is_finite());
+
+    // Decompose `n` into integer parts such that `n == sign * mantissa *
+    // 2^exponent`. Folding in the `* 2^FLOAT_SCALE_EXP` scaling then amounts to
+    // shifting `mantissa` left by `exponent + FLOAT_SCALE_EXP` bits.
+    let (mantissa, exponent, sign) = Float::integer_decode(n);
+    let significand = u128::from(mantissa);
+    let exp = i64::from(exponent) + i64::from(FLOAT_SCALE_EXP);
+
+    let magnitude: u128 = if exp >= 0 {
+        // Left shifts of 128 or more bits leave nothing within the 128-bit
+        // window; smaller shifts keep only the low 128 bits (i.e. mod `2^128`).
+        match u32::try_from(exp) {
+            Ok(shift) if shift < 128 => significand << shift,
+            _ => 0,
+        }
+    } else {
+        // Right shift truncates the fractional part towards zero. Subnormals
+        // (and zero) shift entirely out of the window and become zero.
+        match u32::try_from(-exp) {
+            Ok(shift) if shift < 128 => significand >> shift,
+            _ => 0,
+        }
+    };
+
+    // Reinterpret the magnitude as a signed `i128` (wrapping into the signed
+    // domain) and apply the sign of `n`.
+    let magnitude = magnitude.cast_signed();
+    if sign < 0 {
+        magnitude.wrapping_neg()
+    } else {
+        magnitude
+    }
+}
 
 fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
     match aggregate_func {
@@ -1577,10 +1705,10 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             let accum = if nans.is_positive() || pos_infs.is_positive() || neg_infs.is_positive() {
                 AccumCount::ZERO
             } else {
-                // This operation will truncate to i128::MAX if out of range.
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                { (n * *FLOAT_SCALE) as i128 }.into()
+                // Wrap (rather than saturate) on overflow, so that the mapping is
+                // a group homomorphism and large finite values whose sum is in
+                // range still produce correct results (database-issues#11265).
+                float_to_fixed_point(n).into()
             };
 
             Accum::Float {
@@ -1757,11 +1885,8 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 } else if neg_infs.is_positive() {
                     Datum::from(f32::NEG_INFINITY)
                 } else {
-                    // TODO(benesch): remove potentially dangerous usage of `as`.
-                    #[allow(clippy::as_conversions)]
-                    {
-                        Datum::from(((accum.into_inner() as f64) / *FLOAT_SCALE) as f32)
-                    }
+                    let sum = f64::cast_lossy(accum.into_inner()) / FLOAT_SCALE;
+                    Datum::from(f32::cast_lossy(sum))
                 }
             }
             (
@@ -1783,11 +1908,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 } else if neg_infs.is_positive() {
                     Datum::from(f64::NEG_INFINITY)
                 } else {
-                    // TODO(benesch): remove potentially dangerous usage of `as`.
-                    #[allow(clippy::as_conversions)]
-                    {
-                        Datum::from((accum.into_inner() as f64) / *FLOAT_SCALE)
-                    }
+                    Datum::from(f64::cast_lossy(accum.into_inner()) / FLOAT_SCALE)
                 }
             }
             (
@@ -2465,5 +2586,99 @@ mod window_agg_helpers {
         fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
             temp_storage.make_datum(|packer| packer.extend(self.monoid.finalize().iter()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The saturating conversion that `float_to_fixed_point` replaces. Used to
+    /// assert that the new wrapping conversion agrees on the in-range values
+    /// where the old conversion was already correct.
+    #[allow(clippy::as_conversions)]
+    fn saturating_convert(n: f64) -> i128 {
+        (n * FLOAT_SCALE) as i128
+    }
+
+    #[mz_ore::test]
+    fn float_to_fixed_point_matches_saturating_in_range() {
+        // For values whose scaled magnitude comfortably fits in an `i128`, the
+        // wrapping conversion must produce exactly the same result the previous
+        // saturating cast did.
+        let cases = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.1,
+            -0.1,
+            0.5,
+            -0.5,
+            3.25,
+            -3.25,
+            123456.789,
+            -123456.789,
+            1e10,
+            -1e10,
+            1e20,
+            -1e20,
+            5e30, // large, but scaled magnitude still fits comfortably in i128
+            -5e30,
+        ];
+        for n in cases {
+            assert_eq!(
+                float_to_fixed_point(n),
+                saturating_convert(n),
+                "mismatch for n = {n}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn float_to_fixed_point_truncates_toward_zero() {
+        // 1.75 * 2^24 = 29360128, exactly representable.
+        assert_eq!(float_to_fixed_point(1.75), 29_360_128);
+        assert_eq!(float_to_fixed_point(-1.75), -29_360_128);
+
+        // Fractional results truncate toward zero, matching the previous cast.
+        let frac = 0.123_456_7_f64;
+        assert_eq!(float_to_fixed_point(frac), saturating_convert(frac));
+        assert_eq!(float_to_fixed_point(-frac), saturating_convert(-frac));
+        assert_eq!(float_to_fixed_point(-frac), -float_to_fixed_point(frac));
+    }
+
+    #[mz_ore::test]
+    fn float_to_fixed_point_subnormals_round_to_zero() {
+        assert_eq!(float_to_fixed_point(0.0), 0);
+        assert_eq!(float_to_fixed_point(-0.0), 0);
+        assert_eq!(float_to_fixed_point(f64::MIN_POSITIVE / 2.0), 0);
+        assert_eq!(float_to_fixed_point(5e-324), 0); // smallest subnormal
+    }
+
+    #[mz_ore::test]
+    fn float_to_fixed_point_cancels_large_finite_values() {
+        // Regression test for database-issues#11265: large finite values that
+        // individually overflow the fixed-point domain must still sum to the
+        // correct result when their mathematical sum is representable. The
+        // previous saturating conversion produced `i128::MAX + i128::MIN == -1`.
+        for &n in &[1.1e31_f64, 1e32, 5e33, 1e284] {
+            assert_eq!(
+                float_to_fixed_point(n).wrapping_add(float_to_fixed_point(-n)),
+                0,
+                "n = {n} did not cancel with -n"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn float_to_fixed_point_sum_via_accumulator() {
+        // Exercise the full accumulate-then-finalize path for the reported case.
+        let func = AggregateFunc::SumFloat64;
+        let mut acc = accumulable_zero(&func);
+        acc.plus_equals(&datum_to_accumulator(&func, Datum::from(1.1e31_f64)));
+        acc.plus_equals(&datum_to_accumulator(&func, Datum::from(-1.1e31_f64)));
+        let datum = finalize_accum(&func, &acc, Diff::from(2_i64));
+        assert_eq!(datum, Datum::from(0.0_f64));
     }
 }

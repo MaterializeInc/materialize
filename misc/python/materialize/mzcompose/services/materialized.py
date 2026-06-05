@@ -71,6 +71,8 @@ class Materialized(Service):
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
         memory: str | None = None,
+        memory_swap: str | None = None,
+        mem_swappiness: int | None = None,
         cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
@@ -99,6 +101,8 @@ class Materialized(Service):
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
+        builtin_system_cluster_replication_factor: int | None = None,
+        builtin_probe_cluster_replication_factor: int | None = None,
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
         config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
@@ -119,6 +123,10 @@ class Materialized(Service):
             bootstrap_replica_size = bootstrap_cluster_replica_size()
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
+        if builtin_system_cluster_replication_factor is None:
+            builtin_system_cluster_replication_factor = default_replication_factor
+        if builtin_probe_cluster_replication_factor is None:
+            builtin_probe_cluster_replication_factor = default_replication_factor
 
         environment = [
             "MZ_NO_TELEMETRY=1",
@@ -158,8 +166,8 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             # Note(SangJunBak): mz_system and mz_probe have no replicas by default in materialized
             # but we re-enable them here since many of our tests rely on them.
-            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
-            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={builtin_system_cluster_replication_factor}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={builtin_probe_cluster_replication_factor}",
             f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
@@ -325,6 +333,15 @@ class Materialized(Service):
             if cpu:
                 limits["cpus"] = cpu
             config["deploy"] = {"resources": {"limits": limits}}
+
+        # Swap controls live as top-level compose v2 service keys, not under
+        # `deploy.resources`. `memswap_limit > mem_limit` lets the container use
+        # host swap so the kernel can page out anonymous memory rather than OOM.
+        # `mem_swappiness=100` biases the kernel toward swapping aggressively.
+        if memory_swap is not None:
+            config["memswap_limit"] = memory_swap
+        if mem_swappiness is not None:
+            config["mem_swappiness"] = mem_swappiness
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133

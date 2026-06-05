@@ -33,7 +33,7 @@ terraform {
     }
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~> 2.0"
+      version = "~> 2.4"
     }
   }
 }
@@ -75,4 +75,9 @@ provider "kubectl" {
   cluster_ca_certificate = base64decode(module.aks.kube_config[0].cluster_ca_certificate)
 
   load_config_file = false
+
+  # lazy_load defers kubeconfig resolution until first use (strict since
+  # alekc/kubectl v2.3.0); needed because the cluster and its kubectl_manifest
+  # resources are created in the same root module.
+  lazy_load = true
 }

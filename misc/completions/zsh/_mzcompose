@@ -58,7 +58,7 @@ _shtab_mzcompose_options=(
   "--optimized[build Rust binaries with the optimized profile (optimizations, no LTO, no debug symbols)]"
   "--coverage[whether to enable code coverage compilation flags]"
   "--sanitizer[whether to enable a sanitizer]:sanitizer:(address hwaddress cfi thread leak undefined none)"
-  "--arch[the CPU architecture to build for]:arch:(X86_64 AARCH64)"
+  "--arch[the CPU architecture to build for]:arch:"
   "--image-registry[the Docker image registry to pull images from and push images to]:image_registry:"
   "--image-prefix[a prefix to apply to all Docker image names]:image_prefix:"
 )

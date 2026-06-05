@@ -100,6 +100,29 @@ EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AN
 ----
 materialize.public.jsonb_fields  3018  0  2  0
 
+# Regression test for PER-6: filter pushdown over a CASE that picks between two
+# JSON columns must not prune parts where accessing a key only present in one
+# branch could yield NULL on the other. Before the fix, the union of two `Nested`
+# specs with disjoint keys discarded one side's contribution, so this query
+# returned 0 instead of 3 (or panicked under audit).
+
+statement ok
+CREATE TABLE case_jsonb (flag bool, j1 jsonb, j2 jsonb)
+
+statement ok
+INSERT INTO case_jsonb VALUES
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (true,  '{"x":"a"}', '{"y":"b"}'),
+    (false, '{"x":"a"}', '{"y":"b"}'),
+    (false, '{"x":"a"}', '{"y":"b"}')
+
+query I
+SELECT count(*) FROM case_jsonb
+WHERE ((CASE WHEN flag THEN j1 ELSE j2 END) ->> 'y') IS NULL
+----
+3
+
 # EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
 
 statement ok

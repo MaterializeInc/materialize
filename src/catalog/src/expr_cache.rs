@@ -398,23 +398,21 @@ impl ExpressionCacheHandle {
             ExpressionCache::open(config).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn(|| "expression-cache-task", async move {
-            loop {
-                while let Some(op) = rx.recv().await {
-                    match op {
-                        CacheOperation::Update {
-                            new_local_expressions,
-                            new_global_expressions,
-                            invalidate_ids,
-                            trigger: _trigger,
-                        } => {
-                            cache
-                                .update(
-                                    new_local_expressions,
-                                    new_global_expressions,
-                                    invalidate_ids,
-                                )
-                                .await
-                        }
+            while let Some(op) = rx.recv().await {
+                match op {
+                    CacheOperation::Update {
+                        new_local_expressions,
+                        new_global_expressions,
+                        invalidate_ids,
+                        trigger: _trigger,
+                    } => {
+                        cache
+                            .update(
+                                new_local_expressions,
+                                new_global_expressions,
+                                invalidate_ids,
+                            )
+                            .await
                     }
                 }
             }

@@ -42,7 +42,7 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::func::variadic;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, func};
+use mz_expr::{AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, func};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -139,7 +139,6 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
-    pub enable_guard_subquery_tablefunc: bool,
     pub enable_cast_elimination: bool,
     pub enable_simplify_quantified_comparisons: bool,
 }
@@ -149,7 +148,6 @@ impl Default for Config {
         Self {
             enable_new_outer_join_lowering: false,
             enable_variadic_left_join_lowering: false,
-            enable_guard_subquery_tablefunc: false,
             enable_cast_elimination: false,
             enable_simplify_quantified_comparisons: false,
         }
@@ -161,7 +159,6 @@ impl From<&SystemVars> for Config {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
-            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
         }
@@ -1998,34 +1995,19 @@ fn apply_scalar_subquery(
                     None,
                 );
 
-                let use_guard = context.config.enable_guard_subquery_tablefunc;
-
                 // Errors should result from counts > 1.
-                let errors = if use_guard {
-                    counts
-                        .flat_map(
-                            mz_expr::TableFunc::GuardSubquerySize {
-                                column_type: col_type.clone().scalar_type,
-                            },
-                            vec![MirScalarExpr::column(inner_arity)],
-                        )
-                        .project(
-                            (0..inner_arity)
-                                .chain(Some(inner_arity + 1))
-                                .collect::<Vec<_>>(),
-                        )
-                } else {
-                    counts
-                        .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                            MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
-                            func::Gt,
-                        )])
-                        .project((0..inner_arity).collect::<Vec<_>>())
-                        .map_one(MirScalarExpr::literal(
-                            Err(mz_expr::EvalError::MultipleRowsFromSubquery),
-                            ReprScalarType::from(&col_type.scalar_type),
-                        ))
-                };
+                let errors = counts
+                    .flat_map(
+                        mz_expr::TableFunc::GuardSubquerySize {
+                            column_type: col_type.clone().scalar_type,
+                        },
+                        vec![MirScalarExpr::column(inner_arity)],
+                    )
+                    .project(
+                        (0..inner_arity)
+                            .chain(Some(inner_arity + 1))
+                            .collect::<Vec<_>>(),
+                    );
                 // Return `get_select` and any errors added in.
                 Ok::<_, PlanError>(get_select.union(errors))
             })?;

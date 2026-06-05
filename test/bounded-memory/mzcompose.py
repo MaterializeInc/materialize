@@ -1495,11 +1495,6 @@ def run_scenario(
 
         if scenario.needs_iceberg:
             username, key = setup_polaris_for_iceberg(c)
-            c.sql(
-                "ALTER SYSTEM SET enable_iceberg_sink = true;",
-                port=6877,
-                user="mz_system",
-            )
             extra_testdrive_args = [
                 f"--var=s3-access-key={key}",
                 f"--var=s3-access-user={username}",

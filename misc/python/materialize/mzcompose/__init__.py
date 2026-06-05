@@ -33,7 +33,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.9.4"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "8.2.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -79,13 +79,10 @@ def get_minimal_system_parameters(
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
-        "enable_copy_to_expr": "true",
-        "enable_copy_from_remote": "true",
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
-        "enable_iceberg_sink": "true",
         "enable_introspection_subscribes": "true",
         "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
@@ -98,7 +95,6 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
-        "enable_sql_server_source": "true",
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
@@ -498,6 +494,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
+    "enable_column_paged_batcher",
+    "enable_column_paged_batcher_spill",
+    "column_paged_batcher_budget_fraction",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -610,6 +609,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_poll_max_wait",
     "kafka_default_aws_privatelink_endpoint_identification_algorithm",
     "kafka_buffered_event_resize_threshold_elements",
+    "kafka_low_watermark_check",
     "mysql_replication_heartbeat_interval",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",

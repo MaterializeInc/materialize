@@ -20,6 +20,7 @@ use aws_types::region::Region;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_repr::{CatalogItemId, GlobalId};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -36,7 +37,8 @@ use crate::{
 };
 
 /// AWS connection configuration.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsConnection {
     pub auth: AwsAuth,
     /// The AWS region to use.
@@ -56,7 +58,8 @@ impl AlterCompatible for AwsConnection {
 }
 
 /// Describes how to authenticate with AWS.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum AwsAuth {
     /// Authenticate with an access key.
     Credentials(AwsCredentials),
@@ -65,7 +68,8 @@ pub enum AwsAuth {
 }
 
 /// AWS credentials to access an AWS account using user access keys.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsCredentials {
     /// The AWS API Access Key required to connect to the AWS account.
     pub access_key_id: StringOrSecret,
@@ -113,7 +117,8 @@ impl AwsCredentials {
 }
 
 /// Describes an AWS IAM role to assume.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsAssumeRole {
     /// The Amazon Resource Name of the role to assume.
     pub arn: String,

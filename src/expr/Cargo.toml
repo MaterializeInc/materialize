@@ -68,18 +68,21 @@ tracing.workspace = true
 uncased.workspace = true
 unicode-normalization.workspace = true
 uuid = { workspace = true, features = ["v5"] }
-proptest.workspace = true
-proptest-derive.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 smallvec.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true
+mz-expr = { path = ".", features = ["proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 mz-transform = { path = "../transform" }
+proptest.workspace = true
+proptest-derive.workspace = true
 rand.workspace = true
 
 [build-dependencies]
@@ -88,3 +91,4 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]

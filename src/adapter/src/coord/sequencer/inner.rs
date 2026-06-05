@@ -26,7 +26,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_expr::{
-    CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
+    CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -97,7 +97,9 @@ use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
+};
 use crate::coord::read_then_write::validate_read_then_write_dependencies;
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
@@ -159,10 +161,12 @@ struct CreateSourceInner {
 }
 
 impl Coordinator {
-    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
-    /// execute both on and off of the coordinator thread. Stages can either produce another stage
-    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
-    /// tracing.
+    /// Sequences a [Staged] plan.
+    ///
+    /// This is designed for plans that execute both on and off the coordinator
+    /// thread. Stages can either produce another stage to execute or a final
+    /// response. Maintains the connection-scoped cancel watch in
+    /// `connection_cancel_watches` while a stage is cancelable.
     pub(crate) async fn sequence_staged<S>(
         &mut self,
         mut ctx: S::Ctx,
@@ -180,7 +184,7 @@ impl Coordinator {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
                     if let Some((_prev_tx, prev_rx)) = self
-                        .staged_cancellation
+                        .connection_cancel_watches
                         .insert(session.conn_id().clone(), watch::channel(false))
                     {
                         let was_canceled = *prev_rx.borrow();
@@ -192,7 +196,7 @@ impl Coordinator {
                 } else {
                     // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
                     // when cancel_enabled may have been true on an earlier stage.
-                    self.staged_cancellation.remove(session.conn_id());
+                    self.connection_cancel_watches.remove(session.conn_id());
                 }
             } else {
                 cancel_enabled = false
@@ -225,6 +229,8 @@ impl Coordinator {
         }
     }
 
+    /// Waits for either the spawned stage work to complete or cancellation to
+    /// be signaled through the connection-scoped cancel watch.
     fn handle_spawn<C, T, F>(
         &self,
         ctx: C,
@@ -238,7 +244,7 @@ impl Coordinator {
     {
         let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
             .session()
-            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+            .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
             let mut rx = rx.clone();
             Box::pin(async move {
@@ -2032,11 +2038,11 @@ impl Coordinator {
                     span: Span::current(),
                     writes: collected_writes,
                     write_locks: validated_locks,
-                    pending_txn: PendingTxn {
+                    responder: UserWriteResponder::Session(PendingTxn {
                         ctx,
                         response,
                         action,
-                    },
+                    }),
                 });
                 return;
             }
@@ -2177,6 +2183,15 @@ impl Coordinator {
     ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[
+                        Datum::Null,
+                    ]))));
+                    return;
+                };
+
                 if ctx.session().conn_id().unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we send
                     // back a canceled resposne to the client issuing the query,
@@ -2215,6 +2230,12 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                let Some(connection_id) = connection_id else {
+                    // The argument was `NULL`, so, like in PostgreSQL, the
+                    // function returns `NULL`.
+                    return Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::Null])));
+                };
+
                 if conn_id.unhandled() == connection_id {
                     // As a special case, if we're canceling ourselves, we return
                     // a canceled response to the client issuing the query,

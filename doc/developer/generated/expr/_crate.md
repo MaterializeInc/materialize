@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/lib.rs
-revision: 7892865e00
+revision: 40e5dd1af8
 ---
 
 # mz-expr
@@ -11,4 +11,5 @@ The crate provides two primary IR types: `MirScalarExpr` (scalar expressions inc
 Supporting modules cover the full scalar function library (`scalar::func`), the fused `MapFilterProject` operator (`linear`), an abstract interpreter for filter pushdown (`interpret`), visitor infrastructure (`visit`), `EXPLAIN` rendering (`explain`), and sorted row collections (`row`).
 
 Key internal dependencies: `mz-repr` (datum/row types), `mz-expr-derive` (the `#[sqlfunc]` proc-macro), `mz-proto` (protobuf serialization), `mz-pgrepr`/`mz-pgtz` (PostgreSQL type compatibility), and `mz-ore` (utilities).
+The crate also exports the `Columns`, `Eval`, and `OptimizableExpr` traits. `Columns` abstracts over column-reference operations; `Eval` abstracts over scalar evaluation; `OptimizableExpr` is the bound required by the generic `MapFilterProject<E>` parameter, combining the common operations needed for optimization (temporal predicate detection, error-literal detection, and column manipulation) into a single trait.
 Downstream consumers include `mz-sql` (which lowers SQL AST to MIR), `mz-transform` (which optimizes MIR), `mz-compute` (which executes MIR), and `mz-adapter` (which evaluates unmaterializable functions).

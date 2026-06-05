@@ -628,6 +628,46 @@ db error: ERROR: access to system object mz_show_clusters is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 # =============================================================================
+# Test: SHOW COLUMNS is blocked when restrict_to_user_objects is active (SQL-301)
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SHOW COLUMNS FROM agent_objects.next_arrivals;
+----
+db error: ERROR: access to system object mz_show_columns is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# Regression test: SHOW COLUMNS succeeds for the non-restricted agent (positive
+# side of the SQL-301 fix). The system catalog IDs from the inner query land
+# in sql_impl_resolved_ids — not resolved_ids — and therefore do not generate
+# spurious privilege errors or "unstable dependencies" for unrestricted sessions.
+simple conn=agent,user=agent
+SELECT count(*) FROM (SHOW COLUMNS FROM agent_objects.next_arrivals);
+----
+2
+COMPLETE 1
+
+# =============================================================================
+# Test: EXPLAIN ANALYZE is blocked when restrict_to_user_objects is active (SQL-301)
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+EXPLAIN ANALYZE HINTS FOR MATERIALIZED VIEW agent_objects.next_arrivals;
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.agent_objects.next_arrivals
+
+simple conn=agent_restricted,user=agent
+EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW agent_objects.next_arrivals;
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.agent_objects.next_arrivals
+
+simple conn=agent_restricted,user=agent
+EXPLAIN ANALYZE CLUSTER MEMORY;
+----
+db error: ERROR: access to system object mz_arrangement_sizes_per_worker is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
 # Test: pg_catalog access is blocked when restrict_to_user_objects is active
 # =============================================================================
 

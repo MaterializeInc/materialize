@@ -30,6 +30,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
+use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
@@ -38,7 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
@@ -173,17 +174,8 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
     let options = parse_options(params.get("options").unwrap_or(&String::new()));
-
-    // If oidc_auth_enabled exists as an option, return its value and filter it from
-    // the remaining options.
-    let (oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
-    let authenticator = get_authenticator(
-        authenticator_kind,
-        frontegg,
-        oidc,
-        adapter_client.clone(),
-        oidc_auth_enabled,
-    );
+    let authenticator =
+        get_authenticator(authenticator_kind, frontegg, oidc, adapter_client.clone());
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
     // this is a superset of internal users
@@ -216,7 +208,11 @@ where
                 }
             };
 
-            let auth_response = frontegg.authenticate(&user, &password).await;
+            let group_claim =
+                OIDC_GROUP_CLAIM.get(adapter_client.get_system_vars().await.dyncfgs());
+            let auth_response = frontegg
+                .authenticate(&user, &password, Some(&group_claim))
+                .await;
             match auth_response {
                 // Create a session based on the auth session.
                 //
@@ -225,6 +221,7 @@ where
                 // different casing than the user supplied via the pgwire
                 // username fN
                 Ok((mut auth_session, authenticated)) => {
+                    let groups = auth_session.groups();
                     let session = adapter_client.new_session(
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
@@ -234,7 +231,7 @@ where
                             external_metadata_rx: Some(auth_session.external_metadata_rx()),
                             helm_chart_version,
                             authenticator_kind,
-                            groups: None,
+                            groups,
                         },
                         authenticated,
                     );
@@ -253,49 +250,77 @@ where
             }
         }
         Authenticator::Oidc(oidc) => {
-            // OIDC authentication: JWT sent as password in cleartext flow
-            let jwt = match request_cleartext_password(conn).await {
+            // OIDC listener: accepts either a JWT (uses OIDC authentication) or a
+            // plain SQL password (uses SQL password authentication).
+            let password = match request_cleartext_password(conn).await {
                 Ok(password) => password,
                 Err(PasswordRequestError::IoError(e)) => return Err(e),
                 Err(PasswordRequestError::InvalidPasswordError(e)) => {
                     return conn.send(e).await;
                 }
             };
-            let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
-            match auth_response {
-                Ok((mut claims, authenticated)) => {
-                    let groups = claims.groups.take();
-                    let session = adapter_client.new_session(
-                        SessionConfig {
-                            conn_id: conn.conn_id().clone(),
-                            uuid: conn_uuid,
-                            user: std::mem::take(&mut claims.user),
-                            client_ip: conn.peer_addr().clone(),
-                            external_metadata_rx: None,
-                            helm_chart_version,
-                            authenticator_kind,
-                            groups,
-                        },
-                        authenticated,
-                    );
-                    // No invalidation of the auth session once authenticated,
-                    // so auth session lasts indefinitely.
-                    (session, pending().right_future())
+            if is_jwt(&password) {
+                let auth_response = oidc.authenticate(&password, Some(&user)).await;
+                match auth_response {
+                    Ok((mut claims, authenticated)) => {
+                        let groups = claims.groups.take();
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: std::mem::take(&mut claims.user),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: None,
+                                helm_chart_version,
+                                authenticator_kind,
+                                groups,
+                            },
+                            authenticated,
+                        );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
+                        (session, pending().right_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn.send(err.into_response()).await;
+                    }
                 }
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn.send(err.into_response()).await;
-                }
+            } else {
+                let session = match authenticate_with_password(
+                    conn,
+                    &adapter_client,
+                    user,
+                    Password(password),
+                    conn_uuid,
+                    helm_chart_version,
+                )
+                .await
+                {
+                    Ok(session) => session,
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
+                };
+                (session, pending().right_future())
             }
         }
         Authenticator::Password(adapter_client) => {
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
             let session = match authenticate_with_password(
                 conn,
                 &adapter_client,
                 user,
+                Password(password),
                 conn_uuid,
                 helm_chart_version,
-                authenticator_kind,
             )
             .await
             {
@@ -618,29 +643,10 @@ where
     }
 }
 
-/// Gets `oidc_auth_enabled` from options if it exists.
-/// Returns options with oidc_auth_enabled extracted
-/// and the oidc_auth_enabled value.
-fn extract_oidc_auth_enabled_from_options(
-    options: Result<Vec<(String, String)>, ()>,
-) -> (bool, Result<Vec<(String, String)>, ()>) {
-    let options = match options {
-        Ok(opts) => opts,
-        Err(_) => return (false, options),
-    };
-
-    let mut new_options = Vec::new();
-    let mut oidc_auth_enabled = false;
-
-    for (k, v) in options {
-        if k == "oidc_auth_enabled" {
-            oidc_auth_enabled = v.parse::<bool>().unwrap_or(false);
-        } else {
-            new_options.push((k, v));
-        }
-    }
-
-    (oidc_auth_enabled, Ok(new_options))
+/// Decides if a given password is a JWT by checking
+/// if we can decode its header.
+fn is_jwt(password: &str) -> bool {
+    jsonwebtoken::decode_header(password).is_ok()
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -769,21 +775,16 @@ where
 /// Helper for password-based authentication using AdapterClient
 /// and returns an authenticated session.
 async fn authenticate_with_password<A>(
-    conn: &mut FramedConn<A>,
+    conn: &FramedConn<A>,
     adapter_client: &mz_adapter::Client,
     user: String,
+    password: Password,
     conn_uuid: Uuid,
     helm_chart_version: Option<String>,
-    authenticator_kind: mz_auth::AuthenticatorKind,
 ) -> Result<Session, PasswordRequestError>
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
 {
-    let password = match request_cleartext_password(conn).await {
-        Ok(password) => Password(password),
-        Err(e) => return Err(e),
-    };
-
     let authenticated = match adapter_client.authenticate(&user, &password).await {
         Ok(authenticated) => authenticated,
         Err(err) => {
@@ -802,7 +803,7 @@ where
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
             helm_chart_version,
-            authenticator_kind,
+            authenticator_kind: mz_auth::AuthenticatorKind::Password,
             groups: None,
         },
         authenticated,
@@ -3199,9 +3200,6 @@ fn get_authenticator(
     frontegg: Option<FronteggAuthenticator>,
     oidc: GenericOidcAuthenticator,
     adapter_client: mz_adapter::Client,
-    // If oidc_auth_enabled exists as an option in the pgwire connection's
-    // `option` parameter
-    oidc_auth_option_enabled: bool,
 ) -> Authenticator {
     match authenticator_kind {
         listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
@@ -3209,15 +3207,7 @@ fn get_authenticator(
         )),
         listeners::AuthenticatorKind::Password => Authenticator::Password(adapter_client),
         listeners::AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
-        listeners::AuthenticatorKind::Oidc => {
-            if oidc_auth_option_enabled {
-                Authenticator::Oidc(oidc)
-            } else {
-                // Fallback to password authentication if oidc auth is not enabled
-                // through options.
-                Authenticator::Password(adapter_client)
-            }
-        }
+        listeners::AuthenticatorKind::Oidc => Authenticator::Oidc(oidc),
         listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }
@@ -3250,6 +3240,11 @@ struct CopyRowScanner {
     scan_pos: usize,
     last_row_end: Option<usize>,
     end_marker_end: Option<usize>,
+    // Byte offset within `data` at which the in-progress CSV record begins.
+    // Used to verify the end-of-copy marker against the raw input bytes,
+    // distinguishing a literal `\.` line from a quoted CSV value `"\."`
+    // whose decoded form is also `\.`.
+    record_start: usize,
     csv: Option<CsvScanState>,
 }
 
@@ -3258,8 +3253,6 @@ struct CsvScanState {
     reader: csv_core::Reader,
     output: Vec<u8>,
     ends: Vec<usize>,
-    record: Vec<u8>,
-    record_ends: Vec<usize>,
     skip_first_record: bool,
 }
 
@@ -3280,6 +3273,7 @@ impl CopyRowScanner {
             scan_pos: 0,
             last_row_end: None,
             end_marker_end: None,
+            record_start: 0,
             csv,
         }
     }
@@ -3293,17 +3287,11 @@ impl CopyRowScanner {
             let mut input = &data[self.scan_pos..];
             let mut consumed = 0usize;
             while !input.is_empty() {
-                let (result, n_input, n_output, n_ends) =
+                let (result, n_input, _n_output, _n_ends) =
                     csv.reader
                         .read_record(input, &mut csv.output, &mut csv.ends);
                 consumed += n_input;
                 input = &input[n_input..];
-                if !csv.output.is_empty() {
-                    csv.record.extend_from_slice(&csv.output[..n_output]);
-                }
-                if !csv.ends.is_empty() {
-                    csv.record_ends.extend_from_slice(&csv.ends[..n_ends]);
-                }
 
                 match result {
                     ReadRecordResult::InputEmpty => break,
@@ -3325,19 +3313,42 @@ impl CopyRowScanner {
                             let is_marker = if csv.skip_first_record {
                                 csv.skip_first_record = false;
                                 false
-                            } else if csv.record_ends.len() == 1 {
-                                let end = csv.record_ends[0];
-                                end == 2 && csv.record.get(0..end) == Some(b"\\.")
                             } else {
-                                false
+                                // Detect the marker against the raw input
+                                // bytes, not the CSV-decoded record. A quoted
+                                // data row `"\."` decodes to `\.` but must be
+                                // imported as data; only a bare `\.` line
+                                // terminates the COPY.
+                                let raw = &data[self.record_start..row_end];
+                                // csv-core ends a CRLF record after the `\r`,
+                                // leaving the trailing `\n` as the leading byte
+                                // of the next record's span; a CR-only record
+                                // ends in a lone `\r`. So a `\.` marker record's
+                                // raw span can be `\.\n` (LF), `\n\.\r` (CRLF)
+                                // or `\.\r` (CR). Trim CR/LF from both ends
+                                // before comparing — a trailing-only strip would
+                                // miss the CRLF/CR forms. Quoted `"\."` data
+                                // keeps its surrounding quotes after trimming and
+                                // is therefore correctly rejected.
+                                let start = raw
+                                    .iter()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trailing = raw[start..]
+                                    .iter()
+                                    .rev()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trimmed = &raw[start..raw.len() - trailing];
+                                trimmed == b"\\."
                             };
                             if is_marker {
                                 self.end_marker_end = Some(row_end);
+                                self.record_start = row_end;
                                 break;
                             }
                         }
-                        csv.record.clear();
-                        csv.record_ends.clear();
+                        self.record_start = row_end;
                     }
                 }
             }
@@ -3380,12 +3391,27 @@ impl CopyRowScanner {
         self.end_marker_end = self
             .end_marker_end
             .and_then(|end| end.checked_sub(split_pos));
+        // `record_start` is only maintained for the CSV path; the text and
+        // binary paths leave it at 0. For CSV, splits always occur at a
+        // completed-row boundary, so the in-progress record (if any) starts at
+        // the new beginning of the buffer. Assert that invariant so the
+        // `saturating_sub` below doesn't silently paper over a bug that
+        // bisected an in-progress record — but only when CSV is in use, since
+        // otherwise `record_start` is meaninglessly 0.
+        soft_assert_or_log!(
+            self.csv.is_none() || self.record_start >= split_pos,
+            "split bisected an in-progress CSV record: record_start={} < split_pos={}",
+            self.record_start,
+            split_pos,
+        );
+        self.record_start = self.record_start.saturating_sub(split_pos);
     }
 
     fn on_truncate(&mut self, new_len: usize) {
         self.scan_pos = self.scan_pos.min(new_len);
         self.last_row_end = self.last_row_end.filter(|&end| end <= new_len);
         self.end_marker_end = self.end_marker_end.filter(|&end| end <= new_len);
+        self.record_start = self.record_start.min(new_len);
     }
 }
 
@@ -3405,8 +3431,6 @@ impl CsvScanState {
                 .build(),
             output: vec![0; 1],
             ends: vec![0; 1],
-            record: Vec::new(),
-            record_ends: Vec::new(),
             skip_first_record: header,
         }
     }
@@ -3415,6 +3439,78 @@ impl CsvScanState {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_end_marker_line_endings() {
+        // The pgwire COPY row scanner must detect a bare `\.` end-of-copy
+        // marker for every line ending, and must never mistake a quoted
+        // `"\."` data row for it. csv-core ends a CRLF record after the `\r`
+        // (leaving the `\n` as the next record's leading byte), so the raw
+        // record span of a `\.` marker is `\.\n` (LF), `\n\.\r` (CRLF) or
+        // `\.\r` (CR); a trailing-only strip would miss the CRLF/CR forms and
+        // silently import post-marker rows.
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+
+        let marker_end = |data: &[u8]| -> Option<usize> {
+            let mut scanner = CopyRowScanner::new(&params);
+            scanner.scan_new_bytes(data);
+            scanner.end_marker_end()
+        };
+
+        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
+            let join = |lines: &[&str]| -> Vec<u8> {
+                let mut out = Vec::new();
+                for line in lines {
+                    out.extend_from_slice(line.as_bytes());
+                    out.extend_from_slice(eol);
+                }
+                out
+            };
+
+            // Bare `\.` (the marker is the second record, so record_start has
+            // already advanced past the orphaned terminator of `first`).
+            // csv-core reports the record after a single terminator byte, so
+            // the marker boundary sits just past `first<eol>\.` + one byte.
+            let data = join(&["first", "\\.", "after"]);
+            let mut prefix = Vec::new();
+            prefix.extend_from_slice(b"first");
+            prefix.extend_from_slice(eol);
+            prefix.extend_from_slice(b"\\.");
+            assert_eq!(
+                marker_end(&data),
+                Some(prefix.len() + 1),
+                "bare marker, eol={eol:?}"
+            );
+
+            // Quoted "\." is data, not the marker.
+            let data = join(&["before", "\"\\.\"", "after"]);
+            assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_non_csv_split() {
+        // Regression: `record_start` is only maintained for the CSV path; the
+        // text and binary paths leave it at 0. `on_split` must therefore not
+        // assert `record_start >= split_pos` for those formats — that fires on
+        // every split of a large text/binary COPY stream (soft-assertions
+        // panic under test). Mirrors `COPY ... FROM STDIN` (default text
+        // format) splitting at a row boundary once the buffer fills.
+        for params in [
+            CopyFormatParams::Text(CopyTextFormatParams::default()),
+            CopyFormatParams::Binary,
+        ] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = b"1\thello world\t2\tsome text value here\n\
+                         3\thello world\t6\tsome text value here\n";
+            scanner.scan_new_bytes(data);
+            let split_pos = scanner.last_row_end().expect("a complete row");
+            assert!(split_pos > 0, "params={params:?}");
+            // Must not panic via the CSV-only `on_split` soft-assert.
+            scanner.on_split(split_pos);
+            assert_eq!(scanner.record_start, 0, "params={params:?}");
+        }
+    }
 
     #[mz_ore::test]
     fn test_parse_options() {
@@ -3588,6 +3684,23 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_is_jwt() {
+        // A real JWT header decodes successfully.
+        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
+        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
+        for s in [
+            "",
+            "secure_password",
+            "p4ss.w0rd",
+            "aaa.bbb.ccc",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
+        ] {
+            assert!(!is_jwt(s), "is_jwt({s:?})");
         }
     }
 }

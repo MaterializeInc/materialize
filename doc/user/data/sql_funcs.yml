@@ -559,8 +559,20 @@
     description: "`true` if `s` returns zero rows."
 
   - signature: 'expression NOT IN(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` for each value in `expression`
-      if it does not match any elements of `s`."
+    description: |
+     `s` must return exactly one column; `true` for each value in `expression`
+     if it does not match any elements of `s`.
+
+     {{< note >}}
+
+     When evaluating a `WHERE fieldX NOT IN (<subquery>)` predicate involving
+     possible `NULL` values for `fieldX` or `<subquery>`, Materialize performs a
+     cross join between the outer relation and the subquery to preserve SQL
+     `NULL` semantics, which can significantly increase memory usage. If
+     possible, rewrite using [idiomatic Materialize
+     SQL](/transform-data/idiomatic-materialize-sql/not-in/).
+
+     {{< /note >}}
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
@@ -881,7 +893,7 @@
     ROW`.
 
     {{< note >}}
-    {{% idiomatic-sql/materialize-window-functions %}}
+    {{% include-headless "/headless/materialize-window-functions" %}}
 
     See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
     for examples of rewriting window functions.

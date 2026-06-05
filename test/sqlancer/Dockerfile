@@ -23,9 +23,10 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 # TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1307 & DQP
+# ggevay: But in the meantime there have been more changes to our fork, see the `main` branch there.
 RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
-    && git checkout 04873e8f449c484060b80cf4bf80ce91a27e758e \
+    && git checkout 933b9fa077916fa8f431612d6892f6fa4c711a78 \
     && rm -rf .git \
     && mvn package -DskipTests
 # RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \

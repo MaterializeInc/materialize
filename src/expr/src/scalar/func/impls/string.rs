@@ -35,7 +35,7 @@ use crate::func::{binary, regexp_match_static};
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
-use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
+use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 #[sqlfunc(
     sqlname = "text_to_boolean",
@@ -48,21 +48,29 @@ fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
 
 #[sqlfunc(
     sqlname = "text_to_\"char\"",
-    preserves_uniqueness = true,
+    // Not injective: only the first byte is kept (e.g. 'a' and 'abc' both
+    // collapse to 'a'::"char"), so inverse-cast canonicalization of
+    // `c::text = lit` would silently change results.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastPgLegacyCharToString)
 )]
 fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
     PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
 }
 
-#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = true)]
+#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = false)]
 fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     PgLegacyName(strconv::parse_pg_legacy_name(a))
 }
 
 #[sqlfunc(
     sqlname = "text_to_bytea",
-    preserves_uniqueness = true,
+    // Not injective: `parse_bytes` accepts both hex (`\x..`) and the
+    // traditional textual encoding for the same bytes, so distinct text
+    // literals can map to the same bytea. Inverse-cast canonicalization of
+    // `b::text = lit` would otherwise rewrite to a comparison that ignores
+    // the actual textual form.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastBytesToString)
 )]
 fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
@@ -352,7 +360,7 @@ impl LazyUnaryFunc for CastStringToArray {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -440,7 +448,7 @@ impl LazyUnaryFunc for CastStringToList {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -534,7 +542,7 @@ impl LazyUnaryFunc for CastStringToMap {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -704,7 +712,7 @@ impl LazyUnaryFunc for CastStringToRange {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -817,7 +825,7 @@ impl EagerUnaryFunc for CastStringToVarChar {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        !self.fail_on_len || self.length.is_none()
+        self.length.is_none()
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -871,7 +879,7 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -1113,7 +1121,7 @@ impl LazyUnaryFunc for RegexpMatch {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {
@@ -1186,7 +1194,7 @@ impl LazyUnaryFunc for RegexpSplitToArray {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {

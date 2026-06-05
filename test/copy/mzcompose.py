@@ -372,7 +372,6 @@ def workflow_test_column_dedup(c: Composition):
 
         c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_copy_to_expr = true;
 
                 > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
                 > CREATE CONNECTION aws_conn
@@ -449,12 +448,6 @@ def workflow_test_github_9627(c: Composition):
 def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
     """Regression: COPY FROM must not follow redirects to private IPs."""
     c.up("materialized", "redirect-server")
-
-    c.sql(
-        "ALTER SYSTEM SET enable_copy_from_remote = true;",
-        port=6877,
-        user="mz_system",
-    )
     c.sql("CREATE TABLE ssrf_target (a text)")
 
     copy_succeeded = True
@@ -523,3 +516,187 @@ def workflow_copy_from_csv_header(c: Composition) -> None:
         cur.execute("SELECT val FROM csv_header_test WHERE id = 999999")
         row = cur.fetchone()
         assert row is not None and row[0] == f"{pad}_0000999999"
+
+
+def workflow_copy_from_csv_quoted_null(c: Composition) -> None:
+    """Regression test: CSV COPY FROM STDIN must distinguish quoted from
+    unquoted NULL markers per PostgreSQL semantics. An unquoted occurrence of
+    the NULL marker is SQL NULL; a quoted occurrence is the literal string.
+    """
+    c.up("materialized")
+
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        # Default NULL marker (empty string): unquoted empty -> NULL,
+        # quoted empty -> "".
+        cur.execute("CREATE TABLE csv_null_default (a TEXT, b TEXT)")
+        with cur.copy("COPY csv_null_default FROM STDIN WITH (FORMAT CSV)") as copy:
+            copy.write('a,\nb,""\n"",c\n')
+
+        cur.execute("SELECT a, b FROM csv_null_default ORDER BY a NULLS LAST")
+        rows = cur.fetchall()
+        assert rows == [
+            ("a", None),
+            ("b", ""),
+            ("", "c"),
+        ], f"unexpected rows with default NULL marker: {rows}"
+
+        # Custom NULL marker "NULL": unquoted NULL -> SQL NULL,
+        # quoted "NULL" -> the literal string "NULL".
+        cur.execute("CREATE TABLE csv_null_custom (a TEXT, b TEXT)")
+        with cur.copy(
+            "COPY csv_null_custom FROM STDIN WITH (FORMAT CSV, NULL 'NULL')"
+        ) as copy:
+            copy.write('a,NULL\nb,"NULL"\nNULL,c\n')
+
+        cur.execute("SELECT a, b FROM csv_null_custom ORDER BY a NULLS LAST")
+        rows = cur.fetchall()
+        assert rows == [
+            ("a", None),
+            ("b", "NULL"),
+            (None, "c"),
+        ], f"unexpected rows with custom NULL marker: {rows}"
+
+
+def workflow_copy_from_csv_end_marker(c: Composition) -> None:
+    """Regression test: CSV COPY FROM STDIN must distinguish a quoted "\\."
+    data row from the bare \\. end-of-copy marker.
+
+    The marker is recognized in the raw input bytes only; a CSV value whose
+    *decoded* form is \\. (i.e. the quoted field "\\.") is data. Previously
+    both the pgwire row scanner and the CSV decoder compared the decoded
+    field bytes, so a quoted "\\." row would stop the import and silently
+    drop any subsequent rows.
+    """
+    c.up("materialized")
+
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE csv_end_marker_test (val TEXT)")
+
+        # A quoted "\." row in the middle, followed by another row. With the
+        # bug, the "\." row and "after" row are both silently dropped.
+        with cur.copy("COPY csv_end_marker_test FROM STDIN WITH (FORMAT CSV)") as copy:
+            copy.write('before\n"\\."\nafter\n')
+
+        cur.execute("SELECT val FROM csv_end_marker_test ORDER BY val")
+        rows = [r[0] for r in cur.fetchall()]
+        assert rows == ["\\.", "after", "before"], (
+            f'quoted "\\." CSV row was misread as end-of-copy marker; '
+            f"got {rows!r}, expected ['\\\\.', 'after', 'before']"
+        )
+
+        # Bare \. on its own line still terminates the COPY and discards
+        # everything after it, matching PostgreSQL behavior.
+        cur.execute("DELETE FROM csv_end_marker_test")
+        with cur.copy("COPY csv_end_marker_test FROM STDIN WITH (FORMAT CSV)") as copy:
+            copy.write("first\n\\.\nignored\n")
+
+        cur.execute("SELECT val FROM csv_end_marker_test")
+        rows = [r[0] for r in cur.fetchall()]
+        assert rows == [
+            "first"
+        ], f"bare \\. did not terminate COPY; got {rows!r}, expected ['first']"
+
+
+def workflow_copy_from_csv_crlf(c: Composition) -> None:
+    """Regression test: CSV COPY FROM STDIN must handle CRLF and CR line
+    endings, not just LF.
+
+    csv-core places the record boundary between \\r and \\n, so for CRLF input
+    every non-first record's bytes begin with an orphaned \\n. Both the
+    decoder's per-field quote probe and the pgwire scanner's end-of-copy marker
+    check inspect raw bytes and were fooled by this: a quoted NULL marker
+    corrupted to SQL NULL, and a quoted "\\." (plus every row after it) was
+    silently dropped. RFC 4180 mandates CRLF and Windows/Excel exports use it,
+    so the most standard CSV form was untested and broken.
+    """
+    c.up("materialized")
+
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        for label, eol in [("crlf", "\r\n"), ("cr", "\r")]:
+            # Quoted vs unquoted NULL marker, including a quoted empty leading
+            # field on an orphan-led (non-first) record. The dynamic SQL is
+            # encoded to bytes so it satisfies psycopg's LiteralString-typed
+            # query parameter.
+            cur.execute(f"CREATE TABLE csv_{label}_null (a TEXT, b TEXT)".encode())
+            with cur.copy(
+                f"COPY csv_{label}_null FROM STDIN WITH (FORMAT CSV)".encode()
+            ) as copy:
+                copy.write(f'a,{eol}b,""{eol}"",c{eol}')
+            cur.execute(
+                f"SELECT a, b FROM csv_{label}_null ORDER BY a NULLS LAST".encode()
+            )
+            rows = cur.fetchall()
+            assert rows == [
+                ("a", None),
+                ("b", ""),
+                ("", "c"),
+            ], f"{label}: quoted/unquoted NULL markers misread on CRLF/CR: {rows}"
+
+            # Quoted "\." is data; a bare \. terminates and drops the rest.
+            cur.execute(f"CREATE TABLE csv_{label}_marker (val TEXT)".encode())
+            with cur.copy(
+                f"COPY csv_{label}_marker FROM STDIN WITH (FORMAT CSV)".encode()
+            ) as copy:
+                copy.write(f'before{eol}"\\."{eol}after{eol}\\.{eol}ignored{eol}')
+            cur.execute(f"SELECT val FROM csv_{label}_marker ORDER BY val".encode())
+            rows = [r[0] for r in cur.fetchall()]
+            assert rows == ["\\.", "after", "before"], (
+                f"{label}: quoted \\. misread as marker or bare \\. not honored "
+                f"on CRLF/CR; got {rows!r}"
+            )
+
+
+def workflow_copy_from_csv_crlf_large_end_marker(c: Composition) -> None:
+    """Regression test: a bare \\. end-of-copy marker in CRLF input must drop
+    every row after it, even when the COPY exceeds the 32MB batch size and is
+    split across parallel workers.
+
+    The pgwire scanner locates the marker and truncates the stream there. For
+    CRLF the record boundary sits between \\r and \\n, so the raw marker span
+    is "\\n\\.\\r"; a trailing-only strip missed it, leaving the stream
+    untruncated. Below 32MB the single-chunk decoder still catches the marker,
+    but past 32MB the buffer is split at row boundaries and round-robined to
+    workers, so post-marker rows in chunks other than the marker's are imported
+    anyway. Pre- and post-marker data here both exceed 32MB to force splits on
+    each side of the marker; post-marker ids are >= rows_each_side so any leak
+    is detectable via max(id).
+    """
+    c.up("materialized")
+
+    # ~95-byte rows; 400k per side ~= 38MB, comfortably over the 32MB batch.
+    rows_each_side = 400_000
+    chunk_rows = 50_000
+    pad = "a" * 80
+
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE csv_crlf_marker_large (id INT, val TEXT)")
+
+        with cur.copy(
+            "COPY csv_crlf_marker_large FROM STDIN WITH (FORMAT CSV)"
+        ) as copy:
+            # Pre-marker rows: ids [0, rows_each_side).
+            for start in range(0, rows_each_side, chunk_rows):
+                end = min(start + chunk_rows, rows_each_side)
+                copy.write("".join(f"{i},{pad}\r\n" for i in range(start, end)))
+            # Bare \. end-of-copy marker (CRLF terminated).
+            copy.write("\\.\r\n")
+            # Post-marker rows: ids [rows_each_side, 2*rows_each_side). These
+            # must all be discarded.
+            for start in range(rows_each_side, 2 * rows_each_side, chunk_rows):
+                end = min(start + chunk_rows, 2 * rows_each_side)
+                copy.write("".join(f"{i},{pad}\r\n" for i in range(start, end)))
+
+        cur.execute("SELECT count(*), max(id) FROM csv_crlf_marker_large")
+        row = cur.fetchone()
+        assert row is not None
+        count, max_id = row
+        assert count == rows_each_side and max_id == rows_each_side - 1, (
+            "CRLF end-of-copy marker not honored across 32MB chunk boundaries: "
+            f"got count={count}, max_id={max_id}; "
+            f"expected count={rows_each_side}, max_id={rows_each_side - 1} "
+            "(rows after the bare \\. leaked through parallel workers)"
+        )

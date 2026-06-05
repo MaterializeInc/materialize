@@ -5,8 +5,15 @@
   {{- $data = index $data . -}}
 {{- end }}
 {{- $name := .Get "name" -}}
-{{- range $data -}}
+{{- $field := .Get "field" | default "content" -}}
+
+{{- $rows := $data -}}
+{{- if reflect.IsMap $data -}}
+  {{- $rows = $data.rows -}}
+{{- end -}}
+
+{{- range $rows -}}
 {{- if eq .name $name -}}
-{{- .content | $.Page.RenderString -}}
+{{- index . $field | $.Page.RenderString -}}
 {{- end -}}
 {{- end -}}

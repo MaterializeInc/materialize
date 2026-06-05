@@ -174,6 +174,10 @@ where
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
+    // Box the future so tokio's task machinery is monomorphized over
+    // `Pin<Box<dyn Future<Output = Fut::Output> + Send>>` per output type,
+    // rather than over every distinct future type at every call site.
+    let future: Pin<Box<dyn Future<Output = Fut::Output> + Send>> = Box::pin(future);
     #[allow(clippy::disallowed_methods)]
     JoinHandle::new(tokio::spawn(future))
 }
@@ -191,6 +195,10 @@ where
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
+    // Box the future so tokio's task machinery is monomorphized over
+    // `Pin<Box<dyn Future<Output = Fut::Output> + Send>>` per output type,
+    // rather than over every distinct future type at every call site.
+    let future: Pin<Box<dyn Future<Output = Fut::Output> + Send>> = Box::pin(future);
     #[allow(clippy::disallowed_methods)]
     JoinHandle::new(
         task::Builder::new()
@@ -414,6 +422,11 @@ impl<T> JoinSetExt<T> for tokio::task::JoinSet<T> {
         Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
+        // Box the future so tokio's task machinery is monomorphized over
+        // `Pin<Box<dyn Future<Output = T> + Send>>` per output type, rather
+        // than over every distinct future type at every call site. See the
+        // analogous comment on the top-level `spawn` for context.
+        let future: Pin<Box<dyn Future<Output = T> + Send>> = Box::pin(future);
         #[cfg(tokio_unstable)]
         #[allow(clippy::disallowed_methods)]
         {

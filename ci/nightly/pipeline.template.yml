@@ -114,6 +114,16 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
+      - id: check-package-isolation
+        label: Package-isolated cargo check
+        command: bin/ci-builder run stable bin/check-package-isolation
+        depends_on: []
+        timeout_in_minutes: 45
+        parallelism: 5
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        sanitizer: skip
+
       - id: cargo-deny-check-advisories
         label: Security advisories
         command: bin/ci-builder run stable cargo deny check advisories
@@ -284,18 +294,6 @@ steps:
   - group: Kafka
     key: kafka
     steps:
-      - id: kafka-matrix
-        label: Previous Kafka versions
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-matrix
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9510"
-
       - id: kafka-multi-broker
         label: Kafka multi-broker
         depends_on: build-aarch64
@@ -435,7 +433,7 @@ steps:
 
       - id: testdrive-alloydb
         label: "testdrive with AlloyDB"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 60
         parallelism: 2
         inputs: [test/testdrive]
@@ -1096,6 +1094,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromPreviousSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-v80-migration
+        label: "Checks upgrade v80 migration"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 4
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeV80Migration, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
@@ -2362,6 +2372,32 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-revert-rollout
+        label: Orchestratord revert in-progress rollout
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: revert-rollout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-rollout-timeout
+        label: Orchestratord cancel rollout after timeout
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: rollout-timeout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-upgrade-operator
         label: Orchestratord operator upgrade
         artifact_paths: ["mz_debug_*.zip"]
@@ -2384,6 +2420,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: oidc-auth
+              args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-clusterd-generation-scheduling
+        label: Orchestratord clusterd generation scheduling
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: clusterd-generation-scheduling
               args: [--recreate-cluster]
               ci-builder: stable
         agents:

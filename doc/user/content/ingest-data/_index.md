@@ -95,8 +95,8 @@ Although Materialize is continually ingesting changes from the upstream system,
 depending on the volume of the upstream changes, Materialize may lag behind the
 upstream system. If the lag is significant, queries may block until Materialize
 has caught up sufficiently with the upstream system when using the default
-[isolation level](/get-started/isolation-level/) of [strict
-serializability](/get-started/isolation-level/#strict-serializable).
+[isolation level](/reference/isolation-level/) of [strict
+serializability](/reference/isolation-level/#strict-serializable).
 
 In the Materialize Console, you can see a source's data freshness from the
 **Data Explorer** screen. Alternatively, you can run a query to monitor the lag.

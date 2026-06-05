@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/dataflow.rs
-revision: 4267863081
+revision: c0559e3dbe
 ---
 
 # mz-transform::dataflow

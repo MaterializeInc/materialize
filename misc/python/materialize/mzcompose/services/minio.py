@@ -67,7 +67,7 @@ class Mc(Service):
     def __init__(
         self,
         name: str = "mc",
-        image: str = "minio/mc:RELEASE.2023-07-07T05-25-51Z",
+        image: str = "minio/mc:RELEASE.2025-08-13T08-35-41Z",
     ) -> None:
         super().__init__(
             name=name,

@@ -9,13 +9,11 @@
 
 //! Utilities and stream extensions for temporal bucketing.
 
-use std::marker::PhantomData;
-
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Batcher;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
@@ -113,7 +111,7 @@ where
                                     if !buffer.is_empty() {
                                         let bucket =
                                             chain.find_mut(&range.start).expect("Must exist");
-                                        bucket.inner.push_container(&mut buffer);
+                                        bucket.push_container(&mut buffer);
                                         buffer.clear();
                                     }
                                     range = chain.range_of(&time).expect("Must exist");
@@ -124,7 +122,7 @@ where
                             // Handle leftover data in the buffer.
                             if !buffer.is_empty() {
                                 let bucket = chain.find_mut(&range.start).expect("Must exist");
-                                bucket.inner.push_container(&mut buffer);
+                                bucket.push_container(&mut buffer);
                                 buffer.clear();
                             }
                         }
@@ -169,6 +167,10 @@ where
 }
 
 /// A wrapper around `MergeBatcher` that implements the `Storage` trait for bucketing.
+///
+/// The merge batcher consumes pre-chunked input, so this wrapper carries a
+/// [`ColumnationChunker`] that consolidates the `Vec` input into the
+/// [`ColumnationStack`] chunks the batcher consumes.
 struct MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone,
@@ -177,27 +179,49 @@ where
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
-    inner: MergeBatcher<Vec<(D, T, R)>, ColumnationChunker<(D, T, R)>, ColInternalMerger<D, T, R>>,
+    chunker: ColumnationChunker<(D, T, R)>,
+    inner: MergeBatcher<ColInternalMerger<D, T, R>>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord + Clone,
+    D: MzData + Ord + Clone + 'static,
     T: MzData + Ord + PartialOrder + Clone + Timestamp,
-    R: MzData + Semigroup + Default,
+    R: MzData + Semigroup + Default + 'static,
 {
     /// Construct a new `MergeBatcherWrapper` with the given logger and operator ID.
     fn new(logger: Option<differential_dataflow::logging::Logger>, operator_id: usize) -> Self {
         Self {
             logger: logger.clone(),
             operator_id,
+            chunker: ColumnationChunker::default(),
             inner: MergeBatcher::new(logger, operator_id),
+        }
+    }
+
+    /// Consolidate `buffer` through the chunker and feed any complete chunks to
+    /// the batcher.
+    fn push_container(&mut self, buffer: &mut Vec<(D, T, R)>) {
+        use timely::container::ContainerBuilder as _;
+        self.chunker.push_into(buffer);
+        while let Some(chunk) = self.chunker.extract() {
+            self.inner.push_into(std::mem::take(chunk));
+        }
+    }
+
+    /// Flush any partial chunk still held by the chunker into the batcher.
+    fn flush(&mut self) {
+        use timely::container::ContainerBuilder as _;
+        while let Some(chunk) = self.chunker.finish() {
+            self.inner.push_into(std::mem::take(chunk));
         }
     }
 
     /// Reveal the contents of the `MergeBatcher`, returning a vector of `ColumnationStack`s.
     fn done(mut self) -> Vec<ColumnationStack<(D, T, R)>> {
-        self.inner.seal::<CapturingBuilder<_, _>>(Antichain::new())
+        self.flush();
+        let (chain, _description) = self.inner.seal(Antichain::new());
+        chain
     }
 }
 
@@ -205,7 +229,7 @@ impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone + 'static,
     T: MzData + Ord + PartialOrder + Clone + 'static + BucketTimestamp,
-    R: MzData + Semigroup + Default,
+    R: MzData + Semigroup + Default + 'static,
 {
     type Timestamp = T;
 
@@ -214,44 +238,18 @@ where
         // different containers when not needed. The merge batcher we use can only accept
         // vectors as inputs, but not any other container type.
         // TODO: Allow the merge batcher to accept more generic containers.
+        self.flush();
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         let mut buffer = Vec::new();
-        for chunk in self.inner.seal::<CapturingBuilder<_, _>>(upper) {
+        let (chain, _description) = self.inner.seal(upper);
+        for chunk in chain {
             *fuel = fuel.saturating_sub(chunk.len().try_into().expect("must fit"));
             // TODO: Avoid this cloning.
             buffer.extend(chunk.into_iter().cloned());
-            lower.inner.push_container(&mut buffer);
+            lower.push_container(&mut buffer);
             buffer.clear();
         }
         (lower, self)
-    }
-}
-
-struct CapturingBuilder<D, T>(D, PhantomData<T>);
-
-impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
-    type Input = D;
-    type Time = T;
-    type Output = Vec<D>;
-
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        // Not needed for this implementation.
-        unimplemented!()
-    }
-
-    fn push(&mut self, _chunk: &mut Self::Input) {
-        // Not needed for this implementation.
-        unimplemented!()
-    }
-
-    fn done(self, _description: Description<Self::Time>) -> Self::Output {
-        // Not needed for this implementation.
-        unimplemented!()
-    }
-
-    #[inline]
-    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
-        std::mem::take(chain)
     }
 }

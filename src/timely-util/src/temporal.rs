@@ -163,6 +163,17 @@ impl<S: Bucket> BucketChain<S> {
     /// bucket of -2 bits just before the smallest bucket.
     #[inline]
     pub fn restore(&mut self, fuel: &mut i64) {
+        // Fast path: the chain is already well-formed. Avoids rebuilding the map below.
+        let mut last_bits = -2_isize;
+        let well_formed = self.content.values().all(|(bits, _)| {
+            let ok = isize::cast_from(*bits) <= last_bits + 2;
+            last_bits = isize::cast_from(*bits);
+            ok
+        });
+        if well_formed {
+            return;
+        }
+
         // We could write this in terms of a cursor API, but it's not stable yet. Instead, we
         // allocate a new map and move elements over.
         let mut new = BTreeMap::default();

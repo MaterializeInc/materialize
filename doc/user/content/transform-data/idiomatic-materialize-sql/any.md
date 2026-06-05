@@ -51,49 +51,7 @@ array/list/map contains duplicates, include [`DISTINCT`](/sql/select/#select-dis
 <td><blue>Materialize SQL</blue></td>
 <td class="copyableCode">
 
-**If no duplicates exist in the unnested field:** Use a Common Table
-Expression (CTE) to [`UNNEST()`](/sql/functions/#unnest) the array of values and
-perform the equi-join on the unnested values.
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```mzsql
--- array_field contains no duplicates.--
-
-WITH my_expanded_values AS
-(SELECT UNNEST(array_field) AS fieldZ FROM tableB)
-SELECT a.fieldA, ...
-FROM tableA a
-JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
-;
-```
-
-</td>
-</tr>
-<tr>
-<td><blue>Materialize SQL</blue></td>
-<td class="copyableCode">
-
-**Duplicates may exist in the unnested field:** Use a Common Table
-Expression (CTE) to [`DISTINCT`](/sql/select/#select-distinct)
-[`UNNEST()`](/sql/functions/#unnest) the array of values and perform the
-equi-join on the unnested values.
-
-<br>
-<div style="background-color: var(--code-block)">
-
-
-```mzsql
--- array_field may contain duplicates.--
-
-WITH my_expanded_values AS
-(SELECT DISTINCT UNNEST(array_field) AS fieldZ FROM tableB)
-SELECT a.fieldA, ...
-FROM tableA a
-JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
-;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_general" name="any-equi-join" field="syntax_idiomatic" %}}
 
 </td>
 </tr>
@@ -101,22 +59,8 @@ JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`ANY(...)` function](/sql/functions/#expression-bool_op-any) for equi-join
-conditions.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_general" name="any-equi-join" field="syntax_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT a.fieldA, ...
-FROM tableA a, tableB b
-WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
-;
-
-```
-
-</div>
 </td>
 </tr>
 
@@ -155,35 +99,7 @@ with the `orders` table on the unnested values.
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-***If no duplicates in the unnested field***
-
-```mzsql
--- sales_items.items contains no duplicates. --
-
-WITH individual_sales_items AS
-(SELECT unnest(items) as item, week_of FROM sales_items)
-SELECT s.week_of, o.order_id, o.item, o.quantity
-FROM orders o
-JOIN individual_sales_items s ON o.item = s.item
-WHERE date_trunc('week', o.order_date) = s.week_of
-ORDER BY s.week_of, o.order_id, o.item, o.quantity
-;
-```
-
-***To omit duplicates that may exist in the unnested field***
-
-```mzsql
--- sales_items.items may contains duplicates --
-
-WITH individual_sales_items AS
-(SELECT DISTINCT unnest(items) as item, week_of FROM sales_items)
-SELECT s.week_of, o.order_id, o.item, o.quantity
-FROM orders o
-JOIN individual_sales_items s ON o.item = s.item
-WHERE date_trunc('week', o.order_date) = s.week_of
-ORDER BY s.week_of, o.order_id, o.item, o.quantity
-;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_general" name="any-equi-join" field="example_idiomatic" %}}
 
 </td>
 </tr>
@@ -192,22 +108,7 @@ ORDER BY s.week_of, o.order_id, o.item, o.quantity
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`ANY()`](/sql/functions/#expression-bool_op-any) for the equi-join condition.</red>
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT s.week_of, o.order_id, o.item, o.quantity
-FROM orders o
-JOIN sales_items s ON o.item = ANY(s.items)
-WHERE date_trunc('week', o.order_date) = s.week_of
-ORDER BY s.week_of, o.order_id, o.item, o.quantity
-;
-```
-
-</div>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_general" name="any-equi-join" field="example_anti_pattern" %}}
 
 </td>
 </tr>

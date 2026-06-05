@@ -15,7 +15,7 @@ use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::{Eval, EvalError, MirScalarExpr};
 
 #[derive(
     Ord,
@@ -38,7 +38,7 @@ impl LazyUnaryFunc for CastRecordToString {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -109,7 +109,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -182,7 +182,7 @@ impl LazyUnaryFunc for RecordGet {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

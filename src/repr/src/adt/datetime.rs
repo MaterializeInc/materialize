@@ -19,6 +19,7 @@ use chrono::{NaiveDate, NaiveTime, Timelike};
 use mz_lowertest::MzReflect;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +30,6 @@ use crate::adt::interval::Interval;
 /// TODO(benesch): with enough thinking, this type could probably be merged with
 /// `DateTimeField`.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -42,6 +42,7 @@ use crate::adt::interval::Interval;
     Deserialize,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DateTimeUnits {
     Epoch,
     Millennium,

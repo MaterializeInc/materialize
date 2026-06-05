@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/join_implementation.rs
-revision: ddc1ff8d2d
+revision: 5d046b3ab6
 ---
 
 # mz-transform::join_implementation

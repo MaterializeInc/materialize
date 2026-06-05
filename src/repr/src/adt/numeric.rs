@@ -22,6 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +103,6 @@ pub mod str_serde {
 ///
 /// [`SqlScalarType::Numeric`]: crate::SqlScalarType::Numeric
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     Copy,
@@ -115,6 +115,7 @@ pub mod str_serde {
     Deserialize,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {

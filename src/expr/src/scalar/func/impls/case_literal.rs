@@ -26,7 +26,7 @@ use mz_repr::{Datum, Row, RowArena, SqlColumnType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::variadic::LazyVariadicFunc;
-use crate::{EvalError, MirScalarExpr};
+use crate::{Eval, EvalError};
 
 /// A single entry in a [`CaseLiteral`] lookup table: a literal `Row` value
 /// paired with the index of the corresponding result expression in `exprs`.
@@ -81,7 +81,7 @@ impl LazyVariadicFunc for CaseLiteral {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let input = exprs[0].eval(datums, temp_storage)?;
         // SQL NULL = x is always NULL/falsy, so go straight to the fallback.

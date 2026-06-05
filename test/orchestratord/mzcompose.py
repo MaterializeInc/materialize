@@ -191,6 +191,28 @@ def get_clusterd_data() -> dict[str, Any]:
     )
 
 
+def get_console_app_config(namespace="materialize-environment") -> dict[str, Any]:
+    """Return the parsed contents of the console's `app-config.json` configmap."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "configmap",
+                "-l",
+                "materialize.cloud/app=console",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )
+    items = data["items"]
+    assert len(items) == 1, f"Expected exactly one console configmap, but got {items}"
+    return json.loads(items[0]["data"]["app-config.json"])
+
+
 def ensure_kind_version() -> None:
     kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
     assert kind_version >= Version.parse(
@@ -1562,6 +1584,48 @@ class ConsoleResources(Modification):
         retry(check_pods, 360)
 
 
+class BalancerdExternalDnsNames(Modification):
+    # The operator surfaces the balancerd external certificate's DNS names to
+    # the console's `app-config.json` as `balancerd_dns_names`, so the console
+    # knows which hostnames balancerd serves.
+    DNS_NAMES = ["balancerd.example.com"]
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, cls.DNS_NAMES]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["balancerdExternalCertificateSpec"] = {
+                "dnsNames": self.value,
+            }
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # `balancerd_dns_names` was added to the console app config in v26.27;
+        # older orchestratord builds don't surface the cert spec's DNS names.
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.27.0-dev.0"
+        ):
+            return
+        # Without a console there's no app config to inspect.
+        if not mods[ConsoleEnabled]:
+            return
+
+        def check() -> None:
+            app_config = get_console_app_config()
+            actual = app_config.get("balancerd_dns_names")
+            assert (
+                actual == self.value
+            ), f"Expected balancerd_dns_names {self.value}, but got {actual}: {app_config}"
+
+        # The console is reconciled last and the configmap update is async.
+        retry(check, 360)
+
+
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -1899,7 +1963,8 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
-        for i in range(180):
+        # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
+        for i in range(120):
             try:
                 data = json.loads(
                     spawn.capture(
@@ -2394,6 +2459,352 @@ def workflow_orchestratord_upgrade(
     # balancerd is broken in the upgrade to 26.4.0
     if str(versions[-1]) != "v26.4.0":
         check_balancerd_version(versions[-1])
+
+
+def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Regression test for DEP-42: if a user starts an upgrade and then cancels
+    # by reverting only `spec.requestRollout` without also reverting
+    # `spec.environmentdImageRef`, the spec image stays ahead of the image
+    # actually running in environmentd. Downstream resources (balancerd,
+    # console) must continue tracking the last completed rollout's image
+    # rather than the diverged spec image — otherwise they end up
+    # version-skewed from environmentd.
+    #
+    # We exercise this end-to-end by initial-deploying on a prior released
+    # version, then starting a `ManuallyPromote` upgrade to the current
+    # build's image and parking it at `ReadyToPromote` (never promoting it),
+    # and finally reverting only `requestRollout`.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    def get_cr(plural: str) -> dict[str, Any]:
+        # orchestratord creates the Balancer and Console CRs after writing
+        # `lastCompletedRolloutRequest`, so `post_run_check` can return
+        # before they exist. Retry until the resource shows up.
+        result: dict[str, Any] = {}
+
+        def fetch() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        plural,
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert len(data["items"]) >= 1, f"{plural} not yet present"
+            result["item"] = data["items"][0]
+
+        retry(fetch, 120)
+        return result["item"]
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version, so the upgrade target
+    # (current build) is a real, pullable, different image. orchestratord
+    # itself stays on the current build — that's the binary whose fix is
+    # under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_mz = get_cr("materializes")
+    initial_request = initial_mz["spec"]["requestRollout"]
+    assert initial_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
+        == initial_image
+    ), (
+        "status.lastCompletedRolloutEnvironmentdImageRef was not populated "
+        "with the rolled-out image"
+    )
+    initial_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    initial_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+
+    # Kick off a real ManuallyPromote upgrade to the current build's image
+    # and leave it parked at ReadyToPromote. At this point the new-generation
+    # environmentd is up and running, but the active environmentd is still
+    # the initial-version pod, so `status.lastCompletedRollout*` must not
+    # have advanced.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
+        raise RuntimeError("upgrade never became ready for manual promotion")
+
+    parked_mz = get_cr("materializes")
+    assert parked_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        parked_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    )
+
+    # Even mid-rollout (spec.envImageRef = upgrade, status = initial),
+    # downstream CRs must track the active image, not the spec image.
+    parked_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert parked_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef drifted during a parked upgrade: "
+        f"{initial_balancerd_image_ref!r} -> {parked_balancerd_image_ref!r}"
+    )
+    parked_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert parked_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef drifted during a parked upgrade: "
+        f"{initial_console_image_ref!r} -> {parked_console_image_ref!r}"
+    )
+
+    # Cancel the upgrade by reverting only `requestRollout`. Deliberately
+    # leave `environmentdImageRef` pointed at the upgrade image — that's the
+    # DEP-42 scenario: spec image and running image diverge.
+    definition["materialize"]["spec"]["requestRollout"] = initial_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump(definition["materialize"]).encode(),
+    )
+
+    def check_revert_applied() -> None:
+        mz = get_cr("materializes")
+        assert mz["spec"]["requestRollout"] == initial_request
+        assert mz["spec"]["environmentdImageRef"] == upgrade_image
+
+    retry(check_revert_applied, 60)
+
+    # Let orchestratord reconcile several times after the revert.
+    time.sleep(30)
+
+    final_mz = get_cr("materializes")
+    assert final_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        final_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    ), "lastCompletedRolloutEnvironmentdImageRef should not change without a completed rollout"
+
+    final_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert final_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef tracked diverged spec image instead "
+        f"of the last completed rollout image: "
+        f"{initial_balancerd_image_ref!r} -> {final_balancerd_image_ref!r}"
+    )
+
+    final_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert final_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef tracked diverged spec image instead of "
+        f"the last completed rollout image: "
+        f"{initial_console_image_ref!r} -> {final_console_image_ref!r}"
+    )
+
+
+def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Tests CLO-81: orchestratord automatically cancels an in-progress rollout
+    # once it has been running longer than `spec.rolloutRequestTimeout`. A new
+    # generation left un-promoted holds back compaction via read holds, and
+    # promoting it after a long delay can cause incident-inducing load, so
+    # instead of parking it indefinitely orchestratord tears it down and keeps
+    # serving the previously-active generation. The user must request a fresh
+    # rollout to retry.
+    #
+    # We deploy on a prior released version, then start a default
+    # (WaitUntilReady) upgrade to the current build with a deliberately tiny
+    # `rolloutRequestTimeout`. The new generation cannot boot and catch up
+    # within the timeout, so orchestratord must cancel the rollout: the active
+    # environmentd stays on the initial image, the un-promoted generation is
+    # torn down, `status.conditions` reports reason `RolloutTimeout`, and
+    # `lastCompletedRolloutRequest` advances to the cancelled request (so it is
+    # not immediately retried) while `lastCompletedRolloutEnvironmentdImageRef`
+    # never moves to the upgrade image.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    def get_mz() -> dict[str, Any]:
+        return json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+        )["items"][0]
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version so the upgrade target (current
+    # build) is a real, pullable, different image. orchestratord stays on the
+    # current build — that's the binary whose timeout logic is under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_mz = get_mz()
+    assert (
+        initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
+        == initial_image
+    )
+
+    # Start a default (WaitUntilReady) upgrade with a tiny timeout. The new
+    # generation cannot become ready within the timeout, so the rollout will be
+    # cancelled. We apply the manifest directly (rather than via `run`, which
+    # would wait for a successful rollout) and poll for the cancellation.
+    upgrade_request = str(uuid.uuid4())
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["rolloutRequestTimeout"] = "1s"
+    definition["materialize"]["spec"]["requestRollout"] = upgrade_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    # Wait for orchestratord to observe the timeout and cancel the rollout.
+    def check_cancelled() -> None:
+        status = get_mz().get("status") or {}
+        conditions = status.get("conditions") or []
+        assert conditions, "no status conditions yet"
+        condition = conditions[0]
+        assert (
+            condition["type"] == "UpToDate"
+            and condition["status"] == "False"
+            and condition["reason"] == "RolloutTimeout"
+        ), f"expected a RolloutTimeout condition, but got {condition}"
+        # The cancelled request is marked completed so it isn't retried...
+        assert (
+            status["lastCompletedRolloutRequest"] == upgrade_request
+        ), f"lastCompletedRolloutRequest did not advance to the cancelled request: {status}"
+        # ...but the rollout never actually became active.
+        assert (
+            status["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+        ), f"lastCompletedRolloutEnvironmentdImageRef advanced despite cancellation: {status}"
+
+    retry(check_cancelled, 300)
+
+    # The previously-active generation keeps serving on the initial image, and
+    # the un-promoted generation has been torn down (releasing its read holds).
+    def check_active_generation_intact() -> None:
+        live_images = [
+            item["spec"]["containers"][0]["image"]
+            for item in get_environmentd_data()["items"]
+            if not item.get("metadata", {}).get("deletionTimestamp")
+        ]
+        assert live_images, "no environmentd pods running"
+        assert all(
+            image != upgrade_image for image in live_images
+        ), f"cancelled upgrade generation is still running: {live_images}"
+        assert any(
+            image == initial_image for image in live_images
+        ), f"active generation is not on the initial image: {live_images}"
+
+    retry(check_active_generation_intact, 120)
+
+    def check_single_generation() -> None:
+        statefulsets = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            .strip()
+            .split("\n")
+        )
+        environmentd_statefulsets = [s for s in statefulsets if "-environmentd-" in s]
+        assert (
+            len(environmentd_statefulsets) == 1
+        ), f"expected exactly one environmentd statefulset after cancellation, but found {environmentd_statefulsets}"
+
+    retry(check_single_generation, 120)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -3512,9 +3923,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
         token = _fetch_hydra_jwt()
 
         print(f"Verifying OIDC pgwire login as {OIDC_CLIENT_ID}...")
-        # `-c oidc_auth_enabled=true` opts this connection into the OIDC
-        # authenticator. The role is auto-provisioned by environmentd on first
-        # login if it doesn't already exist.
         with (
             psycopg.connect(
                 host="127.0.0.1",
@@ -3522,7 +3930,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user=OIDC_CLIENT_ID,
                 password=token,
                 dbname="materialize",
-                options="-c oidc_auth_enabled=true",
                 connect_timeout=30,
             ) as conn,
             conn.cursor() as cur,
@@ -3540,7 +3947,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user=OIDC_CLIENT_ID,
                 password=bad_token,
                 dbname="materialize",
-                options="-c oidc_auth_enabled=true",
                 connect_timeout=30,
             ).close()
         except psycopg.OperationalError:
@@ -3551,3 +3957,241 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
 
     print("OIDC end-to-end auth test passed.")
+
+
+def workflow_clusterd_generation_scheduling(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for CLO-77.
+
+    Clusterd pod scheduling constraints (anti-affinity, topology spread) must
+    only consider pods of the same deploy generation. Otherwise, during a
+    generation rollout, the still-running old-generation pod can block the
+    new-generation pod from scheduling — e.g. when topology spread + a
+    single eligible AZ count the old-gen pod toward `maxSkew`, leaving the
+    new-gen pod Pending and the rollout stuck.
+
+    The kind nodes in `cluster.yaml.tmpl` happen to make this easy to
+    reproduce: only one of the two worker nodes carries
+    `materialize.cloud/swap=true`, so all clusterd pods land in that node's
+    AZ. With topology spread enabled and `maxSkew=1`, the new-generation
+    pod can only schedule there if the spread selector filters to its own
+    generation.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, expect_fail=False)
+
+    gen_label = "cluster.environmentd.materialize.cloud/generation"
+    cluster_id_label = "cluster.environmentd.materialize.cloud/cluster-id"
+
+    # Enable topology spread (off by default on self-hosted via
+    # `cluster_enable_topology_spread=false`). The internal SQL listener
+    # at 6877 has no authenticator, so a plain mz_system connection works.
+    with port_forward_environmentd(6877) as port:
+        with (
+            psycopg.connect(
+                f"host=localhost port={port} user=mz_system sslmode=disable",
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("ALTER SYSTEM SET cluster_enable_topology_spread = true")
+
+    def list_clusterd_statefulsets() -> list[dict[str, Any]]:
+        # `kubectl get -l` matches against statefulset metadata labels, but
+        # clusterd statefulsets only carry labels on the pod template (not
+        # on the statefulset itself), so filter client-side.
+        data = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        return [
+            ss
+            for ss in data["items"]
+            if ss["spec"]["template"]["metadata"]
+            .get("labels", {})
+            .get("environmentd.materialize.cloud/namespace")
+            == "cluster"
+        ]
+
+    # The ALTER SYSTEM above only takes effect for replicas created after
+    # the change, so cycle clusterd to pick up topology spread by forcing
+    # a new generation. `requestRollout` alone is a no-op when nothing
+    # else in the spec changed; `forceRollout` set to the same value
+    # makes orchestratord treat the resources as changed and bump the
+    # generation anyway.
+    initial_request = definition["materialize"]["spec"].get("requestRollout")
+    new_request = str(uuid.uuid4())
+    assert new_request != initial_request
+
+    # Park the rollout at `ReadyToPromote` so both the old- and new-
+    # generation clusterd pods are alive simultaneously while we inspect
+    # them. Without the CLO-77 fix, the new-gen clusterd would never
+    # become ready (pod Pending) and `ReadyToPromote` would never fire.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["requestRollout"] = new_request
+    definition["materialize"]["spec"]["forceRollout"] = new_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "statefulsets,pods",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "wide",
+            ]
+        )
+        raise RuntimeError(
+            "rollout never reached ReadyToPromote — likely a clusterd "
+            "statefulset for the new generation has a pod stuck Pending "
+            "(check that scheduling constraints filter to the same "
+            "generation; see CLO-77)"
+        )
+
+    # Both generations should be live now. Group statefulsets by replica
+    # so we can verify every replica brought up its new generation while
+    # the old one was still running.
+    statefulsets = list_clusterd_statefulsets()
+    assert statefulsets, "no clusterd statefulsets found"
+    by_replica: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for ss in statefulsets:
+        labels = ss["spec"]["template"]["metadata"]["labels"]
+        cluster_id = labels[cluster_id_label]
+        replica_id = labels["cluster.environmentd.materialize.cloud/replica-id"]
+        gen = labels[gen_label]
+        by_replica.setdefault((cluster_id, replica_id), {})[gen] = ss
+
+    # The current orchestratord generation, derived from the parked
+    # Materialize CR — used to compute the expected (old, new) pair per
+    # replica.
+    parked_mz = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ]
+        )
+    )["items"][0]
+    new_gen = int(parked_mz["status"]["activeGeneration"]) + 1
+    old_gen = new_gen - 1
+
+    errors: list[str] = []
+    for (cluster_id, replica_id), gens in sorted(by_replica.items()):
+        replica = f"{cluster_id}/{replica_id}"
+        present = sorted(int(g) for g in gens)
+        if present != [old_gen, new_gen]:
+            errors.append(
+                f"{replica}: expected statefulsets for generations "
+                f"{[old_gen, new_gen]}, got {present}"
+            )
+            continue
+        for gen_value, ss in gens.items():
+            if ss["status"].get("readyReplicas") != 1:
+                errors.append(f"{replica} gen {gen_value}: not ready: {ss['status']}")
+
+        # Each new-generation statefulset's anti-affinity and topology
+        # spread selectors must pin to its own generation. Without that
+        # filter, the new-gen pod's spread/anti-affinity would have
+        # counted the old-gen pod and (depending on capacity) blocked
+        # scheduling.
+        new_ss = gens[str(new_gen)]
+        pod_template = new_ss["spec"]["template"]
+        actual_gen_label = pod_template["metadata"]["labels"].get(gen_label)
+        if actual_gen_label != str(new_gen):
+            errors.append(
+                f"{replica} gen {new_gen}: pod template missing/incorrect "
+                f"{gen_label}: {actual_gen_label!r}"
+            )
+
+        affinity = pod_template["spec"]["affinity"]
+        anti_affinity_terms = affinity["podAntiAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]
+        if not anti_affinity_terms:
+            errors.append(f"{replica} gen {new_gen}: no required pod anti-affinity")
+            continue
+        anti_affinity_exprs = anti_affinity_terms[0]["labelSelector"][
+            "matchExpressions"
+        ]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in anti_affinity_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: anti-affinity does not filter by "
+                f"generation; matchExpressions={anti_affinity_exprs}"
+            )
+
+        topology_spread = pod_template["spec"]["topologySpreadConstraints"]
+        if not topology_spread:
+            errors.append(f"{replica} gen {new_gen}: topology spread not present")
+            continue
+        spread_exprs = topology_spread[0]["labelSelector"]["matchExpressions"]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in spread_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: topology spread does not filter by "
+                f"generation; matchExpressions={spread_exprs}"
+            )
+
+    assert not errors, "clusterd generation scheduling check failed:\n" + "\n".join(
+        errors
+    )
+
+    print(
+        f"verified {len(by_replica)} replica(s) have generations "
+        f"{old_gen} and {new_gen} live and that new-gen selectors filter "
+        f"to generation {new_gen}"
+    )

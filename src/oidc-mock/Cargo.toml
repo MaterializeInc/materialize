@@ -15,7 +15,7 @@ anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 jsonwebtoken.workspace = true
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["assert-no-tracing", "async"] }
 reqwest.workspace = true
 openssl.workspace = true
 serde.workspace = true

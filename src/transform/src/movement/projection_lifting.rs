@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::mem;
 
 use itertools::zip_eq;
-use mz_expr::{AccessStrategy, Id, MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::{AccessStrategy, Columns, Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::ReprRelationType;
 

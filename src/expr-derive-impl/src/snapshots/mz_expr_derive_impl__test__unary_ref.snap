@@ -3,7 +3,6 @@ source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    unimplemented!()\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: &i16) -> bool {\n    un
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct UnaryFn;
 impl crate::func::EagerUnaryFunc for UnaryFn {
     type Input<'a> = &'a i16;

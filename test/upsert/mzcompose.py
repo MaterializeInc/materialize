@@ -29,7 +29,6 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
 additional_system_parameter_defaults = {
@@ -39,7 +38,6 @@ additional_system_parameter_defaults = {
 }
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Mz(app_password=""),
@@ -104,7 +102,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    dependencies = ["materialized", "kafka", "schema-registry"]
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,
@@ -162,7 +160,6 @@ def workflow_rehydration(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "clusterd1",
@@ -332,7 +329,7 @@ def workflow_failpoint(c: Composition) -> None:
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
     print(f">>> Running failpoint test for failpoint {failpoint}")
 
-    dependencies = ["zookeeper", "kafka", "materialized"]
+    dependencies = ["kafka", "materialized"]
     c.kill("clusterd1")
     c.up(*dependencies)
     c.run_testdrive_files("failpoint/00-reset.td")
@@ -372,7 +369,6 @@ def workflow_incident_49(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
     ]
@@ -434,7 +430,6 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     c.down(destroy_volumes=True)
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
     ]
@@ -653,7 +648,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
     """
     The goal is to test a large scale Kafka upsert instance and to make sure that we can successfully ingest data from it quickly.
     """
-    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    dependencies = ["materialized", "kafka", "schema-registry"]
     scenarios = [
         (
             "with upsert v2 enabled",

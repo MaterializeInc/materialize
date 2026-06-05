@@ -10,7 +10,7 @@ menu:
 
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 {{< note >}}
 Changing column types is currently unsupported.
 {{< /note >}}
@@ -26,8 +26,7 @@ This guide walks you through how to handle these changes without any downtime in
 ## Prerequisites
 
 Some familiarity with Materialize. If you've never used Materialize before,
-start with our [guide to getting started](/get-started/quickstart/) to learn
-how to connect a database to Materialize.
+start with our [guide to getting started](/get-started/quickstart/).
 
 ### Set up a SQL Server database
 
@@ -78,10 +77,7 @@ snapshot](/ingest-data/#snapshotting) of table `v1.t1` will begin.
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. As before, you can monitor progress for the
-snapshot operation on the overview page for the source in the Materialize
-console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -178,10 +174,7 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.t1` will begin.
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. As before, you can monitor progress for the
-snapshot operation on the overview page for the source in the Materialize
-console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -213,10 +206,7 @@ CREATE TABLE v3.t1
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. As before, you can monitor progress for the
-snapshot operation on the overview page for the source in the Materialize
-console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 

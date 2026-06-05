@@ -131,18 +131,29 @@ pub(crate) enum BuiltinTableUpdateSource {
     Background(oneshot::Sender<()>),
 }
 
+/// Where to deliver the result of a [`PendingWriteTxn::User`] write.
+#[derive(Debug)]
+pub(crate) enum UserWriteResponder {
+    /// Session-bound write. The coordinator retires the session's
+    /// `ExecuteContext` once the write commits.
+    Session(PendingTxn),
+}
+
 /// A pending write transaction that will be committing during the next group commit.
 #[derive(Debug)]
 pub(crate) enum PendingWriteTxn {
-    /// Write to a user table.
+    /// Write to a user table. The write timestamp is picked by the oracle
+    /// during group commit. The write lock is either handed off from the
+    /// submitting session (via `write_locks: Some(..)`) or acquired during
+    /// group commit (`write_locks: None`).
     User {
         span: Span,
         /// List of all write operations within the transaction.
         writes: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
         /// If they exist, should contain locks for each [`CatalogItemId`] in `writes`.
         write_locks: Option<WriteLocks>,
-        /// Inner transaction.
-        pending_txn: PendingTxn,
+        /// Where to deliver the result once the write commits.
+        responder: UserWriteResponder,
     },
     /// Write to a system table.
     System {
@@ -264,7 +275,7 @@ impl Coordinator {
                     span,
                     writes,
                     write_locks,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 });
             }
         }
@@ -349,7 +360,7 @@ impl Coordinator {
                     span,
                     write_locks: Some(write_locks),
                     writes,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 } => match write_locks.validate(writes.keys().copied()) {
                     Ok(validated_locks) => {
                         // Merge all of our write locks together since we can allow concurrent
@@ -360,7 +371,7 @@ impl Coordinator {
                             span,
                             writes,
                             write_locks: None,
-                            pending_txn,
+                            responder: UserWriteResponder::Session(pending_txn),
                         };
                         validated_writes.push(validated_write);
                     }
@@ -381,7 +392,7 @@ impl Coordinator {
                     span,
                     writes,
                     write_locks: None,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 } => {
                     let missing = group_write_locks.missing_locks(writes.keys().copied());
 
@@ -391,7 +402,7 @@ impl Coordinator {
                             span,
                             writes,
                             write_locks: None,
-                            pending_txn,
+                            responder: UserWriteResponder::Session(pending_txn),
                         };
                         validated_writes.push(validated_write);
                     } else {
@@ -412,7 +423,7 @@ impl Coordinator {
                                     span,
                                     writes,
                                     write_locks: None,
-                                    pending_txn,
+                                    responder: UserWriteResponder::Session(pending_txn),
                                 };
                                 validated_writes.push(validated_write);
                             }
@@ -472,12 +483,12 @@ impl Coordinator {
                     span: _,
                     writes,
                     write_locks,
-                    pending_txn:
-                        PendingTxn {
+                    responder:
+                        UserWriteResponder::Session(PendingTxn {
                             ctx,
                             response,
                             action,
-                        },
+                        }),
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
                     for (id, table_data) in writes {
@@ -508,15 +519,6 @@ impl Coordinator {
                 }
             }
         }
-
-        // Add table advancements for all tables.
-        let table_advancement_start = Instant::now();
-        for table in self.catalog().entries().filter(|entry| entry.is_table()) {
-            appends.entry(table.id()).or_default();
-        }
-        self.metrics
-            .group_commit_table_advancement_seconds
-            .observe(table_advancement_start.elapsed().as_secs_f64());
 
         // Consolidate all Rows for a given table. We do not consolidate the
         // staged batches, that's up to whoever staged them.
@@ -561,8 +563,15 @@ impl Coordinator {
                 "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
             );
         }
+
         // Instrument our table writes since they can block the coordinator.
         let histogram = self.metrics.append_table_duration_seconds.clone();
+
+        // NOTE: It is important that we append, even when there are no actual
+        // appends. This makes sure we periodically bump the upper of all
+        // tables, which is required to make them readable at the latest oracle
+        // read ts.
+
         let append_fut = self
             .controller
             .storage

@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/movement/projection_pushdown.rs
-revision: 52af3ba2a1
+revision: 5d046b3ab6
 ---
 
 # mz-transform::movement::projection_pushdown

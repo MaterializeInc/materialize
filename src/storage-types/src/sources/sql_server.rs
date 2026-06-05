@@ -252,6 +252,25 @@ pub struct SqlServerSourceExportDetails {
     pub initial_lsn: mz_sql_server_util::cdc::Lsn,
 }
 
+impl AlterCompatible for SqlServerSourceExportDetails {
+    fn alter_compatible(
+        &self,
+        _id: GlobalId,
+        _other: &Self,
+    ) -> Result<(), crate::controller::AlterError> {
+        // compatibility checks are performed against the upstream table in the source
+        // render operators instead
+        let Self {
+            capture_instance: _,
+            table: _,
+            text_columns: _,
+            exclude_columns: _,
+            initial_lsn: _,
+        } = self;
+        Ok(())
+    }
+}
+
 impl SourceTimestamp for Lsn {
     fn encode_row(&self) -> mz_repr::Row {
         Row::pack_slice(&[Datum::Bytes(&self.as_bytes())])

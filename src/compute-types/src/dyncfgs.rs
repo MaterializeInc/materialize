@@ -23,6 +23,62 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
 );
 
+/// Use the column-paged merge batcher code path at arrange sites. When
+/// `true`, arrange operators use `Col2ValPagedBatcher` (in
+/// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
+/// `mz_row_spine`) — the columnar-native batcher that the pager can
+/// spill (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). When `false`
+/// (the default), the same arrange sites use the legacy
+/// `Col2ValBatcher` / `RowRowBuilder` (columnation-merger) path that
+/// shipped before #36627. Read at operator construction time; flips
+/// take effect on dataflows created after the change.
+///
+/// Disabled by default while the new path is stabilizing.
+/// `DifferentialJoinHydration*` feature-benchmark scenarios opt in
+/// explicitly so the spill path is measured.
+pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
+    "enable_column_paged_batcher",
+    false,
+    "Use the columnar-native paged merge batcher at arrange sites. When `false` (default), \
+     arranges fall back to the legacy columnation `Col2ValBatcher` / `RowRowBuilder` path.",
+);
+
+/// Allow the column-paged batcher's pager to actually evict chunks
+/// under memory pressure. Only meaningful when
+/// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`; with the spill flag off
+/// the pager keeps every chunk resident regardless of budget.
+///
+/// Off by default, even when the batcher path itself is on, so the
+/// no-pressure case stays a pure resident operation. Tune the budget /
+/// backend via [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
+pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
+    "enable_column_paged_batcher_spill",
+    false,
+    "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
+     meaningful when `enable_column_paged_batcher = true`.",
+);
+
+/// Total resident-byte budget the column-paged batcher's tiered policy
+/// (`mz_timely_util::column_pager::policy::TieredPolicy`) is allowed to
+/// hold across all workers in this process, expressed as a fraction of
+/// the replica's announced memory limit. A single
+/// process-wide pool tracks all resident chunks; allocations beyond the
+/// pool spill to the configured backend.
+///
+/// `0.05` (5%) is a reasonable starting point: large enough that the
+/// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
+/// per worker, small enough that the merge-batcher's transient state
+/// doesn't crowd out the spine. Set lower to spill more aggressively
+/// under pressure. The computed budget is floored at 128 MiB so the
+/// no-pressure case doesn't page per chunk. Ignored when
+/// `enable_column_paged_batcher_spill` is `false`.
+pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_budget_fraction",
+    0.05,
+    "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
+     before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -424,4 +480,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
+        .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
 }

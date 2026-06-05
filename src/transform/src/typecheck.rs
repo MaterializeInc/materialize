@@ -42,7 +42,7 @@ pub fn empty_typechecking_context() -> SharedTypecheckingContext {
 ///
 /// Every variant has a `source` field identifying the MIR term that is home
 /// to the error (though not necessarily the root cause of the error).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum TypeError<'a> {
     /// Unbound identifiers (local or global)
     Unbound {

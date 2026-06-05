@@ -13,6 +13,7 @@ use std::ops::Range;
 use itertools::Itertools;
 use mz_repr::ReprRelationType;
 
+use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr, VariadicFunc};
@@ -180,11 +181,9 @@ impl JoinInputMapper {
     /// Takes an expression from the global context and creates a new version
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
-    pub fn map_expr_to_local(&self, mut expr: MirScalarExpr) -> MirScalarExpr {
-        expr.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(c, _name) = e {
-                *c -= self.prior_arities[self.input_relation[*c]];
-            }
+    pub fn map_expr_to_local<C: Columns + Sized>(&self, mut expr: C) -> C {
+        expr.visit_columns(|c| {
+            *c -= self.prior_arities[self.input_relation[*c]];
         });
         expr
     }
@@ -192,11 +191,9 @@ impl JoinInputMapper {
     /// Takes an expression from the local context of the `index`th input and
     /// creates a new version where column references have been remapped to the
     /// global context.
-    pub fn map_expr_to_global(&self, mut expr: MirScalarExpr, index: usize) -> MirScalarExpr {
-        expr.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(c, _name) = e {
-                *c += self.prior_arities[index];
-            }
+    pub fn map_expr_to_global<C: Columns + Sized>(&self, mut expr: C, index: usize) -> C {
+        expr.visit_columns(|c| {
+            *c += self.prior_arities[index];
         });
         expr
     }
@@ -229,7 +226,7 @@ impl JoinInputMapper {
     }
 
     /// Find the sorted, dedupped set of inputs an expression references
-    pub fn lookup_inputs(&self, expr: &MirScalarExpr) -> impl Iterator<Item = usize> + use<> {
+    pub fn lookup_inputs<C: Columns>(&self, expr: &C) -> impl Iterator<Item = usize> + use<C> {
         expr.support()
             .iter()
             .map(|c| self.input_relation[*c])
@@ -238,7 +235,7 @@ impl JoinInputMapper {
     }
 
     /// Returns the index of the only input referenced in the given expression.
-    pub fn single_input(&self, expr: &MirScalarExpr) -> Option<usize> {
+    pub fn single_input(&self, expr: &impl Columns) -> Option<usize> {
         let mut inputs = self.lookup_inputs(expr);
         if let Some(first_input) = inputs.next() {
             if inputs.next().is_none() {
@@ -249,7 +246,7 @@ impl JoinInputMapper {
     }
 
     /// Returns whether the given expr refers to columns of only the `index`th input.
-    pub fn is_localized(&self, expr: &MirScalarExpr, index: usize) -> bool {
+    pub fn is_localized(&self, expr: &impl Columns, index: usize) -> bool {
         if let Some(single_input) = self.single_input(expr) {
             if single_input == index {
                 return true;
@@ -296,16 +293,16 @@ impl JoinInputMapper {
     ///   input_mapper.find_bound_expr(&MirScalarExpr::column(0), &[1], &equivalences)
     /// );
     /// ```
-    pub fn find_bound_expr(
+    pub fn find_bound_expr<C: Columns + Clone + Eq>(
         &self,
-        expr: &MirScalarExpr,
+        expr: &C,
         bound_inputs: &[usize],
-        equivalences: &[Vec<MirScalarExpr>],
-    ) -> Option<MirScalarExpr> {
+        equivalences: &[Vec<C>],
+    ) -> Option<C> {
         if let Some(equivalence) = equivalences.iter().find(|equivs| equivs.contains(expr)) {
             if let Some(bound_expr) = equivalence
                 .iter()
-                .find(|expr| self.lookup_inputs(expr).all(|i| bound_inputs.contains(&i)))
+                .find(|expr| self.lookup_inputs(*expr).all(|i| bound_inputs.contains(&i)))
             {
                 return Some(bound_expr.clone());
             }
