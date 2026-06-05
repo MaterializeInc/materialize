@@ -40,7 +40,7 @@
 //! ## When the document is published
 //!
 //! The handler returns 404 when no OAuth flow is meaningful for the
-//! listener — either because `oidc_issuer` is unset (no authorization
+//! listener: either because `oidc_issuer` is unset (no authorization
 //! server to advertise) or because the listener's authenticator is
 //! [`listeners::AuthenticatorKind::None`] (no token would ever be
 //! validated). Returning an empty or fake document instead would mislead
@@ -200,7 +200,7 @@ pub(crate) struct DiscoveryConfig {
 
 /// HTTP handler for [`PROTECTED_RESOURCE_METADATA_PATH`].
 ///
-/// Always public — no authentication is performed, by design. RFC 9728
+/// Always public: no authentication is performed, by design. RFC 9728
 /// places no auth requirements on this endpoint; clients must be able to
 /// fetch it before they have a token.
 ///
@@ -250,12 +250,9 @@ pub(crate) async fn handle_protected_resource_metadata(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(err) = validate_issuer_url(&issuer) {
-        // Don't echo the issuer back into logs verbatim: if it failed
-        // validation because it carried userinfo (e.g. an operator
-        // misconfigured `oidc_issuer = 'https://user:pass@idp/...'`),
-        // logging it raw turns the WARN line into a credential
-        // repository. The reason string from `validate_issuer_url` is
-        // already specific enough to debug from.
+        // Don't echo the issuer into the WARN: a userinfo-bearing value
+        // would turn this log line into a credential dump. The error
+        // reason is specific enough.
         warn!(error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
         metrics.inc("invalid_issuer");
         return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
@@ -331,7 +328,7 @@ pub(crate) fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Optio
 /// Resolves the host string to embed in published absolute URLs.
 ///
 /// Prefers the operator-configured `http_host_name`; falls back to the
-/// request's `Host` header. **Never consults `X-Forwarded-*`** — see the
+/// request's `Host` header. **Never consults `X-Forwarded-*`**. See the
 /// module-level "Host derivation" notes.
 ///
 /// The returned value is parsed through [`http::uri::Authority`] before
@@ -356,12 +353,9 @@ fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         })?;
-    // Userinfo (`user[:pass]@host`) is part of the URI authority grammar
-    // and `http::uri::Authority` accepts it, but it never appears in a
-    // Host header from a legitimate client. Reject explicitly so an
-    // attacker cannot send `Host: bobby@evil.example.com` and poison
-    // the published `resource` / `resource_metadata` URLs with their
-    // own prefix.
+    // Reject `user@host` explicitly. `Authority::as_str()` keeps userinfo,
+    // so the round-trip below would pass it through, letting an attacker
+    // poison the published URLs via a forged `Host: bobby@evil...`.
     if candidate.contains('@') {
         return None;
     }
@@ -390,7 +384,7 @@ mod tests {
             .unwrap()
     }
 
-    /// Pin the serialized field names — clients key off them.
+    /// Pin the serialized field names; clients key off them.
     #[mz_ore::test]
     fn test_metadata_serialization_matches_rfc9728_field_names() {
         let metadata = ProtectedResourceMetadata {
@@ -539,7 +533,7 @@ mod tests {
         }
     }
 
-    /// Pin the assembled URL — accidental path drift (extra slashes,
+    /// Pin the assembled URL: accidental path drift (extra slashes,
     /// dropped suffix) breaks every connected client.
     #[mz_ore::test]
     fn test_metadata_url_assembles_canonical_suffix() {
@@ -550,7 +544,7 @@ mod tests {
         );
     }
 
-    /// Pin the path-suffixed aliases — strict RFC 9728 §3.1 clients
+    /// Pin the path-suffixed aliases; strict RFC 9728 §3.1 clients
     /// probe these before the bare URI.
     #[mz_ore::test]
     fn test_path_suffixed_alias_paths_are_correct() {
@@ -564,7 +558,7 @@ mod tests {
         );
     }
 
-    /// Pin the wire-visible scope string — clients ask the IdP for a
+    /// Pin the wire-visible scope string; clients ask the IdP for a
     /// token with this exact value.
     #[mz_ore::test]
     fn test_mcp_scope_constant() {
@@ -601,7 +595,7 @@ mod tests {
     }
 
     /// IPv6 literals (`[::1]:8080`) are valid `Authority` syntax and
-    /// must round-trip — a regression silently breaks IPv6 deployments.
+    /// must round-trip. A regression silently breaks IPv6 deployments.
     #[mz_ore::test]
     fn test_resolve_host_accepts_ipv6_literal() {
         for host in ["[::1]", "[::1]:8080", "[2001:db8::1]:443"] {

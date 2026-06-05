@@ -525,7 +525,7 @@ impl HttpServer {
         if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
 
-            // RFC 9728 Protected Resource Metadata. Public route — MCP
+            // RFC 9728 Protected Resource Metadata. Public route: MCP
             // clients fetch it before they have a token. Sits on its own
             // router so the auth middleware never runs on it. The handler
             // 404s when the listener does not advertise OAuth (see
@@ -1000,13 +1000,13 @@ impl IntoResponse for AuthError {
         let mut headers = HeaderMap::new();
         // We omit most detail from the error message we send to the client, to
         // avoid giving attackers unnecessary information. `OidcFailed` is the
-        // exception — its payload is a sanitized `OidcError::Display` that the
+        // exception: its payload is a sanitized `OidcError::Display` that the
         // console embeds in the login-page error.
         let body = match &self {
             // Bearer goes first so OAuth-aware clients see it before the
             // Basic fallback. RFC 7235 allows emitting multiple
             // `WWW-Authenticate` headers; we use one per scheme so each
-            // challenge is unambiguously framed — some parsers struggle
+            // challenge is unambiguously framed; some parsers struggle
             // with multiple schemes on a single header value.
             AuthError::MissingHttpAuthentication { challenges } => {
                 if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
