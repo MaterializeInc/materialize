@@ -712,7 +712,18 @@ impl ConnectionOptionExtracted {
                                 credential,
                                 scope: self.scope.clone(),
                             },
-                            (None, Some(gcp_connection)) => IcebergCatalogAuth::Gcp(gcp_connection),
+                            (None, Some(gcp_connection)) => {
+                                /// All BigLake Iceberg REST Catalogs use the same catalog URI.
+                                const BIGLAKE_CATALOG_URI: &str =
+                                    "https://biglake.googleapis.com/iceberg/v1/restcatalog";
+                                if uri.to_string() != BIGLAKE_CATALOG_URI {
+                                    sql_bail!(
+                                        "GCP connection can only be used with '{}'",
+                                        BIGLAKE_CATALOG_URI
+                                    );
+                                }
+                                IcebergCatalogAuth::Gcp(gcp_connection)
+                            }
                             (None, None) => sql_bail!(
                                 "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL or GCP CONNECTION"
                             ),

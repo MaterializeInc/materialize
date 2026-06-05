@@ -29,7 +29,7 @@ ALTER SYSTEM SET enable_default_connection_validation = false
     GCP CONNECTION = gcpconn,
     WAREHOUSE = 'gs://anything'
   )
-contains:must point URL at a *.googleapis.com host
+contains:GCP connection can only be used with 'https://biglake.googleapis.com/iceberg/v1/restcatalog'
 
 # Positive control: a real BigLake host is accepted, so the allowlist doesn't
 # break the feature.
