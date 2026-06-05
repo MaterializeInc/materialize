@@ -250,7 +250,13 @@ pub(crate) async fn handle_protected_resource_metadata(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(err) = validate_issuer_url(&issuer) {
-        warn!(%issuer, error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
+        // Don't echo the issuer back into logs verbatim: if it failed
+        // validation because it carried userinfo (e.g. an operator
+        // misconfigured `oidc_issuer = 'https://user:pass@idp/...'`),
+        // logging it raw turns the WARN line into a credential
+        // repository. The reason string from `validate_issuer_url` is
+        // already specific enough to debug from.
+        warn!(error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
         metrics.inc("invalid_issuer");
         return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
     }
@@ -350,16 +356,21 @@ fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         })?;
+    // Userinfo (`user[:pass]@host`) is part of the URI authority grammar
+    // and `http::uri::Authority` accepts it, but it never appears in a
+    // Host header from a legitimate client. Reject explicitly so an
+    // attacker cannot send `Host: bobby@evil.example.com` and poison
+    // the published `resource` / `resource_metadata` URLs with their
+    // own prefix.
+    if candidate.contains('@') {
+        return None;
+    }
     // Round-trip through `http::uri::Authority` to confirm the value is
     // a syntactically valid `host[:port]`. This rejects header-smuggling
     // payloads (quotes, whitespace, control chars, parameter-delimiters)
     // that `HeaderValue::from_str` lets through.
     let authority = candidate.parse::<http::uri::Authority>().ok()?;
     if authority.as_str() != candidate {
-        // The Authority parser is permissive about some forms (e.g.
-        // `userinfo@host`), so additionally require the parsed form to
-        // round-trip exactly. Anything that re-renders differently is
-        // refused.
         return None;
     }
     Some(candidate)
@@ -497,6 +508,33 @@ mod tests {
                 resolve_host(&req, Some(malicious)),
                 None,
                 "smuggling payload via http_host_name must be rejected: {malicious:?}",
+            );
+        }
+    }
+
+    /// `http::uri::Authority` accepts a `userinfo@host` form, but the
+    /// round-trip check in `resolve_host` must reject it: if we accepted
+    /// it, an attacker could send `Host: bobby@evil.example.com` and
+    /// poison the published `resource` URL with their own prefix.
+    #[mz_ore::test]
+    fn test_resolve_host_rejects_userinfo() {
+        for malicious in [
+            "user@host.example.com",
+            "user:pass@host.example.com",
+            "@host.example.com",
+            "user@host.example.com:8080",
+            "user:pass@host.example.com:8080",
+        ] {
+            let req = req_with_host(malicious);
+            assert_eq!(
+                resolve_host(&req, None),
+                None,
+                "userinfo in Host header must be rejected: {malicious:?}",
+            );
+            assert_eq!(
+                resolve_host(&req, Some(malicious)),
+                None,
+                "userinfo in http_host_name must be rejected: {malicious:?}",
             );
         }
     }
