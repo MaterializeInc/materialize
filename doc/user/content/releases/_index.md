@@ -19,24 +19,34 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-06-04* <br>
 *Released to Materialize Self-Managed: 2026-06-05* <br>
 
-This release includes MCP improvements, improvements and bug fixes.
+This release includes improvements to the MCP Server for Agents, general
+improvements, and bug fixes.
+
+### MCP Server for Agents
+We've made several improvements to our MCP Server for Agents, which can be used to give agents in production fresh context from Materialize.
+
+- **`query` tool enabled by default**: The MCP Server for Agents now
+  enables the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
+  by default, allowing agents to join across data products.
+- **Data product routing**: The `read_data_product` tool now
+  automatically routes queries to the data product's catalog cluster,
+  eliminating the need to specify the cluster manually.
+- **Data product hydration status**: The MCP Server for Agents now
+  surfaces hydration readiness state for data products, enabling agents
+  to check whether a data product is fully hydrated before querying.
+
+For more information, refer to:
+- [MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
 
 ### Improvements {#v26.27-improvements}
 
-- **MCP data product routing**: The `read_data_product` MCP tool now
-  automatically routes queries to the data product's catalog cluster,
-  eliminating the need to specify the cluster manually.
-- **MCP data product hydration status**: The MCP server now surfaces
-  hydration readiness state for data products, enabling agents to check
-  whether a data product is fully hydrated before querying.
 - **Improved `EXPLAIN` output**: Default `EXPLAIN` output now uses
   cleaner formatting for joins and explicitly identifies cross joins.
-- **Self-Managed Console connection info**: The Console in self-managed
-  deployments now displays the balancerd hostname in the connection
-  dialog.
 
 ### Bug Fixes {#v26.27-bug-fixes}
 
+- Fixed the Console in self-managed deployments not displaying the
+  balancerd hostname in the connection dialog.
 - Fixed incorrect query results from filter pushdown when using
   timestamp or date arithmetic with interval values.
 - Fixed incorrect query results from filter pushdown when using `CASE`
