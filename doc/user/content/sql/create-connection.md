@@ -830,7 +830,18 @@ Materialize supports two catalog types:
 
 #### Syntax {#iceberg-catalog-syntax}
 
-{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-s3tables" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 #### Examples {#iceberg-catalog-examples}
 

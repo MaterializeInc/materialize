@@ -685,14 +685,13 @@
         |-------|-------|-------------|
         | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `false`. |
 
-- name: "syntax-iceberg-catalog"
+- name: "syntax-iceberg-catalog-s3tables"
   code: |
     CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
-        CATALOG TYPE = { 's3tablesrest' | 'rest' },
+        CATALOG TYPE = 's3tablesrest',
         URL = '<catalog_url>',
         WAREHOUSE = '<warehouse>',
         AWS CONNECTION = <aws_connection>,
-        GCP CONNECTION = <gcp_connection>
     );
   syntax_elements:
     - name: "`<connection_name>`"
@@ -707,9 +706,6 @@
         - `'s3tablesrest'` — [AWS S3
           Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
           Requires `AWS CONNECTION`.
-        - `'rest'` - Generic Iceberg REST catalog, currently
-          [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
-          Requires `GCP CONNECTION`.
     - name: "`URL`"
       description: |
         *Value:* `text`. Required.
@@ -717,7 +713,6 @@
         The URL of the Iceberg catalog endpoint.
 
         - AWS S3 Tables: `https://s3tables.<region>.amazonaws.com/iceberg`.
-        - GCP BigLake: `https://biglake.googleapis.com/iceberg/v1/restcatalog`.
     - name: "`WAREHOUSE`"
       description: |
         *Value:* `text`.
@@ -727,12 +722,48 @@
 
         - AWS S3 Tables: the S3 Tables bucket ARN
           (`arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`).
-        - GCP BigLake: the GCS bucket URI (`gs://<bucket>`).
     - name: "`AWS CONNECTION`"
       description: |
         *Value:* object name.
 
         The name of an [AWS connection](#aws) to use for authentication.
+
+- name: "syntax-iceberg-catalog-biglake"
+  code: |
+    CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = '<catalog_url>',
+        WAREHOUSE = '<warehouse>',
+        GCP CONNECTION = <gcp_connection>
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`CATALOG TYPE`"
+      description: |
+        *Value:* `text`. Required.
+
+        The type of Iceberg catalog:
+
+        - `'rest'` - Generic Iceberg REST catalog, currently
+          [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog).
+          Requires `GCP CONNECTION`.
+    - name: "`URL`"
+      description: |
+        *Value:* `text`. Required.
+
+        The URL of the Iceberg catalog endpoint.
+
+        - GCP BigLake: `https://biglake.googleapis.com/iceberg/v1/restcatalog`.
+    - name: "`WAREHOUSE`"
+      description: |
+        *Value:* `text`.
+
+        Identifies the catalog's warehouse — the object-storage location for
+        table data. Required for `'s3tablesrest'`. Required for `'rest'` with GCP BigLake.
+
+        - GCP BigLake: the GCS bucket URI (`gs://<bucket>`).
     - name: "`GCP CONNECTION`"
       description: |
         *Value:* object name.
