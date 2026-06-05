@@ -97,6 +97,26 @@
 //! completed-fetches frontier is empty. If the dataflow is dropped instead,
 //! the tasks are aborted via their [AbortOnDropHandle]s.
 //!
+//! **The feedback edge is a stream on purpose.** It carries no data — its
+//! type is uninhabited — and even its frontier is redundant with the data
+//! output's (both capabilities of a pair drop together). But a dataflow edge
+//! provides three things a probe would not:
+//!
+//! * **Cross-process signaling**: capability drops on remote workers reach
+//!   the chosen worker through timely's progress protocol, and the input
+//!   frontier passing `t` means *every* fetch operator in *every* process has
+//!   completed its fetches at or before `t` — a global minimum, which is what
+//!   makes the lease release sound.
+//! * **Wakeups**: frontier changes on a real input schedule the descs
+//!   operator; lease release and the shutdown oneshot need no other
+//!   activation source. A caught-up source produces no activations at all,
+//!   so a passive probe would stall both.
+//! * **Operator lifetime**: once the listen completes, the descs operator
+//!   holds no capabilities; the still-open feedback input is the only thing
+//!   keeping timely from shutting the operator down, which would drop its
+//!   state and abort the listen task — releasing the SeqNo hold while
+//!   fetches are still in flight.
+//!
 //! Subtleties worth knowing before changing this code:
 //!
 //! * [LeasedBatchPart]s panic on drop while leased; only the lease-split
