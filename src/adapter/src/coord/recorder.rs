@@ -59,6 +59,14 @@ use crate::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 
+/// The detailed message of a tokio-postgres error (its `Display` is just
+/// "db error").
+fn err_msg(err: &tokio_postgres::Error) -> String {
+    err.as_db_error()
+        .map(|e| e.message().to_string())
+        .unwrap_or_else(|| err.to_string())
+}
+
 /// How often a recorder re-executes its actions.
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -226,9 +234,9 @@ async fn recorder_loop(
                     match client.execute(&sql, &[]).await {
                         Ok(_) => info!(recorder = %name, view, "recorder created integrate view"),
                         // "already exists" is fine (re-create or reconnect).
-                        Err(err) if err.to_string().contains("already exists") => {}
+                        Err(err) if err_msg(&err).contains("already exists") => {}
                         Err(err) => {
-                            warn!(recorder = %name, "recorder integrate failed: {err}");
+                            warn!(recorder = %name, "recorder integrate failed: {}", err_msg(&err));
                             tokio::time::sleep(TICK_INTERVAL).await;
                             continue 'reconnect;
                         }
@@ -243,7 +251,7 @@ async fn recorder_loop(
                     let cols: Vec<String> = match client.query(cols_query, &[&bare]).await {
                         Ok(rows) => rows.iter().map(|r| r.get::<_, String>(0)).collect(),
                         Err(err) => {
-                            warn!(recorder = %name, "recorder column fetch failed: {err}");
+                            warn!(recorder = %name, "recorder column fetch failed: {}", err_msg(&err));
                             tokio::time::sleep(TICK_INTERVAL).await;
                             continue 'reconnect;
                         }
@@ -266,8 +274,57 @@ async fn recorder_loop(
             info!(recorder = %name, sql = %sql, "recorder tick statement");
         }
 
+        // The progress watermark: in the real design the RECORD commit at `T`
+        // advances the targets' physical uppers in lockstep with input
+        // consumption (including empty commits — "nothing to record through
+        // `F`" is information). The prototype's targets are plain tables whose
+        // uppers free-run with wall clock, so the consumed-through frontier is
+        // instead expressed *as data*: one row per recorder, advanced every
+        // tick even when no deltas flow. Without it, a reader cannot
+        // distinguish "no delta at `t`" from "the recorder has not gotten
+        // there" (or is gone).
+        // Separate statements: DDL and writes cannot share an implicit
+        // multi-statement transaction.
+        let progress_setup = [
+            "CREATE TABLE IF NOT EXISTS mz_recorder_progress \
+             (recorder text, consumed_through mz_timestamp)"
+                .to_string(),
+            format!("DELETE FROM mz_recorder_progress WHERE recorder = '{name}'"),
+            format!("INSERT INTO mz_recorder_progress VALUES ('{name}', 0)"),
+        ];
+        for sql in &progress_setup {
+            if let Err(err) = client.execute(sql.as_str(), &[]).await {
+                warn!(recorder = %name, sql = %sql, "recorder progress setup failed: {}", err_msg(&err));
+                tokio::time::sleep(TICK_INTERVAL).await;
+                continue 'reconnect;
+            }
+        }
+        // The frontier is inlined as a literal: tokio-postgres would serialize
+        // a text parameter against the server-inferred mz_timestamp type.
+        let progress_sql = |frontier: &str| {
+            format!(
+                "UPDATE mz_recorder_progress SET consumed_through = '{frontier}'::mz_timestamp \
+                 WHERE recorder = '{name}'"
+            )
+        };
+
         loop {
             tokio::time::sleep(TICK_INTERVAL).await;
+            // Sample the frontier before running the actions: the actions'
+            // reads happen at later timestamps, so every input delta with
+            // `mz_timestamp <= frontier` is reflected in the targets once they
+            // all succeed. Conservative by up to one tick.
+            let frontier: String = match client.query_one("SELECT mz_now()::text", &[]).await {
+                Ok(row) => row.get(0),
+                Err(err) => {
+                    warn!(recorder = %name, "recorder frontier read failed: {}", err_msg(&err));
+                    if client.is_closed() {
+                        continue 'reconnect;
+                    }
+                    continue;
+                }
+            };
+            let mut all_ok = true;
             for sql in &tick_sqls {
                 match client.execute(sql.as_str(), &[]).await {
                     Ok(rows) if rows > 0 => {
@@ -275,10 +332,20 @@ async fn recorder_loop(
                     }
                     Ok(_) => {}
                     Err(err) => {
-                        warn!(recorder = %name, "recorder tick failed: {err}");
+                        warn!(recorder = %name, "recorder tick failed: {}", err_msg(&err));
+                        all_ok = false;
                         if client.is_closed() {
                             continue 'reconnect;
                         }
+                    }
+                }
+            }
+            // Advance the watermark only if the whole tick applied.
+            if all_ok {
+                if let Err(err) = client.execute(&progress_sql(&frontier), &[]).await {
+                    warn!(recorder = %name, "recorder progress write failed: {}", err_msg(&err));
+                    if client.is_closed() {
+                        continue 'reconnect;
                     }
                 }
             }
