@@ -826,6 +826,31 @@ impl Pretty {
         }
     }
 
+    /// `DECLARE <name> CURSOR FOR <stmt>`. The inner statement is printed via the
+    /// recursive doc printer (not the redacting AstDisplay fallback) so a secret
+    /// it carries — e.g. `CURSOR FOR ALTER ROLE r PASSWORD '…'` — survives the
+    /// round trip instead of becoming `'<REDACTED>'`.
+    pub(crate) fn doc_declare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a DeclareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!(
+            "DECLARE {} CURSOR FOR ",
+            v.name.to_ast_string_simple()
+        ))
+        .append(self.to_doc(&v.stmt))
+    }
+
+    /// `PREPARE <name> AS <stmt>`. Recurses into the inner statement for the same
+    /// reason as [`Self::doc_declare`].
+    pub(crate) fn doc_prepare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a PrepareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!("PREPARE {} AS ", v.name.to_ast_string_simple()))
+            .append(self.to_doc(&v.stmt))
+    }
+
     fn doc_view_definition<'a, T: AstInfo>(&'a self, v: &'a ViewDefinition<T>) -> RcDoc<'a> {
         let mut docs = vec![RcDoc::text(v.name.to_string())];
         if !v.columns.is_empty() {
