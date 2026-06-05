@@ -585,7 +585,7 @@ impl Value {
         Ok(())
     }
 
-    /// Static helper method to pre-validate that a given Datum corresponding to
+    /// Static helper method to pre-validate that a Datum corresponding to
     /// the provided `SqlScalarType` can be converted into a `Value` and then
     /// encoded as binary using `encode_binary` without an error.
     ///
