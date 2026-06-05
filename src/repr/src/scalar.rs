@@ -5405,9 +5405,27 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
         SqlScalarType::Array(element_type) => arb_array(arb_datum_for_scalar(*element_type))
             .prop_map(PropDatum::Array)
             .boxed(),
-        SqlScalarType::Int2Vector => arb_array(any::<i16>().prop_map(PropDatum::Int16).boxed())
-            .prop_map(PropDatum::Array)
-            .boxed(),
+        SqlScalarType::Int2Vector => {
+            // `int2vector` is, by definition, a 1-dimensional array of `int2`
+            // values (matching PostgreSQL's `int2vector` and Materialize's
+            // `Value::from_datum`, which asserts on multi-dimensional arrays).
+            // The generic `arb_array` strategy can produce multi-dimensional
+            // arrays, so we hand-roll a 1-D variant here.
+            let element_strategy = any::<i16>().prop_map(PropDatum::Int16).boxed();
+            prop::collection::vec(element_strategy, 0..16)
+                .prop_map(|elements| {
+                    let dims = [ArrayDimension {
+                        lower_bound: 1,
+                        length: elements.len(),
+                    }];
+                    let element_datums: Vec<Datum<'_>> =
+                        elements.iter().map(|pd| pd.into()).collect();
+                    let mut row = Row::default();
+                    row.packer().try_push_array(&dims, element_datums).unwrap();
+                    PropDatum::Array(PropArray(row, elements))
+                })
+                .boxed()
+        }
         SqlScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(*value_type))
             .prop_map(PropDatum::Map)
             .boxed(),
