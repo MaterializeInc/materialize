@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce.rs
-revision: 4fe7ed31b7
+revision: 261d61df83
 ---
 
 # mz-expr::scalar::reduce

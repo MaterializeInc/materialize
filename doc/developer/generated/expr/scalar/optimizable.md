@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/optimizable.rs
-revision: 0094e55a71
+revision: 261d61df83
 ---
 
 # mz-expr::scalar::optimizable

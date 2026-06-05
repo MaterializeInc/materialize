@@ -1,6 +1,6 @@
 ---
 source: src/frontegg-mock/src/handlers/user.rs
-revision: e757b4d11b
+revision: 33b8db85da
 ---
 
 # frontegg-mock::handlers::user
