@@ -34,7 +34,7 @@ cargo build --release -p fivetran_destination --no-default-features
 ```
 
 Cargo will emit the built binary at
-`ROOT/target/release/fivetran_destination.`
+`ROOT/target/release/mz-fivetran-destination.`
 
 ### Docker image distribution
 
