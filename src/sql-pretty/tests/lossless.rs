@@ -57,6 +57,25 @@ fn alter_role_password_preserved() {
 }
 
 #[mz_ore::test]
+fn declare_inner_secret_not_redacted() {
+    // DECLARE/PREPARE wrap an inner statement and used to fall back to the
+    // redacting AstDisplay for the whole wrapper, turning a secret in the inner
+    // statement into `'<REDACTED>'`. They now recurse into the inner statement's
+    // pretty doc, which prints the secret. (A full-AST round trip can't be used
+    // here: DECLARE/PREPARE capture the raw input in a `sql` field that always
+    // differs after reformatting, so we check the printed output directly.)
+    // Found by parse_pretty_roundtrip.
+    let pretty = pretty_str_simple("DECLARE c CURSOR FOR ALTER ROLE adb PASSWORD '2'", 100)
+        .expect("pretty-prints");
+    assert!(pretty.contains("PASSWORD '2'"), "secret redacted: {pretty}");
+    assert!(!pretty.contains("REDACTED"), "secret redacted: {pretty}");
+
+    // And the inner statement is still printed via the recursive doc printer.
+    let pretty = pretty_str_simple("DECLARE c CURSOR FOR SELECT 1", 100).expect("pretty-prints");
+    assert!(pretty.starts_with("DECLARE c CURSOR FOR SELECT"), "{pretty}");
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn materialized_view_as_of_preserved() {
     assert_lossless("CREATE MATERIALIZED VIEW mv AS SELECT 1 AS OF 12345");
