@@ -1,6 +1,7 @@
 # Persist source: deasync and fetch backpressure
 
 - Associated:
+  - [#36910](https://github.com/MaterializeInc/materialize/pull/36910) (phase 1 implementation)
   - [#36810](https://github.com/MaterializeInc/materialize/pull/36810) (txn-wal deasync precedent)
   - `compute_dataflow_max_inflight_bytes` / `compute_dataflow_max_inflight_bytes_cc` dyncfgs
 
@@ -58,7 +59,7 @@ graph LR
         FO[fetch op<br/>sync, per-flight caps]
     end
     L -- "descs + progress (mpsc)" --> D
-    D -- "exchange by part hash" --> FO
+    D -- "exchange by assigned worker" --> FO
     FO -- "desc (mpsc)" --> F
     F -- "FetchedBlob + permit (mpsc)" --> FO
     FO -- "Pipeline" --> X
@@ -68,21 +69,22 @@ graph LR
 ### Operators and tasks
 
 **Listen task (tokio, chosen worker only).**
-Owns the `Subscribe` and the leased reader.
-Pushes `(parts, progress frontier)` over an unbounded channel and wakes the descs operator through a `SyncActivator`.
+Owns the snapshot, listen, and leased reader, and applies the stats-based `filter_fn` and audit budget (which gain `Send` bounds, as do `listen_sleep` and `start_signal`).
+Pushes parts (split into `ExchangeableBatchPart` plus `Lease`) and progress frontiers over an unbounded channel and wakes the descs operator through a `SyncActivator`-backed activator.
 Sends the empty frontier as its final message before exiting (shutdown signal pattern from #36810).
-Its `AbortOnDropHandle` is shared via `Rc` with the descs operator so the reader (and its SeqNo hold) outlives all in-flight fetches.
+The descs operator holds its `AbortOnDropHandle` and releases the listen handle (and with it the reader's SeqNo hold) through a oneshot only once the completed-fetches frontier is empty, so the reader outlives all in-flight fetches.
 
 **Descs operator (sync, all workers).**
 Built on all workers; non-chosen workers drain inputs and hold no capabilities.
-The chosen worker drains the listen channel, downgrades capabilities to the received progress frontier, stores each part's `Lease` in the existing `LeaseManager`, and exchanges `ExchangeableBatchPart`s by part hash.
+The separate `shard_source_descs_return` operator is merged in: the completed-fetches stream becomes a disconnected second input.
+The chosen worker drains the listen channel, downgrades capabilities to the received progress frontier, stores each part's `Lease` in the existing `LeaseManager`, and exchanges `ExchangeableBatchPart`s by their randomly assigned worker index.
 The `completed_fetches` feedback input advances the `LeaseManager` exactly as today.
 
 **Fetch operator (sync, per worker) + fetch task (tokio, per worker).**
 The operator forwards each incoming desc to its fetch task over a channel and retains per-flight capabilities for both outputs:
 
 ```rust
-inflight_caps.push_back((cap.retain_for_output(0), cap.retain_for_output(1)));
+inflight_caps.push_back((cap.delayed(cap.time(), 0), cap.delayed(cap.time(), 1)));
 ```
 
 The fetch task runs the backpressure loop:
@@ -133,7 +135,8 @@ Compared to `granular_backpressure`:
 * **Shutdown.**
   Dropping the operators drops the channel senders and `AbortOnDropHandle`s; tasks observe closed channels and exit; dropped permits release the budget.
 * **Task failure.**
-  Channel disconnect in an operator is a panic (`expect`), not a silent stall; fetch errors route through the existing `ErrorHandler` via an error channel drained on activation.
+  Sending on a closed desc channel is a panic (`expect`), and a disconnected fetch-result channel with fetches still in flight is an assertion failure, so a dead task cannot silently stall the dataflow.
+  Fetch and listen errors route through the existing `ErrorHandler`; the reporting operator then freezes, retaining its capabilities so no spurious progress is observable while a restart is pending.
 * **Frontier correctness.**
   Buffered data is emitted at retained capabilities before any downgrade, following the SQL-299 fix-by-construction approach from #36810.
 
@@ -153,16 +156,21 @@ Compared to `granular_backpressure`:
 
 ### Testing
 
-* Existing `shard_source` unit tests, converted.
-* Regression tests per #36810's approach: lease-release ordering (capability held until emission), shutdown mid-fetch, jumbo part progress, fetch task panic propagation.
-* A fuzz test over random interleavings of desc arrival, fetch completion, fuel exhaustion, and shutdown, asserting no data loss, no stall, and budget compliance.
-* Hydration benchmark before/after with the budget unbounded (phase 1) and bounded (phase 2).
+Delivered in phase 1:
+
+* Existing `shard_source` unit tests pass unchanged.
+* New regression tests: end-to-end data fetch (a written batch is emitted as a `FetchedBlob` and the frontier reaches the upper), shutdown mid-stream (dropping tokens drains the dataflow to the empty frontier), and error freeze (an unserveable `as_of` reports through the `ErrorHandler` and the frontier stays at the `as_of`).
+* The txn-wal suite, including `stress_correctness`, which surfaced a test-harness liveness assumption: harnesses that park workers indefinitely (`step_or_park(None)`) while polling state that does not activate the worker relied on the async operators' listen retry timers as accidental wakeups; with the listen in a task, a caught-up source produces no activations, so such parks must be bounded.
+
+Deferred:
+
+* A fuzz test over random interleavings of desc arrival, fetch completion, and shutdown, per #36810's approach.
+* Hydration benchmark before/after retuning the budget (phase 2).
 
 ## Minimal viable prototype
 
-Prototype phase 1 in a worktree: deasync `shard_source_fetch` first (per-flight capabilities, fetch task), then `shard_source_descs`, leaving decode untouched.
-Validate with the existing test suite plus a heap profile of a hydration under `bin/environmentd`, confirming the `mz_persist_semaphore_available_permits{name="fetch"}` gauge tracks the `S3Blob::get` allocation site.
-The timely-deasync skill patterns (per-flight capabilities, shared task handles) come from a prior prototype of exactly this operator, which de-risks the approach.
+Phase 1 is implemented in [#36910](https://github.com/MaterializeInc/materialize/pull/36910): `shard_source_fetch` first (per-flight capabilities, fetch task), then `shard_source_descs`, leaving decode untouched.
+Remaining validation: a heap profile of a hydration confirming the `mz_persist_semaphore_available_permits{name="fetch"}` gauge tracks the `S3Blob::get` allocation site.
 
 ## Alternatives
 
@@ -182,4 +190,4 @@ The timely-deasync skill patterns (per-flight capabilities, shared task handles)
 * Per-process budget couples dataflows (one slow decoder starves other dataflows' fetches); whether that needs a per-dataflow refinement in practice.
 * Whether `announce_memory_limit` is populated on all deployment paths the semaphore should bound; processes without it remain unbounded.
 * Ordering with #36810: both touch the async-to-sync conversion patterns; land txn-wal first to validate the shared patterns, or in parallel?
-* Whether `desc_transformer` users (txn-wal) constrain the desc-channel handoff in the fetch operator.
+* ~~Whether `desc_transformer` users (txn-wal) constrain the desc-channel handoff in the fetch operator.~~ Resolved: the transformer interposes on the descs stream and is unaffected; the txn-wal suite passes unchanged.
