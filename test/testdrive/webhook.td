@@ -133,7 +133,7 @@ $ webhook-append database=materialize schema=public name=webhook_json_with_heade
 "\"Hellö String\""
 
 ! SELECT * FROM webhook_json_with_headers;
-contains: binary encoding of map types is not implemented
+contains: no binary output function available for type map
 
 # An invalid body should return a 400.
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers status=400 content-type=application/json

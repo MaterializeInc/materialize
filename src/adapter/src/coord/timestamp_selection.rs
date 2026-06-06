@@ -625,7 +625,7 @@ impl Coordinator {
                     true => "true",
                     false => "false",
                 },
-                isolation_level.as_str(),
+                isolation_level.as_variant_str(),
                 &compute_instance.to_string(),
             ])
             .inc();

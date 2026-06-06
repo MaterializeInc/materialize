@@ -43,7 +43,7 @@ LEFT JOIN mz_introspection.mz_dataflow_operator_parents AS mdop ON mdod.id = mdo
 LEFT JOIN mz_introspection.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
 
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
-statement error binary encoding of list types is not implemented
+statement error no binary output function available for type list
 SELECT mdco.id, from_operator_id, from_operator_address, from_port, to_operator_id, to_operator_address, to_port, COALESCE(sum(sent), 0) AS sent
 FROM mz_introspection.mz_dataflow_channel_operators AS mdco
 JOIN mz_introspection.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
@@ -53,7 +53,7 @@ WHERE mce.export_id = 'does_not_exist'
 GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, from_port, to_port;
 
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
-statement error binary encoding of list types is not implemented
+statement error no binary output function available for type list
 SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_ops WHERE export_id = 'does_not_exist';
 
 # Ensure indexes are used where expected.
