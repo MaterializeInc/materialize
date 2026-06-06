@@ -474,6 +474,20 @@ fn test_create_index_keyword_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_case_when_operand_display_roundtrip() {
+    // `CASE` treats a leading `WHEN` as the first arm of a searched `CASE` (no
+    // operand), so a bare `when` identifier used as the `CASE` operand —
+    // `CASE when WHEN ...` — reparses as `CASE WHEN ...` and then chokes
+    // ("Expected an expression, found ..."). `can_be_printed_bare` must force
+    // `when` quoted. Regression for the parse_expr_roundtrip finding
+    // `CASE CAST(When.a AS jsonb) WHEN ...`.
+    assert_display_roundtrips(r#"SELECT CASE "when" WHEN 1 THEN 2 END"#);
+    assert_display_roundtrips(r#"SELECT CASE "when".a WHEN 1 THEN 2 END"#);
+    assert_display_roundtrips("SELECT CASE x WHEN 1 THEN 2 END");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_cast_over_low_precedence_display_roundtrip() {
     // `CAST(X AS t)` prints as the Postgres `X::t` form, so a low-precedence `X`
     // (a comparison, a quantified comparison) must be parenthesized or the `::`

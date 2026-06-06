@@ -19,7 +19,7 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, PREPARE, SOME};
+use mz_sql_lexer::keywords::{ALL, ANY, AS, Keyword, LIST, PREPARE, SOME, WHEN};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -323,6 +323,13 @@ impl Ident {
                         // name (`DEALLOCATE prepare` -> `DEALLOCATE` + the optional
                         // keyword + a missing name).
                         || kw == PREPARE
+                        // `CASE` treats a leading `WHEN` as the start of the
+                        // first arm (a searched `CASE` with no operand), so a
+                        // bare `when` identifier used as the `CASE` operand —
+                        // `CASE when.a WHEN ...` — reparses as `CASE WHEN .a ...`
+                        // ("expected an expression, found dot"). Quoting it keeps
+                        // the operand an identifier.
+                        || kw == WHEN
                 })
                 .unwrap_or(false)
     }
