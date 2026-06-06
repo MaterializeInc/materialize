@@ -521,7 +521,16 @@ impl Pretty {
         }
 
         if let Some(name) = &v.name {
-            docs.push(nest_title(title, self.doc_display_pass(name)));
+            // A bare `in` index name re-lexes as the start of the optional
+            // `IN CLUSTER` clause, so force it quoted (matching the
+            // `CreateIndexStatement` AstDisplay impl). `in` is fine bare in a
+            // required-name position, so this isn't a `can_be_printed_bare` case.
+            let name_doc = if name.as_str().eq_ignore_ascii_case("in") {
+                RcDoc::text(format!("\"{}\"", name.as_str()))
+            } else {
+                self.doc_display_pass(name)
+            };
+            docs.push(nest_title(title, name_doc));
         } else {
             docs.push(RcDoc::text(title));
         }

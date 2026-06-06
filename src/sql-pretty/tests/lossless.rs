@@ -146,3 +146,11 @@ fn csr_seed_protobuf_message_name_preserved() {
          SEED VALUE SCHEMA 'sch' MESSAGE 'a''b'",
     );
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn create_index_in_name_preserved() {
+    // A bare `in` index name re-lexes as the start of the optional `IN CLUSTER`
+    // clause, so the pretty-printer must quote it. Found by grammar_roundtrip.
+    assert_lossless(r#"CREATE INDEX "in" ON t (a)"#);
+}
