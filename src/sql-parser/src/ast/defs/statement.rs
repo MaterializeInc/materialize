@@ -1846,7 +1846,19 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         if let Some(name) = &self.name {
-            f.write_node(name);
+            // A bare `in` index name re-lexes as the start of the optional
+            // `IN CLUSTER` clause below (`CREATE INDEX in ON …` fails to reparse
+            // with "Expected ON, found IN"), so force it quoted. `in` is
+            // legitimately bare in other name positions — e.g. a required
+            // `CREATE SINK` name — so this is local to the optional-name +
+            // `IN CLUSTER` ambiguity, not a `can_be_printed_bare` case.
+            if name.as_str().eq_ignore_ascii_case("in") {
+                f.write_str("\"");
+                f.write_str(name.as_str());
+                f.write_str("\"");
+            } else {
+                f.write_node(name);
+            }
             f.write_str(" ");
         }
         if let Some(cluster) = &self.in_cluster {
