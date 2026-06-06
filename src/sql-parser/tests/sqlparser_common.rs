@@ -462,6 +462,18 @@ fn test_deallocate_keyword_name_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_create_index_keyword_name_display_roundtrip() {
+    // `CREATE INDEX [<name>] [IN CLUSTER c] ON …` — a bare `in` index name
+    // re-lexes as the start of the optional `IN CLUSTER` clause (so
+    // `CREATE INDEX in ON t (a)` fails with "Expected ON, found IN"), so it must
+    // be quoted. Regression for the grammar_roundtrip finding.
+    assert_display_roundtrips(r#"CREATE INDEX "in" ON t (a)"#);
+    assert_display_roundtrips("CREATE INDEX foo ON t (a)");
+    assert_display_roundtrips("CREATE INDEX ON t (a)");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_cast_over_low_precedence_display_roundtrip() {
     // `CAST(X AS t)` prints as the Postgres `X::t` form, so a low-precedence `X`
     // (a comparison, a quantified comparison) must be parenthesized or the `::`
