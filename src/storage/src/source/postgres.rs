@@ -447,22 +447,23 @@ async fn fetch_slot_metadata(
     }
 }
 
-/// Fetch the `pg_current_wal_lsn`, used to report metrics.
+/// Fetch the upstream WAL frontier, used to report metrics.
 async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
-    let query = "SELECT pg_current_wal_lsn()";
+    // `pg_current_wal_lsn()` errors with "recovery is in progress" on a physical
+    // standby; fall back to the local replay frontier there. See
+    // `mz_postgres_util::get_current_wal_lsn` for the rationale.
+    let query = "SELECT CASE WHEN pg_is_in_recovery() \
+         THEN pg_last_wal_replay_lsn() ELSE pg_current_wal_lsn() END AS wal_lsn";
     let row = simple_query_opt(client, query).await?;
 
-    match row.and_then(|row| {
-        row.get("pg_current_wal_lsn")
-            .map(|lsn| lsn.parse::<PgLsn>().unwrap())
-    }) {
+    match row.and_then(|row| row.get("wal_lsn").map(|lsn| lsn.parse::<PgLsn>().unwrap())) {
         // Based on the documentation, it appears that `pg_current_wal_lsn` has
         // the same "upper" semantics of `confirmed_flush_lsn`:
         // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
         // We may need to revisit this and use `pg_current_wal_flush_lsn`.
         Some(lsn) => Ok(MzOffset::from(lsn)),
         None => Err(TransientError::Generic(anyhow::anyhow!(
-            "pg_current_wal_lsn() mysteriously has no value"
+            "WAL LSN mysteriously has no value"
         ))),
     }
 }
