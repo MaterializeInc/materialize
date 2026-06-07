@@ -108,7 +108,7 @@ should be sequenced first (Phase 0).
 |---|---|---|
 | `src/adapter` — group commit, per-object sequencing, the target-`T`/retry loop, the dataflow→control-plane drain | Build the timestamped group-commit extension (target `T`, fail-on-conflict, oracle advance) and the per-object control loop that commits its data + reclock via txn-wal. Adapt the removed `sequence_create_continual_task` scaffolding. | **XL** |
 | `src/compute/src/render` | Revive CT body rendering (`render/continual_task.rs`: the input/self/normal source transformers, `step_forward`, time extract/reduce). Replace the bespoke sink with *emit proposed diffs to the control plane*. **Render `INTEGRATE` as a stateful reduce** (accumulate `change_diff` per row, threshold `max(0, Σ)`, place by `change_ts`) — memory ∝ live output. Each object is its own dataflow (one primary export), so the CT one-sink-per-dataflow shape is kept, not torn out. | **L** |
-| `src/sql` (parser + plan) | New DDL: `CREATE RECORDER … INTO <table> AS <query>` (bare query, no `RECORD(...)` wrapper — binds like MV's `AS <query>`; `INTO` reuses the SINK destination idiom; the store is a **regular `CREATE TABLE`**, no new table DDL) with an optional `EXPOSE RECLOCK AS <name>` (the `EXPOSE PROGRESS AS` precedent) and a hand-built table's `WITH (TIMELINE = …)` (not `IN DOMAIN`). Carriers use a **`USING TIME …, DIFF …` clause** on `CHANGES`/`INTEGRATE` — **no named-arg (`=>`) parser work needed** (`USING` is already reserved); `CHANGES`'s `AS OF` parses like `SUBSCRIBE (query) AS OF …` (attaches to the operator, not an inner SELECT). The `INTEGRATE` **combinator** (accumulate-and-threshold) usable in MVs; `DELETE`/`UPDATE` planning (ordinary retraction; integral-preserving data-domain compaction = `clamp + GROUP BY/SUM`). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES` / recorded changelog), legal only in a `RECORD` body, with the `EXPLAIN`/`NOTICE` diagnostics. Note `RECORD` as a verb overlaps the composite-type "record" — dropping the wrapper avoids it. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
+| `src/sql` (parser + plan) | New DDL: `CREATE RECORDER … INTO <table> AS <query>` (bare query, no `RECORD(...)` wrapper — binds like MV's `AS <query>`; `INTO` reuses the SINK destination idiom; the store is a **regular `CREATE TABLE`**, no new table DDL); the table's reclock is auto-created and optionally named `EXPOSE RECLOCK AS <name>` (the `EXPOSE PROGRESS AS` precedent); a hand-built table's `WITH (TIMELINE = …)` (not `IN DOMAIN`). Carriers use a **`USING TIME …, DIFF …` clause** on `CHANGES`/`INTEGRATE` — **no named-arg (`=>`) parser work needed** (`USING` is already reserved); `CHANGES`'s `AS OF` parses like `SUBSCRIBE (query) AS OF …` (attaches to the operator, not an inner SELECT). `INTEGRATE(<table> USING …)` takes a **bare recorded table** (not a relation) and does the accumulate-and-threshold internally — so the reclock is looked up **from the table** (no per-operator arg, no lineage analysis). `DELETE`/`UPDATE` planning (ordinary retraction; integral-preserving data-domain compaction = `clamp + GROUP BY/SUM`). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES` / recorded changelog), legal only in a `RECORD` body, with the `EXPLAIN`/`NOTICE` diagnostics. Note `RECORD` as a verb overlaps the composite-type "record" — dropping the wrapper avoids it. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
 | `src/catalog` + `src/catalog-protos` | New item kinds: the **explicit reclock object** (engine-written / user-read-only, source-remap precedent) and the `RECORDER` writer; the recorded store is a **regular `TABLE`** (no new kind). Dependency edges; reclock domain binding; a durable-catalog migration version. No multi-output orchestration (`INTEGRATE` rides on MVs; bounding is DML). | **M** |
 | `src/storage-types` + persist schema | **No new collection kind** — the recorded store is a regular table whose `change_ts`/`change_diff` are ordinary columns. Net-new: the **reclock object's** shard + its txns registration, and committing `(data, reclock)` in one group commit. (`INTEGRATE`'s accumulation is a compute reduce, not a storage concern.) | **S–M** |
 | `src/compute-client` (`as_of_selection.rs`, `controller/instance.rs`) | Self-reference read-hold (since strictly below output upper). **These files already carry the write-only-collection (CT) special-casing** (`as_of_selection.rs:460`, `controller/instance.rs:1530,1776`) — reuse, do not rebuild. | **M** |
@@ -181,11 +181,14 @@ There is **no new collection kind**: the recorded store is a regular table whose
 its physical commit ts is fine — it is just a column value, exactly as `CHANGES`
 already produces (#36869). The net-new storage piece is instead the **explicit
 reclock object**: an engine-written, **user-read-only**, relation-valued mapping
-(the source-remap / progress-subsource precedent), committed by `RECORD` *together
-with* the data in one group commit. This is a smaller, more precedented surface
-than a bespoke collection kind — the risk shifts from "a new table type with
-implicit columns" to "a new read-only, engine-written object kind + the two-shard
-commit."
+(the source-remap / progress-subsource precedent) **owned by the table** —
+auto-created when the table first becomes a recording target, written by `RECORD`
+*together with* the data in one group commit (a per-writer lane). It is associated
+with the *table*, not the recorder, so `INTEGRATE(table …)` resolves it by table
+identity (no lineage analysis). This is a smaller, more precedented surface than a
+bespoke collection kind — the risk shifts from "a new table type with implicit
+columns" to "a table-associated read-only, engine-written object kind + the
+two-shard commit."
 
 ### MED — M4: output frontier advancement (reclock-driven, domain A)
 The `change_ts` column is *data* and does not set an output's `upper`. `INTEGRATE`
@@ -276,9 +279,10 @@ recorder design tries to sidestep (and, per H2, only partly does).
   bespoke sink. One `RECORD` into one regular table **+ its explicit reclock
   object**. Validates freeze (renderer form), self-read, restart, and the
   data+reclock two-shard commit.
-- **Phase 2 — `INTEGRATE` combinator + mutable-table bounding.** `INTEGRATE(rel
-  USING TIME …, DIFF …)` as a **stateful reduce** (accumulate + threshold) inside a
-  plain MV, reclock inferred from `rel`'s table (no per-operator arg); ordinary
+- **Phase 2 — `INTEGRATE` combinator + mutable-table bounding.** `INTEGRATE(<table>
+  USING TIME …, DIFF …)` over a **bare recorded table** as a **stateful reduce**
+  (accumulate + threshold) inside a plain MV, reclock resolved by table identity (no
+  per-operator arg, no lineage analysis); ordinary
   `DELETE`/`UPDATE` bounding (integral-preserving data-domain compaction = the
   `clamp + GROUP BY/SUM` reduce). No atomic bundle, no multi-sink dataflow;
   consistency via logical-time reads. Add the reclock object + its domain binding
@@ -320,10 +324,10 @@ recorder design tries to sidestep (and, per H2, only partly does).
      would re-sample frozen / non-deterministic values); `INTEGRATE` and downstream
      **are** definite over the table + reclock and *may* be recomputed. The
      planner/optimizer must enforce this barrier.
-   - **Reclock is an explicit, engine-written / user-read-only object, bound 1:1 to
-     the table** (no per-operator `RECLOCK` arg — that would let two readers
-     disagree). `B` is the table's single shard frontier, so there is exactly one
-     reclock per table; **multiple writers commit per-writer lanes** (each its own
+   - **Reclock is an explicit, engine-written / user-read-only object owned by the
+     table** (auto-created when it first becomes a recording target; no per-operator
+     `RECLOCK` arg — that would let two readers disagree). `B` is the table's single
+     shard frontier, so there is exactly one reclock per table; **multiple writers commit per-writer lanes** (each its own
      two-shard commit), and the table's A-`upper` is `meet_i R_i[B_upper]` at read
      time (a merged frontier can't work). Drop-all seals the table. All `INTEGRATE`s
      share the one reclock, so they are consistent by construction. Recovered on
