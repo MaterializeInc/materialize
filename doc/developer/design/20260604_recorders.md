@@ -40,7 +40,10 @@ But a class of high-value workloads does not fit that model. They require
 The common shape: a transformation **triggered by input changes**, whose output
 **depends on when it ran** (not a deterministic function of inputs at a logical
 time), and whose result must be **durably recorded** — recomputation would
-produce a *different* answer, so it must be avoided. And because we give up
+produce a *different* answer, so it must be avoided. The guarantee is **at-least-once
+application** of the (possibly non-deterministic) function and **at-most-once
+persistence** of its result (a given result is committed once, via the per-commit
+CAS) — i.e. exactly-once into persist where the application succeeds. And because we give up
 recomputation, **bounding the growth** of the recorded output is a first-class
 problem, not an afterthought.
 
@@ -54,7 +57,7 @@ were designed: the `CHANGES` table function (#36869, open PR) and the OCC
 timestamped-write substrate (`20260210_incremental_occ_read_then_write.md`,
 designed but unbuilt). This document revives the capability by **distilling it to
 a small calculus** (`differentiate` / `integrate` / `record` / `freeze`) over
-**regular tables + an explicit reclock object**: one new standing-write object (the
+**regular tables + an explicit progress collection**: one new standing-write object (the
 `RECORD` writer), `INTEGRATE` as a SQL combinator usable in ordinary materialized
 views, and ordinary DML for bounding — no new collection kind.
 
@@ -115,33 +118,34 @@ Four operations move between them:
 | operation | signature | surface |
 |---|---|---|
 | **differentiate** | TVC → dTVC | `CHANGES(rel [AS OF …] USING TIME …, DIFF …)` operator (draft PR #36869) |
-| **integrate** | dTVC → TVC | `INTEGRATE(table USING TIME …, DIFF …)` combinator — takes a table; reclock looked up from it |
-| **record** | dTVC → durable dTVC | `CREATE RECORDER … INTO <table> AS <changelog query>` — the one new standing-write object (writes table + a reclock lane) |
+| **integrate** | dTVC → TVC | `INTEGRATE(table)` combinator — carriers + progress collection declared on the table |
+| **record** | dTVC → durable dTVC | `CREATE RECORDER … INTO <table> AS <changelog query>` — the one new standing-write object (writes table + a progress lane) |
 | **bound** | keep a dTVC finite | temporal filter, or ordinary `DELETE` of changelog rows (data-domain compaction = `clamp + GROUP BY/SUM`) |
 
 plus **freeze**, which is not a keyword but falls out of typing (below).
 
-The surface is deliberately small, and **needs no new collection kind**. The
-change carriers — a **time** column and a **diff** column — are *ordinary data
-columns* the user names with a `USING TIME …, DIFF …` clause: `CHANGES(rel USING
-TIME …, DIFF …)` *produces* them and `INTEGRATE(table USING TIME …, DIFF …)`
-*consumes* them (same clause, dual roles: output-naming on `CHANGES`,
-column-reference on `INTEGRATE`). Nothing is reserved or implicit — bare
-`CHANGES(rel)` exposes no carriers (it is still the changelog;
-you name `TIME`/`DIFF` only when something downstream needs them). So the store is
-a **regular table**. Only three things are new:
+The surface is deliberately small, and **needs no new collection kind**. The store
+is a **regular table** that declares its change carriers — a **time** and a
+**diff** column — and an associated progress collection in one clause:
+`CREATE TABLE … WITH (PROGRESS, TIMESTAMP = …, DIFF = …)`. The carriers are ordinary
+data columns (no reserved `mz_` names); `CHANGES` *produces* them (it names its
+output time/diff so a recorder can write them into the table) and the table *holds*
+them, so `INTEGRATE(table)` needs no carrier arguments at all. Only three things
+are new:
 
 - the **`RECORD` writer** — the one new standing object; it picks the commit time
   `T`, commits **frontier-gated**, and writes the table **and a lane of the table's
-  reclock** together;
-- an explicit **reclock** — a named, relation-valued, engine-written /
-  user-read-only mapping **owned by the *table*** (auto-created when the table first
-  becomes a recording target; the source-progress-subsource precedent), not hidden
-  metadata and not a per-operator argument;
-- **`INTEGRATE`** — a *combinator* (the dual of `CHANGES`) usable inside ordinary
-  materialized views, taking a **recorded table** plus its time/diff column names. It
-  carries no non-determinism, so it needs no new object kind. (Application shaping —
-  dedup, upsert, top-k — lives in the `RECORD` body, not in `INTEGRATE`.)
+  progress collection** together;
+- the **progress collection** — a named, relation-valued, engine-written /
+  user-read-only mapping (the source-progress-subsource precedent) **owned by the
+  *table*** (created by `WITH (PROGRESS, …)`, initialized to `(0, 0)`); it is what
+  `INTEGRATE` reclocks through. *("Reclock"/"reclocking" name the operation of
+  mapping through it; "progress collection" is the object.)*
+- **`INTEGRATE(table)`** — a *combinator* (the dual of `CHANGES`) usable inside
+  ordinary materialized views, taking just a **recorded table** (carriers and
+  progress come from the table). It carries no non-determinism, so it needs no new
+  object kind. (Application shaping — dedup, upsert, top-k — lives in the `RECORD`
+  body, not in `INTEGRATE`.)
 
 Bounding is ordinary `DELETE` of changelog rows. These pieces are **not** bundled
 into one atomic transaction: cross-object consistency comes from **reading at a
@@ -177,7 +181,7 @@ bounding is an ordinary `DELETE` of changelog rows.
 (`INTEGRATE`, `I = D⁻¹`) is `changelog(A) → TVC(A)`, summing the `change_diff`s back
 up. Neither crosses time domains and neither is non-deterministic. **The `A → B`
 move lives only in `RECORD`** — the durable write at processing time (domain B),
-which also notes the reclock; *this* is where the commit time `T` is picked and
+which also notes the progress collection; *this* is where the commit time `T` is picked and
 frozen values are sampled, i.e. the only non-deterministic leg. So the earlier
 "`INTEGRATE`/`RECORD` are integrate" was imprecise: `INTEGRATE` is the pure,
 definite inverse of `CHANGES`; `RECORD` is a separate durable-write-plus-reclock
@@ -199,7 +203,7 @@ taints it and is rejected at plan time.
 **Invariant (optimizer barrier): a recorded table is authoritative, never
 recomputable from the `RECORD` body's original inputs.** The optimizer must treat
 the recorded table as an opaque source — it *may* recompute `INTEGRATE` and
-everything downstream *over the table + its reclock* (those are definite), but it must
+everything downstream *over the table + its progress collection* (those are definite), but it must
 **never** see through `RECORD` to re-derive the recorded rows from the body's
 inputs. If it did, a recomputation would re-sample the frozen / non-deterministic
 values and this whole boundary argument collapses. This is a load-bearing
@@ -214,7 +218,7 @@ deliberate opt-in), but the engine must make freeze **loud**: `EXPLAIN` and a
 plan-time **`NOTICE` naming every frozen reference** in a body, with an optional
 explicit `FROZEN`/`TRACKED` marker for readability (see Open Questions).
 
-### The surface: a regular table, an explicit reclock, and `INTEGRATE`
+### The surface: a regular table, an explicit progress collection, and `INTEGRATE`
 
 The **store is a regular table** that happens to carry a time column and a diff
 column (`change_ts` / `change_diff` — ordinary data, user-named). There is **no
@@ -223,25 +227,33 @@ reconstructed on read by `INTEGRATE`, and the table is mutable like any other (y
 `DELETE` from it to bound it). A stored, never-bounded audit log is just "a regular
 table you only `INSERT` into" — still no special kind.
 
-The **reclock** is an explicit object — a named, relation-valued, **engine-written
-/ user-read-only** mapping between the input timeline (domain A) and the table's
-processing/write timeline (domain B), following the source-remap /
+The **progress collection** is an explicit object — a named, relation-valued,
+**engine-written / user-read-only** mapping between the input timeline (domain A)
+and the table's processing/write timeline (domain B), following the source-remap /
 progress-subsource precedent (`20210714_reclocking.md`, where remap was always a
-collection). It is *referenceable* (so `INTEGRATE` can name it) but not
-user-writable — so there is nothing to tamper with and nothing to defensively
-validate on read (preserving the rejection of in-band `mz_progressed` markers).
-`RECORD` writes the data table **and** its reclock together, as a two-shard
-`group_commit`.
+collection); `INTEGRATE` *reclocks* through it. It is created with the table by
+`WITH (PROGRESS, …)` and is *referenceable* but not user-writable — so there is
+nothing to tamper with and nothing to defensively validate on read (preserving the
+rejection of in-band `mz_progressed` markers). `RECORD` writes the data table **and**
+a lane of its progress collection together, as a two-shard `group_commit`.
 
-The domain a reclock describes is **inherited by default** (there is one global
+The domain a progress collection describes is **inherited by default** (there is one global
 logical timeline, domain A, so it is bound from the first `RECORD` writer's
 differentiate input and is then immutable — it survives dropping the writer); an
 explicit binding is the escape hatch for a hand-written table or several writers
 sharing a domain (see "Time domains").
 
 ```sql
-CREATE TABLE enriched (a, b, c, val, change_ts mz_timestamp, change_diff bigint);
--- + an engine-managed reclock object, written by the RECORD below
+CREATE TABLE enriched (
+  a BIGINT, b BIGINT, c BIGINT, val TEXT,
+  change_ts mz_timestamp NOT NULL,        -- the carrier columns, declared once
+  change_diff bigint NOT NULL
+) WITH (PROGRESS, TIMESTAMP = change_ts, DIFF = change_diff);
+-- WITH (PROGRESS, …) makes this a recorded table: it names the carrier columns and
+-- creates an associated, engine-written progress collection, initialized to (0, 0)
+-- ("no data yet, more may come" — an empty progress collection means an empty,
+-- i.e. sealed, frontier, so it must be initialized). INTEGRATE then needs no
+-- carrier arguments; it reads them, and the progress, from the table.
 ```
 
 The dedup pipeline below uses all three pieces — the `RECORD` writer, the
@@ -259,15 +271,14 @@ CREATE RECORDER enrich INTO enriched AS
   FROM CHANGES(events AS OF AT LEAST mz_now() - INTERVAL '1 hour'
                USING TIME change_ts, DIFF change_diff) e
   JOIN dim d ON e.fk = d.key;           -- bare TVC reference ⇒ frozen lookup
--- `enriched` owns an associated reclock (auto-created, à la a source's progress
--- collection); the recorder writes a lane into it in the same commit.
+-- the recorder writes a lane into `enriched`'s progress collection in the same commit.
 
 -- 2) reconstruct the recorded collection with INTEGRATE over the *table*. It does
 --    the accumulate-and-threshold (GROUP BY the non-carrier columns, SUM(change_diff)
---    keeping > 0) internally, and looks the reclock up from `enriched` — the argument
---    is a table, not a relation, and there is no reclock argument.
+--    keeping > 0) internally, and reads the carriers + progress from `enriched` — so
+--    it takes the table directly, with no carrier and no progress arguments.
 CREATE MATERIALIZED VIEW enriched_now AS
-  SELECT * FROM INTEGRATE(enriched USING TIME change_ts, DIFF change_diff);
+  SELECT * FROM INTEGRATE(enriched);
 
 -- 3) bound the table with ordinary (periodic) DML — a real persist retraction.
 --    Integral-preserving bounding is data-domain compaction (see "Bounding growth").
@@ -286,30 +297,31 @@ clean cases that record raw (like `enrich` above) are not. They coordinate throu
   standing-write object. The body is a bare query (no `RECORD(...)` wrapper — it
   binds like `CREATE MATERIALIZED VIEW … AS <query>`, and `INTO <table>` names the
   destination like `CREATE SINK … INTO`); it must type as a changelog (dTVC). Its
-  rows are appended to `<table>`, and the writer advances **`<table>`'s reclock** (a
-  per-writer lane; the reclock belongs to the *table*, not the recorder — see "The
-  reclock") in the same commit. It re-evaluates on its **driver deltas** and commits
-  **frontier-gated** (compute through `X`, commit at `X+1`); cadence is implicit — no
-  `COMMIT EVERY` (an anti-pattern; frontier advancement drives commits). (Object
-  kind: `RECORDER`.)
-- **`INTEGRATE(table USING TIME t, DIFF d)`** — a **combinator**, the dual of
-  `CHANGES`; *not* an object kind. It takes a **recorded table** and reconstructs its
-  TVC by **accumulating `DIFF` per row and thresholding at zero** — internally a
-  `GROUP BY <non-carrier columns, TIME>` summing `DIFF` and keeping `> 0`
-  (multiplicity `max(0, Σ)`, dropping net-non-positive). Building the threshold in
-  makes it **safe by construction**: a negative accumulation can never leak past the
-  boundary into a relation that must have non-negative multiplicity. (This is why
-  `repeat_row` is the wrong primitive to expose — `RepeatRow` emits negatives,
-  `RepeatRowNonNegative` errors; the threshold lives in the reduce, so only a
-  non-negative count is ever materialized.) The cost is a **stateful reduce**: memory
-  ∝ live output. **No reclock or relation argument**: `INTEGRATE` takes the table
-  *directly*, so the reclock is unambiguously *that table's* — looked up, not passed.
-  (This is the reason the argument is a table and not arbitrary SQL: an arbitrary
-  relation has no single, well-defined reclock; to combine sources, record them into
-  one table via multi-writer rather than union-at-integrate.) It drives the output
-  frontier into domain A. `INTEGRATE` is the **typing boundary**: `TIME`/`DIFF` are
+  rows are appended to `<table>`, and the writer advances a **lane of `<table>`'s
+  progress collection** (it belongs to the *table*, not the recorder — see "The
+  progress collection") in the same commit. It re-evaluates on its **driver deltas**
+  and commits **frontier-gated** (compute through `X`, commit at `X+1`); cadence is
+  implicit — no `COMMIT EVERY` (an anti-pattern; frontier advancement drives
+  commits). (Object kind: `RECORDER`.)
+- **`INTEGRATE(table)`** — a **combinator**, the dual of `CHANGES`; *not* an object
+  kind. It takes a **recorded table** and reconstructs its TVC by **accumulating
+  `DIFF` per row and thresholding at zero** — internally a `GROUP BY <non-carrier
+  columns, TIME>` summing `DIFF` and keeping `> 0` (multiplicity `max(0, Σ)`,
+  dropping net-non-positive). Building the threshold in makes it **safe by
+  construction**: a negative accumulation can never leak past the boundary into a
+  relation that must have non-negative multiplicity. (This is why `repeat_row` is the
+  wrong primitive to expose — `RepeatRow` emits negatives, `RepeatRowNonNegative`
+  errors; the threshold lives in the reduce, so only a non-negative count is ever
+  materialized.) The cost is a **stateful reduce**: memory ∝ live output. **No
+  arguments beyond the table**: the carrier columns and the progress collection are
+  declared on the table (`WITH (PROGRESS, TIMESTAMP = …, DIFF = …)`), so `INTEGRATE`
+  reads both from it — there is nothing to mismatch. (This is the reason the argument
+  is a table and not arbitrary SQL: an arbitrary relation has no single,
+  well-defined progress collection; to combine sources, record them into one table
+  via multi-writer rather than union-at-integrate.) It drives the output frontier
+  into domain A. `INTEGRATE` is the **typing boundary**: `TIME`/`DIFF` are
   data in the table and *gone* (turned into time / multiplicity) in the result. It is
-  definite given `(table, reclock)`; non-determinism lives only in the recorded
+  definite given `(table, progress collection)`; non-determinism lives only in the recorded
   *values*. To keep an event-time as a stable queryable value, **record it as an
   ordinary value column** — not the `TIME` carrier, which is consumed and clamps (see
   "Bounding growth").
@@ -348,11 +360,11 @@ it*.
 
 - **`RECORD`** takes a query in domain A and writes it as data into the table,
   which physically advances in domain B; the `change_ts` column carries the
-  domain-A times, and `RECORD` also **notes the mapping A → B** (the reclock:
+  domain-A times, and `RECORD` also **notes the mapping A → B** (the progress collection:
   "input time `t` was recorded at system time `t'`").
 - **`INTEGRATE`** reads the table (domain B), **places each delta's contribution by
   `change_ts` (domain A)** — folding below-frontier times into the current `upper`,
-  then accumulating `change_diff` per row and thresholding — and **uses the reclock
+  then accumulating `change_diff` per row and thresholding — and **uses the progress collection
   to drive its output frontier back into domain A**.
 
 So the integrated output `v` lives in **domain A**: an event at input-time `t`
@@ -367,20 +379,24 @@ freeze caveat.)
 body runs in its *inputs'* domain. `RECORD`'s query is in A and reclocks A→B as
 it writes the table (so `mz_now()` there is A); `INTEGRATE` reads the table in B
 and reclocks B→A as it produces `v` (placing by `change_ts`, driving the frontier
-via the reclock; `mz_now()` there is B). Consequence worth stating: to stamp
+via the progress collection; `mz_now()` there is B). Consequence worth stating: to stamp
 **system / wall-clock time** onto a recorded row (e.g. an `ingested_at` for
 staleness), use **`now()`** — a frozen processing-time sample — *not* `mz_now()`,
 which in a `RECORD` body is the domain-A *event* time. (`now()` is non-deterministic
 and so legal only here, recorded once; record it as a **value column**, where it is
 stable, not as the `change_ts` carrier.)
 
-**The reclock is an explicit, engine-owned object (decision).** The A→B mapping is
-a durable, monotone mapping between the two domains — exactly the **source-remap
-pattern** (`20210714_reclocking.md`, where remap was always a collection). It is a
-**named, relation-valued object**, written by `RECORD` alongside the data table and
-**read-only to users**, *not* encoded as data in the table. Three grounds:
+**The progress collection (decision).** The A→B mapping is a durable, monotone
+mapping between the two domains — exactly the **source-remap pattern**
+(`20210714_reclocking.md`, where remap was always a collection); we call the object
+the **progress collection** (matching a source's), and "reclock"/"reclocking" the
+operation of mapping through it. It is a **named, relation-valued object**, created
+with the table by `WITH (PROGRESS, …)` and initialized to `(0, 0)` (an empty
+progress collection is an empty — i.e. sealed — frontier, so it must be
+initialized), written by `RECORD` alongside the data table and **read-only to
+users**, *not* encoded as data in the table. Three grounds:
 
-- **Clean reasoning.** The reclock is a separable object `R`, so `v` is provably
+- **Clean reasoning.** The progress collection is a separable object `R`, so `v` is provably
   `INTEGRATE(table)` with its frontier driven by `R` — a function we can state and
   verify in isolation, rather than one entangled with parsing frontier information
   back out of the data stream.
@@ -389,29 +405,28 @@ pattern** (`20210714_reclocking.md`, where remap was always a collection). It is
   by every consumer — nothing for a user to corrupt, nothing to defensively
   validate on read. It can be retained independently of the data, long enough to
   interpret history.
-- **An associated subobject of the *table*, not the recorder.** The reclock is
-  intrinsic to the table — you cannot interpret/integrate the table without it — so
-  it is owned by the table and **auto-created when the table first becomes a
-  recording target**, surfaced as an associated relation (optionally named on the
-  table, e.g. `EXPOSE RECLOCK AS <name>`) — exactly the `CREATE SOURCE … EXPOSE
-  PROGRESS AS <name>` precedent (engine-written, user-read-only). A `RECORDER` only
+- **An associated subobject of the *table*, not the recorder.** The progress
+  collection is intrinsic to the table — you cannot interpret/integrate the table
+  without it — so it is owned by the table and **created with it** by `WITH
+  (PROGRESS, …)`, surfaced as an associated relation (the `CREATE SOURCE … EXPOSE
+  PROGRESS AS <name>` precedent; engine-written, user-read-only). A `RECORDER` only
   *writes a lane* into it; it does not own it (and could not — N recorders feed one
-  table). `INTEGRATE(table …)` therefore looks the reclock up **from the table**:
-  there is **no per-operator `RECLOCK` argument**, and (the reason `INTEGRATE` takes
-  a table, not a relation) no ambiguity about *which* reclock — a mismatch is
-  unrepresentable.
+  table). `INTEGRATE(table)` therefore looks the progress collection up **from the
+  table**: there is **no per-operator argument**, and (the reason `INTEGRATE` takes a
+  table, not a relation) no ambiguity about *which* progress collection — a mismatch
+  is unrepresentable.
 
 This respects a boundary worth stating plainly: **the recorded table is
-user-queryable data; the reclock is control-plane bookkeeping that users may read
+user-queryable data; the progress collection is control-plane bookkeeping that users may read
 but not write.** Folding the mapping into the table as data is the root of the
 tampering risk and consumption noise of the in-band alternative (see Alternatives).
 
-**One reclock per table — structurally, and necessarily.** `B` is the table's
+**One progress collection per table — structurally, and necessarily.** `B` is the table's
 single persist-shard write frontier (one shard, one clock), and A-completeness is a
 *joint* property of all the table's writers. So **all `RECORD`s into a table and
-all `INTEGRATE`s of it share one reclock — and must, for consistency.** Multiple
+all `INTEGRATE`s of it share one progress collection — and must, for consistency.** Multiple
 `INTEGRATE`s (say a top-1 upsert and a sum) then agree on "what is final" by
-construction (same reclock → same completeness frontier) and compose at a common
+construction (same progress collection → same completeness frontier) and compose at a common
 logical time. The table is therefore *the unit of shared completeness*: wanting two
 readers to integrate over *different* completeness is a statement that they should
 not share a table — use separate tables. (A `WITH (TIMELINE = …)` option sets the
@@ -419,7 +434,7 @@ units/timeline for a hand-built table; it is not a shared remap. We avoid an `IN
 DOMAIN` clause — it would overload the busy `IN` keyword and foreclose a future
 standard `CREATE DOMAIN`.)
 
-**Several `RECORD` writers can feed one table — via per-writer reclock lanes, with
+**Several `RECORD` writers can feed one table — via per-writer progress lanes, with
 zero mutual coordination.** A single *merged* frontier can't work: a writer only
 knows its own committed-through `X_i`, and a fast writer must not advance
 A-completeness past a slow one. So each writer records its **own lane** `R_i: B →
@@ -432,14 +447,16 @@ is reconstructed by the meet, so multi-writer is cheap.
   (extends; no backfill below `since`).
 - **Drop a writer:** its lane leaves the meet, which may jump forward — a **one-way
   door** (you cannot un-declare a time complete); its already-committed deltas stay.
-- **Drop *all* writers ⇒ the table seals:** the meet over no lanes is the *top*
-  frontier (complete to the end of time), so the collection becomes static and
-  fully readable — **finalization for free** (terminal; sealing is irreversible).
+- **Drop *all* writers:** two reasonable terminal states — **freeze** (leave the
+  progress where it is; the table stays readable up to its last completeness but
+  never advances) or **seal** (advance to the *top* / empty frontier — complete to
+  the end of time, a static, fully-readable collection, **finalization for free**).
+  Which is the default is open (see Open Questions).
 
 Per-writer replica races stay an *exactly-once* (CAS) concern — a given writer's
 delta must not be recorded twice — not a correctness one. Non-determinism is
 confined to the recorded **values** (frozen at processing time), so `v` is a
-definite function of the table + its reclock. The `change_ts` remains queryable as
+definite function of the table + its progress collection. The `change_ts` remains queryable as
 data for "as of input-time" questions, within `RETAIN HISTORY`. (Webhook demux =
 several independent `RECORD`s, one lane each.)
 
@@ -591,7 +608,7 @@ Two realities the engine must hold:
    on its outputs (and on `INTEGRATE`'s arrangement).
 
 **Data-domain compaction is reclock-free and recorder-free.** It lives entirely in
-the A/data domain — no reclock entry, no recorder involvement. The horizon `t` it
+the A/data domain — no progress entry, no recorder involvement. The horizon `t` it
 compacts to is an **A-domain retention frontier** (an A-`since`, distinct from the
 persist B-`since`), bounded only by downstream `INTEGRATE`/MV read-holds (the
 engine-owned read policy). Reclamation is the usual two layers: the reduce commits
@@ -631,7 +648,7 @@ view — still needs the `AS OF AT LEAST`.)
 
 Same operations, two altitudes; neither adds capability.
 
-1. **Declarative** — a regular recorded table + its reclock, a `RECORD` writer
+1. **Declarative** — a regular recorded table + its progress collection, a `RECORD` writer
    feeding it, `INTEGRATE` inside ordinary MVs, and `DELETE`/`UPDATE` DML for
    bounding (shown above); the safe default. The pieces are created and dropped
    independently and coordinate via logical-time reads, not a shared transaction.
@@ -672,7 +689,7 @@ The tiers are not primitives; they fall out of which operations a body uses:
   the OCC critical path**. Cross-object consistency is via logical-time reads, so
   **no cross-object atomic bundle is required**.
 - Needs **a regular table** carrying the time/diff columns (no new collection kind)
-  plus an **explicit, engine-written / user-read-only reclock object** (source-remap
+  plus an **explicit, engine-written / user-read-only progress collection** (source-remap
   precedent); engine-driven read policy / compaction on outputs and on `INTEGRATE`'s
   arrangement.
 - Time-based bounding reuses the `CHANGES` maintained-MV temporal-filter /
@@ -723,7 +740,7 @@ implementation, PR #35967):
   no atomic multi-output orchestration is needed. (c) *Freeze-by-typing* — CTs did
   it as a persist-source renderer trick (inputs fed as insert-then-retract diffs)
   with a known gap; first-class HIR/MIR support is new optimizer work. (d) *The
-  net-new storage piece* is the **explicit reclock object** (source-remap
+  net-new storage piece* is the **explicit progress collection** (source-remap
   precedent), not a new table kind; and `INTEGRATE` is a **stateful reduce** in
   compute (accumulate + threshold), memory ∝ live output.
 - **Reusable from CT history:** body rendering, restart-cheap rehydration
@@ -743,7 +760,7 @@ implementation, PR #35967):
   alone is session-scoped and exposes self-reference to everyone; declarative
   alone cannot express general bundled read-then-write. Kept as two altitudes.
 - **A dedicated `DELTA TABLE` collection kind.** Rejected in favor of a **regular
-  table + an explicit reclock object + the `INTEGRATE` combinator**. Once
+  table + an explicit progress collection + the `INTEGRATE` combinator**. Once
   `change_diff` is *data* (not the persist multiplicity), a special kind buys
   nothing: the store is an ordinary table, bounding is an ordinary `DELETE`, and the
   integral is reconstructed on read. This also dissolves the earlier
@@ -757,29 +774,29 @@ implementation, PR #35967):
   operationally heavy; the point is to stay inside Materialize.
 - **Distributed locking instead of OCC commit.** Rejected (latency, brittleness,
   scalability), per the OCC read-then-write design.
-- **In-band progress markers instead of a separate reclock.** Considered and
+- **In-band progress markers instead of a separate progress collection.** Considered and
   rejected. Encoding the A→B mapping as `mz_progressed` rows in the recorded table
   (a persisted `SUBSCRIBE`) gives a single-shard CAS, but (a) makes the frontier
   *user data* — inviting tampering and forcing defensive validation on every read
   — and (b) burdens every consumer with progress-marker noise. Its single-CAS
-  upside is moot: each `RECORD` write already commits the table and its reclock
+  upside is moot: each `RECORD` write already commits the table and its progress collection
   together. (Conceptually neat — `change_diff` is changes-as-data, `mz_progressed`
-  is frontier-as-data — but not worth storing that way; the explicit reclock object
+  is frontier-as-data — but not worth storing that way; the explicit progress collection
   keeps the mapping referenceable without making it user-writable.)
 - **A per-operator `RECLOCK` argument** (`INTEGRATE(…, RECLOCK => r)`). Rejected:
   two `INTEGRATE`s of one table could then name *different* reclocks → silent
-  cross-reader inconsistency, with no legitimate use. Binding the reclock 1:1 to the
+  cross-reader inconsistency, with no legitimate use. Binding the progress collection 1:1 to the
   table makes a mismatch unrepresentable; operators reference the table and the
   reclock comes along.
-- **A single merged reclock for multi-writer tables.** Rejected: a writer knows only
+- **A single merged progress collection for multi-writer tables.** Rejected: a writer knows only
   its own committed-through `X_i`, so a merged frontier would let a fast writer
   advance A-completeness past a slow one. Per-writer lanes + a read-time meet are
   correct and need no inter-writer coordination (see "multi-writer").
 - **`INTEGRATE` over an arbitrary relation.** Rejected for v1 in favor of
   **`INTEGRATE(table …)`** (a bare recorded table): an arbitrary relation has no
-  single, well-defined reclock — which of its recorded inputs? a join has several —
-  so its completeness would be ambiguous, exactly the failure the table-owned reclock
-  avoids. Taking the table directly keeps the reclock lookup trivial and pushes
+  single, well-defined progress collection — which of its recorded inputs? a join has several —
+  so its completeness would be ambiguous, exactly the failure the table-owned progress collection
+  avoids. Taking the table directly keeps the progress collection lookup trivial and pushes
   application shaping (dedup/first-seen/upsert/top-k) into the `RECORD` body, where
   the non-determinism already lives. (A relaxation to a *single-recorded-table*
   relation — inline reduces whose lineage is exactly one table, reclock = that
@@ -814,20 +831,20 @@ implementation, PR #35967):
   new collection kind); the only new standing object is the `RECORD` writer,
   `CREATE RECORDER … INTO <table> AS <changelog query>` (bare query, no
   `RECORD(...)` wrapper — binds like `CREATE MATERIALIZED VIEW … AS`; `INTO` matches
-  `CREATE SINK … INTO`); `INTEGRATE(table USING TIME …, DIFF …)` is a combinator in
-  ordinary MVs that **takes a recorded table** (not a relation) and does the
-  accumulate-and-threshold internally — so the **reclock is looked up from the
-  table** (no per-operator argument, no ambiguity); application shaping lives in the
-  `RECORD` body. `CHANGES(rel [AS OF …] USING TIME …, DIFF …)` symmetrically *names*
-  its carriers, with `AS OF` binding to `CHANGES` like `SUBSCRIBE (query) AS OF …`
-  (not the inner query); the carriers use a **`USING` clause** (`=>` named args are
-  not supported in MZ today and `=>` already means map-entry — `USING` reuses a
-  reserved keyword at near-zero parser cost); the **reclock** is an explicit
-  engine-written / user-read-only object **owned by the table** (auto-created when it
-  first becomes a recording target; optionally named `EXPOSE RECLOCK AS <name>`, the
-  `EXPOSE PROGRESS AS` precedent); a hand-built table's timeline is a `WITH (TIMELINE
-  = …)` option (not `IN DOMAIN`, which would overload `IN` / foreclose standard
-  `CREATE DOMAIN`); bounding is `DELETE`/`UPDATE` DML; cadence is **implicit /
+  `CREATE SINK … INTO`); the table **declares its carriers and an associated progress collection** in one
+  clause, `CREATE TABLE … WITH (PROGRESS, TIMESTAMP = …, DIFF = …)` (initialized to
+  `(0, 0)`); so **`INTEGRATE(table)` is argument-free** — it reads the carriers and
+  the progress collection from the table (nothing to mismatch), does the
+  accumulate-and-threshold internally, and application shaping lives in the `RECORD`
+  body. `CHANGES(rel [AS OF …] USING TIME …, DIFF …)` *names its output* carriers so
+  a recorder can write them into the table's columns, with `AS OF` binding to
+  `CHANGES` like `SUBSCRIBE (query) AS OF …` (not the inner query); the
+  carrier-naming on `CHANGES` uses a **`USING` clause** (`=>` named args are not
+  supported in MZ today and `=>` already means map-entry — `USING` reuses a reserved
+  keyword) — though the exact `CHANGES` spelling is to co-design with #36869. The
+  **progress collection** is engine-written / user-read-only and **owned by the
+  table**; a hand-built table's timeline is a `WITH (TIMELINE = …)` option (not `IN
+  DOMAIN`, which would overload `IN` / foreclose standard `CREATE DOMAIN`); bounding is `DELETE`/`UPDATE` DML; cadence is **implicit /
   frontier-driven** (`COMMIT EVERY` rejected). Carriers are **ordinary user-named
   columns** (no reserved `mz_` names). *Open:* keyword ergonomics — `RECORDER`/
   `INTEGRATE` are collision-free, but `RECORD` as a verb overlaps the composite-type
@@ -841,6 +858,13 @@ implementation, PR #35967):
   `AS OF AT LEAST mz_now()` window inherits the same default. Pulled forward to
   Phase 1 (it gates the bounding design and the user mental model). *Open:* the
   opt-in syntax, and whether any single body needs both domains at once.
+- **Where does the `RETAIN HISTORY` / "see back in time" modifier sit?** On the
+  *table* it would read as system time (wrong); the better homes are the **`INTEGRATE`
+  consumer** or the **recorder**. Leaning `INTEGRATE` — it is where the user wants to
+  see back in time, and figuring out how much progress-collection / reclock history
+  the controller must retain to satisfy all consumers is then the controller's job
+  (it tracks each `INTEGRATE`'s read frontier and GCs progress entries no longer
+  needed; the read policy sets the lag).
 - **Commit-timestamp / frontier-advance policy.** With cadence frontier-driven
   (no `COMMIT EVERY`), at which frontiers does a writer actually commit — "every
   timestamp" vs "timestamps where a driver is non-empty" (the Decision Log's
@@ -862,7 +886,7 @@ implementation, PR #35967):
 - **`INTEGRATE` accumulation & timestamp-as-data stability.** *Decided:*
   `INTEGRATE` takes a **bare recorded table** and accumulates `change_diff` per row,
   emitting multiplicity `max(0, Σ)` (the threshold is the safety net; below-frontier
-  `change_ts` folds into `upper`), as a stateful reduce; the reclock is the table's.
+  `change_ts` folds into `upper`), as a stateful reduce; the progress collection is the table's.
   *Open:* confirm faithful multiset semantics (vs. existence/0-1); the `RETAIN
   HISTORY` history caveat; and the pitfall that the `change_ts` *carrier* clamps and
   can advance as `since` ticks forward (record a value column for a stable
@@ -881,14 +905,15 @@ implementation, PR #35967):
   the definite temporal join as first-class sugar, given it is nearly expressible
   today?
 - **Output ownership & multi-writer.** *Decided:* **multiple `RECORD` writers per
-  table are allowed** via **per-writer reclock lanes** `R_i: B → X_i` (no merged
+  table are allowed** via **per-writer progress lanes** `R_i: B → X_i` (no merged
   frontier, no inter-writer coordination); table A-completeness `= meet_i R_i[B_upper]`
   computed at read time. Adding a writer registers a lane `≥ upper`; dropping one
-  removes its lane from the meet (**one-way door**); dropping all **seals** the table
-  (empty meet = top = static, fully-readable — finalization for free). Multiple
-  `INTEGRATE`s share the one reclock, so they are consistent by construction. *Open:*
-  may users *also* hand-write such a table directly (mixed `RECORD` + DML
-  provenance)? `RETAIN HISTORY` interaction; whether sealing is ever reversible.
+  removes its lane from the meet (**one-way door**). Multiple `INTEGRATE`s share the
+  one progress collection, so they are consistent by construction. *Open:* on
+  dropping the **last** writer, **freeze** the progress (stay at the last
+  completeness) or **seal** (advance to the top/empty frontier — finalization for
+  free)? Whether sealing is reversible; whether users may *also* hand-write such a
+  table directly (mixed `RECORD` + DML provenance); `RETAIN HISTORY` interaction.
 - **Read-your-own-writes / frontier-gating.** Is "compute through `X`, commit at
   `X+1`" sufficient for all intended bodies, or do some need controlled iteration
   (imperative surface)?

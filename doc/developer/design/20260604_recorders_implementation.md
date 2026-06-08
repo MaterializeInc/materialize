@@ -13,7 +13,7 @@
 
 This is the implementation companion to `20260604_recorders.md`. That doc
 distils the feature to a calculus (`differentiate` / `integrate` / `record` /
-`bound`, with `freeze`) realized over **regular tables + an explicit reclock
+`bound`, with `freeze`) realized over **regular tables + an explicit progress collection
 object** as **one new standing-write object** (the `RECORD` writer), `INTEGRATE`
 as a **SQL combinator** (accumulate-and-threshold) usable in ordinary materialized
 views, and ordinary **DML** for bounding — **no new collection kind**, no atomic
@@ -46,14 +46,14 @@ the `RECORD` writer's body commits.
   (`truncating_compare_and_append`) — **not** the shared `render_sink`
   (`src/compute/src/render/sinks.rs:166`). It bypasses txn-wal (writing a
   txns-registered shard with a raw handle is UB, `src/txn-wal/src/lib.rs`), so it
-  cannot even commit the data table together with its reclock shard, and gives no
+  cannot even commit the data table together with its progress shard, and gives no
   control-plane "commit at exactly `T`, retry on conflict" needed for OCC
   frontier-gating.
 
 - **Option B — control-plane timestamped commit (chosen).** The body computes
   *proposed* diffs; a control-plane loop reads them at the dataflow's output
   frontier and commits at the frontier-gated `T` via group commit / txn-wal
-  (committing the object's data shard and its reclock together). This is the OCC
+  (committing the object's data shard and its progress collection together). This is the OCC
   timestamped write, per object — not a cross-object bundle.
 
 **Decision: Option B, for the `RECORD` writer.** The writer commits through the
@@ -108,9 +108,9 @@ should be sequenced first (Phase 0).
 |---|---|---|
 | `src/adapter` — group commit, per-object sequencing, the target-`T`/retry loop, the dataflow→control-plane drain | Build the timestamped group-commit extension (target `T`, fail-on-conflict, oracle advance) and the per-object control loop that commits its data + reclock via txn-wal. Adapt the removed `sequence_create_continual_task` scaffolding. | **XL** |
 | `src/compute/src/render` | Revive CT body rendering (`render/continual_task.rs`: the input/self/normal source transformers, `step_forward`, time extract/reduce). Replace the bespoke sink with *emit proposed diffs to the control plane*. **Render `INTEGRATE` as a stateful reduce** (accumulate `change_diff` per row, threshold `max(0, Σ)`, place by `change_ts`) — memory ∝ live output. Each object is its own dataflow (one primary export), so the CT one-sink-per-dataflow shape is kept, not torn out. | **L** |
-| `src/sql` (parser + plan) | New DDL: `CREATE RECORDER … INTO <table> AS <query>` (bare query, no `RECORD(...)` wrapper — binds like MV's `AS <query>`; `INTO` reuses the SINK destination idiom; the store is a **regular `CREATE TABLE`**, no new table DDL); the table's reclock is auto-created and optionally named `EXPOSE RECLOCK AS <name>` (the `EXPOSE PROGRESS AS` precedent); a hand-built table's `WITH (TIMELINE = …)` (not `IN DOMAIN`). Carriers use a **`USING TIME …, DIFF …` clause** on `CHANGES`/`INTEGRATE` — **no named-arg (`=>`) parser work needed** (`USING` is already reserved); `CHANGES`'s `AS OF` parses like `SUBSCRIBE (query) AS OF …` (attaches to the operator, not an inner SELECT). `INTEGRATE(<table> USING …)` takes a **bare recorded table** (not a relation) and does the accumulate-and-threshold internally — so the reclock is looked up **from the table** (no per-operator arg, no lineage analysis). `DELETE`/`UPDATE` planning (ordinary retraction; integral-preserving data-domain compaction = `clamp + GROUP BY/SUM`). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES` / recorded changelog), legal only in a `RECORD` body, with the `EXPLAIN`/`NOTICE` diagnostics. Note `RECORD` as a verb overlaps the composite-type "record" — dropping the wrapper avoids it. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
-| `src/catalog` + `src/catalog-protos` | New item kinds: the **explicit reclock object** (engine-written / user-read-only, source-remap precedent) and the `RECORDER` writer; the recorded store is a **regular `TABLE`** (no new kind). Dependency edges; reclock domain binding; a durable-catalog migration version. No multi-output orchestration (`INTEGRATE` rides on MVs; bounding is DML). | **M** |
-| `src/storage-types` + persist schema | **No new collection kind** — the recorded store is a regular table whose `change_ts`/`change_diff` are ordinary columns. Net-new: the **reclock object's** shard + its txns registration, and committing `(data, reclock)` in one group commit. (`INTEGRATE`'s accumulation is a compute reduce, not a storage concern.) | **S–M** |
+| `src/sql` (parser + plan) | New DDL: `CREATE TABLE … WITH (PROGRESS, TIMESTAMP = …, DIFF = …)` (a regular table that **declares its carrier columns + an associated progress collection**, initialized to `(0,0)` — no new collection kind); `CREATE RECORDER … INTO <table> AS <query>` (bare query, no `RECORD(...)` wrapper — binds like MV's `AS <query>`; `INTO` reuses the SINK destination idiom); a hand-built table's `WITH (TIMELINE = …)` (not `IN DOMAIN`). `CHANGES`'s carrier-naming uses a `USING TIME …, DIFF …` clause (**no named-arg (`=>`) parser work** — `USING` is already reserved; exact `CHANGES` spelling co-designed with #36869), and its `AS OF` parses like `SUBSCRIBE (query) AS OF …` (attaches to the operator, not an inner SELECT). **`INTEGRATE(<table>)` is argument-free** — carriers + progress collection come from the table's `WITH`, so it does the accumulate-and-threshold internally with the progress looked up by table identity (no per-operator arg, no lineage analysis). `DELETE`/`UPDATE` planning (ordinary retraction; integral-preserving data-domain compaction = `clamp + GROUP BY/SUM`). `freeze`-by-typing as a planner concept (bare TVC ref vs `CHANGES` / recorded changelog), legal only in a `RECORD` body, with the `EXPLAIN`/`NOTICE` diagnostics. Note `RECORD` as a verb overlaps the composite-type "record" — dropping the wrapper avoids it. Optimizer support for the asymmetric/frozen join if lifted above LIR. | **L** |
+| `src/catalog` + `src/catalog-protos` | New item kinds: the **explicit progress collection** (engine-written / user-read-only, source-remap precedent) and the `RECORDER` writer; the recorded store is a **regular `TABLE`** (no new kind). Dependency edges; progress-collection domain binding; a durable-catalog migration version. No multi-output orchestration (`INTEGRATE` rides on MVs; bounding is DML). | **M** |
+| `src/storage-types` + persist schema | **No new collection kind** — the recorded store is a regular table whose `change_ts`/`change_diff` are ordinary columns. Net-new: the **progress collection's** shard + its txns registration, and committing `(data, reclock)` in one group commit. (`INTEGRATE`'s accumulation is a compute reduce, not a storage concern.) | **S–M** |
 | `src/compute-client` (`as_of_selection.rs`, `controller/instance.rs`) | Self-reference read-hold (since strictly below output upper). **These files already carry the write-only-collection (CT) special-casing** (`as_of_selection.rs:460`, `controller/instance.rs:1530,1776`) — reuse, do not rebuild. | **M** |
 | `src/adapter/src/coord/read_policy.rs` + compaction | Engine-owned read policy / compaction advancement on recorder outputs so retractions consolidate and `since` advances; `RETAIN HISTORY` interaction. | **M** |
 
@@ -143,7 +143,7 @@ read-hold machinery. Mitigation: reuse the (working) read-hold + step-forward
 code; rely on the relaxed rule to avoid the (unfinished) fixpoint sub-scope.
 
 ### MED — H3: object/catalog model — independent objects (de-risked by the model)
-Each piece is its own object: the **explicit reclock object** and the `RECORD`
+Each piece is its own object: the **explicit progress collection** and the `RECORD`
 writer are the new kinds (the store is a **regular table**); `INTEGRATE` rides on
 ordinary MVs and bounding is DML.
 CTs were structurally single-output
@@ -154,7 +154,7 @@ is no longer a wall**: it matches how controllers already key dataflows by
 `GlobalId`, and the tables-from-sources precedent (`20240625_…`, each output a
 top-level catalog item). The earlier worry — a single multi-sink dataflow
 committing N outputs atomically — **is moot**: there is no atomic multi-output
-commit. What remains is ordinary new-object-kind catalog work (the reclock object,
+commit. What remains is ordinary new-object-kind catalog work (the progress collection,
 `RECORDER`) plus per-object dataflow wiring — no multi-output orchestration.
 (Demote from High to Med given the model change.)
 
@@ -174,13 +174,13 @@ Making `freeze` a first-class HIR/MIR construct (so it survives optimization and
 works over arrangements) is **net-new optimizer work** in `src/sql/src/plan` +
 `src/expr` + `src/compute/src/render`.
 
-### MED — M2: the explicit reclock object (the net-new storage piece)
+### MED — M2: the explicit progress collection (the net-new storage piece)
 There is **no new collection kind**: the recorded store is a regular table whose
 `change_ts` / `change_diff` are *ordinary columns*. Persist already stores
 `(SourceData, (), Timestamp, Diff)`; that the row's embedded `change_ts` (data) ≠
 its physical commit ts is fine — it is just a column value, exactly as `CHANGES`
 already produces (#36869). The net-new storage piece is instead the **explicit
-reclock object**: an engine-written, **user-read-only**, relation-valued mapping
+progress collection**: an engine-written, **user-read-only**, relation-valued mapping
 (the source-remap / progress-subsource precedent) **owned by the table** —
 auto-created when the table first becomes a recording target, written by `RECORD`
 *together with* the data in one group commit (a per-writer lane). It is associated
@@ -203,12 +203,13 @@ liveness:** outputs must keep advancing their `upper` even with no data;
 (`src/storage-controller/src/lib.rs:2082`) advances the `upper` via `advance_to`
 independently of `appends`, so a frontier-only commit is a no-new-machinery
 operation; wire it into the Phase-0 commit loop (easy to forget). **Multi-writer:**
-each writer commits its own **reclock lane** `R_i: B → X_i` atomically with its
+each writer commits its own **progress lane** `R_i: B → X_i` atomically with its
 deltas (independent two-shard `group_commit`, no inter-writer coordination); the
 table's A-`upper` is `meet_i R_i[B_upper]`, computed **at read time** by the
 integrator (a merged frontier can't work — a fast writer would outrun a slow one).
 Lane register on add (`≥ upper`), leave-the-meet on drop (one-way); **drop all →
-empty meet = top → the table seals** (finalization). **Decided:** the aging/`mz_now()`
+freeze or seal** (advance to the empty/top frontier = finalization; open which is
+default — see M5). **Decided:** the aging/`mz_now()`
 domain defaults to B (wall-clock), A (event-age) opt-in (conceptual doc), pulled to
 Phase 1.
 
@@ -231,6 +232,24 @@ merges to persist multiplicity 2 while the data column still reads `+1`) — and
 standing pruner can re-run it. A hand-written `DELETE` that is *not*
 integral-preserving silently changes `INTEGRATE`'s result, and that is
 **unenforceable**. Feasible, with a sharp user-facing edge.
+
+### MED — M5: controller obligations for the progress collection
+The controller owns the progress collection's lifecycle (these are the concrete
+tasks behind the conceptual "engine-owned, table-owned progress"):
+- **Writer registration = a capability.** The number of recorders into a table is
+  not known ahead of time, so adding one acquires the equivalent of a capability and
+  registers a new lane (`≥` the current `upper`); the controller writes lane entries
+  as that writer commits.
+- **Progress GC.** The controller tracks every `INTEGRATE` reading the table and
+  observes how far each has read; it can then collect progress entries no longer
+  needed by any consumer. How far to *lag* the GC is the **read policy** — and this
+  is where `RETAIN HISTORY` lands. *Open (per the conceptual doc):* the retention
+  modifier should sit on the `INTEGRATE` consumer (or the recorder), **not** the
+  table (on the table it would read as system time); leaning `INTEGRATE`, with the
+  controller reconciling how much progress history to retain across consumers.
+- **Drop-all = freeze or seal.** Dropping the last writer either freezes the
+  progress or advances it to the empty (top) frontier; the controller initialized it
+  to `(0,0)` at creation so it is not born sealed. (Open which is the default.)
 
 ### LOW–MED — L1: planning / parser / sequencing / restart
 New DDL is mechanical (CTs had `ContinualTaskStmt`, `CreateContinualTaskSugar`,
@@ -276,18 +295,19 @@ recorder design tries to sidestep (and, per H2, only partly does).
   and the dataflow→coordinator drain. Shared with the OCC read-then-write effort.
 - **Phase 1 — one `RECORD` object.** Revive CT body rendering + read-hold +
   restart machinery; emit proposed diffs to Phase 0's commit path instead of the
-  bespoke sink. One `RECORD` into one regular table **+ its explicit reclock
+  bespoke sink. One `RECORD` into one regular table **+ its explicit progress collection
   object**. Validates freeze (renderer form), self-read, restart, and the
   data+reclock two-shard commit.
-- **Phase 2 — `INTEGRATE` combinator + mutable-table bounding.** `INTEGRATE(<table>
-  USING TIME …, DIFF …)` over a **bare recorded table** as a **stateful reduce**
-  (accumulate + threshold) inside a plain MV, reclock resolved by table identity (no
-  per-operator arg, no lineage analysis); ordinary
-  `DELETE`/`UPDATE` bounding (integral-preserving data-domain compaction = the
-  `clamp + GROUP BY/SUM` reduce). No atomic bundle, no multi-sink dataflow;
-  consistency via logical-time reads. Add the reclock object + its domain binding
-  (inherited / explicit) and **multi-writer via per-writer lanes** (meet at read
-  time; seal on drop-all).
+- **Phase 2 — `INTEGRATE` combinator + mutable-table bounding.** `INTEGRATE(<table>)`
+  (argument-free; carriers + progress from the table's `WITH (PROGRESS, …)`) over a
+  **bare recorded table** as a **stateful reduce** (accumulate + threshold) inside a
+  plain MV, progress collection resolved by table identity (no per-operator arg, no
+  lineage analysis); ordinary `DELETE`/`UPDATE` bounding (integral-preserving
+  data-domain compaction = the `clamp + GROUP BY/SUM` reduce). No atomic bundle, no
+  multi-sink dataflow; consistency via logical-time reads. Add the `WITH (PROGRESS,
+  …)` table declaration (+ `(0,0)` init), its domain binding (inherited / explicit),
+  and **multi-writer via per-writer lanes** (meet at read time; freeze-or-seal on
+  drop-all).
 - **Phase 3 — freeze as first-class.** Lift `freeze`/asymmetric join into
   HIR/MIR (remove the persist-source-only hack and `NoIndexCatalog`); the lint
   rule; the definite as-of-event-time temporal join (possibly `STREAM JOIN`).
@@ -322,15 +342,15 @@ recorder design tries to sidestep (and, per H2, only partly does).
    - **Optimizer barrier (hard invariant).** The recorded table is authoritative and
      must **not** be treated as recomputable from the `RECORD` body's inputs (that
      would re-sample frozen / non-deterministic values); `INTEGRATE` and downstream
-     **are** definite over the table + reclock and *may* be recomputed. The
+     **are** definite over the table + progress collection and *may* be recomputed. The
      planner/optimizer must enforce this barrier.
    - **Reclock is an explicit, engine-written / user-read-only object owned by the
      table** (auto-created when it first becomes a recording target; no per-operator
      `RECLOCK` arg — that would let two readers disagree). `B` is the table's single
-     shard frontier, so there is exactly one reclock per table; **multiple writers commit per-writer lanes** (each its own
+     shard frontier, so there is exactly one progress collection per table; **multiple writers commit per-writer lanes** (each its own
      two-shard commit), and the table's A-`upper` is `meet_i R_i[B_upper]` at read
      time (a merged frontier can't work). Drop-all seals the table. All `INTEGRATE`s
-     share the one reclock, so they are consistent by construction. Recovered on
+     share the one progress collection, so they are consistent by construction. Recovered on
      restart. Exactly-once is the per-commit CAS, not a determinism concern. (In-band
      `mz_progressed` markers: considered and rejected.)
    - **`mz_now()`/aging domain decided B (wall-clock) by default**, A (event-age)
