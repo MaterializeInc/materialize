@@ -46,31 +46,41 @@ cannot modify your existing tables, here are some common alternatives:
 
 - **Debezium + Kafka**
 
-  You can use [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/) to
-  propagate Change Data Capture (CDC) data to Materialize.
+  With [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/), if the
+  tables to replicate each have a **primary key** defined, you can use the
+  default replica identity. However, without `REPLICA IDENTITY FULL`, you cannot
+  ingest unchanged
+  [TOASTed](https://www.postgresql.org/docs/current/storage-toast.html) values.
 
-  {{< tip >}}
+  {{< note >}}
 
-  We **strongly recommend** using the native
-  [PostgreSQL](/sql/create-source/postgres-v2/) connector instead. [Contact
-  Support](/support/) to discuss strategies for enabling `REPLICA IDENTITY
-  FULL`.
+  - We **strongly recommend** using the native
+    [PostgreSQL](/sql/create-source/postgres-v2/) source connector with `REPLICA
+    IDENTITY FULL` instead.
 
-  {{< /tip >}}
+  - [Contact Support](/support/) to discuss strategies for enabling `REPLICA
+    IDENTITY FULL`.
+
+  {{< /note >}}
 
 ## For production, what if I cannot use `REPLICA IDENTITY FULL`?
 
-You can use [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/) to
-propagate Change Data Capture (CDC) data to Materialize from databases. However,
-we **strongly recommend** using the native
-[PostgreSQL](/sql/create-source/postgres-v2/) source connector instead.
+With [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/), if the tables
+to replicate each have a **primary key** defined, you can use the default
+replica identity. However, without `REPLICA IDENTITY FULL`, you cannot ingest
+unchanged [TOASTed](https://www.postgresql.org/docs/current/storage-toast.html)
+values.
 
-{{< tip >}}
+{{< note >}}
 
-[Contact Support](/support/) to discuss strategies for enabling `REPLICA
-IDENTITY FULL`.
+- We **strongly recommend** using the native
+  [PostgreSQL](/sql/create-source/postgres-v2/) source connector with `REPLICA
+  IDENTITY FULL` instead.
 
-{{< /tip >}}
+- [Contact Support](/support/) to discuss strategies for enabling `REPLICA
+  IDENTITY FULL`.
+
+{{< /note >}}
 
 ## What if my table contains data types that are unsupported in Materialize?
 
