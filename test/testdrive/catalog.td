@@ -523,7 +523,6 @@ mz_egress_ips                  ""
 mz_functions                   ""
 mz_iceberg_sinks               ""
 mz_index_columns               ""
-mz_indexes                     ""
 mz_kafka_connections           ""
 mz_kafka_sinks                 ""
 mz_kafka_sources               ""
@@ -556,6 +555,7 @@ name                cluster             comment
 ------------------------------------------------
 mz_connections      mz_catalog_server   ""
 mz_databases        mz_catalog_server   ""
+mz_indexes          mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
 mz_secrets          mz_catalog_server   ""
@@ -822,7 +822,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-53
+52
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

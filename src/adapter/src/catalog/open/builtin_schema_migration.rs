@@ -177,6 +177,12 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_sources",
         ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
     ]
 });
 

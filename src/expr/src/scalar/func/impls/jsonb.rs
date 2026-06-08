@@ -516,7 +516,16 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "subsource"
             }
             CreateSink(_) => "sink",
-            CreateIndex(_) => "index",
+            CreateIndex(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                let cluster_id = get_cluster_id(in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+                let on_id = get_item_id(stmt.on_name)?;
+                info.insert("on_id", json!(on_id));
+                "index"
+            }
             CreateType(_) => "type",
             _ => return Err("not a CREATE item statement".into()),
         };
