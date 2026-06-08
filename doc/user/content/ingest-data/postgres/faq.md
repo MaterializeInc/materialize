@@ -15,7 +15,8 @@ sources in Materialize. For general ingestion questions/troubleshooting, see:
 ## For my trial/POC, what if I cannot use `REPLICA IDENTITY FULL`?
 
 Materialize requires `REPLICA IDENTITY FULL` on PostgreSQL tables to capture all
-column values in change events. If for your trial/POC (Proof-of-concept) you cannot modify your existing tables, here are two common alternatives:
+column values in change events. If for your trial/POC (Proof-of-concept) you
+cannot modify your existing tables, here are some common alternatives:
 
 - **Outbox Pattern (shadow tables)**
 
@@ -40,8 +41,36 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
   With the Sidecar pattern, you create a separate PostgreSQL instance as an
   integration layer. That is, in the sidecar instance, you recreate the tables
-  you want to replicate, setting these tableswith `REPLICA IDENTITY FULL`. You
-  can then use the sidecar for Materialiez instead of your primary database.
+  you want to replicate, setting these tables with `REPLICA IDENTITY FULL`. You
+  can then use the sidecar for Materialize instead of your primary database.
+
+- **Debezium + Kafka**
+
+  You can use [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/) to
+  propagate Change Data Capture (CDC) data to Materialize.
+
+  {{< tip >}}
+
+  We **strongly recommend** using the native
+  [PostgreSQL](/sql/create-source/postgres-v2/) connector instead. [Contact
+  Support](/support/) to discuss strategies for enabling `REPLICA IDENTITY
+  FULL`.
+
+  {{< /tip >}}
+
+## For production, what if I cannot use `REPLICA IDENTITY FULL`?
+
+You can use [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/) to
+propagate Change Data Capture (CDC) data to Materialize from databases. However,
+we **strongly recommend** using the native
+[PostgreSQL](/sql/create-source/postgres-v2/) source connector instead.
+
+{{< tip >}}
+
+[Contact Support](/support/) to discuss strategies for enabling `REPLICA
+IDENTITY FULL`.
+
+{{< /tip >}}
 
 ## What if my table contains data types that are unsupported in Materialize?
 
