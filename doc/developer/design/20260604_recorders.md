@@ -367,7 +367,12 @@ freeze caveat.)
 body runs in its *inputs'* domain. `RECORD`'s query is in A and reclocks A→B as
 it writes the table (so `mz_now()` there is A); `INTEGRATE` reads the table in B
 and reclocks B→A as it produces `v` (placing by `change_ts`, driving the frontier
-via the reclock; `mz_now()` there is B).
+via the reclock; `mz_now()` there is B). Consequence worth stating: to stamp
+**system / wall-clock time** onto a recorded row (e.g. an `ingested_at` for
+staleness), use **`now()`** — a frozen processing-time sample — *not* `mz_now()`,
+which in a `RECORD` body is the domain-A *event* time. (`now()` is non-deterministic
+and so legal only here, recorded once; record it as a **value column**, where it is
+stable, not as the `change_ts` carrier.)
 
 **The reclock is an explicit, engine-owned object (decision).** The A→B mapping is
 a durable, monotone mapping between the two domains — exactly the **source-remap
@@ -612,6 +617,15 @@ Note that the input window (`CHANGES(events AS OF AT LEAST mz_now() - '1 hour')`
 and the recorded table are **two independent dTVCs with two independent bounds**:
 the window bounds the `differentiate` state; the `DELETE`/dedup bounds the recorded
 output.
+
+**Rule: a `CHANGES` over a long-lived input must be bounded**, or its
+`differentiate` state grows without limit. Bound it with `AS OF AT LEAST mz_now() -
+W` (a sliding lower bound, so history older than `W` falls out of scope) *and* a
+temporal filter on its time carrier (`mz_now() < change_ts + W`, so the
+change-records retract out of the relation). Neither alone suffices — the first
+bounds what the operator retains, the second bounds what downstream sees. (`CHANGES`
+over a *short-lived* input — itself already temporally filtered, like a windowed
+view — still needs the `AS OF AT LEAST`.)
 
 ### Surfaces / altitudes
 
