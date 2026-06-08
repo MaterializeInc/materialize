@@ -195,7 +195,7 @@ pub trait Visit {
     /// Optionally, `pre` can return which children, if any, should be visited
     /// (default is to visit all children).
     ///
-    /// It is improtant for safety that `pre` is (a) safe code and (b) returns children only.
+    /// It is important for safety that `pre` is (a) safe code and (b) returns children only.
     fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,

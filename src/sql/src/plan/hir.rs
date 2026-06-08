@@ -730,33 +730,9 @@ impl ValueWindowExpr {
 /// Yields `args` (the value-window function's argument expression);
 /// does not descend into it.
 impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
-    fn visit_children<F>(&self, mut f: F)
-    where
-        F: FnMut(&HirScalarExpr),
-    {
-        f(&self.args)
-    }
-
-    fn visit_mut_children<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut HirScalarExpr),
-    {
-        f(&mut self.args)
-    }
-
-    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&HirScalarExpr) -> Result<(), E>,
-    {
-        f(&self.args)
-    }
-
-    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-    {
-        f(&mut self.args)
-    }
+    // `visit_children` and friends are not implemented explicitly: the trait
+    // defaults delegate to `children`/`children_mut` below, which yield the
+    // single argument expression.
 
     fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
     where
@@ -933,33 +909,9 @@ impl AggregateWindowExpr {
 /// Yields the aggregate's argument expression (`aggregate_expr.expr`);
 /// does not descend into it.
 impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
-    fn visit_children<F>(&self, mut f: F)
-    where
-        F: FnMut(&HirScalarExpr),
-    {
-        f(&self.aggregate_expr.expr)
-    }
-
-    fn visit_mut_children<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut HirScalarExpr),
-    {
-        f(&mut self.aggregate_expr.expr)
-    }
-
-    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&HirScalarExpr) -> Result<(), E>,
-    {
-        f(&self.aggregate_expr.expr)
-    }
-
-    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
-    {
-        f(&mut self.aggregate_expr.expr)
-    }
+    // `visit_children` and friends are not implemented explicitly: the trait
+    // defaults delegate to `children`/`children_mut` below, which yield the
+    // single aggregate argument expression.
 
     fn children<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a HirScalarExpr>
     where
