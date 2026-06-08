@@ -492,10 +492,15 @@ impl PeekClient {
         &self,
         id: StatementLoggingId,
         cluster_id: mz_controller_types::ClusterId,
+        cluster_name: String,
     ) {
         self.coordinator_client
             .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetCluster { id, cluster_id },
+                FrontendStatementLoggingEvent::SetCluster {
+                    id,
+                    cluster_id,
+                    cluster_name,
+                },
             ));
     }
 
