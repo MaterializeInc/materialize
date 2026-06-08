@@ -81,15 +81,17 @@ use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_row_spine::{DatumSeq, ValRowColPagedBuilder, ValRowSpine};
+use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
+use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::StreamVec;
@@ -256,6 +258,12 @@ type UpsertBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
 /// [`UpsertBatcher`] consumes.
 type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
 
+/// The operator's data-output handle. A fueled `Vec` builder so the drain can
+/// `give_fueled` each emitted update and yield to timely under large snapshot
+/// drains instead of monopolizing the worker.
+type UpsertOutputHandle<T> =
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>;
+
 // The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
 // land in a columnation arena (`UpsertKey` is `[u8; 32]` + `Copy`, so it uses
 // `CopyRegion`), and values are stored as packed `Row` bytes in a
@@ -283,10 +291,13 @@ fn upsert_value_to_row(value: &UpsertValue) -> Row {
     row
 }
 
-/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
-/// `DatumSeq` view returned by a `ValRowSpine` cursor.
-fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
-    decode_upsert_value(seq)
+/// Heap-size estimate for an emitted [`UpsertValue`], used to drive
+/// `give_fueled` yielding on the output edge.
+fn upsert_value_byte_len(value: &UpsertValue) -> usize {
+    match value {
+        Ok(row) => row.byte_len(),
+        Err(err) => std::mem::size_of_val(err.as_ref()),
+    }
 }
 
 /// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] from any datum
@@ -425,7 +436,8 @@ where
     // ── Build the async processing operator ─────────────────────────────
     let mut builder = AsyncOperatorBuilder::new("Upsert V2".to_string(), input.scope());
 
-    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output_handle, output) = builder
+        .new_output::<FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>();
     let (_snapshot_handle, snapshot_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let (_health_output, health_stream) = builder
@@ -480,7 +492,6 @@ where
         let mut stash_cap: Option<Capability<T>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
-        let mut output_updates = vec![];
         let snapshot_start = std::time::Instant::now();
         let mut prev_persist_upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -634,15 +645,20 @@ where
                 let remaining_frontier = batcher.frontier().to_owned();
 
                 let mut ineligible = Vec::new();
+                // `drain_sealed_input` emits eligible output directly through
+                // `output_handle` (fueled), so there is no intermediate output
+                // buffer to drain afterward.
                 let drain_stats = drain_sealed_input(
                     sealed,
                     &mut ineligible,
-                    &mut output_updates,
+                    &output_handle,
+                    &*cap,
                     &persist_upper,
                     &mut persist_trace,
                     &source_config.worker_id,
                     &source_config.id,
-                );
+                )
+                .await;
 
                 upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
                 upsert_metrics
@@ -658,12 +674,6 @@ where
                 if hydrating {
                     rehydration_total += drain_stats.inserts;
                     rehydration_updates += drain_stats.eligible;
-                }
-
-                // Emit output: retractions of old values and insertions of
-                // new values, all at the eligible timestamp.
-                for (update, ts, diff) in output_updates.drain(..) {
-                    output_handle.give(cap, (update, ts, diff));
                 }
 
                 // ── Step 4: Capability management ─────────────────────────
@@ -735,10 +745,11 @@ struct DrainStats {
 ///
 /// The sealed chunks are already sorted and consolidated by the MergeBatcher,
 /// so the trace cursor walks forward through keys in order — seeks amortize.
-fn drain_sealed_input<T, O>(
+async fn drain_sealed_input<T, O>(
     sealed: Vec<Column<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
-    output: &mut Vec<(UpsertValue, T, Diff)>,
+    output_handle: &UpsertOutputHandle<T>,
+    output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
     worker_id: &usize,
@@ -769,9 +780,9 @@ where
     // amortize, and eligible values are emitted straight from the column's
     // `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed ineligible
     // set is materialized.
-    let output_before = output.len();
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;
+    let mut output_count: u64 = 0;
     let mut inserts: u64 = 0;
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
@@ -814,7 +825,7 @@ where
                                 count == 1.into(),
                                 "unexpected multiple entries for the same key in persist trace"
                             );
-                            result = Some(datum_seq_to_upsert_value(val));
+                            result = Some(decode_upsert_value(val));
                         }
                         cursor.step_val(&storage);
                     }
@@ -830,16 +841,29 @@ where
             match diff.value {
                 Some(row) => {
                     if let Some(old_val) = old_value {
-                        output.push((old_val, ts.clone(), Diff::MINUS_ONE));
+                        let size = upsert_value_byte_len(&old_val);
+                        output_handle
+                            .give_fueled(output_cap, (old_val, ts.clone(), Diff::MINUS_ONE), size)
+                            .await;
+                        output_count += 1;
                         updates += 1;
                     } else {
                         inserts += 1;
                     }
-                    output.push((decode_upsert_value(row.iter()), ts, Diff::ONE));
+                    let new_val = decode_upsert_value(row.iter());
+                    let size = upsert_value_byte_len(&new_val);
+                    output_handle
+                        .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
+                        .await;
+                    output_count += 1;
                 }
                 None => {
                     if let Some(old_val) = old_value {
-                        output.push((old_val, ts, Diff::MINUS_ONE));
+                        let size = upsert_value_byte_len(&old_val);
+                        output_handle
+                            .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
+                            .await;
+                        output_count += 1;
                         deletes += 1;
                     }
                 }
@@ -852,11 +876,8 @@ where
         source_id = %source_id,
         ineligible = ineligible.len(),
         eligible = eligible_count,
-        "draining stash",
+        "drained stash",
     );
-
-    let output_count =
-        u64::try_from(output.len() - output_before).expect("output count overflows u64");
 
     DrainStats {
         eligible: eligible_count,
