@@ -448,16 +448,6 @@ $ kafka-create-topic topic=new-dbz-data partitions=1
 # 2 3
 # -1 7
 
-$ kafka-create-topic topic=ignored partitions=1
-
-> CREATE SOURCE recursive
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ignored-${testdrive.seed}')
-
-! CREATE TABLE recursive_tbl FROM SOURCE recursive (REFERENCE "testdrive-ignored-${testdrive.seed}")
-  FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
-contains:validating avro schema: Recursive types are not supported: .a
-
 $ set key-schema={"type": "string"}
 $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
 

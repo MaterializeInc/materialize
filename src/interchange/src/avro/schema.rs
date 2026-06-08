@@ -118,56 +118,44 @@ fn get_union_columns<'a>(
         bail!(anyhow!("Empty or null-only unions are not supported"));
     } else {
         for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
-            let named_idx = match v {
-                SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                SchemaPieceOrNamed::Piece(_) => None,
-            };
-            if let Some(named_idx) = named_idx {
-                if !seen_avro_nodes.insert(named_idx) {
-                    bail!(
-                        "Recursive types are not supported: {}",
-                        v.get_human_name(schema.root)
-                    );
+            with_recursion_guard(seen_avro_nodes, schema.root, v, |seen| {
+                let node = schema.step(v);
+                if let SchemaPiece::Union(_) = node.inner {
+                    unreachable!("Internal error: directly nested avro union!");
                 }
-            }
-            let node = schema.step(v);
-            if let SchemaPiece::Union(_) = node.inner {
-                unreachable!("Internal error: directly nested avro union!");
-            }
 
-            let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
-                // There is only one non-null variant in the
-                // union, so we can use the field name directly.
-                base_name
-                    .map(|n| n.to_owned())
-                    .or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
-                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
-            } else {
-                // There are multiple non-null variants in the
-                // union, so we need to invent field names for
-                // each variant.
-                base_name
-                    .map(|n| format!("{}{}", n, i + 1))
-                    .or_else(|| {
-                        v.get_piece_and_name(schema.root)
-                            .1
-                            .map(|full_name| full_name.base_name().to_owned())
-                    })
-                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
-            };
+                let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
+                    // There is only one non-null variant in the
+                    // union, so we can use the field name directly.
+                    base_name
+                        .map(|n| n.to_owned())
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
+                } else {
+                    // There are multiple non-null variants in the
+                    // union, so we need to invent field names for
+                    // each variant.
+                    base_name
+                        .map(|n| format!("{}{}", n, i + 1))
+                        .or_else(|| {
+                            v.get_piece_and_name(schema.root)
+                                .1
+                                .map(|full_name| full_name.base_name().to_owned())
+                        })
+                        .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
+                };
 
-            // If there is more than one variant in the union,
-            // the column's output type is nullable, as this
-            // column will be null whenever it is uninhabited.
-            let ty = validate_schema_2(seen_avro_nodes, node)?;
-            columns.push((name.into(), ty.nullable(vs.len() > 1)));
-            if let Some(named_idx) = named_idx {
-                seen_avro_nodes.remove(&named_idx);
-            }
+                // If there is more than one variant in the union,
+                // the column's output type is nullable, as this
+                // column will be null whenever it is uninhabited.
+                let ty = validate_schema_2(seen, node)?;
+                columns.push((name.into(), ty.nullable(vs.len() > 1)));
+                Ok(())
+            })?;
         }
     }
     Ok(columns)
@@ -247,27 +235,14 @@ fn validate_schema_2(
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
             for f in fields {
-                let named_idx = match &f.schema {
-                    SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                    SchemaPieceOrNamed::Piece(_) => None,
-                };
-                if let Some(named_idx) = named_idx {
-                    if !seen_avro_nodes.insert(named_idx) {
-                        bail!(
-                            "Recursive types are not supported: {}",
-                            f.schema.get_human_name(schema.root)
-                        );
-                    }
-                }
-                let next_node = schema.step(&f.schema);
-                columns.extend(get_named_columns(
-                    seen_avro_nodes,
-                    next_node,
-                    Some(&f.name),
-                )?);
-                if let Some(named_idx) = named_idx {
-                    seen_avro_nodes.remove(&named_idx);
-                }
+                with_recursion_guard(seen_avro_nodes, schema.root, &f.schema, |seen| {
+                    columns.extend(get_named_columns(
+                        seen,
+                        schema.step(&f.schema),
+                        Some(&f.name),
+                    )?);
+                    Ok(())
+                })?;
             }
             SqlScalarType::Record {
                 fields: columns.into(),
@@ -275,54 +250,51 @@ fn validate_schema_2(
             }
         }
         SchemaPiece::Array(inner) => {
-            let named_idx = match inner.as_ref() {
-                SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                SchemaPieceOrNamed::Piece(_) => None,
-            };
-            if let Some(named_idx) = named_idx {
-                if !seen_avro_nodes.insert(named_idx) {
-                    bail!(
-                        "Recursive types are not supported: {}",
-                        inner.get_human_name(schema.root)
-                    );
-                }
-            }
-            let next_node = schema.step(inner);
-            let ret = SqlScalarType::List {
-                element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
-                custom_id: None,
-            };
-            if let Some(named_idx) = named_idx {
-                seen_avro_nodes.remove(&named_idx);
-            }
-            ret
+            with_recursion_guard(seen_avro_nodes, schema.root, inner.as_ref(), |seen| {
+                Ok(SqlScalarType::List {
+                    element_type: Box::new(validate_schema_2(seen, schema.step(inner))?),
+                    custom_id: None,
+                })
+            })?
         }
         SchemaPiece::Map(inner) => {
-            let named_idx = match inner.as_ref() {
-                SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                SchemaPieceOrNamed::Piece(_) => None,
-            };
-            if let Some(named_idx) = named_idx {
-                if !seen_avro_nodes.insert(named_idx) {
-                    bail!(
-                        "Recursive types are not supported: {}",
-                        inner.get_human_name(schema.root)
-                    );
-                }
-            }
-
-            let ret = SqlScalarType::Map {
-                value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
-                custom_id: None,
-            };
-
-            if let Some(named_idx) = named_idx {
-                seen_avro_nodes.remove(&named_idx);
-            }
-            ret
+            with_recursion_guard(seen_avro_nodes, schema.root, inner.as_ref(), |seen| {
+                Ok(SqlScalarType::Map {
+                    value_type: Box::new(validate_schema_2(seen, schema.step(inner))?),
+                    custom_id: None,
+                })
+            })?
         }
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
+}
+
+/// Runs `f` with `node` marked as on the current resolution path, bailing if it's
+/// already on the path (a cycle). The mark is cleared on exit so sibling reuse of a
+/// named type isn't flagged.
+fn with_recursion_guard<T>(
+    seen: &mut BTreeSet<usize>,
+    root: &Schema,
+    node: &SchemaPieceOrNamed,
+    f: impl FnOnce(&mut BTreeSet<usize>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let named_idx = match node {
+        SchemaPieceOrNamed::Named(idx) => Some(*idx),
+        SchemaPieceOrNamed::Piece(_) => None,
+    };
+    if let Some(named_idx) = named_idx {
+        if !seen.insert(named_idx) {
+            bail!(
+                "Recursive types are not supported: {}",
+                node.get_human_name(root)
+            );
+        }
+    }
+    let result = f(seen);
+    if let Some(named_idx) = named_idx {
+        seen.remove(&named_idx);
+    }
+    result
 }
 
 #[cfg(test)]
