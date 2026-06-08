@@ -936,9 +936,7 @@ impl SubscribeFrom {
     pub fn contains_temporal(&self) -> bool {
         match self {
             SubscribeFrom::Id(_) => false,
-            SubscribeFrom::Query { expr, .. } => expr
-                .contains_temporal()
-                .expect("Unexpected error in `visit_scalars` call"),
+            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
         }
     }
 }

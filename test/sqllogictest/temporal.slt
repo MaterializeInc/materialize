@@ -223,6 +223,25 @@ with v as (select mz_now() < '3000-01-01') select * from v;
 ----
 true
 
+# Regression test for SQL-332: `mz_now()` as the direct argument of a value
+# window function (e.g. `first_value`/`last_value`) must still be recognized as
+# temporal, so that the query gets a timestamp near the current time.
+query B
+SELECT first_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+query B
+SELECT last_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+# Same for `mz_now()` as the direct argument of an aggregate window function.
+query B
+SELECT max(mz_now()) OVER () < '3000-01-01';
+----
+true
+
 # Make sure that we find temporal expressions also in referenced views.
 statement ok
 create view v as select mz_now() as x;
