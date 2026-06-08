@@ -29,8 +29,15 @@
 //! [`mz_repr::Timestamp`] and [`mz_repr::Diff`], respectively.
 //!
 //! [`CorrectionV2`] holds onto a list of [`Chain`]s containing [`Chunk`]s of stashed updates. Each
-//! [`Chunk`] is a columnation region containing a fixed maximum number of updates. All updates in
-//! a chunk, and all updates in a chain, are ordered by (time, data) and consolidated.
+//! [`Chunk`] is a single columnar allocation holding a byte-bounded number of updates (see
+//! [`ChunkBuilder`]). All updates in a chunk, and all updates in a chain, are ordered by
+//! (time, data) and consolidated.
+//!
+//! Chunks are paged out at rest through the process-wide [`column_pager`] (which spills to swap
+//! or a scratch file, or keeps them resident when the policy's budget allows) and materialize
+//! lazily on read. A chunk stays resident only while it is referenced; cursors release their
+//! chunks as they advance, so a merge over an out-of-core working set keeps only the chunks
+//! under its active fronts in memory. See [`Chunk`] for the mechanism.
 //!
 //! ```text
 //!       chain[0]   |   chain[1]   |   chain[2]
@@ -129,6 +136,7 @@
 //!   chain 2.a: [(b, 2, +1)],
 //!   chain 2.b: [(a, 2, +1), (c, 2, -1)]
 
+use std::cell::{OnceCell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
@@ -138,6 +146,7 @@ use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
+use mz_timely_util::column_pager::{self, PagedColumn};
 use mz_timely_util::columnar::Column;
 use timely::PartialOrder;
 use timely::dataflow::channels::ContainerBytes;
@@ -291,30 +300,47 @@ impl<D: Data> CorrectionV2<D> {
     }
 
     /// Return consolidated updates before the given `upper`.
-    pub fn updates_before<'a>(
-        &'a mut self,
+    ///
+    /// This is a non-destructive read: the returned updates remain in the buffer. The persist
+    /// sink writes them out, and the matching retractions arrive later as persist feedback
+    /// (via [`insert_negated`](Self::insert_negated)), which is what cancels them. Draining
+    /// them here would break that contract.
+    ///
+    /// The updates are collected into an owned buffer rather than returned as a borrowing
+    /// iterator. Chunks are paged out at rest (see [`Chunk`]) and materialize behind a
+    /// `RefCell`/`OnceCell`, which makes a borrowing iterator `!Send`; the persist writer holds
+    /// the iterator across an `await`, so it must be `Send`. The collected buffer is the write
+    /// payload, bounded by the data below `upper`.
+    pub fn updates_before(
+        &mut self,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
-        let mut result = None;
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + use<D> {
+        let mut result = Vec::new();
 
         if !PartialOrder::less_than(&self.since, upper) {
             // All contained updates are beyond the upper.
-            return result.into_iter().flatten();
+            return result.into_iter();
         }
 
         self.consolidate_before(upper);
 
-        // There is at most one chain that contains updates before `upper` now.
-        result = self
+        // There is at most one chain that contains updates before `upper` now. Locate it by its
+        // cached first time, so chains entirely at or beyond `upper` are not paged in.
+        let chain = self
             .chains
             .iter()
-            .find(|c| c.first().is_some_and(|(_, t, _)| !upper.less_equal(&t)))
-            .map(move |c| {
-                let upper = upper.clone();
-                c.iter().take_while(move |(_, t, _)| !upper.less_equal(t))
-            });
+            .find(|c| c.first_time().is_some_and(|t| !upper.less_equal(&t)));
+        if let Some(chain) = chain {
+            // The chain is sorted by (time, data), so the updates before `upper` form a prefix.
+            for (d, t, r) in chain.iter() {
+                if upper.less_equal(&t) {
+                    break;
+                }
+                result.push((d, t, r));
+            }
+        }
 
-        result.into_iter().flatten()
+        result.into_iter()
     }
 
     /// Consolidate all updates before the given `upper`.
@@ -639,30 +665,46 @@ impl<D: Data> Chain<D> {
     /// All updates in the chunk must sort after all updates already in the chain, in
     /// (time, data)-order, to ensure the chain remains sorted.
     fn push_chunk(&mut self, chunk: Chunk<D>) {
-        debug_assert!(self.can_accept(chunk.first()));
+        debug_assert!(self.can_accept_chunk(&chunk));
 
         self.update_count += chunk.len();
         self.chunks.push(chunk);
     }
 
-    /// Return whether the chain can accept the given update.
+    /// Return whether the chain can accept the given chunk at its end while preserving
+    /// (time, data)-order.
     ///
-    /// A chain can accept an update if pushing it at the end upholds the (time, data)-order.
-    fn can_accept<'a>(&'a self, update: Ref<'a, (D, Timestamp, Diff)>) -> bool {
-        self.last().is_none_or(|(dc, tc, _)| {
-            let (d, t, _) = update;
-            (tc, dc) < (t, d)
-        })
-    }
-
-    /// Return the first update in the chain, if any.
-    fn first(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
-        self.chunks.first().map(|c| c.first())
+    /// Uses the cached boundary times and only materializes the boundary chunks when the times
+    /// tie (a single timestamp straddling the chunk boundary), so the common
+    /// strictly-increasing-time case checks the invariant without paging chunks in.
+    fn can_accept_chunk(&self, chunk: &Chunk<D>) -> bool {
+        match self.last_time() {
+            None => true,
+            Some(last_time) => match last_time.cmp(&chunk.first_time()) {
+                Ordering::Less => true,
+                Ordering::Greater => false,
+                Ordering::Equal => {
+                    let (dc, _, _) = self.last().expect("non-empty: last_time was Some");
+                    let (d, _, _) = chunk.first();
+                    dc < d
+                }
+            },
+        }
     }
 
     /// Return the last update in the chain, if any.
     fn last(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.last().map(|c| c.last())
+    }
+
+    /// Return the time of the first update in the chain, if any, without materializing.
+    fn first_time(&self) -> Option<Timestamp> {
+        self.chunks.first().map(|c| c.first_time())
+    }
+
+    /// Return the time of the last update in the chain, if any, without materializing.
+    fn last_time(&self) -> Option<Timestamp> {
+        self.chunks.last().map(|c| c.last_time())
     }
 
     /// Convert the chain into a cursor over the contained updates.
@@ -742,10 +784,9 @@ impl<D: Data> ChainBuilder<D> {
     /// Finish building, returning the assembled [`Chain`].
     fn finish(self) -> Chain<D> {
         let Self { builder, mut chain } = self;
+        // `ChunkBuilder::finish` only yields non-empty chunks.
         for chunk in builder.finish() {
-            if chunk.len() > 0 {
-                chain.push_chunk(chunk);
-            }
+            chain.push_chunk(chunk);
         }
         chain
     }
@@ -1043,9 +1084,33 @@ impl<D: Data> Cursor<D> {
 /// new chunk whenever its in-progress columnar container reaches a fixed serialized byte
 /// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
 /// chunk corresponds to a single, predictably sized allocation.
+///
+/// A chunk is born paged out: [`from_column`](Chunk::from_column) hands the column to the
+/// process-wide [`column_pager`], which spills it to the configured backend (or keeps it
+/// resident, if the policy's budget allows). The chunk materializes lazily on the first read
+/// via [`column`](Chunk::column) and stays resident only until it is dropped. Because cursors
+/// hold their chunks behind `Rc` and release them as they advance, only the chunks under
+/// active merge fronts are resident at any time; trailing chunks remain spilled until reached.
+/// This is how the correction buffer streams out-of-core working sets through a merge.
 struct Chunk<D: Data> {
-    /// The contained updates.
-    data: Column<(D, Timestamp, Diff)>,
+    /// The paged-out form, taken on first materialization.
+    ///
+    /// Wrapped in a `RefCell` because cursors hold chunks behind a shared `Rc`, so the move
+    /// into [`column_pager::ColumnPager::take`] happens through a `&self`.
+    paged: RefCell<Option<PagedColumn<(D, Timestamp, Diff)>>>,
+    /// The materialized form, populated lazily by [`Chunk::column`] on first access.
+    ///
+    /// Once set, the slot is never cleared, so its address is stable and [`Chunk::index`] can
+    /// hand out `Ref<'_>` borrows tied to `&self`. The allocation is freed when the chunk is
+    /// dropped, which is what bounds resident memory to the chunks under active merge fronts.
+    resident: OnceCell<Column<(D, Timestamp, Diff)>>,
+    /// Number of updates, cached so `len` and chain bookkeeping never page the chunk in.
+    len: usize,
+    /// Time of the first update, cached so boundary time checks don't materialize a resting
+    /// chunk.
+    first_time: Timestamp,
+    /// Time of the last update, cached likewise.
+    last_time: Timestamp,
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -1055,44 +1120,96 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Wrap the given column into a chunk.
-    fn from_column(data: Column<(D, Timestamp, Diff)>) -> Self {
-        Self { data }
+    /// Page the given non-empty column out into a chunk.
+    ///
+    /// Reads the chunk's cached metadata (length, boundary times) while the column is still
+    /// resident, then hands it to the global column pager. The policy decides whether the
+    /// column actually spills; either way the chunk is born in paged form and materializes
+    /// lazily on the first read.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
+    /// and [`ChainBuilder`] only ever build a chunk from a populated column.
+    fn from_column(mut data: Column<(D, Timestamp, Diff)>) -> Self {
+        let (len, first_time, last_time) = {
+            let borrowed = data.borrow();
+            let len = borrowed.len();
+            assert!(len > 0, "chunks are non-empty");
+            (len, borrowed.get(0).1, borrowed.get(len - 1).1)
+        };
+
+        let paged = column_pager::global_pager().page(&mut data);
+        Self {
+            paged: RefCell::new(Some(paged)),
+            resident: OnceCell::new(),
+            len,
+            first_time,
+            last_time,
+        }
+    }
+
+    /// Materialize the chunk's column, paging it in on first access.
+    ///
+    /// The returned reference is valid for as long as `&self`: the `OnceCell` slot is never
+    /// cleared once populated, so its contents have a stable address.
+    fn column(&self) -> &Column<(D, Timestamp, Diff)> {
+        self.resident.get_or_init(|| {
+            let paged = self
+                .paged
+                .borrow_mut()
+                .take()
+                .expect("paged form present until materialized");
+            column_pager::global_pager().take(paged)
+        })
     }
 
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
-        self.data.borrow().len()
+        self.len
     }
 
-    /// Return the update at the given index.
+    /// Return the update at the given index, paging the chunk in if necessary.
     ///
     /// # Panics
     ///
     /// Panics if the given index is not populated.
     fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
-        self.data.borrow().get(idx)
+        self.column().borrow().get(idx)
     }
 
-    /// Return the first update in the chunk.
+    /// Return the first update in the chunk, paging the chunk in if necessary.
     fn first(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(0)
     }
 
-    /// Return the last update in the chunk.
+    /// Return the last update in the chunk, paging the chunk in if necessary.
     fn last(&self) -> Ref<'_, (D, Timestamp, Diff)> {
-        self.index(self.len() - 1)
+        self.index(self.len - 1)
+    }
+
+    /// Return the time of the first update, without materializing the chunk.
+    fn first_time(&self) -> Timestamp {
+        self.first_time
+    }
+
+    /// Return the time of the last update, without materializing the chunk.
+    fn last_time(&self) -> Timestamp {
+        self.last_time
     }
 
     /// Return the index of the first update at a time greater than `time`, or `None` if no such
     /// update exists.
+    ///
+    /// The early-out uses the cached last time, so a chunk whose updates are all at or before
+    /// `time` is skipped without paging it in.
     fn find_time_greater_than(&self, time: Timestamp) -> Option<usize> {
-        if self.last().1 <= time {
+        if self.last_time <= time {
             return None;
         }
 
         let mut lower = 0;
-        let mut upper = self.len();
+        let mut upper = self.len;
         while lower < upper {
             let idx = (lower + upper) / 2;
             if self.index(idx).1 > time {
@@ -1106,12 +1223,28 @@ impl<D: Data> Chunk<D> {
     }
 
     /// Return the size of the chunk, for use in metrics.
+    ///
+    /// Reports resident bytes only: a chunk still spilled (on swap or in a pager file) is not
+    /// part of RSS and contributes nothing, matching the accounting in
+    /// [`mz_timely_util::columnar::merge_batcher`].
     fn get_size(&self) -> SizeMetrics {
-        let bytes = self.data.length_in_bytes();
-        SizeMetrics {
-            size: bytes,
-            capacity: bytes,
-            allocations: 1,
+        let resident = |col: &Column<(D, Timestamp, Diff)>| {
+            let bytes = col.length_in_bytes();
+            SizeMetrics {
+                size: bytes,
+                capacity: bytes,
+                allocations: 1,
+            }
+        };
+
+        if let Some(col) = self.resident.get() {
+            return resident(col);
+        }
+        // Not yet materialized: a policy that chose to keep the column resident still occupies
+        // RSS, so account for it; a genuinely spilled column does not.
+        match &*self.paged.borrow() {
+            Some(PagedColumn::Resident(col, _)) => resident(col),
+            _ => SizeMetrics::default(),
         }
     }
 }
@@ -1170,10 +1303,17 @@ impl<D: Data> ChunkBuilder<D> {
         // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
         // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
         // the rest until `None`. Translate that into an owning iterator.
+        //
+        // `finish` can hand back an empty column (e.g. when the last shipped chunk landed
+        // exactly on the boundary). Skip those: `Chunk::from_column` requires a non-empty
+        // column, and an empty chunk would needlessly engage the pager.
         std::iter::from_fn(move || {
-            self.inner
-                .finish()
-                .map(|c| Chunk::from_column(std::mem::take(c)))
+            loop {
+                let col = std::mem::take(self.inner.finish()?);
+                if col.borrow().len() > 0 {
+                    return Some(Chunk::from_column(col));
+                }
+            }
         })
     }
 }
@@ -1480,16 +1620,13 @@ mod tests {
         }
         let chain = builder.finish();
 
-        // At least one chunk must have been minted into `Column::Align` form, otherwise the
-        // spill path wouldn't be exercised.
-        let align_chunks = chain
-            .chunks
-            .iter()
-            .filter(|c| matches!(c.data, mz_timely_util::columnar::Column::Align(_)))
-            .count();
+        // Crossing the mint boundary must have produced more than one chunk; otherwise the
+        // spill encode/decode path (each minted chunk is paged out and read back through the
+        // pager) wouldn't be exercised.
         assert!(
-            align_chunks > 0,
-            "expected at least one spilled (Align) chunk, got chunks: {:?}",
+            chain.chunks.len() > 1,
+            "expected multiple minted chunks, got {} chunk(s): {:?}",
+            chain.chunks.len(),
             chain.chunks,
         );
 
@@ -1503,5 +1640,112 @@ mod tests {
             expected += 1;
         }
         assert_eq!(expected, count);
+    }
+
+    /// A [`PagingPolicy`] that always spills to the given backend, uncompressed.
+    ///
+    /// The default global pager is [`ColumnPager::disabled`], which keeps every chunk
+    /// resident; installing this drives the actual spill path so the tests exercise
+    /// [`Chunk::column`]'s page-in through [`mz_ore::pager`].
+    ///
+    /// [`PagingPolicy`]: super::column_pager::PagingPolicy
+    /// [`ColumnPager::disabled`]: super::column_pager::ColumnPager::disabled
+    struct ForcePage(mz_ore::pager::Backend);
+
+    impl super::column_pager::PagingPolicy for ForcePage {
+        fn decide(
+            &self,
+            _hint: super::column_pager::PageHint,
+        ) -> super::column_pager::PageDecision {
+            super::column_pager::PageDecision::Page {
+                backend: self.0,
+                codec: None,
+            }
+        }
+        fn record(&self, _event: super::column_pager::PageEvent) {}
+    }
+
+    /// Install a global pager that spills every chunk to the swap backend for the duration of
+    /// `f`, then restore the default (disabled) pager.
+    ///
+    /// The global pager is process-wide; concurrent tests that page chunks only ever observe a
+    /// correct round-trip regardless of which backend is active, so racing on this global is
+    /// benign for correctness.
+    fn with_swap_pager<R>(f: impl FnOnce() -> R) -> R {
+        use std::sync::Arc;
+
+        use mz_ore::pager::Backend;
+
+        use super::column_pager::{self, ColumnPager};
+
+        column_pager::set_global_pager(ColumnPager::new(Arc::new(ForcePage(Backend::Swap))));
+        let result = f();
+        column_pager::set_global_pager(ColumnPager::disabled());
+        result
+    }
+
+    /// Build a chain crossing the mint boundary while every chunk is spilled to the swap
+    /// backend, then assert `iter()` (the read path behind `updates_before`) pages each chunk
+    /// back in and roundtrips values, order, and diffs.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
+    fn iter_roundtrips_through_swap_backend() {
+        let count = 200_000_u64;
+
+        with_swap_pager(|| {
+            let mut builder = ChainBuilder::<i64>::default();
+            for i in 0..count {
+                let d = i64::try_from(i).expect("fits");
+                builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+            }
+            let chain = builder.finish();
+
+            assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+            assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+
+            let mut expected = 0_u64;
+            for (d, t, r) in chain.iter() {
+                assert_eq!(d, i64::try_from(expected).expect("fits"));
+                assert_eq!(t, Timestamp::new(expected));
+                assert_eq!(r, Diff::ONE);
+                expected += 1;
+            }
+            assert_eq!(expected, count);
+        });
+    }
+
+    /// Drive a [`Cursor`] over a spilled, multi-chunk chain by stepping it to completion (the
+    /// access pattern merges use). Each step pages the front chunk back in via
+    /// [`Chunk::column`]; assert the cursor yields every update in order.
+    ///
+    /// [`Cursor`]: super::Cursor
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
+    fn cursor_steps_through_swap_backend() {
+        use columnar::Columnar;
+
+        let count = 200_000_u64;
+
+        with_swap_pager(|| {
+            let mut builder = ChainBuilder::<i64>::default();
+            for i in 0..count {
+                let d = i64::try_from(i).expect("fits");
+                builder.push_owned(&(d, Timestamp::new(i), Diff::ONE));
+            }
+            let chain = builder.finish();
+            assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+
+            let mut rest = chain.into_cursor();
+            let mut expected = 0_u64;
+            while let Some(cursor) = rest.take() {
+                let (d, t, r) = cursor.get();
+                assert_eq!(i64::into_owned(d), i64::try_from(expected).expect("fits"));
+                assert_eq!(t, Timestamp::new(expected));
+                assert_eq!(r, Diff::ONE);
+                expected += 1;
+                rest = cursor.step();
+            }
+            assert_eq!(expected, count);
+        });
     }
 }
