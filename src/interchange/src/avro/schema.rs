@@ -297,13 +297,95 @@ fn validate_schema_2(
             }
             ret
         }
-        SchemaPiece::Map(inner) => SqlScalarType::Map {
-            value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
-            custom_id: None,
-        },
+        SchemaPiece::Map(inner) => {
+            let named_idx = match inner.as_ref() {
+                SchemaPieceOrNamed::Named(idx) => Some(*idx),
+                SchemaPieceOrNamed::Piece(_) => None,
+            };
+            if let Some(named_idx) = named_idx {
+                if !seen_avro_nodes.insert(named_idx) {
+                    bail!(
+                        "Recursive types are not supported: {}",
+                        inner.get_human_name(schema.root)
+                    );
+                }
+            }
 
+            let ret = SqlScalarType::Map {
+                value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
+                custom_id: None,
+            };
+
+            if let Some(named_idx) = named_idx {
+                seen_avro_nodes.remove(&named_idx);
+            }
+            ret
+        }
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A named type that refers back to itself cannot be represented in the SQL
+    /// type system. Recursion can be introduced through any container that holds
+    /// a named reference: record fields (directly or via a union), arrays, and
+    /// maps. Each should be rejected rather than recursed into forever.
+    fn assert_recursive(schema: &str) {
+        let err = schema_to_relationdesc(parse_schema(schema, &[]).expect("schema should parse"))
+            .expect_err("recursive schema should be rejected");
+        assert!(
+            err.to_string()
+                .contains("Recursive types are not supported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_record_field() {
+        assert_recursive(r#"{"type":"record","name":"a","fields":[{"name":"f","type":"a"}]}"#);
+    }
+
+    #[mz_ore::test]
+    fn recursive_union() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}"#,
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_array() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":{"type":"array","items":"a"}}]}"#,
+        );
+    }
+
+    #[mz_ore::test]
+    fn recursive_map() {
+        assert_recursive(
+            r#"{"type":"record","name":"a","fields":[{"name":"f","type":{"type":"map","values":"a"}}]}"#,
+        );
+    }
+
+    /// Reusing a named type in sibling positions is a diamond, not a cycle, and
+    /// must not be flagged as recursive. Guards against the path-tracking set
+    /// failing to release a node after it leaves the current path.
+    #[mz_ore::test]
+    fn repeated_named_type_is_not_recursive() {
+        let schema = r#"{
+            "type": "record",
+            "name": "outer",
+            "fields": [
+                {"name": "a", "type": {"type": "record", "name": "inner", "fields": [{"name": "x", "type": "int"}]}},
+                {"name": "b", "type": "inner"}
+            ]
+        }"#;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[]).expect("schema should parse"))
+            .expect("diamond reuse of a named type should be allowed");
+        assert_eq!(desc.arity(), 2);
+    }
 }
 
 pub struct ConfluentAvroResolver {
