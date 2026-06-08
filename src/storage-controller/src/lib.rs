@@ -792,6 +792,7 @@ impl StorageController for Controller {
                     data_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
+                    source_for_fork: None,
                 };
 
                 Ok((id, description, metadata))
@@ -1423,6 +1424,7 @@ impl StorageController for Controller {
             relation_desc: new_desc.clone(),
             // TODO(alter_table): Support schema evolution on sources.
             txns_shard: Some(self.txns_read.txns_id().clone()),
+            source_for_fork: None,
         };
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
