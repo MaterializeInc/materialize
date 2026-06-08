@@ -37,6 +37,7 @@ class Persistd(Service):
         command: list[str] | None = None,
         depends_on: list[str] = [],
         environment_extra: list[str] = [],
+        volumes: list[str] = [],
     ) -> None:
         if command is None:
             command = [
@@ -65,6 +66,7 @@ class Persistd(Service):
             "ports": [listen_port],
             "environment": environment,
             "depends_on": depends_graph,
+            "volumes": volumes,
         }
 
         super().__init__(name=name, config=config)

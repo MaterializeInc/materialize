@@ -265,18 +265,20 @@ class Materialized(Service):
 
         # Decide whether to auto-attach a paired Persistd companion that
         # owns the persist consensus traffic for this Materialized instance.
-        # Only meaningful when there is an external Postgres-flavored
-        # metadata store; in-process metadata stores have nothing for
-        # persistd to talk to.
+        # Only meaningful when there is an external metadata store;
+        # in-process metadata stores have nothing for persistd to talk to.
         use_persistd = (
             external_persist_committer
             and bool(external_metadata_store)
-            and metadata_store in ("postgres-metadata", "cockroach", "alloydb")
+            and metadata_store
+            in ("postgres-metadata", "cockroach", "alloydb", "foundationdb")
         )
         persistd_name = f"{name}-persistd"
         # Set when use_persistd is True; captured so the companion Persistd
         # can dial the same consensus backend envd would otherwise own.
         persistd_consensus_url: str | None = None
+        # Extra volumes for the companion (e.g. the fdb.cluster file).
+        persistd_volumes: list[str] = []
 
         if external_metadata_store:
             depends_graph[metadata_store] = {"condition": "service_healthy"}
@@ -310,6 +312,13 @@ class Materialized(Service):
                 min_version = MzVersion.parse_mz("v26.9.0")
                 if image_version is None or image_version >= min_version:
                     volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+                if use_persistd:
+                    persistd_consensus_url = "foundationdb:?prefix=consensus"
+                    # The companion discovers the cluster via the default
+                    # /etc/foundationdb/fdb.cluster path, same as envd.
+                    persistd_volumes += foundationdb.fdb_cluster_file(
+                        external_metadata_store
+                    )
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -469,6 +478,7 @@ class Materialized(Service):
                         f"MZ_COALESCE_MAX_BATCH={persistd_coalesce_max_batch}",
                         f"MZ_COALESCE_CONCURRENCY={persistd_coalesce_concurrency}",
                     ],
+                    volumes=persistd_volumes,
                 )
             )
 

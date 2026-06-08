@@ -34,6 +34,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import foundationdb_services
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -2391,9 +2392,9 @@ def _percentile(values: list[float], pct: float) -> float:
 def workflow_committer_comparison(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """Compare freshness and hydration across metadata stores (cockroach vs
-    postgres) and committer modes (in-process vs persistd) under a swept
-    clusters x MVs workload.
+    """Compare freshness and hydration across metadata stores (cockroach,
+    postgres, foundationdb) and committer modes (in-process vs persistd)
+    under a swept clusters x MVs workload.
 
     For each of the four variants the workflow brings up a clean Materialize
     with the variant's metadata store and committer, then builds the workload
@@ -2416,7 +2417,8 @@ def workflow_committer_comparison(
         "--stores",
         default="cockroach,postgres-metadata",
         help="comma-separated metadata stores to include (cockroach, "
-        "postgres-metadata) — e.g. just 'cockroach' to probe crdb's limit",
+        "postgres-metadata, foundationdb) — e.g. just 'cockroach' to probe "
+        "crdb's limit",
     )
     parser.add_argument(
         "--samples",
@@ -2486,6 +2488,8 @@ def workflow_committer_comparison(
         ("crdb / persistd", "cockroach", True, 0),
         ("psql / no committer", "postgres-metadata", False, 0),
         ("psql / persistd", "postgres-metadata", True, 0),
+        ("fdb / no committer", "foundationdb", False, 0),
+        ("fdb / persistd", "foundationdb", True, 0),
     ]
     if args.skip_baselines:
         assert (
@@ -2501,6 +2505,7 @@ def workflow_committer_comparison(
                 True,
                 args.coalesce_max_batch,
             ),
+            ("fdb / persistd coal", "foundationdb", True, args.coalesce_max_batch),
         ]
     wanted_stores = {s.strip() for s in args.stores.split(",")}
     variants = [v for v in variants if v[1] in wanted_stores]
@@ -2566,22 +2571,28 @@ def workflow_committer_comparison(
         # elements in RWConflictPool"). These values test whether the psql
         # hydration collapse is just default-limit starvation rather than a
         # fundamental direct-CaS limit.
-        store_service = (
-            Cockroach(in_memory=True)
-            if store == "cockroach"
-            else PostgresMetadata(
-                extra_command=[
-                    "-c",
-                    "max_pred_locks_per_transaction=1024",
-                    "-c",
-                    "max_pred_locks_per_relation=10000",
-                    "-c",
-                    "max_pred_locks_per_page=512",
-                ]
-            )
-        )
+        store_services: list[Service]
+        if store == "cockroach":
+            store_services = [Cockroach(in_memory=True)]
+        elif store == "foundationdb":
+            # Single-node fdb cluster: a `foundationdb-0` server node plus the
+            # `foundationdb` init/healthcheck service materialized depends on.
+            store_services = list(foundationdb_services(num_nodes=1))
+        else:
+            store_services = [
+                PostgresMetadata(
+                    extra_command=[
+                        "-c",
+                        "max_pred_locks_per_transaction=1024",
+                        "-c",
+                        "max_pred_locks_per_relation=10000",
+                        "-c",
+                        "max_pred_locks_per_page=512",
+                    ]
+                )
+            ]
         with c.override(
-            store_service,
+            *store_services,
             make_materialized(
                 metadata_store=store,
                 external_persist_committer=committer,
