@@ -63,14 +63,7 @@ COMMIT;
 > ALTER CLUSTER drop_recreate_cluster SET (REPLICATION FACTOR 1)
 
 # The table was dropped and recreated, so Materialize should emit a definite error.
-#! SELECT * FROM drop_recreate;
-#contains:table was dropped
-
-# INCORRECT BEHAVIOR: this violates correctness
-> SELECT * FROM drop_recreate;
-1 one
-2 two
-3 three
-
+! SELECT * FROM drop_recreate;
+contains:table was dropped
 
 > DROP CLUSTER drop_recreate_cluster CASCADE;
