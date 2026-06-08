@@ -1,0 +1,4 @@
+target/
+
+# Per-developer default profile pointer (set by `mz-deploy profile set`).
+.mzprofile
