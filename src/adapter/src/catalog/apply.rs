@@ -1404,15 +1404,16 @@ impl CatalogState {
                 vec![self.pack_system_privileges_update(system_privilege, diff)]
             }
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
-            StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
+            // mz_clusters and mz_cluster_schedules are MaterializedViews backed
+            // by mz_internal.mz_catalog_raw, so cluster rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::Cluster(_) => Vec::new(),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.item_id, diff)
             }
-            StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
-                cluster_replica.cluster_id,
-                &cluster_replica.name,
-                diff,
-            ),
+            // mz_cluster_replicas is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw.
+            StateUpdateKind::ClusterReplica(_) => Vec::new(),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
                 // items collection and so get handled through the normal

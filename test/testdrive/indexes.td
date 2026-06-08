@@ -301,6 +301,7 @@ mz_cluster_replica_history_ind                              mz_cluster_replica_h
 mz_cluster_replica_name_history_ind                         mz_cluster_replica_name_history              mz_catalog_server    {id}                                        ""
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_catalog_server    {replica_id}                                ""
 mz_cluster_replica_metrics_history_ind                      mz_cluster_replica_metrics_history           mz_catalog_server    {replica_id}                                ""
+mz_cluster_replica_size_internal_ind                        mz_cluster_replica_size_internal             mz_catalog_server    {size}                                      ""
 mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_catalog_server    {size}                                      ""
 mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_catalog_server    {replica_id}                                ""
 mz_cluster_replica_status_history_ind                       mz_cluster_replica_status_history            mz_catalog_server    {replica_id}                                ""
