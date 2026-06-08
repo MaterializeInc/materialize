@@ -763,7 +763,21 @@ where
     //     `ts == persist_upper` can never again hold) and pin the operator's
     //     output frontier below the shard upper. This mirrors v1's
     //     `relevant = persist_upper.less_equal(ts)`.
-    let mut eligible = Vec::new();
+    // Walk the sealed chunks by reference rather than collecting the eligible
+    // set into an owned Vec. The chunks are globally sorted (the seal merges
+    // all chains into one run), so the cursor seeks still walk forward and
+    // amortize, and eligible values are emitted straight from the column's
+    // `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed ineligible
+    // set is materialized.
+    let output_before = output.len();
+    let mut eligible_count: u64 = 0;
+    let mut result_count: u64 = 0;
+    let mut inserts: u64 = 0;
+    let mut updates: u64 = 0;
+    let mut deletes: u64 = 0;
+
+    let (mut cursor, storage) = trace.cursor();
+
     for chunk in &sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
@@ -771,17 +785,64 @@ where
                 // ts < persist_upper: drop.
                 continue;
             }
-            let entry = (
-                *key,
-                ts,
-                <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-            );
-            if persist_upper.less_than(&entry.1) {
-                // ts > persist_upper: re-stash for later.
-                ineligible.push(entry);
-            } else {
-                // ts == persist_upper: process now.
-                eligible.push(entry);
+            if persist_upper.less_than(&ts) {
+                // ts > persist_upper: re-stash for later (owned).
+                ineligible.push((
+                    *key,
+                    ts,
+                    <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                ));
+                continue;
+            }
+
+            // ts == persist_upper: eligible. Look up the prior value for this
+            // key in the persist trace and emit the retraction / insertion. The
+            // spine stores keys in a columnation arena, so we seek by the
+            // column's borrowed `&UpsertKey` directly.
+            eligible_count += 1;
+            cursor.seek_key(&storage, key);
+            let old_value = match cursor.get_key(&storage) {
+                Some(found) if found == key => {
+                    let mut result = None;
+                    while let Some(val) = cursor.get_val(&storage) {
+                        let mut count = Diff::ZERO;
+                        cursor.map_times(&storage, |_time, d| {
+                            count += d.clone();
+                        });
+                        if count.is_positive() {
+                            assert!(
+                                count == 1.into(),
+                                "unexpected multiple entries for the same key in persist trace"
+                            );
+                            result = Some(datum_seq_to_upsert_value(val));
+                        }
+                        cursor.step_val(&storage);
+                    }
+                    result
+                }
+                _ => None,
+            };
+
+            if old_value.is_some() {
+                result_count += 1;
+            }
+
+            match diff.value {
+                Some(row) => {
+                    if let Some(old_val) = old_value {
+                        output.push((old_val, ts.clone(), Diff::MINUS_ONE));
+                        updates += 1;
+                    } else {
+                        inserts += 1;
+                    }
+                    output.push((decode_upsert_value(row.iter()), ts, Diff::ONE));
+                }
+                None => {
+                    if let Some(old_val) = old_value {
+                        output.push((old_val, ts, Diff::MINUS_ONE));
+                        deletes += 1;
+                    }
+                }
             }
         }
     }
@@ -790,80 +851,9 @@ where
         worker_id = %worker_id,
         source_id = %source_id,
         ineligible = ineligible.len(),
-        eligible = eligible.len(),
+        eligible = eligible_count,
         "draining stash",
     );
-
-    let eligible_count = u64::try_from(eligible.len()).expect("eligible count overflows u64");
-
-    if eligible.is_empty() {
-        return DrainStats {
-            eligible: 0,
-            result_count: 0,
-            inserts: 0,
-            updates: 0,
-            deletes: 0,
-            output_count: 0,
-        };
-    }
-
-    let output_before = output.len();
-    let mut result_count: u64 = 0;
-    let mut inserts: u64 = 0;
-    let mut updates: u64 = 0;
-    let mut deletes: u64 = 0;
-
-    let (mut cursor, storage) = trace.cursor();
-
-    for (key, ts, upsert_diff) in eligible {
-        // Look up the current value for this key in the persist trace. The
-        // spine stores keys directly in a columnation arena, so we seek by
-        // borrowed `UpsertKey`.
-        cursor.seek_key(&storage, &key);
-        let old_value = match cursor.get_key(&storage) {
-            Some(found) if found == &key => {
-                let mut result = None;
-                while let Some(val) = cursor.get_val(&storage) {
-                    let mut count = Diff::ZERO;
-                    cursor.map_times(&storage, |_time, diff| {
-                        count += diff.clone();
-                    });
-                    if count.is_positive() {
-                        assert!(
-                            count == 1.into(),
-                            "unexpected multiple entries for the same key in persist trace"
-                        );
-                        result = Some(datum_seq_to_upsert_value(val));
-                    }
-                    cursor.step_val(&storage);
-                }
-                result
-            }
-            _ => None,
-        };
-
-        if old_value.is_some() {
-            result_count += 1;
-        }
-
-        match upsert_diff.value {
-            Some(new_val) => {
-                if let Some(old_val) = old_value {
-                    output.push((old_val, ts.clone(), Diff::MINUS_ONE));
-                    updates += 1;
-                } else {
-                    inserts += 1;
-                }
-                output.push((decode_upsert_value(new_val.iter()), ts, Diff::ONE));
-            }
-            None => {
-                if let Some(old_val) = old_value {
-                    output.push((old_val, ts, Diff::MINUS_ONE));
-                    deletes += 1;
-                }
-            }
-        }
-    }
 
     let output_count =
         u64::try_from(output.len() - output_before).expect("output count overflows u64");
