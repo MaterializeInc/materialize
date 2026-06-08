@@ -360,13 +360,13 @@ mod tests {
     }
 }
 
-pub struct ConfluentAvroResolver {
+pub struct AvroSchemaResolver {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     confluent_wire_format: bool,
 }
 
-impl ConfluentAvroResolver {
+impl AvroSchemaResolver {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
@@ -432,9 +432,9 @@ impl ConfluentAvroResolver {
     }
 }
 
-impl fmt::Debug for ConfluentAvroResolver {
+impl fmt::Debug for AvroSchemaResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("ConfluentAvroResolver")
+        f.debug_struct("AvroSchemaResolver")
             .field("reader_schema", &self.reader_schema)
             .field(
                 "write_schema",
