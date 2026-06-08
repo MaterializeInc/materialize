@@ -22,6 +22,8 @@ parameters to your Iceberg catalog.
 
 ## Syntax
 
+{{% include-headless "/headless/iceberg-sinks/syntax-change-aws-connection" %}}
+
 {{< tabs level=3 >}}
 
 {{< tab "MODE UPSERT" >}}
