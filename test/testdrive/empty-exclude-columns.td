@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for ss-159: an empty `TEXT COLUMNS = ()` on a
+# Regression test for ss-159: an empty `EXCLUDE COLUMNS = ()` on a
 # `CREATE TABLE .. FROM SOURCE` statement is treated as though the option
 # were omitted and must succeed.
 
@@ -32,7 +32,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 > CREATE SOURCE s FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 
-> CREATE TABLE foo FROM SOURCE s (REFERENCE = public.foo) WITH (TEXT COLUMNS = ());
+> CREATE TABLE foo FROM SOURCE s (REFERENCE = public.foo) WITH (EXCLUDE COLUMNS = ());
 
 > SELECT * FROM foo;
 1 one
@@ -61,7 +61,7 @@ INSERT INTO bar VALUES (1, 'one'), (2, 'two');
 
 > CREATE SOURCE s2 FROM MYSQL CONNECTION mysql_conn;
 
-> CREATE TABLE bar FROM SOURCE s2 (REFERENCE = public.bar) WITH (TEXT COLUMNS = ());
+> CREATE TABLE bar FROM SOURCE s2 (REFERENCE = public.bar) WITH (EXCLUDE COLUMNS = ());
 
 > SELECT * FROM bar;
 1 one

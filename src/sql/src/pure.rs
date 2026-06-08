@@ -29,7 +29,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
@@ -2059,14 +2058,9 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_exclude_columns {
-                    Some(gen_exclude_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_exclude_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "exclude_columns should be Some if exclude_cols_option is present"
-                    ),
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
                 }
             }
             match columns {
@@ -2114,14 +2108,9 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_exclude_columns {
-                    Some(gen_exclude_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_exclude_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "exclude_columns should be Some if exclude_cols_option is present"
-                    ),
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    exclude_cols_option.value =
+                        Some(WithOptionValue::Sequence(gen_exclude_columns));
                 }
             }
             match columns {
@@ -2169,14 +2158,8 @@ async fn purify_create_table_from_source(
                 .iter_mut()
                 .find(|opt| opt.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                match gen_excl_columns {
-                    Some(gen_excl_columns) => {
-                        exclude_cols_option.value =
-                            Some(WithOptionValue::Sequence(gen_excl_columns))
-                    }
-                    None => soft_panic_or_log!(
-                        "excl_columns should be Some if excl_cols_option is present"
-                    ),
+                if let Some(gen_excl_columns) = gen_excl_columns {
+                    exclude_cols_option.value = Some(WithOptionValue::Sequence(gen_excl_columns));
                 }
             }
 

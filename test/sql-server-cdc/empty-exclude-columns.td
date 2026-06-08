@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for ss-159: an empty `TEXT COLUMNS = ()` on a
+# Regression test for ss-159: an empty `EXCLUDE COLUMNS = ()` on a
 # `CREATE TABLE .. FROM SOURCE` statement is treated as though the option
 # were omitted and must succeed.
 
@@ -32,7 +32,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'foo', @role
 
 > CREATE SOURCE s FROM SQL SERVER CONNECTION ssconn;
 
-> CREATE TABLE foo FROM SOURCE s (REFERENCE dbo.foo) WITH (TEXT COLUMNS = ());
+> CREATE TABLE foo FROM SOURCE s (REFERENCE dbo.foo) WITH (EXCLUDE COLUMNS = ());
 
 > SELECT * FROM foo;
 1 one
