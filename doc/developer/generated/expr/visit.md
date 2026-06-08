@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/visit.rs
-revision: eab8136a84
+revision: 261d61df83
 ---
 
 # mz-expr::visit

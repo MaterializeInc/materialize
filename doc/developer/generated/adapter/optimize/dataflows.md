@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/dataflows.rs
-revision: 3df8ae2fd8
+revision: 261d61df83
 ---
 
 # adapter::optimize::dataflows

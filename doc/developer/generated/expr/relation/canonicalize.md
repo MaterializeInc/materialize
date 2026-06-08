@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/relation/canonicalize.rs
-revision: 52af3ba2a1
+revision: 261d61df83
 ---
 
 # mz-expr::relation::canonicalize
