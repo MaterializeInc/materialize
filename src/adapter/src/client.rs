@@ -59,6 +59,7 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::{self, Metrics};
+use crate::peek_client::StatementLoggingGuard;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
@@ -863,65 +864,42 @@ impl SessionClient {
         //
         // We pass the *outer* portal's `logging` and pgwire-bound `params`
         // so the recorded entry shows the user-visible `EXECUTE foo (...)`,
-        // not the inner SQL. The id (if any) moves into `outer_ctx_extra`
-        // below for `try_frontend_peek` to retire; on planning error we
-        // explicitly emit an `Errored` end-event below.
-        let began_outer_logging = outer_ctx_extra.is_none();
-        let logging_id: Option<crate::statement_logging::StatementLoggingId> =
-            if began_outer_logging {
-                let session = self.session.as_mut().expect("SessionClient invariant");
-                let result = self
-                    .peek_client
-                    .statement_logging_frontend
-                    .begin_statement_execution(
-                        session,
-                        &params,
-                        &outer_logging,
-                        catalog.system_config(),
-                        outer_lifecycle_timestamps,
-                    );
-                if let Some((id, began_execution, mseh_update, prepared_statement)) = result {
-                    self.peek_client.log_began_execution(
-                        began_execution,
-                        mseh_update,
-                        prepared_statement,
-                    );
-                    Some(id)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+        // not the inner SQL. On success the id moves into `outer_ctx_extra`
+        // for `try_frontend_peek` to retire; on planning error we explicitly
+        // retire this guard with `Errored`.
+        let mut held_guard: Option<StatementLoggingGuard> = if outer_ctx_extra.is_none() {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let mut none_guard: Option<ExecuteContextGuard> = None;
+            Some(self.peek_client.begin_statement_logging(
+                session,
+                &params,
+                &outer_logging,
+                &catalog,
+                outer_lifecycle_timestamps,
+                &mut none_guard,
+            ))
+        } else {
+            None
+        };
 
         let new_portal_name = match self.install_inner_portal_for_execute(&catalog, &stmt, &params)
         {
             Ok(name) => name,
             Err(err) => {
-                if let Some(id) = logging_id {
-                    self.peek_client.log_ended_execution(
-                        id,
-                        StatementEndedExecutionReason::Errored {
-                            error: err.to_string(),
-                        },
-                    );
+                if let Some(g) = held_guard.take() {
+                    g.retire(StatementEndedExecutionReason::Errored {
+                        error: err.to_string(),
+                    });
                 }
                 return Err(err);
             }
         };
 
-        // Hand off to `outer_ctx_extra` whenever we entered the begin path
-        // for the outer EXECUTE — even if `begin_statement_execution`
-        // returned `None` (sampling decided not to sample, or logging is
-        // disabled for the user). This mirrors the original coord path,
-        // which always installs a guard via
-        // `ExecuteContextGuard::new(maybe_uuid, ...)`. Without this, the
-        // inner portal would be treated as a fresh statement by
-        // `try_frontend_peek` (or the fallback `Command::Execute` path)
-        // and re-account its bytes against
-        // `mz_statement_logging_unsampled_bytes`, double-counting the
-        // inner SQL.
-        if began_outer_logging {
+        // Hand off the logging id to `outer_ctx_extra`. `try_frontend_peek`
+        // retires it itself once it takes ownership.
+        if let Some(g) = held_guard.take() {
+            let id = g.id();
+            g.defuse();
             // Soft invariant: `try_frontend_peek` takes ownership of
             // `outer_ctx_extra` immediately, so this guard's `Drop` is
             // unreachable on the normal flow and the dummy channel is
@@ -930,7 +908,7 @@ impl SessionClient {
             // — an acceptable trade given the panic implies the
             // connection is going down anyway.
             let (dummy_tx, _dummy_rx) = mpsc::unbounded_channel();
-            *outer_ctx_extra = Some(ExecuteContextGuard::new(logging_id, dummy_tx));
+            *outer_ctx_extra = Some(ExecuteContextGuard::new(id, dummy_tx));
         }
 
         Ok((new_portal_name, Some(catalog)))
@@ -942,8 +920,8 @@ impl SessionClient {
     /// EXECUTE's bound parameter values. Returns the new portal's name.
     ///
     /// Split out so [`Self::unroll_sql_execute`] can wrap the fallible work
-    /// in a single error-handling site that emits an `Errored` end-event
-    /// for the EXECUTE-level statement-logging entry.
+    /// in a single error-handling site that retires the EXECUTE-level
+    /// statement-logging guard with `Errored`.
     fn install_inner_portal_for_execute(
         &mut self,
         catalog: &Arc<Catalog>,

@@ -592,6 +592,11 @@ impl StatementLoggingGuard {
         self.id
     }
 
+    /// Retires the guard with an explicit end-execution reason.
+    pub(crate) fn retire(mut self, reason: statement_logging::StatementEndedExecutionReason) {
+        self.emit(reason);
+    }
+
     /// Hands off logging responsibility without emitting an end-execution
     /// event. Use when another component (e.g. the coordinator, for streaming
     /// peek / subscribe responses) will log the end asynchronously.
