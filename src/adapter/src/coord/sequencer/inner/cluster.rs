@@ -680,6 +680,7 @@ impl Coordinator {
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &size,
+            false,
         )?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
@@ -755,6 +756,7 @@ impl Coordinator {
                     .catalog()
                     .get_role_allowed_cluster_sizes(&Some(owner_id)),
                 azs,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
@@ -880,6 +882,7 @@ impl Coordinator {
                         .catalog()
                         .get_role_allowed_cluster_sizes(&Some(role_id)),
                     None,
+                    false,
                 )?,
                 compute: ComputeReplicaConfig { logging },
             };
@@ -965,6 +968,7 @@ impl Coordinator {
                 // Planning ensures all replicas in this codepath
                 // are unmanaged.
                 None,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
@@ -1056,6 +1060,7 @@ impl Coordinator {
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
+            false,
         )?;
 
         // check for active updates
