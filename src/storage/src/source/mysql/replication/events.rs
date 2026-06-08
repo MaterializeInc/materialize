@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-
 use std::collections::BTreeMap;
 use std::str::SplitAsciiWhitespace;
 
@@ -149,9 +148,7 @@ pub(super) async fn handle_query_event(
                         Diff::ONE,
                     );
                     let size = update.fuel_size();
-                    ctx.data_output
-                        .give_fueled(&gtid_cap, update, size)
-                        .await;
+                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(output.output_index);
                 }
             }
