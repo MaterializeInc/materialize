@@ -551,33 +551,42 @@ pub(super) enum LoggingEvent {
 /// instance. This allows corrections on the Tokio task to participate in introspection logging
 /// without holding `Rc<RefCell<..>>`.
 #[derive(Clone, Debug)]
-pub(super) struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
+pub struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
 
 impl ChannelLogging {
-    pub fn new(tx: mpsc::UnboundedSender<LoggingEvent>) -> Self {
+    /// Construct a logger that forwards [`LoggingEvent`]s to the given channel.
+    ///
+    /// Scoped to the `sink` module (matching the visibility of the private `LoggingEvent`); the
+    /// bench/example path constructs [`CorrectionV2`] with `None` logging rather than a channel.
+    pub(super) fn new(tx: mpsc::UnboundedSender<LoggingEvent>) -> Self {
         Self(tx)
     }
 
+    /// Log the creation of a chain holding `updates` updates.
     pub fn chain_created(&self, updates: usize) {
         let _ = self.0.send(LoggingEvent::ChainCreated(updates));
     }
 
+    /// Log the dropping of a chain holding `updates` updates.
     pub fn chain_dropped(&self, updates: usize) {
         let _ = self.0.send(LoggingEvent::ChainDropped(updates));
     }
 
+    /// Log a change of `diff` bytes in the reported (heap) size.
     pub fn report_size_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::SizeDiff(diff));
         }
     }
 
+    /// Log a change of `diff` bytes in the reported capacity.
     pub fn report_capacity_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::CapacityDiff(diff));
         }
     }
 
+    /// Log a change of `diff` in the reported allocation count.
     pub fn report_allocations_diff(&self, diff: isize) {
         if let Some(diff) = NonZeroIsize::new(diff) {
             let _ = self.0.send(LoggingEvent::AllocationsDiff(diff));

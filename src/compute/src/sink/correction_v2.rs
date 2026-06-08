@@ -181,7 +181,7 @@ impl<D> Data for D where
 /// In contrast to `CorrectionV1`, this implementation stores updates in columnation regions,
 /// allowing their memory to be transparently spilled to disk.
 #[derive(Debug)]
-pub(super) struct CorrectionV2<D: Data> {
+pub struct CorrectionV2<D: Data> {
     /// Chains containing sorted updates.
     chains: Vec<Chain<D>>,
     /// A staging area for updates, to speed up small inserts.

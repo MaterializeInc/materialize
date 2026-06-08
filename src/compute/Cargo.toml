@@ -62,6 +62,12 @@ rand.workspace = true
 
 [features]
 default = []
+# Exposes internal sink types (e.g. `CorrectionV2`) for benchmarks and examples.
+bench = []
+
+[[example]]
+name = "correction_v2_pager"
+required-features = ["bench"]
 
 [[bench]]
 name = "columnar_merger_row"
