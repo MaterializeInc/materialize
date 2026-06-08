@@ -6847,3 +6847,589 @@ fn test_inject_audit_events_malformed() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+// =====================================================================
+// QA adversarial tests for frontend OCC read-then-write.
+// Added while trying to break the feature on branch
+// `adapter-read-then-write-occ-incremental`.
+// =====================================================================
+
+/// Helper: start a server with frontend OCC read-then-write enabled.
+fn qa_occ_server() -> test_util::TestServerWithRuntime {
+    test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking()
+}
+
+/// Concurrent DELETEs of the same multiset rows must not over-delete.
+/// With a row of multiplicity M and N concurrent deleters, exactly the
+/// committed deletes should sum to M, the table must end empty, and the
+/// stored multiplicity must never go negative.
+#[mz_ore::test]
+fn qa_occ_concurrent_delete_no_overdelete() {
+    const MULTIPLICITY: i32 = 7;
+    const NUM_WORKERS: usize = 6;
+
+    let server = qa_occ_server();
+    let mut setup = server.connect(postgres::NoTls).unwrap();
+    setup.batch_execute("CREATE TABLE t (id INT)").unwrap();
+
+    for _round in 0..10 {
+        setup.batch_execute("DELETE FROM t").unwrap();
+        setup
+            .execute(
+                "INSERT INTO t SELECT 1 FROM generate_series(1, $1)",
+                &[&MULTIPLICITY],
+            )
+            .unwrap();
+
+        let total_deleted = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..NUM_WORKERS {
+            let mut client = server.connect(postgres::NoTls).unwrap();
+            let total_deleted = Arc::clone(&total_deleted);
+            handles.push(thread::spawn(move || {
+                let n = client
+                    .execute("DELETE FROM t WHERE id = 1", &[])
+                    .expect("DELETE under contention should succeed via OCC");
+                total_deleted.fetch_add(usize::try_from(n).unwrap(), Ordering::SeqCst);
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker panicked");
+        }
+
+        let remaining: i64 = setup
+            .query_one("SELECT count(*) FROM t", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            remaining, 0,
+            "table should be empty after concurrent deletes"
+        );
+        assert_eq!(
+            total_deleted.load(Ordering::SeqCst),
+            usize::try_from(MULTIPLICITY).unwrap(),
+            "sum of reported deletes must equal initial multiplicity (no over/under-delete)",
+        );
+    }
+}
+
+/// Multiset multiplicity must be reflected in affected-row counts for
+/// DELETE / UPDATE / INSERT...SELECT.
+#[mz_ore::test]
+fn qa_occ_duplicate_row_multiplicity_counts() {
+    let server = qa_occ_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a INT, b INT)")
+        .unwrap();
+
+    // 3 identical rows.
+    client
+        .execute("INSERT INTO t SELECT 1, 10 FROM generate_series(1, 3)", &[])
+        .unwrap();
+
+    // UPDATE all 3 -> Updated(3).
+    let n = client
+        .execute("UPDATE t SET b = 20 WHERE a = 1", &[])
+        .unwrap();
+    assert_eq!(
+        n, 3,
+        "UPDATE should report 3 affected rows for multiplicity 3"
+    );
+
+    // INSERT INTO t SELECT * FROM t -> doubles, returns 3.
+    let n = client
+        .execute("INSERT INTO t SELECT a, b FROM t", &[])
+        .unwrap();
+    assert_eq!(n, 3, "INSERT...SELECT should report 3 inserted rows");
+    let cnt: i64 = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(cnt, 6);
+
+    // DELETE all 6 -> Deleted(6).
+    let n = client.execute("DELETE FROM t WHERE a = 1", &[]).unwrap();
+    assert_eq!(n, 6, "DELETE should report 6 affected rows");
+    let cnt: i64 = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(cnt, 0);
+}
+
+/// NOT NULL constraint violations via UPDATE and INSERT...SELECT must error
+/// and leave the table unchanged (no partial commit).
+#[mz_ore::test]
+fn qa_occ_not_null_constraint_enforced() {
+    let server = qa_occ_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a INT NOT NULL, b INT)")
+        .unwrap();
+    client.execute("INSERT INTO t VALUES (1, 10)", &[]).unwrap();
+
+    // UPDATE setting NOT NULL column to NULL must fail.
+    let err = client
+        .execute("UPDATE t SET a = NULL WHERE b = 10", &[])
+        .unwrap_err();
+    let msg = err
+        .as_db_error()
+        .expect("expected db error")
+        .message()
+        .to_lowercase();
+    assert!(
+        msg.contains("null"),
+        "expected null-constraint error, got: {msg}"
+    );
+
+    // INSERT...SELECT producing a NULL into a NOT NULL column must fail.
+    let err = client
+        .execute("INSERT INTO t SELECT NULL::INT, 99", &[])
+        .unwrap_err();
+    let msg = err
+        .as_db_error()
+        .expect("expected db error")
+        .message()
+        .to_lowercase();
+    assert!(
+        msg.contains("null"),
+        "expected null-constraint error, got: {msg}"
+    );
+
+    // Table must be unchanged: still exactly (1, 10).
+    let rows = client.query("SELECT a, b FROM t", &[]).unwrap();
+    assert_eq!(rows.len(), 1, "no rows should have been added/removed");
+    let a: i32 = rows[0].get(0);
+    let b: i32 = rows[0].get(1);
+    assert_eq!(
+        (a, b),
+        (1, 10),
+        "row must be unchanged after failed mutations"
+    );
+}
+
+/// RETURNING must produce new values for UPDATE, old values for DELETE,
+/// and inserted values for INSERT.
+#[mz_ore::test]
+fn qa_occ_returning_values_correct() {
+    let server = qa_occ_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (id INT, v INT)")
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1, 100), (2, 200)")
+        .unwrap();
+
+    // Materialize only supports RETURNING on INSERT (the parser rejects it for
+    // UPDATE/DELETE), so we exercise INSERT...RETURNING in both the constant
+    // and the read-dependent (INSERT...SELECT) shapes.
+
+    // Constant INSERT RETURNING with an expression over the inserted row.
+    let rows = client
+        .query("INSERT INTO t VALUES (3, 300) RETURNING id, v, v * 2", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 3);
+    assert_eq!(rows[0].get::<_, i32>(1), 300);
+    assert_eq!(
+        rows[0].get::<_, i32>(2),
+        600,
+        "RETURNING expression mis-evaluated"
+    );
+
+    // INSERT...SELECT RETURNING reading existing rows (goes through OCC).
+    let mut rows: Vec<(i32, i32)> = client
+        .query(
+            "INSERT INTO t SELECT id + 100, v + 1 FROM t WHERE id <= 2 RETURNING id, v",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![(101, 101), (102, 201)],
+        "INSERT...SELECT RETURNING returned wrong inserted rows"
+    );
+
+    // Final state: original (1,100),(2,200),(3,300) plus (101,101),(102,201).
+    let mut got: Vec<(i32, i32)> = client
+        .query("SELECT id, v FROM t", &[])
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![(1, 100), (2, 200), (3, 300), (101, 101), (102, 201)]
+    );
+}
+
+/// UPDATEs that move rows into a range that overlaps existing rows must
+/// produce the correct final set (exercises the Let/Negate/map MIR
+/// transform with consolidation overlap).
+#[mz_ore::test]
+fn qa_occ_update_moves_overlapping_rows() {
+    let server = qa_occ_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (id INT)").unwrap();
+    client
+        .execute("INSERT INTO t SELECT generate_series(1, 5)", &[])
+        .unwrap();
+
+    // Overlapping shift: {1,2,3,4,5} -> {2,3,4,5,6}.
+    client.execute("UPDATE t SET id = id + 1", &[]).unwrap();
+    let mut got: Vec<i32> = client
+        .query("SELECT id FROM t ORDER BY id", &[])
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![2, 3, 4, 5, 6],
+        "overlapping +1 shift produced wrong set"
+    );
+
+    // Non-overlapping shift: {2..6} -> {12..16}.
+    client.execute("UPDATE t SET id = id + 10", &[]).unwrap();
+    let mut got: Vec<i32> = client
+        .query("SELECT id FROM t ORDER BY id", &[])
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    got.sort();
+    assert_eq!(got, vec![12, 13, 14, 15, 16]);
+}
+
+/// INSERT INTO t SELECT FROM a materialized view must read the MV's content
+/// correctly. Exercises the TimestampDependent timeline + linearization
+/// defaulting to EpochMilliseconds.
+#[mz_ore::test]
+fn qa_occ_insert_select_from_mv() {
+    let server = qa_occ_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a * 10 AS a FROM src")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+
+    let n = client
+        .execute("INSERT INTO dst SELECT a FROM mv", &[])
+        .unwrap();
+    assert_eq!(n, 3);
+    let mut got: Vec<i32> = client
+        .query("SELECT a FROM dst ORDER BY a", &[])
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    got.sort();
+    assert_eq!(got, vec![10, 20, 30]);
+}
+
+/// Concurrent mixed DML (UPDATE / DELETE / INSERT...SELECT) on one table must
+/// not panic the coordinator or produce internal errors, and the server must
+/// remain responsive afterward.
+#[mz_ore::test]
+fn qa_occ_concurrent_mixed_dml_no_internal_error() {
+    const NUM_WORKERS: usize = 8;
+    const ITERS: usize = 30;
+
+    let server = qa_occ_server();
+    let mut setup = server.connect(postgres::NoTls).unwrap();
+    setup
+        .batch_execute("CREATE TABLE t (id INT, v INT)")
+        .unwrap();
+    setup
+        .execute("INSERT INTO t SELECT generate_series(1, 20), 0", &[])
+        .unwrap();
+
+    let internal_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut handles = Vec::new();
+    for w in 0..NUM_WORKERS {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let internal_errors = Arc::clone(&internal_errors);
+        handles.push(thread::spawn(move || {
+            for i in 0..ITERS {
+                let id = (w * 7 + i) % 20 + 1;
+                let stmt = match i % 4 {
+                    0 => format!("UPDATE t SET v = v + 1 WHERE id = {id}"),
+                    1 => format!("DELETE FROM t WHERE id = {id} AND v < 0"),
+                    2 => format!("INSERT INTO t SELECT {id}, 0 WHERE NOT EXISTS (SELECT 1 FROM t WHERE id = {id})"),
+                    _ => format!("UPDATE t SET v = v WHERE id = {id}"),
+                };
+                if let Err(e) = client.execute(stmt.as_str(), &[]) {
+                    let msg = e.to_string();
+                    // Contention exhaustion is acceptable; internal errors are not.
+                    if msg.contains("internal error")
+                        || msg.contains("reached the coordinator")
+                        || msg.contains("unexpectedly got")
+                    {
+                        internal_errors.lock().unwrap().push(msg);
+                    }
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().expect("worker panicked");
+    }
+
+    let errs = internal_errors.lock().unwrap();
+    assert!(errs.is_empty(), "internal errors observed: {:?}", *errs);
+
+    // Server still responsive.
+    let cnt: i64 = setup
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get(0);
+    assert!(cnt >= 0);
+}
+
+/// BUG REPRO (ignored): A read-then-write whose read resolves to a far-future
+/// timestamp (here, a `REFRESH AT <far future>` materialized view) hangs in
+/// `ensure_read_linearized`'s sleep loop and ignores `statement_timeout`. The
+/// code comment in `frontend_read_then_write` claims such an op "hits
+/// statement_timeout and returns"; it does not. Only client cancellation /
+/// disconnect can free it.
+///
+/// NOTE: the indefinite far-future hang is *not* OCC-specific (the legacy path
+/// hangs too — see `qa_legacy_far_future_refresh_mv_statement_timeout`); what
+/// is OCC-specific is the false safety claim in the comment, plus the
+/// permit-pool amplification demonstrated by
+/// `qa_occ_far_future_rtw_starves_permit_pool`.
+///
+/// Ignored because it reproduces an open bug (it would fail/hang in CI). Run
+/// with `--ignored` to reproduce.
+#[mz_ore::test]
+#[ignore = "reproduces bug: ensure_read_linearized ignores statement_timeout for far-future as_of"]
+fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    // Refresh only at a far-future instant: the MV holds no readable content
+    // until then, so a freshest-table-write read must pick a far-future as_of.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT '3000-01-01 00:00:00') AS SELECT a FROM src",
+        )
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+
+    let mut worker = server.connect(postgres::NoTls).unwrap();
+    // Grab a cancel token so we can free the parked statement for a clean
+    // teardown if it hangs.
+    let cancel = worker.cancel_token();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        worker
+            .batch_execute("SET statement_timeout = '3s'")
+            .unwrap();
+        let started = Instant::now();
+        let res = worker.batch_execute("INSERT INTO dst SELECT a FROM mv");
+        let _ = tx.send((started.elapsed(), res.map_err(|e| e.to_string())));
+    });
+
+    let outcome = rx.recv_timeout(Duration::from_secs(45));
+    if outcome.is_err() {
+        // Free the parked statement so the server can shut down cleanly.
+        let _ = cancel.cancel_query(postgres::NoTls);
+    }
+    let _ = handle.join();
+
+    match outcome {
+        Ok((elapsed, res)) => {
+            if let Err(msg) = res {
+                assert!(
+                    msg.to_lowercase().contains("timeout") || msg.to_lowercase().contains("cancel"),
+                    "far-future RTW failed with non-timeout error: {msg}"
+                );
+                assert!(
+                    elapsed < Duration::from_secs(30),
+                    "statement_timeout was 3s but the op took {elapsed:?} to return",
+                );
+            }
+        }
+        Err(recv_err) => {
+            panic!(
+                "BUG: INSERT...SELECT from a far-future REFRESH AT MV did not return \
+                 within 45s despite statement_timeout = '3s'; ensure_read_linearized \
+                 ignores the statement timeout (hangs in its sleep loop) ({recv_err})."
+            );
+        }
+    }
+}
+
+/// CONTEXT (ignored): the same far-future scenario on the LEGACY (non-OCC)
+/// path also hangs past `statement_timeout`. This documents that the
+/// indefinite hang is pre-existing behavior, not a regression introduced by
+/// the OCC path. Ignored for the same reason as the OCC repro above.
+#[mz_ore::test]
+#[ignore = "documents pre-existing far-future hang on the legacy path"]
+fn qa_legacy_far_future_refresh_mv_statement_timeout() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT '3000-01-01 00:00:00') AS SELECT a FROM src",
+        )
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+
+    let mut worker = server.connect(postgres::NoTls).unwrap();
+    let cancel = worker.cancel_token();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        worker
+            .batch_execute("SET statement_timeout = '3s'")
+            .unwrap();
+        let started = Instant::now();
+        let res = worker.batch_execute("INSERT INTO dst SELECT a FROM mv");
+        let _ = tx.send((started.elapsed(), res.map_err(|e| e.to_string())));
+    });
+
+    let outcome = rx.recv_timeout(Duration::from_secs(45));
+    // Cancel the parked statement (if any) for a clean teardown, then join.
+    let _ = cancel.cancel_query(postgres::NoTls);
+    let _ = handle.join();
+
+    match outcome {
+        Ok((elapsed, res)) => {
+            eprintln!("LEGACY far-future RTW returned in {elapsed:?} with result {res:?}");
+            assert!(
+                elapsed < Duration::from_secs(40),
+                "legacy far-future RTW also appears to hang ({elapsed:?})"
+            );
+        }
+        Err(recv_err) => {
+            panic!(
+                "LEGACY INSERT...SELECT from a far-future REFRESH AT MV also did not \
+                 return within 45s; the far-future hang is pre-existing, not an OCC \
+                 regression ({recv_err})."
+            );
+        }
+    }
+}
+
+/// BUG REPRO (ignored): the op hung in `ensure_read_linearized` holds an OCC
+/// semaphore permit for its entire (indefinite) lifetime. With a bounded
+/// permit pool, a single such op starves *all* other read-then-writes — even
+/// on unrelated tables — and those victims also ignore `statement_timeout`
+/// because they block on permit acquisition before reaching the OCC loop where
+/// the timeout is enforced. This is the OCC-specific amplification of the
+/// far-future hang: the legacy path only blocks writes to the *target* table
+/// (via its per-table write lock), whereas OCC wedges the whole RTW pipeline.
+///
+/// Ignored because it reproduces an open bug. Run with `--ignored`.
+#[mz_ore::test]
+#[ignore = "reproduces bug: a hung far-future RTW starves the global OCC permit pool"]
+fn qa_occ_far_future_rtw_starves_permit_pool() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        // One permit: a single hung op exhausts the pool.
+        .with_system_parameter_default("max_concurrent_occ_writes".to_string(), "1".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client.batch_execute("INSERT INTO src VALUES (1)").unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT '3000-01-01 00:00:00') AS SELECT a FROM src",
+        )
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+    client
+        .batch_execute("CREATE TABLE other (id INT, v INT)")
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO other VALUES (1, 0)")
+        .unwrap();
+
+    // Launch the hung far-future RTW; it will grab the single OCC permit and
+    // park in ensure_read_linearized.
+    let mut hung = server.connect(postgres::NoTls).unwrap();
+    let hung_cancel = hung.cancel_token();
+    let hung_handle = thread::spawn(move || {
+        let _ = hung.batch_execute("INSERT INTO dst SELECT a FROM mv");
+    });
+    // Give it time to acquire the permit and reach the linearize loop.
+    thread::sleep(Duration::from_secs(3));
+
+    // A completely unrelated UPDATE, with a short statement_timeout, should be
+    // able to make progress. Run it on a worker thread with a wall-clock guard.
+    let mut victim = server.connect(postgres::NoTls).unwrap();
+    let victim_cancel = victim.cancel_token();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let victim_handle = thread::spawn(move || {
+        victim
+            .batch_execute("SET statement_timeout = '3s'")
+            .unwrap();
+        let res = victim.execute("UPDATE other SET v = v + 1 WHERE id = 1", &[]);
+        let _ = tx.send(res.map_err(|e| e.to_string()));
+    });
+
+    let outcome = rx.recv_timeout(Duration::from_secs(25));
+    // Free both parked statements for a clean teardown.
+    let _ = victim_cancel.cancel_query(postgres::NoTls);
+    let _ = hung_cancel.cancel_query(postgres::NoTls);
+    let _ = victim_handle.join();
+    let _ = hung_handle.join();
+
+    match outcome {
+        Ok(res) => {
+            eprintln!("victim UPDATE completed: {res:?}");
+        }
+        Err(recv_err) => {
+            panic!(
+                "BUG: an unrelated UPDATE on a different table did not return within 25s \
+                 (statement_timeout = '3s'). A single far-future read-then-write holds the \
+                 sole OCC permit while parked in ensure_read_linearized, starving all other \
+                 read-then-writes; permit acquisition happens before the OCC loop where \
+                 statement_timeout is enforced, so the victim cannot time out either ({recv_err})."
+            );
+        }
+    }
+}
