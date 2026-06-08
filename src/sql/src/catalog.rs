@@ -954,6 +954,10 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+    /// A user-defined HTTP API.
+    Api,
+    /// A Prometheus metric attached to an API.
+    Metric,
 }
 
 impl CatalogItemType {
@@ -987,6 +991,8 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
+            CatalogItemType::Api => false,
+            CatalogItemType::Metric => false,
         }
     }
 }
@@ -1004,6 +1010,8 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+            CatalogItemType::Api => f.write_str("api"),
+            CatalogItemType::Metric => f.write_str("metric"),
         }
     }
 }
@@ -1021,6 +1029,8 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+            CatalogItemType::Api => ObjectType::Api,
+            CatalogItemType::Metric => ObjectType::Metric,
         }
     }
 }
@@ -1038,6 +1048,8 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
+            CatalogItemType::Api => mz_audit_log::ObjectType::Api,
+            CatalogItemType::Metric => mz_audit_log::ObjectType::Metric,
         }
     }
 }
@@ -1565,6 +1577,8 @@ pub enum ObjectType {
     Schema,
     Func,
     NetworkPolicy,
+    Api,
+    Metric,
 }
 
 impl ObjectType {
@@ -1586,7 +1600,9 @@ impl ObjectType {
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::NetworkPolicy => false,
+            | ObjectType::NetworkPolicy
+            | ObjectType::Api
+            | ObjectType::Metric => false,
         }
     }
 }
@@ -1611,6 +1627,8 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql_parser::ast::ObjectType::Api => ObjectType::Api,
+            mz_sql_parser::ast::ObjectType::Metric => ObjectType::Metric,
         }
     }
 }
@@ -1628,6 +1646,8 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Connection(_) => ObjectType::Connection,
             CommentObjectId::Type(_) => ObjectType::Type,
             CommentObjectId::Secret(_) => ObjectType::Secret,
+            CommentObjectId::Api(_) => ObjectType::Api,
+            CommentObjectId::Metric(_) => ObjectType::Metric,
             CommentObjectId::Role(_) => ObjectType::Role,
             CommentObjectId::Database(_) => ObjectType::Database,
             CommentObjectId::Schema(_) => ObjectType::Schema,
@@ -1657,6 +1677,8 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::Api => "API",
+            ObjectType::Metric => "METRIC",
         })
     }
 }

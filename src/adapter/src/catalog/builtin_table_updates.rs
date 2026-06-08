@@ -607,6 +607,8 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }
+            // TODO: emit mz_apis / mz_metrics rows once those builtin tables exist.
+            CatalogItem::Api(_) | CatalogItem::Metric(_) => vec![],
         };
 
         if !entry.item().is_temporary() {
@@ -1870,7 +1872,9 @@ impl CatalogState {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Secret(global_id)
-            | CommentObjectId::Type(global_id) => global_id.to_string(),
+            | CommentObjectId::Type(global_id)
+            | CommentObjectId::Api(global_id)
+            | CommentObjectId::Metric(global_id) => global_id.to_string(),
             CommentObjectId::Role(role_id) => role_id.to_string(),
             CommentObjectId::Database(database_id) => database_id.to_string(),
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),

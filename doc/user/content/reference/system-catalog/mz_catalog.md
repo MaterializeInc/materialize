@@ -703,4 +703,6 @@ Field          | Type                 | Meaning
 [`uint8 list`]: /sql/types/list
 [`uint4`]: /sql/types/uint4
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_apis -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_metrics -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

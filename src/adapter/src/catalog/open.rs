@@ -918,7 +918,9 @@ fn add_new_remove_old_builtin_items_migration(
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => continue,
+            | CatalogItemType::Connection
+            | CatalogItemType::Api
+            | CatalogItemType::Metric => continue,
         };
         deleted_comments.insert(comment_id);
     }

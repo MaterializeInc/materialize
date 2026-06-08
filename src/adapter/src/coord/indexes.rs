@@ -73,7 +73,9 @@ impl DataflowBuilder<'_> {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::Api(_)
+                    | CatalogItem::Metric(_) => {
                         // Non-indexable thing; no work to do.
                     }
                 }

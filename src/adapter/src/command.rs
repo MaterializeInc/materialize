@@ -583,6 +583,10 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The requested network policy was created.
     CreatedNetworkPolicy,
+    /// The requested API was created.
+    CreatedApi,
+    /// The requested metric was created.
+    CreatedMetric,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -749,6 +753,8 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedApi => Ok(ExecuteResponse::CreatedApi),
+            ExecuteResponseKind::CreatedMetric => Ok(ExecuteResponse::CreatedMetric),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -812,6 +818,8 @@ impl ExecuteResponse {
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
+            CreatedApi => Some("CREATE API".into()),
+            CreatedMetric => Some("CREATE METRIC".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -905,6 +913,8 @@ impl ExecuteResponse {
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
             CreateNetworkPolicy => &[CreatedNetworkPolicy],
+            CreateApi => &[CreatedApi],
+            CreateMetric => &[CreatedMetric],
             Declare => &[DeclaredCursor],
             DiscardTemp => &[DiscardedTemp],
             DiscardAll => &[DiscardedAll],

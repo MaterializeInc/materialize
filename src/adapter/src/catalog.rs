@@ -1454,6 +1454,8 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Connection(_) => ObjectType::Connection,
         CommentObjectId::Type(_) => ObjectType::Type,
         CommentObjectId::Secret(_) => ObjectType::Secret,
+        CommentObjectId::Api(_) => ObjectType::Api,
+        CommentObjectId::Metric(_) => ObjectType::Metric,
         CommentObjectId::Role(_) => ObjectType::Role,
         CommentObjectId::Database(_) => ObjectType::Database,
         CommentObjectId::Schema(_) => ObjectType::Schema,
@@ -1490,6 +1492,8 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql::catalog::ObjectType::Api => ObjectType::Api,
+            mz_sql::catalog::ObjectType::Metric => ObjectType::Metric,
         },
         SystemObjectType::System => ObjectType::System,
     }

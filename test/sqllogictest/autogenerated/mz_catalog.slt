@@ -447,6 +447,7 @@ redacted_create_sql  text  The␠redacted␠`CREATE`␠SQL␠statement␠for␠t
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_catalog') ORDER BY object
 ----
+mz_apis
 mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
@@ -470,6 +471,7 @@ mz_kafka_sources
 mz_list_types
 mz_map_types
 mz_materialized_views
+mz_metrics
 mz_objects
 mz_operators
 mz_pseudo_types

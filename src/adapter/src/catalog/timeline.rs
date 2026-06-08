@@ -97,7 +97,9 @@ impl Catalog {
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::Log(_) => {}
+                        | CatalogItem::Log(_)
+                        | CatalogItem::Api(_)
+                        | CatalogItem::Metric(_) => {}
                     }
                 }
             }
@@ -233,7 +235,9 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::Api(_)
+                    | CatalogItem::Metric(_) => {}
                 }
             }
         }
