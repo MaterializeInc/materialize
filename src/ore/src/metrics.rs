@@ -159,10 +159,10 @@ impl<M: Collector> Collector for DeleteOnDropWrapper<M> {
 }
 
 impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
-    fn make_collector(opts: MakeCollectorOpts) -> Self {
-        DeleteOnDropWrapper {
-            inner: M::make_collector(opts),
-        }
+    fn try_make_collector(opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
+        Ok(DeleteOnDropWrapper {
+            inner: M::try_make_collector(opts)?,
+        })
     }
 }
 
@@ -242,14 +242,30 @@ impl MetricsRegistry {
     }
 
     /// Register a metric defined with the [`metric`] macro.
+    ///
+    /// Panics if `opts` describes an invalid metric or it cannot be registered.
+    /// Suitable only for metrics built from static, trusted `opts`; for metrics
+    /// derived from user input use [`MetricsRegistry::try_register`].
     pub fn register<M>(&self, opts: MakeCollectorOpts) -> M
     where
         M: MakeCollector,
     {
+        self.try_register(opts).expect("registering metric")
+    }
+
+    /// Like [`MetricsRegistry::register`], but returns an error instead of
+    /// panicking if `opts` describes an invalid metric (e.g. an invalid metric
+    /// or label name, or empty HELP text) or it cannot be registered (e.g. a
+    /// duplicate registration with inconsistent labels). Use this whenever the
+    /// metric's shape is derived from user input.
+    pub fn try_register<M>(&self, opts: MakeCollectorOpts) -> Result<M, prometheus::Error>
+    where
+        M: MakeCollector,
+    {
         self.record_per_metric_rules(&opts);
-        let collector = M::make_collector(opts);
-        self.inner.register(Box::new(collector.clone())).unwrap();
-        collector
+        let collector = M::try_make_collector(opts)?;
+        self.inner.register(Box::new(collector.clone()))?;
+        Ok(collector)
     }
 
     /// Registers a gauge whose value is computed when observed.
@@ -311,17 +327,28 @@ impl MetricsRegistry {
 /// Together with the [`metric`] macro, this trait is mainly used by [`MetricsRegistry`] and should
 /// not normally be used outside the metric registration flow.
 pub trait MakeCollector: Collector + Clone + 'static {
-    /// Creates a new collector.
-    fn make_collector(opts: MakeCollectorOpts) -> Self;
+    /// Fallibly creates a new collector. Returns an error if `opts` describes
+    /// an invalid collector, e.g. an invalid metric or label name, or empty
+    /// HELP text. Prefer this over [`MakeCollector::make_collector`] whenever
+    /// `opts` is derived from user input.
+    fn try_make_collector(opts: MakeCollectorOpts) -> Result<Self, prometheus::Error>;
+
+    /// Creates a new collector, panicking if `opts` describes an invalid
+    /// collector. Suitable only for metrics defined from static, trusted
+    /// `opts` (e.g. via the [`metric`] macro); use
+    /// [`MakeCollector::try_make_collector`] for user-derived metrics.
+    fn make_collector(opts: MakeCollectorOpts) -> Self {
+        Self::try_make_collector(opts).expect("defining a collector")
+    }
 }
 
 impl<T> MakeCollector for GenericCounter<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert_none!(mk_opts.buckets);
-        Self::with_opts(mk_opts.opts).expect("defining a counter")
+        Self::with_opts(mk_opts.opts)
     }
 }
 
@@ -329,11 +356,11 @@ impl<T> MakeCollector for GenericCounterVec<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert_none!(mk_opts.buckets);
         let labels: Vec<String> = mk_opts.opts.variable_labels.clone();
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        Self::new(mk_opts.opts, label_refs.as_slice()).expect("defining a counter vec")
+        Self::new(mk_opts.opts, label_refs.as_slice())
     }
 }
 
@@ -341,9 +368,9 @@ impl<T> MakeCollector for GenericGauge<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert_none!(mk_opts.buckets);
-        Self::with_opts(mk_opts.opts).expect("defining a gauge")
+        Self::with_opts(mk_opts.opts)
     }
 }
 
@@ -351,27 +378,26 @@ impl<T> MakeCollector for GenericGaugeVec<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert_none!(mk_opts.buckets);
         let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
-        Self::new(mk_opts.opts, labels).expect("defining a gauge vec")
+        Self::new(mk_opts.opts, labels)
     }
 }
 
 impl MakeCollector for Histogram {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert!(mk_opts.buckets.is_some());
         Self::with_opts(HistogramOpts {
             common_opts: mk_opts.opts,
             buckets: mk_opts.buckets.unwrap(),
         })
-        .expect("defining a histogram")
     }
 }
 
 impl MakeCollector for raw::HistogramVec {
-    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+    fn try_make_collector(mk_opts: MakeCollectorOpts) -> Result<Self, prometheus::Error> {
         assert!(mk_opts.buckets.is_some());
         let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
@@ -382,7 +408,6 @@ impl MakeCollector for raw::HistogramVec {
             },
             labels,
         )
-        .expect("defining a histogram vec")
     }
 }
 

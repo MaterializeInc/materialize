@@ -474,6 +474,19 @@ pub fn create_statement(
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
+        Statement::CreateApi(stmt) => {
+            stmt.name = allocate_name(&stmt.name)?;
+            stmt.if_not_exists = false;
+        }
+
+        Statement::CreateMetric(stmt) => {
+            stmt.name = allocate_name(&stmt.name)?;
+            stmt.if_not_exists = false;
+            // `in_api` and the `VALUES FROM` option are already
+            // ResolvedItemName at this point; their AstDisplay impls render
+            // them in ID-form, so we don't need to do anything extra here.
+        }
+
         _ => bail_internal!("unexpected statement type for normalization"),
     }
 

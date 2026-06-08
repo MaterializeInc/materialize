@@ -1355,6 +1355,7 @@ fn create_connection_info(
                     mcp_agent: true,
                     mcp_developer: true,
                     console_config: true,
+                    endpoint_api: true,
                 }
             },
             "internal".to_owned() => HttpListenerConfig{
@@ -1377,6 +1378,7 @@ fn create_connection_info(
                     mcp_agent: true,
                     mcp_developer: true,
                     console_config: false,
+                    endpoint_api: true,
                 }
             },
         },
@@ -1421,6 +1423,7 @@ fn create_connection_info(
                     mcp_agent: false,
                     mcp_developer: false,
                     console_config: false,
+                    endpoint_api: false,
                 },
             },
         );

@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK or API or METRIC, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -554,13 +554,15 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                cluster             comment
 ------------------------------------------------
+mz_apis             mz_catalog_server   ""
 mz_connections      mz_catalog_server   ""
 mz_databases        mz_catalog_server   ""
+mz_materialized_views mz_catalog_server ""
+mz_metrics          mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
 mz_secrets          mz_catalog_server   ""
 mz_sources          mz_catalog_server   ""
-mz_materialized_views mz_catalog_server ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 

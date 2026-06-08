@@ -17,12 +17,14 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
+use axum_extra::TypedHeader;
 use futures::Future;
 use futures::future::BoxFuture;
 
+use headers::ContentType;
 use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
@@ -39,20 +41,23 @@ use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
+use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Ident, Raw, Statement, StatementKind};
+use mz_sql::catalog::CatalogItem as _;
+use mz_sql::catalog::SessionCatalog as _;
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
-use prometheus::Opts;
 use prometheus::core::{AtomicF64, GenericGaugeVec};
+use prometheus::{Encoder, Opts};
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_sessions::Session as TowerSession;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
@@ -261,6 +266,274 @@ pub async fn handle_promsql(
     }
 
     metrics_registry
+}
+
+/// One metric resolved from the catalog, with everything needed to scrape it.
+struct ResolvedMetric {
+    name: String,
+    help: String,
+    /// `"db"."schema"."item"` — pre-quoted via [`Ident`] so it is safe to
+    /// interpolate directly into SQL.
+    view_quoted_name: String,
+    value_column: String,
+}
+
+/// Quotes `parts` as a dotted identifier reference, e.g.
+/// `"my db"."my schema"."my view"`. Each segment is forced into stable
+/// (always-quoted) form so that names containing dots, quotes, or
+/// whitespace cannot break out of identifier context.
+fn quote_dotted(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|p| Ident::new_unchecked(*p).to_ast_string_stable())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+pub async fn handle_metrics_custom(
+    mut client: AuthedClient,
+    Path((database, schema, name)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    // Resolve the API and its metrics by walking the catalog snapshot. We
+    // intentionally don't go through SQL for discovery, because the API and
+    // its metrics live in the catalog, not in any user-visible relation.
+    let (cluster_name, resolved) = {
+        let catalog = client
+            .client
+            .catalog_snapshot("handle_metrics_custom")
+            .await;
+        let conn_id = client.client.session().conn_id().clone();
+
+        let api_entry = match catalog.entries().find(|e| {
+            e.item_type() == mz_sql::catalog::CatalogItemType::Api && e.name().item == name && {
+                let full = catalog.resolve_full_name(e.name(), Some(&conn_id));
+                full.database.to_string() == database && full.schema == schema
+            }
+        }) {
+            Some(entry) => entry,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("API {database}.{schema}.{name} not found"),
+                ));
+            }
+        };
+        let api = match api_entry.item() {
+            mz_catalog::memory::objects::CatalogItem::Api(api) => api,
+            _ => unreachable!("filtered by item_type above"),
+        };
+
+        // Enforce USAGE on the API itself. The SQL execution path below
+        // catches missing cluster USAGE and missing SELECT on each metric's
+        // VALUES FROM relation, but it never touches the API entry — so
+        // without this check, any role on a listener with `endpoint_api`
+        // enabled could scrape any API as long as the relations happened to
+        // be readable. We gate on `is_rbac_enforced_for_session` so this
+        // matches plan validation exactly. Returns 404 rather than 403 so
+        // callers cannot distinguish "API exists but you can't see it" from
+        // "no such API".
+        let session = client.client.session();
+        if mz_sql::rbac::is_rbac_enforced_for_session(catalog.system_config(), session) {
+            let role_meta = session.role_metadata();
+            let conn_catalog = catalog.for_session(session);
+            let membership = conn_catalog.collect_role_membership(&role_meta.current_role);
+            let role_acl = api_entry
+                .privileges()
+                .all_values()
+                .filter(|item| membership.contains(&item.grantee))
+                .fold(AclMode::empty(), |acc, item| acc.union(item.acl_mode));
+            if !role_acl.contains(AclMode::USAGE) {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("API {database}.{schema}.{name} not found"),
+                ));
+            }
+        }
+
+        let cluster_name = catalog.get_cluster(api.cluster_id).name.clone();
+        let api_id = api_entry.id();
+
+        let mut metrics = Vec::new();
+        for entry in catalog.entries() {
+            let metric = match entry.item() {
+                mz_catalog::memory::objects::CatalogItem::Metric(m) if m.api_id == api_id => m,
+                _ => continue,
+            };
+            let view_entry = catalog.get_entry(&metric.values_from);
+            let view_full = catalog.resolve_full_name(view_entry.name(), Some(&conn_id));
+            // Pre-quote the view's dotted name so it cannot break out of
+            // identifier context when interpolated into SELECT below.
+            let view_quoted_name = match &view_full.database {
+                mz_sql::names::RawDatabaseSpecifier::Name(db) => {
+                    quote_dotted(&[db, &view_full.schema, &view_full.item])
+                }
+                mz_sql::names::RawDatabaseSpecifier::Ambient => {
+                    quote_dotted(&[&view_full.schema, &view_full.item])
+                }
+            };
+            metrics.push(ResolvedMetric {
+                name: entry.name().item.clone(),
+                help: metric.help.clone(),
+                view_quoted_name,
+                value_column: metric.value_column.clone(),
+            });
+        }
+        (cluster_name, metrics)
+    };
+
+    let metrics_registry = MetricsRegistry::new();
+    let mut metrics_by_name = BTreeMap::new();
+
+    if !resolved.is_empty() {
+        // Run all metric peeks in a single read-only transaction so they
+        // share a timestamp; otherwise different metrics on the same API
+        // can disagree on input data.
+        //
+        // Cluster is set as a quoted identifier so a cluster name with
+        // funky characters can't escape into SQL.
+        let cluster_set = format!(
+            "SET cluster = {}",
+            Ident::new_unchecked(&cluster_name).to_ast_string_stable()
+        );
+        let selects: Vec<String> = resolved
+            .iter()
+            .map(|m| format!("SELECT * FROM {}", m.view_quoted_name))
+            .collect();
+        let query = format!(
+            "{cluster_set}; BEGIN READ ONLY; {}; COMMIT",
+            selects.join("; ")
+        );
+        let mut res = SqlResponse {
+            results: Vec::new(),
+        };
+        if let Err(e) = execute_request(&mut client, SqlRequest::Simple { query }, &mut res).await {
+            return Err((StatusCode::BAD_REQUEST, e.to_string()));
+        }
+
+        // Result layout when all queries succeed:
+        //   [Ok(SET), Ok(BEGIN), Rows..N, Ok(COMMIT)].
+        // On the first error we surface it (42501 -> 403, anything else -> 500).
+        let n = resolved.len();
+        let results = &res.results;
+        if results.len() != n + 3 {
+            // Fewer results than expected -> some statement errored. Walk
+            // for the first Err and bubble it up.
+            for r in results {
+                if let SqlResult::Err { error, .. } = r {
+                    let status = if error.code == "42501" {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    };
+                    return Err((status, error.message.clone()));
+                }
+            }
+            warn!("unexpected metrics scrape response: {:?}", res);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "".to_string()));
+        }
+
+        // Skip the SET and BEGIN responses; the next N results are the SELECTs.
+        for (metric, result) in resolved.iter().zip_eq(&results[2..2 + n]) {
+            let (rows, desc) = match result {
+                SqlResult::Rows { rows, desc, .. } => (rows, desc),
+                // PG SQLSTATE 42501 = insufficient_privilege; surface as 403.
+                SqlResult::Err { error, .. } if error.code == "42501" => {
+                    return Err((StatusCode::FORBIDDEN, error.message.clone()));
+                }
+                SqlResult::Err { error, .. } => {
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, error.message.clone()));
+                }
+                SqlResult::Ok { .. } => {
+                    warn!("unexpected ok in place of rows for metric {}", metric.name);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, "".to_string()));
+                }
+            };
+
+            // TODO: support metric types beyond gauge (counter, histogram).
+            let gauge_vec = if let Some(gauge_vec) = metrics_by_name.get(&metric.name) {
+                gauge_vec
+            } else {
+                let label_names: Vec<String> = desc
+                    .columns
+                    .iter()
+                    .filter(|col| col.name != metric.value_column)
+                    .map(|col| col.name.clone())
+                    .collect();
+                // Defense in depth: `plan_create_metric` rejects metric names,
+                // label names, and HELP text that Prometheus would refuse. But
+                // a metric's relation can change shape after the metric is
+                // created (e.g. `ALTER TABLE ... ADD COLUMN "2xx"`), turning a
+                // column into an invalid label name. Plain `register` *panics*
+                // on rejection, so use the fallible `try_register` and skip the
+                // offending metric rather than aborting the whole scrape.
+                let registered = metrics_registry.try_register::<GenericGaugeVec<AtomicF64>>(
+                    MakeCollectorOpts {
+                        opts: Opts::new(metric.name.clone(), metric.help.clone())
+                            .variable_labels(label_names),
+                        buckets: None,
+                        rules: Vec::new(),
+                    },
+                );
+                match registered {
+                    Ok(gauge_vec) => metrics_by_name
+                        .entry(metric.name.clone())
+                        .or_insert(gauge_vec),
+                    Err(err) => {
+                        warn!(
+                            "skipping metric {}: would produce an invalid Prometheus metric: {}",
+                            metric.name, err
+                        );
+                        continue;
+                    }
+                }
+            };
+
+            for row in rows {
+                let label_values: Vec<&str> = desc
+                    .columns
+                    .iter()
+                    .zip_eq(row)
+                    .filter(|(col, _)| col.name != metric.value_column)
+                    .map(|(_, val)| val.as_str().unwrap_or(""))
+                    .collect();
+
+                // The value column is validated numeric at CREATE METRIC time,
+                // so it serializes as a numeric string (or JSON null for a
+                // NULL row). Skip rows whose value is NULL or — defensively —
+                // doesn't parse, rather than reporting a misleading 0 sample.
+                let raw_value = desc
+                    .columns
+                    .iter()
+                    .zip_eq(row)
+                    .find(|(col, _)| col.name == metric.value_column)
+                    .and_then(|(_, val)| val.as_str());
+                let value = match raw_value {
+                    None => continue,
+                    Some(s) => match s.parse::<f64>() {
+                        Ok(value) => value,
+                        Err(_) => {
+                            warn!(
+                                "metric {} value {:?} is not parseable as f64; skipping row",
+                                metric.name, s
+                            );
+                            continue;
+                        }
+                    },
+                };
+
+                if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&label_values) {
+                    gauge.set(value);
+                }
+            }
+        }
+    }
+
+    let mut buffer = Vec::new();
+    let encoder = prometheus::TextEncoder::new();
+    encoder
+        .encode(&metrics_registry.gather(), &mut buffer)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
 }
 
 pub async fn handle_sql(
@@ -1505,6 +1778,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
+        | ExecuteResponse::CreatedApi
+        | ExecuteResponse::CreatedMetric
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp

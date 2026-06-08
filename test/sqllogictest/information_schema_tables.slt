@@ -93,6 +93,10 @@ views
 VIEW
 materialize
 mz_catalog
+mz_apis
+MATERIALIZED VIEW
+materialize
+mz_catalog
 mz_array_types
 BASE TABLE
 materialize
@@ -182,6 +186,10 @@ BASE TABLE
 materialize
 mz_catalog
 mz_materialized_views
+MATERIALIZED VIEW
+materialize
+mz_catalog
+mz_metrics
 MATERIALIZED VIEW
 materialize
 mz_catalog

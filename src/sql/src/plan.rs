@@ -145,6 +145,8 @@ pub enum Plan {
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
+    CreateApi(CreateApiPlan),
+    CreateMetric(CreateMetricPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
@@ -274,6 +276,8 @@ impl Plan {
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
+            StatementKind::CreateApi => &[PlanKind::CreateApi],
+            StatementKind::CreateMetric => &[PlanKind::CreateMetric],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
@@ -350,6 +354,8 @@ impl Plan {
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
+            Plan::CreateApi(_) => "create api",
+            Plan::CreateMetric(_) => "create metric",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -370,6 +376,8 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
                 ObjectType::NetworkPolicy => "drop network policy",
+                ObjectType::Api => "drop api",
+                ObjectType::Metric => "drop metric",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -410,6 +418,8 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
                 ObjectType::NetworkPolicy => "alter network policy",
+                ObjectType::Api => "alter api",
+                ObjectType::Metric => "alter metric",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -445,6 +455,8 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
+                ObjectType::Api => "alter api owner",
+                ObjectType::Metric => "alter metric owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::AlterMaterializedViewApplyReplacement(_) => {
@@ -714,6 +726,20 @@ pub struct ValidateConnectionPlan {
 pub struct CreateSecretPlan {
     pub name: QualifiedItemName,
     pub secret: Secret,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateApiPlan {
+    pub name: QualifiedItemName,
+    pub api: Api,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateMetricPlan {
+    pub name: QualifiedItemName,
+    pub metric: Metric,
     pub if_not_exists: bool,
 }
 
@@ -1837,6 +1863,32 @@ impl SshKey {
 pub struct Secret {
     pub create_sql: String,
     pub secret_as: MirScalarExpr,
+}
+
+/// A user-defined HTTP API.
+#[derive(Clone, Debug)]
+pub struct Api {
+    /// Parse-able SQL that defines this API.
+    pub create_sql: String,
+    /// Cluster on which the metric queries run.
+    pub cluster_id: ClusterId,
+}
+
+/// A Prometheus metric attached to an [`Api`].
+#[derive(Clone, Debug)]
+pub struct Metric {
+    /// Parse-able SQL that defines this metric.
+    pub create_sql: String,
+    /// The API this metric is registered with.
+    pub api_id: CatalogItemId,
+    /// Prometheus metric type (e.g. "gauge").
+    pub metric_type: String,
+    /// HELP text emitted in the Prometheus exposition.
+    pub help: String,
+    /// View whose rows produce metric values.
+    pub values_from: CatalogItemId,
+    /// Column in `values_from` holding the metric value; the others are labels.
+    pub value_column: String,
 }
 
 #[derive(Clone, Debug)]

@@ -223,6 +223,8 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => crate::objects::CatalogItemType::Func,
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
+            CatalogItemType::Api => crate::objects::CatalogItemType::Api,
+            CatalogItemType::Metric => crate::objects::CatalogItemType::Metric,
         }
     }
 
@@ -238,6 +240,8 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             crate::objects::CatalogItemType::Func => CatalogItemType::Func,
             crate::objects::CatalogItemType::Secret => CatalogItemType::Secret,
             crate::objects::CatalogItemType::Connection => CatalogItemType::Connection,
+            crate::objects::CatalogItemType::Api => CatalogItemType::Api,
+            crate::objects::CatalogItemType::Metric => CatalogItemType::Metric,
             crate::objects::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -265,6 +269,8 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
+            ObjectType::Api => crate::objects::ObjectType::Api,
+            ObjectType::Metric => crate::objects::ObjectType::Metric,
         }
     }
 
@@ -286,6 +292,8 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Schema => Ok(ObjectType::Schema),
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
+            crate::objects::ObjectType::Api => Ok(ObjectType::Api),
+            crate::objects::ObjectType::Metric => Ok(ObjectType::Metric),
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -437,6 +445,12 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Secret(global_id) => {
                 crate::objects::CommentObject::Secret(global_id.into_proto())
             }
+            CommentObjectId::Api(global_id) => {
+                crate::objects::CommentObject::Api(global_id.into_proto())
+            }
+            CommentObjectId::Metric(global_id) => {
+                crate::objects::CommentObject::Metric(global_id.into_proto())
+            }
             CommentObjectId::Role(role_id) => {
                 crate::objects::CommentObject::Role(role_id.into_proto())
             }
@@ -496,6 +510,12 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             }
             crate::objects::CommentObject::Secret(item_id) => {
                 CommentObjectId::Secret(item_id.into_rust()?)
+            }
+            crate::objects::CommentObject::Api(item_id) => {
+                CommentObjectId::Api(item_id.into_rust()?)
+            }
+            crate::objects::CommentObject::Metric(item_id) => {
+                CommentObjectId::Metric(item_id.into_rust()?)
             }
             crate::objects::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)

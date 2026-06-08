@@ -80,18 +80,36 @@ fn filter_requirements(
     session_meta: &dyn SessionMetadata,
     rbac_requirements: RbacRequirements,
 ) -> RbacRequirements {
-    // Skip RBAC non-mandatory checks if RBAC is disabled. However, we never skip RBAC checks for
-    // system roles. This allows us to limit access of system users even when RBAC is off.
-    let is_rbac_disabled = !is_rbac_enabled_for_session(catalog.system_vars(), session_meta)
-        && !session_meta.role_metadata().current_role.is_system()
-        && !session_meta.role_metadata().session_role.is_system();
-    // Skip RBAC checks on user items if the session is a superuser.
-    let is_superuser = session_meta.is_superuser();
-    if is_rbac_disabled || is_superuser {
+    // Skip RBAC non-mandatory checks when they aren't enforced for this session
+    // (RBAC disabled for a non-system role, or a superuser).
+    if !is_rbac_enforced_for_session(catalog.system_vars(), session_meta) {
         return rbac_requirements.filter_to_mandatory_requirements();
     }
 
     rbac_requirements
+}
+
+/// Returns whether RBAC privilege checks on user objects are enforced for
+/// `session`.
+///
+/// This is the inverse of the skip condition applied by plan validation in
+/// `filter_requirements`: checks are enforced unless RBAC is disabled (and
+/// the role is not a system role, which is always checked) or the session is a
+/// superuser. Callers that perform ad-hoc privilege checks outside the plan
+/// path (e.g. the custom metrics HTTP endpoint) use this so their gating
+/// matches plan validation exactly.
+pub fn is_rbac_enforced_for_session(
+    system_vars: &SystemVars,
+    session: &dyn SessionMetadata,
+) -> bool {
+    // RBAC is enabled for this session if the server/session flag is on, or if
+    // the role is a system role. We always check system roles so we can limit
+    // their access even when RBAC is off.
+    let is_rbac_enabled = is_rbac_enabled_for_session(system_vars, session)
+        || session.role_metadata().current_role.is_system()
+        || session.role_metadata().session_role.is_system();
+    // Even when enabled, superusers bypass checks on user objects.
+    is_rbac_enabled && !session.is_superuser()
 }
 
 // The default item types that most statements require USAGE privileges for.
@@ -525,6 +543,63 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateApi(plan::CreateApiPlan {
+            name,
+            api,
+            if_not_exists: _,
+        }) => {
+            // The API itself never runs a dataflow; metric scrapes go
+            // through the scraping user's privileges, not the API owner's.
+            // USAGE on the cluster is therefore enough — analogous to
+            // SELECT-from-view, not CREATE SINK.
+            RbacRequirements {
+                privileges: vec![
+                    (
+                        SystemObjectId::Object(name.qualifiers.clone().into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                    (
+                        SystemObjectId::Object(api.cluster_id.into()),
+                        AclMode::USAGE,
+                        role_id,
+                    ),
+                ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
+        Plan::CreateMetric(plan::CreateMetricPlan {
+            name,
+            metric,
+            if_not_exists: _,
+        }) => {
+            let mut privileges = vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                // CREATE METRIC binds the metric to an existing API; require
+                // USAGE on the API the same way other items require USAGE
+                // on a connection they reference.
+                (
+                    SystemObjectId::Object(ObjectId::Item(metric.api_id)),
+                    AclMode::USAGE,
+                    role_id,
+                ),
+            ];
+            // The metric peeks `values_from` whenever it is scraped, so
+            // require SELECT on the source view (and recursively on its
+            // dependencies, like a sink).
+            let items = iter::once(metric.values_from);
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,
@@ -1762,7 +1837,11 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::Index
+                | CatalogItemType::Func
+                | CatalogItemType::Api
+                | CatalogItemType::Metric => {}
             }
         }
     }
@@ -1893,6 +1972,8 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Api) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::Metric) => EMPTY_ACL_MODE,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1921,7 +2002,9 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
+        | ObjectType::NetworkPolicy
+        | ObjectType::Api
+        | ObjectType::Metric => AclMode::empty(),
     }
 }
 

@@ -1130,6 +1130,7 @@ impl<'a> RunnerInner<'a> {
                         mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
+                        endpoint_api: true,
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
@@ -1148,6 +1149,7 @@ impl<'a> RunnerInner<'a> {
                         mcp_agent: false,
                         mcp_developer: false,
                         console_config: false,
+                        endpoint_api: true,
                     },
                 },
             ],

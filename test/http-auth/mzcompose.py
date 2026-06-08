@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
+from dataclasses import dataclass
+
+import psycopg
 import requests
 
 from materialize import MZ_ROOT
@@ -16,6 +20,63 @@ from materialize.mzcompose.services.materialized import Materialized
 SERVICES = [
     Materialized(),
 ]
+
+# The canonical no-auth CI listener config enables the `endpoint_api` route
+# (`/metrics/custom`) on the external HTTP listener (6876), like CI/orchestratord.
+NO_AUTH_LISTENERS = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json"
+
+
+@dataclass
+class MetricTrigger:
+    case: str  # test-case suffix + unique object-name seed
+    view_body: str  # the view's non-value columns become the metric's labels
+    metric_ident: str  # becomes the Prometheus metric name verbatim
+    help_text: str  # the `HELP '...'` literal
+    why: str
+
+
+# `CREATE METRIC` rejects each of these at plan time now, because the resulting
+# Prometheus `Desc` would be invalid and `MetricsRegistry::register`'s
+# `.expect("defining a gauge vec")` (src/ore/src/metrics.rs) would otherwise
+# panic on the next scrape. All views expose `count`.
+METRIC_TRIGGERS = [
+    MetricTrigger(
+        "invalid_metric_name",
+        "SELECT 1::int8 AS count",
+        '"http-requests"',
+        "h",
+        "a hyphen in the metric name",
+    ),
+    MetricTrigger(
+        "invalid_label_name",
+        "SELECT 1::int8 AS count, 'ok'::text AS \"2xx\"",
+        "responses",
+        "h",
+        "a label name starting with a digit (2xx)",
+    ),
+    MetricTrigger(
+        "empty_help",
+        "SELECT 1::int8 AS count",
+        "leads",
+        "",
+        "empty HELP text",
+    ),
+]
+
+
+def environmentd_alive(c: Composition, timeout: float = 20.0) -> bool:
+    """Whether environmentd answers `SELECT 1`. On the buggy path it aborted and,
+    with no restart policy, stays down — so this exhausts `timeout`."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1:
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(1)
 
 
 def workflow_default(c: Composition) -> None:
@@ -98,3 +159,65 @@ def workflow_default(c: Composition) -> None:
                 "permission denied"
                 in r.json()["results"][0]["error"]["message"].lower()
             )
+
+    # `handle_metrics_custom` registers a Prometheus gauge vector per metric via
+    # `MetricsRegistry::register`, which panics — rather than 500s — on an invalid
+    # `Desc` (see METRIC_TRIGGERS). environmentd's enhanced panic handler turns
+    # that into `process::abort()`, so one scrape takes the whole process down,
+    # and re-aborts on every later scrape since the bad metric lives in the
+    # catalog. The `no_auth` listener exposes `endpoint_api` like CI/orchestratord.
+    # Invariant (fix-agnostic): such a scrape must not abort environmentd — a
+    # plan-time rejection or a graceful HTTP error are both fine.
+    with c.override(Materialized(listeners_config_path=NO_AUTH_LISTENERS)):
+        for trig in METRIC_TRIGGERS:
+            with c.test_case(f"metrics_custom_{trig.case}"):
+                # Boot, or recover from the previous case's abort (env boots fine
+                # with a bad metric in the catalog; it only crashes on scrape).
+                c.up("materialized")
+                assert environmentd_alive(c), f"environmentd down before {trig.case}"
+
+                # RBAC is irrelevant to the panic; disabling it lets the anonymous
+                # HTTP user reach registration without grants. Re-applied (with
+                # idempotent drops) so each case is independent of a crash+restart.
+                c.sql(
+                    "ALTER SYSTEM SET enable_prometheus_metrics_api = true;"
+                    " ALTER SYSTEM SET enable_rbac_checks = false;",
+                    user="mz_system",
+                    port=6877,
+                    print_statement=False,
+                )
+                view, api = f"v_{trig.case}", f"api_{trig.case}"
+                c.sql(
+                    f"DROP API IF EXISTS materialize.public.{api} CASCADE;"
+                    f" DROP VIEW IF EXISTS materialize.public.{view} CASCADE;"
+                    f" CREATE VIEW materialize.public.{view} AS {trig.view_body};"
+                    f" CREATE API materialize.public.{api} FORMAT PROMETHEUS;",
+                    print_statement=False,
+                )
+                try:
+                    c.sql(
+                        f"CREATE METRIC materialize.public.{trig.metric_ident}"
+                        f" IN API materialize.public.{api} AS (TYPE 'gauge',"
+                        f" HELP '{trig.help_text}',"
+                        f" VALUES FROM materialize.public.{view},"
+                        f" VALUE COLUMN 'count')",
+                        print_statement=False,
+                    )
+                except psycopg.Error as e:
+                    # Rejected at plan time — the dangerous object never exists.
+                    print(f"[{trig.case}] rejected at CREATE METRIC ({trig.why}): {e}")
+                    continue
+
+                # On the buggy path the abort resets the connection mid-request.
+                url = (
+                    f"http://localhost:{c.port('materialized', 6876)}"
+                    f"/metrics/custom/materialize/public/{api}"
+                )
+                try:
+                    requests.get(url, timeout=30)
+                except requests.exceptions.RequestException:
+                    pass
+                assert environmentd_alive(c), (
+                    f"environmentd aborted after scraping a metric with {trig.why}"
+                    " — handle_metrics_custom panicked in MetricsRegistry::register"
+                )

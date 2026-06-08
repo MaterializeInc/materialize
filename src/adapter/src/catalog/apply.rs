@@ -2337,7 +2337,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::Api
+                | CatalogItemType::Metric => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
             }
         }
@@ -2402,7 +2404,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::Api
+                | CatalogItemType::Metric => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
             }
         }

@@ -1169,6 +1169,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::MaterializedView(&MZ_SECRETS),
         Builtin::MaterializedView(&MZ_CONNECTIONS),
+        Builtin::MaterializedView(&MZ_APIS),
+        Builtin::MaterializedView(&MZ_METRICS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),

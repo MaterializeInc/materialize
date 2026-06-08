@@ -165,6 +165,8 @@ pub fn describe(
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
+        Statement::CreateApi(stmt) => ddl::describe_create_api(&scx, stmt)?,
+        Statement::CreateMetric(stmt) => ddl::describe_create_metric(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
 
@@ -366,6 +368,8 @@ pub fn plan(
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
+        Statement::CreateApi(stmt) => ddl::plan_create_api(scx, stmt),
+        Statement::CreateMetric(stmt) => ddl::plan_create_metric(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
 
@@ -1089,6 +1093,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
+            Statement::CreateApi(_) => DDL,
+            Statement::CreateMetric(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
 
