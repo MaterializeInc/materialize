@@ -622,10 +622,10 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `kynan-mz_changes_v0.9.0` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cd7349fb1fa9d640eaeb9f39d85d7cebc089fa92" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cd7349fb1fa9d640eaeb9f39d85d7cebc089fa92" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cd7349fb1fa9d640eaeb9f39d85d7cebc089fa92" }
+# All changes should go to the `mz_v0.9.0` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

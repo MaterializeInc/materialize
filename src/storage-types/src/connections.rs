@@ -215,9 +215,6 @@ impl RequestAuthenticator for Sigv4Authenticator {
     }
 
     // SigV4 is stateless: nothing to cache, invalidate, or refresh.
-    async fn ensure_cached(&self) -> iceberg::Result<()> {
-        Ok(())
-    }
     async fn invalidate_cache(&self) -> iceberg::Result<()> {
         Ok(())
     }
