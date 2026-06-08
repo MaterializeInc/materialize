@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::str::SplitAsciiWhitespace;
+
 use maplit::btreemap;
 use mysql_async::binlog::events::OptionalMetaExtractor;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
@@ -18,6 +22,7 @@ use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
 
+use crate::source::mysql::SourceOutputInfo;
 use crate::source::types::{FuelSize, SourceMessage};
 
 use super::super::schemas::verify_schemas;
@@ -27,7 +32,8 @@ use super::context::ReplContext;
 /// Returns the MySqlTableName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
 fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
-    let stripped = name.replace('`', "");
+    let stripped = name.trim_end_matches(',');
+    let stripped = stripped.replace('`', "");
     let mut name_iter = stripped.split('.');
     match (name_iter.next(), name_iter.next()) {
         (Some(t_name), None) => Ok(MySqlTableName::new(current_schema, t_name)),
@@ -112,38 +118,41 @@ pub(super) async fn handle_query_event(
         // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
         // this can drop multiple tables we just check all tables we care about
         (Some("drop"), Some("table")) => {
-            let mut conn = ctx
-                .connection_config
-                .connect(
-                    &format!("timely-{worker_id} MySQL "),
-                    &ctx.config.config.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-            let expected = ctx
-                .table_info
+            let dropped_tables = drop_table_identifiers(&mut query_iter, &current_schema, &query)?;
+
+            let tables_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
                 .iter()
-                .map(|(t, info)| {
-                    (
-                        t,
-                        info.iter()
-                            .filter(|output| !ctx.errored_outputs.contains(&output.output_index)),
-                    )
+                .filter_map(|table_name| {
+                    ctx.table_info
+                        .get_key_value(table_name)
+                        .map(|(name, info)| {
+                            let kept = info
+                                .iter()
+                                .filter(|output| {
+                                    !ctx.errored_outputs.contains(&output.output_index)
+                                })
+                                .collect();
+                            (name, kept)
+                        })
                 })
                 .collect();
-            let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
-            for (dropped_output, err) in schema_errors {
-                tracing::info!(%id, "timely-{worker_id} DDL change \
-                           dropped output: {dropped_output:?}: {err:?}");
-                let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                let update = (
-                    (dropped_output.output_index, Err(err.into())),
-                    new_gtid.clone(),
-                    Diff::ONE,
-                );
-                let size = std::mem::size_of_val(&update);
-                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
-                ctx.errored_outputs.insert(dropped_output.output_index);
+            for (table_name, outputs) in tables_to_drop {
+                for output in outputs {
+                    let err = DefiniteError::TableDropped(table_name.to_string());
+                    tracing::info!(%id, "timely-{worker_id} DDL change \
+                            dropped output: {output:?}: {err:?}");
+                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                    let update = (
+                        (output.output_index, Err(err.into())),
+                        new_gtid.clone(),
+                        Diff::ONE,
+                    );
+                    ctx.data_output
+                        .give_fueled(&gtid_cap, update, update.fuel_size())
+                        .await;
+                    ctx.errored_outputs.insert(output.output_index);
+                }
             }
         }
         // Detect `TRUNCATE [TABLE] <tbl>` statements
@@ -213,6 +222,37 @@ pub(super) async fn handle_query_event(
     }
 
     Ok(is_complete_event)
+}
+
+/// Assumes "DROP TABLE" has been checked/consumed. Parses [IF EXISTS] <tbl>, <tbl>, ... <tbl>.
+fn drop_table_identifiers(
+    query_iter: &mut SplitAsciiWhitespace<'_>,
+    current_schema: &str,
+    query: &str,
+) -> Result<Vec<MySqlTableName>, TransientError> {
+    let invalid = || TransientError::Generic(anyhow::anyhow!("Invalid DDL query: {}", query));
+    let mut first_table: &str = query_iter.next().ok_or_else(invalid)?;
+
+    // We may (or may not) have an IF EXISTS clause here. A table could be named 'if' too, but should arrive quoted if that's the case.
+    if first_table.eq_ignore_ascii_case("if") {
+        // Expect EXISTS after an IF, fail if that's not the case.
+        if !query_iter
+            .next()
+            .ok_or_else(invalid)?
+            .eq_ignore_ascii_case("exists")
+        {
+            return Err(invalid());
+        }
+        first_table = query_iter.next().ok_or_else(invalid)?
+    }
+
+    let mut result: Vec<MySqlTableName> = Vec::new();
+    let mut current_table = Some(first_table);
+    while let Some(table) = current_table {
+        result.push(table_ident(table, current_schema)?);
+        current_table = query_iter.next();
+    }
+    Ok(result)
 }
 
 /// Handles RowsEvents from the MySQL replication stream. These events contain
