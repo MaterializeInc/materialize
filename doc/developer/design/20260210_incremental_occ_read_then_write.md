@@ -295,16 +295,26 @@ Benchmarking a PoC-level implementation of the OCC approach against `main` for
 The benchmark varies concurrency (number of workers) on the x-axis and shows
 throughput (left) and latency (right). Key observations:
 
-- At low concurrency (1-7 workers), the OCC approach is comparable or _better_
-  than `main`. This is because the OCC path begins preparing the write (opening
-  the subscribe, receiving the snapshot) before the write timestamp is claimed,
-  whereas the old path only starts the peek after acquiring the lock.
+- At low concurrency (1-7 workers), the result depends on write size. A single
+  large `UPDATE`/`DELETE` is comparable or _better_ than `main`, because the
+  subscribe streams the mutation diffs directly whereas the old path peeks every
+  matched row and then recomputes the diffs. Small writes, however, _regress_:
+  every operation installs a subscribe dataflow, waits for its snapshot, and
+  tears it down, where the old path uses a cheap fast-path peek. This
+  per-operation subscribe overhead makes tiny `UPDATE`s roughly 1.5-2x slower at
+  low/no concurrency (observed in the nightly feature benchmark
+  `ManySmallUpdates` and the scalability `UpdateWorkload`).
 - At higher concurrency, performance degrades as expected due to the O(N^2)
   retry behavior: with more concurrent writers, more retries are needed. The
   concurrency semaphore (default 4 permits) bounds this in practice.
 - The benchmark is for a worst-case workload (all writers updating the same
   table). Real workloads with writes to different tables won't experience the
   contention.
+
+The chart above is from the PoC, which benchmarked `UPDATE t SET x = x + 1` over
+a larger table (the regime where OCC wins). It does not capture the small-write
+regression noted above, which is an accepted cost: high write throughput is a
+non-goal (see Non-Goals).
 
 ## Rollout
 
