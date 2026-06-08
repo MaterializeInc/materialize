@@ -177,6 +177,8 @@ CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
 
 ## Create the Iceberg sink in Materialize
 
+{{% include-headless "/headless/iceberg-sinks/syntax-change-aws-connection" %}}
+
 {{% include-example file="examples/create_sink_iceberg" example="tutorial-create-sink-intro" %}}
 
 ### Upsert mode
