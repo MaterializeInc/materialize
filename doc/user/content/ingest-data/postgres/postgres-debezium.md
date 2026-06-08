@@ -11,9 +11,9 @@ You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
 (CDC) data to Materialize from a PostgreSQL database, but we **strongly
 recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
 instead.
-{{</ warning >}}
+{{< /warning >}}
 
-{{< guided-tour-blurb-for-ingest-data >}}
+{{% guided-tour-blurb-for-ingest-data %}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
 PostgreSQL database to downstream consumers based on its Write-Ahead Log
@@ -180,7 +180,7 @@ Once logical replication is enabled:
    previous values of all the table’s columns in the change events.
    As a heads up, you should expect a performance hit in the database from
    increased CPU usage. For more information, see the
-   [PostgreSQL documentation](https://www.postgresql.org/docs/current      logical-replication-publication.html).
+   [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
 ### B. Deploy Debezium
 
