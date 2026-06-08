@@ -78,6 +78,7 @@ impl FoldConstants {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
+            MirRelationExpr::Changes { .. } => {}
             MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
                 // Constant propagation through bindings is currently handled by in NormalizeLets.
                 // Maybe we should move it / replicate it here (see database-issues#5346 for context)?

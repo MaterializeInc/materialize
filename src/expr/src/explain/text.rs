@@ -530,6 +530,25 @@ impl MirRelationExpr {
                 }
                 self.fmt_analyses(f, ctx)?;
             }
+            Changes {
+                id, bound, strict, ..
+            } => {
+                let humanize = |id: &GlobalId| {
+                    ctx.humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| id.to_string())
+                };
+                let kind = if *strict { "as_of" } else { "as_of_at_least" };
+                write!(
+                    f,
+                    "{}Changes {} {}={}",
+                    ctx.indent,
+                    humanize(id),
+                    kind,
+                    bound
+                )?;
+                self.fmt_analyses(f, ctx)?;
+            }
             Project { outputs, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {

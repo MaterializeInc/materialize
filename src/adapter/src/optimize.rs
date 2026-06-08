@@ -75,6 +75,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, GlobalId};
+use timely::progress::Antichain;
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::{HirRelationExpr, PlanError};
 use mz_sql::session::metadata::SessionMetadata;
@@ -178,13 +179,16 @@ impl PeekOptimizer {
         &mut self,
         raw_expr: HirRelationExpr,
         timestamp_ctx: TimestampContext,
+        since: Antichain<mz_repr::Timestamp>,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> Result<PeekGlobalLirPlan, OptimizerError> {
         match self {
             PeekOptimizer::Select(optimizer) => {
                 let plan = optimize_oneshot(optimizer, raw_expr, |local_mir_plan| {
-                    local_mir_plan.resolve(timestamp_ctx, session, stats)
+                    // `since` clamps an advisory `CHANGES` bound up to the
+                    // earliest available history; see `LocalMirPlan::resolve`.
+                    local_mir_plan.resolve(timestamp_ctx, since, session, stats)
                 })?;
                 Ok(PeekGlobalLirPlan::Select(plan))
             }
@@ -397,6 +401,16 @@ pub enum OptimizerError {
     RestrictedFunction(UnmaterializableFunc),
     #[error("{0}")]
     UnsupportedTemporalExpression(String),
+    /// A strict (`AS OF`) `CHANGES` bound below the earliest history its input
+    /// still retains.
+    #[error(
+        "the strict AS OF bound of CHANGES ({start}) is less than the earliest available \
+         history of its input ({since})"
+    )]
+    ChangesHistoryUnavailable {
+        start: mz_repr::Timestamp,
+        since: mz_repr::Timestamp,
+    },
     /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
     /// catch it and swallow it in some cases.
     #[error("internal optimizer error: MfpPlan couldn't be converted into SafeMfpPlan")]
@@ -431,6 +445,11 @@ impl OptimizerError {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
                 Some("In temporal filters `mz_now()` may work instead.".into())
             }
+            Self::ChangesHistoryUnavailable { .. } => Some(
+                "Use AS OF AT LEAST to start from the earliest available history, or \
+                 configure RETAIN HISTORY on the input to retain more."
+                    .into(),
+            ),
             _ => None,
         }
     }

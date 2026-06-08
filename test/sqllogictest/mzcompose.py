@@ -313,6 +313,9 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/boolean.slt",
         "test/sqllogictest/bytea.slt",
         "test/sqllogictest/cast.slt",
+        # CHANGES is rejected in an index/materialized-view context, so wrapping
+        # its SELECTs in an indexed view is intentionally inconsistent.
+        "test/sqllogictest/changes.slt",
         "test/sqllogictest/char.slt",
         "test/sqllogictest/chbench.slt",
         "test/sqllogictest/chr.slt",
@@ -717,6 +720,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/temporal.slt",
         # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
         "test/sqllogictest/materialized_views.slt",
+        # CHANGES is rejected in an index/materialized-view context, so wrapping
+        # its SELECTs in an indexed view is intentionally inconsistent.
+        "test/sqllogictest/changes.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)

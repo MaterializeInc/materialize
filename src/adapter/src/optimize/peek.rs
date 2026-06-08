@@ -9,14 +9,16 @@
 
 //! Optimizer implementation for `SELECT` statements.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::IndexDesc;
+use mz_compute_types::dataflows::{ChangelogMode, IndexDesc};
 use mz_compute_types::plan::Plan;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::visit::Visit;
+use mz_expr::{Eval, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
@@ -146,6 +148,9 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
     timestamp_ctx: TimestampContext,
+    /// The read frontier (`since`) of the query's inputs, used to clamp an
+    /// advisory `CHANGES` bound up to the earliest available history.
+    since: Antichain<Timestamp>,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -207,6 +212,7 @@ impl LocalMirPlan<Unresolved> {
     pub fn resolve(
         self,
         timestamp_ctx: TimestampContext,
+        since: Antichain<Timestamp>,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
@@ -216,6 +222,7 @@ impl LocalMirPlan<Unresolved> {
             df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
+                since,
                 session,
                 stats,
             },
@@ -236,6 +243,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             context:
                 Resolved {
                     timestamp_ctx,
+                    since,
                     stats,
                     session,
                 },
@@ -284,7 +292,120 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             );
         }
 
+        // `CHANGES`: collect any changelog reads in the dataflow so we can mark
+        // their source imports (to be read as append-only changelogs in
+        // rendering) and pin the dataflow `as_of` to the earliest changelog
+        // start. The peek itself still happens at `timestamp_ctx`'s timestamp, so
+        // history between the changelog start and the peek time is replayed.
+        //
+        // Each changelog's lower bound is an `mz_timestamp`-typed scalar that we
+        // resolve here at the query time: a sliding (`mz_now()`-relative) bound
+        // trails the query time by its lag, while a fixed bound ignores it. So a
+        // one-off `SELECT * FROM CHANGES(c AS OF mz_now() - INTERVAL '30m')`
+        // reads the window `[query_time - 30m, query_time]`.
+        // `CHANGES`: resolve each changelog read's bound at the query time and
+        // rewrite it in place to the resolved literal. Lowering carries the
+        // per-read start into `GetPlan::Changelog`, so each read collapses its
+        // *own* snapshot at its own start. The import-level start (the minimum
+        // over the reads) sizes the persist read and the read holds.
+        let mut changelog_starts: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
+        let mut has_changelog_reads = false;
+        for build in &df_desc.objects_to_build {
+            build.plan.as_inner().visit_pre(|e| {
+                if let MirRelationExpr::Changes { .. } = e {
+                    has_changelog_reads = true;
+                }
+            });
+        }
+        if has_changelog_reads {
+            let prep = ExprPrepOneShot {
+                logical_time: match timestamp_ctx.timestamp() {
+                    Some(t) => EvalTime::Time(*t),
+                    None => EvalTime::NotAvailable,
+                },
+                session,
+                catalog_state: self.catalog.state(),
+            };
+            let temp_storage = mz_repr::RowArena::new();
+            // The dataflow `as_of` cannot precede the inputs' read frontier
+            // (`since`); the existing peek read holds pin it there for the query.
+            let since = since.as_option().copied();
+            for build in df_desc.objects_to_build.iter_mut() {
+                let mut result = Ok(());
+                build.plan.as_inner_mut().visit_mut_post(&mut |e| {
+                    if let MirRelationExpr::Changes {
+                        id,
+                        bound,
+                        strict,
+                        resolved_start,
+                        ..
+                    } = e
+                    {
+                        if result.is_err() {
+                            return;
+                        }
+                        result = (|| {
+                            // Resolve `mz_now()` to the query time, then fold to
+                            // a constant. Work on a copy: the bound stays as
+                            // written, for stable EXPLAIN output, and the
+                            // resolved start travels in `resolved_start`.
+                            let mut bound = bound.clone();
+                            prep.prep_scalar_expr(&mut bound)?;
+                            let start = match bound.eval(&[], &temp_storage)? {
+                                mz_repr::Datum::MzTimestamp(ts) => ts,
+                                other => {
+                                    return Err(OptimizerError::Internal(format!(
+                                        "CHANGES bound did not evaluate to an mz_timestamp:                                          {other:?}"
+                                    )));
+                                }
+                            };
+                            // An advisory (`AS OF AT LEAST`) bound ages in: clamp
+                            // it up to `since`, so the changelog starts at the
+                            // earliest available history rather than erroring. A
+                            // strict (`AS OF`) bound is pinned as written; if it
+                            // precedes `since` the requested history is
+                            // unavailable, which is an error. (The controller
+                            // re-validates the import-level start against the
+                            // read hold at dataflow creation, as a backstop.)
+                            let start = match since {
+                                Some(since) if !*strict => start.max(since),
+                                Some(since) if start < since => {
+                                    return Err(OptimizerError::ChangesHistoryUnavailable {
+                                        start,
+                                        since,
+                                    });
+                                }
+                                _ => start,
+                            };
+                            // Record this read's resolved start, for lowering
+                            // to carry into the LIR changelog read.
+                            *resolved_start = Some(start);
+                            changelog_starts
+                                .entry(*id)
+                                .and_modify(|existing| *existing = (*existing).min(start))
+                                .or_insert(start);
+                            Ok(())
+                        })();
+                    }
+                })?;
+                result?;
+            }
+        }
+        for (id, start) in changelog_starts {
+            df_desc.set_source_changelog(
+                &id,
+                ChangelogMode::OneShot {
+                    start: Antichain::from_elem(start),
+                },
+            );
+        }
+
         // Set the `as_of` and `until` timestamps for the dataflow.
+        //
+        // A changelog import takes its snapshot at its per-import `start`
+        // rather than at this `as_of` (see `ChangelogMode::OneShot`); the
+        // `as_of` stays the query time, so `mz_now()` elsewhere in the query
+        // resolves to the query time below.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
         // Get the single timestamp representing the `as_of` time.

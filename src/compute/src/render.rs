@@ -111,6 +111,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
+use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
@@ -120,7 +121,7 @@ use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
-use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{ChangelogMode, DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
@@ -137,12 +138,12 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow}
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::{CollectionExt, StreamExt, consolidate_pact};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
@@ -271,17 +272,52 @@ pub fn build_compute_dataflow(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
-                    {
-                        SnapshotMode::Include
-                    } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
-                        SnapshotMode::Exclude
+                    // `CHANGES`: a changelog import reads the input from its
+                    // resolved `start` — at or below the dataflow `as_of` —
+                    // rather than at the `as_of` itself; the per-consumer
+                    // reinterpretation advances the times to the `as_of`. A
+                    // one-off read includes the snapshot, so the input's
+                    // history collapses to the changelog start; a maintained
+                    // read excludes it — unless a direct read shares the
+                    // import and needs the snapshot, in which case the
+                    // maintained changelog reads drop their part themselves
+                    // (they unconditionally drop times at or below `start`).
+                    // All other imports read at the dataflow `as_of`.
+                    let (source_as_of, snapshot_mode) = match &import.changelog {
+                        Some(ChangelogMode::OneShot { start }) => {
+                            (Some(start.clone()), SnapshotMode::Include)
+                        }
+                        Some(ChangelogMode::Maintained {
+                            start,
+                            snapshot_for_direct_reads,
+                            ..
+                        }) => {
+                            let start = start.clone().or_else(|| dataflow.as_of.clone());
+                            let snapshot_mode = if *snapshot_for_direct_reads {
+                                SnapshotMode::Include
+                            } else {
+                                SnapshotMode::Exclude
+                            };
+                            (start, snapshot_mode)
+                        }
+                        None => {
+                            let snapshot_mode =
+                                if import.with_snapshot || !subscribe_snapshot_optimization {
+                                    SnapshotMode::Include
+                                } else {
+                                    compute_state.metrics.inc_subscribe_snapshot_optimization();
+                                    SnapshotMode::Exclude
+                                };
+                            (dataflow.as_of.clone(), snapshot_mode)
+                        }
                     };
                     let suppress_early_progress_as_of = dataflow.as_of.clone();
 
                     // Note: For correctness, we require that sources only emit times advanced by
-                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee
+                    // for reads at the dataflow `as_of`; a changelog import reads
+                    // below it, and the changelog reinterpretation below restores the guarantee
+                    // by advancing the emitted times.
                     let (mut ok_stream, err_stream, token) =
                         persist_source::persist_source::<DataflowErrorSer>(
                             inner,
@@ -290,7 +326,7 @@ pub fn build_compute_dataflow(
                             &compute_state.txns_ctx,
                             import.desc.storage_metadata.clone(),
                             read_schema,
-                            dataflow.as_of.clone(),
+                            source_as_of,
                             snapshot_mode,
                             until.clone(),
                             mfp.as_mut(),
@@ -335,16 +371,33 @@ pub fn build_compute_dataflow(
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
 
-                    let (oks, errs) = (
-                        ok_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
-                        err_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
-                    );
+                    let oks = ok_stream
+                        .as_collection()
+                        .leave_region(region)
+                        .leave_region(scope);
+                    let mut errs = err_stream
+                        .as_collection()
+                        .leave_region(region)
+                        .leave_region(scope);
+
+                    // `CHANGES`: a changelog import binds the *raw* stream, read
+                    // from the import-level changelog start. The reinterpretation
+                    // (net per `(row, time)`, pack `mz_timestamp`/`mz_diff`,
+                    // advance emission to the `as_of`) happens per consumer, at
+                    // the changelog `Get` sites (`GetPlan::Changelog`); a direct
+                    // read of the same import advances the raw event times to the
+                    // `as_of` at its `Get` site. Only the error stream is
+                    // advanced here, once, since it is shared by all consumers
+                    // (errors read from below the `as_of` must not violate the
+                    // times-advanced-by-`as_of` guarantee).
+                    if import.read_as_changelog() {
+                        let as_of_errs = dataflow.as_of.clone().unwrap_or_default();
+                        errs = errs.delay(move |time| {
+                            let mut time = *time;
+                            time.advance_by(as_of_errs.borrow());
+                            time
+                        });
+                    }
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
@@ -1207,6 +1260,31 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 let mut collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
+                // A changelog import binds the *raw* stream, read from the
+                // import-level changelog start — at or below the dataflow
+                // `as_of` — so a *direct* read of it must advance the raw event
+                // times to the `as_of` to restore the times-advanced-by-`as_of`
+                // guarantee (the snapshot and pre-`as_of` deltas collapse into
+                // the accumulation at the `as_of`, i.e. the input's contents).
+                // A changelog read (`GetPlan::Changelog` below) instead nets and
+                // packs the raw updates itself.
+                if let Id::Global(gid) = id {
+                    if self.changelog_imports.contains_key(&gid)
+                        && !matches!(plan, mz_compute_types::plan::GetPlan::Changelog { .. })
+                    {
+                        let (oks, errs) = collection
+                            .collection
+                            .clone()
+                            .expect("changelog import binds a raw collection");
+                        let as_of = self.as_of_frontier.clone();
+                        let oks = oks.delay(move |time| {
+                            let mut time = time.clone();
+                            time.event_time_mut().advance_by(as_of.borrow());
+                            time
+                        });
+                        collection = CollectionBundle::from_collections(oks, errs);
+                    }
+                }
                 match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
@@ -1234,6 +1312,104 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
                         let (oks, errs) = collection.as_collection_core(
                             mfp,
+                            None,
+                            self.until.clone(),
+                            &self.config_set,
+                        );
+                        CollectionBundle::from_collections(oks, errs)
+                    }
+                    mz_compute_types::plan::GetPlan::Changelog { start, mfp } => {
+                        // `CHANGES`: reinterpret the raw changelog import as an
+                        // append-only changelog, per consumer.
+                        //
+                        // 1. Advance the raw event times to this read's start
+                        //    (one-off reads; collapses this read's snapshot). A
+                        //    maintained read carries no per-read start: its
+                        //    deltas are replayed strictly after the import-level
+                        //    start (`SnapshotMode::Exclude`), nothing collapses.
+                        // 2. Net per `(row, time)`: `consolidate_pact` runs the
+                        //    arrangement batcher without retaining a trace —
+                        //    each time's updates consolidate once the input
+                        //    frontier passes it, are emitted, and dropped. This
+                        //    is value-defining (the netted diff becomes the
+                        //    `mz_diff` column; the snapshot's fragments net),
+                        //    see the design doc's "Changelog algebra".
+                        // 3. Pack each netted `(row, time, diff)` into the
+                        //    extended row, emitted with diff `+1` at the event
+                        //    time advanced to the `as_of` (the `mz_timestamp`
+                        //    column keeps the pre-`as_of` time).
+                        let (oks, errs) = collection
+                            .collection
+                            .clone()
+                            .expect("changelog import binds a raw collection");
+                        let oks = if let Some(start) = start {
+                            let start = Antichain::from_elem(start);
+                            oks.delay(move |time| {
+                                let mut time = time.clone();
+                                time.event_time_mut().advance_by(start.borrow());
+                                time
+                            })
+                        } else {
+                            // A maintained read replays the deltas strictly
+                            // after the import-level start: drop times at or
+                            // below it. This is a no-op when the import reads
+                            // with `SnapshotMode::Exclude`, and load-bearing
+                            // when the import includes the snapshot for a
+                            // direct reader sharing it.
+                            let Id::Global(gid) = id else {
+                                panic!("changelog read of a local binding")
+                            };
+                            let import_start = match self.changelog_imports.get(&gid) {
+                                Some(mz_compute_types::dataflows::ChangelogMode::Maintained {
+                                    start: Some(start),
+                                    ..
+                                }) => start.clone(),
+                                // Mirrors the import's fallback to the `as_of`
+                                // for an unresolved start.
+                                _ => self.as_of_frontier.clone(),
+                            };
+                            oks.inner
+                                .filter(move |(_, time, _)| {
+                                    import_start.less_than(&time.event_time())
+                                })
+                                .as_collection()
+                        };
+                        let exchange =
+                            Exchange::new(move |update: &((mz_repr::Row, ()), _, Diff)| {
+                                (update.0).0.hashed()
+                            });
+                        let as_of = self.as_of_frontier.clone();
+                        let packed = consolidate_pact::<
+                            ColumnationChunker<_>,
+                            KeyBatcher<mz_repr::Row, _, _>,
+                            _,
+                            _,
+                        >(
+                            oks.map(|row| (row, ())).inner, exchange, "ChangelogNet"
+                        )
+                        .unary(Pipeline, "ChangelogPack", |_cap, _info| {
+                            move |input, output| {
+                                input.for_each(|cap, data| {
+                                    let mut session = output.session(&cap);
+                                    for ((row, ()), time, diff) in
+                                        data.iter().flatten().flat_map(|chunk| chunk.iter())
+                                    {
+                                        let event_time = time.event_time();
+                                        let mut emit_time = time.clone();
+                                        emit_time.event_time_mut().advance_by(as_of.borrow());
+                                        session.give((
+                                            pack_changelog_row(row, event_time, *diff),
+                                            emit_time,
+                                            Diff::ONE,
+                                        ));
+                                    }
+                                });
+                            }
+                        })
+                        .as_collection();
+                        let bundle = CollectionBundle::from_collections(packed, errs);
+                        let (oks, errs) = bundle.as_collection_core(
+                            mfp.clone(),
                             None,
                             self.until.clone(),
                             &self.config_set,
@@ -1801,6 +1977,28 @@ where
     })
 }
 
+/// Packs a single consolidated changelog update `(row, time, diff)` into the
+/// `CHANGES` output row shape: the input columns followed by the `mz_timestamp`
+/// and `mz_diff` columns.
+///
+/// `time` has already been advanced to `max(time, start)` by the persist read
+/// at the changelog start (for a one-off read the included snapshot collapses
+/// to the start; a maintained read excludes the snapshot and its deltas pass
+/// through at their true times), so we record it verbatim in the `mz_timestamp`
+/// column. Note that `time` may be *below* the dataflow `as_of` — that is the
+/// point — which is why the caller advances the differential time separately.
+/// `diff` is the net change at that time, recorded in the `mz_diff` column; the
+/// caller emits the resulting row with diff `+1`, so the changelog is
+/// append-only and never retracts.
+fn pack_changelog_row(row: &Row, time: mz_repr::Timestamp, diff: Diff) -> Row {
+    let mut packed = Row::default();
+    let mut packer = packed.packer();
+    packer.extend(row.iter());
+    packer.push(Datum::MzTimestamp(time));
+    packer.push(Datum::Int64(diff.into_inner()));
+    packed
+}
+
 /// Extension trait for [`Stream`] to selectively limit progress.
 trait LimitProgress<T: Timestamp> {
     /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
@@ -1987,5 +2185,37 @@ impl Pairer {
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)
+    }
+}
+
+#[cfg(test)]
+mod changelog_tests {
+    use mz_repr::{Datum, Diff, Row, Timestamp};
+
+    use super::pack_changelog_row;
+
+    #[mz_ore::test]
+    fn pack_changelog_row_appends_time_and_diff() {
+        let input = Row::pack_slice(&[Datum::Int32(5), Datum::String("a")]);
+        let packed = pack_changelog_row(&input, Timestamp::from(7u64), Diff::from(3));
+        let expected = Row::pack_slice(&[
+            Datum::Int32(5),
+            Datum::String("a"),
+            Datum::MzTimestamp(Timestamp::from(7u64)),
+            Datum::Int64(3),
+        ]);
+        assert_eq!(packed, expected);
+    }
+
+    #[mz_ore::test]
+    fn pack_changelog_row_handles_retraction_diff() {
+        let input = Row::pack_slice(&[Datum::String("row")]);
+        let packed = pack_changelog_row(&input, Timestamp::from(0u64), Diff::from(-2));
+        let expected = Row::pack_slice(&[
+            Datum::String("row"),
+            Datum::MzTimestamp(Timestamp::from(0u64)),
+            Datum::Int64(-2),
+        ]);
+        assert_eq!(packed, expected);
     }
 }

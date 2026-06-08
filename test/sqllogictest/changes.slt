@@ -1,0 +1,461 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Plan-time tests for the CHANGES(<collection> AS OF [AT LEAST] <bound>) table
+# function.
+#
+# The per-update timestamps in the changelog are not deterministic, so the data
+# round-trip is verified in test/testdrive/changes.td. Here we cover the
+# deterministic, plan-time behavior: feature gating, argument validation, and
+# the lower-bound gating (durable objects require a sliding bound).
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int)
+
+# The feature is gated behind a feature flag.
+query error the CHANGES table function is not available
+SELECT * FROM CHANGES (t AS OF 0)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_changes_table_function = true
+----
+COMPLETE 0
+
+# CHANGES requires a persist-backed object (table, source, or materialized
+# view). A view is rejected.
+statement ok
+CREATE VIEW v AS SELECT * FROM t
+
+query error CHANGES requires a table, source, or materialized view, but materialize\.public\.v is a view
+SELECT * FROM CHANGES (v AS OF 0)
+
+# A common table expression is rejected.
+query error CHANGES requires a persisted collection, but got a common table expression
+WITH c AS (SELECT * FROM t) SELECT * FROM CHANGES (c AS OF 0)
+
+# The relation may be a parenthesized subquery (mirroring SUBSCRIBE), as long as
+# it reduces to a bare read of a persist-backed object: `(SELECT * FROM t)`
+# behaves exactly like naming `t`.
+query I
+SELECT count(*) FROM CHANGES ((SELECT * FROM t) AS OF mz_now())
+----
+0
+
+# A view is rejected through a subquery just as it is by name. The subquery
+# reduces to a bare read of `v` itself (a non-materialized view is not inlined
+# at this stage), and a view is not a persist-backed collection; reading through
+# it to an underlying shard is the (deferred) arbitrary-expression case.
+query error CHANGES requires a table, source, or materialized view, but materialize\.public\.v is a view
+SELECT count(*) FROM CHANGES ((SELECT * FROM v) AS OF mz_now())
+
+# A subquery that filters or transforms (i.e. is not a bare read) is the
+# not-yet-supported arbitrary-expression case.
+query error CHANGES over an arbitrary query
+SELECT * FROM CHANGES ((SELECT * FROM t WHERE a > 0) AS OF 0)
+
+# A fixed bound must be a constant timestamp expression: a non-temporal
+# unmaterializable function (e.g. now()) and out-of-range / negative values are
+# rejected.
+query error calling an unmaterializable function in AS OF or UP TO not yet supported
+SELECT * FROM CHANGES (t AS OF now())
+
+query error AS OF or UP TO should be castable to a \(non-null\) mz_timestamp value
+SELECT * FROM CHANGES (t AS OF -1)
+
+# A sliding (mz_now()-relative) bound is supported in a one-off SELECT: mz_now()
+# resolves to the query time, so the changelog start trails it by the lag. With
+# a zero lag the changelog start is the query time, so the snapshot is the empty
+# table's current contents. (The per-update timestamps are non-deterministic;
+# the sliding data round-trip is covered in test/testdrive/changes.td.)
+query I
+SELECT count(*) FROM CHANGES (t AS OF mz_now())
+----
+0
+
+# An advisory bound (AS OF AT LEAST) ages in: a bound below the input's `since`
+# is clamped up to `since` rather than erroring, so an all-history request on a
+# (compacted) collection still succeeds, starting from the earliest available
+# history. On the empty table the snapshot is empty.
+query I
+SELECT count(*) FROM CHANGES (t AS OF AT LEAST 0)
+----
+0
+
+# A strict bound below the input's `since` is unavailable history and errors
+# (regression: this used to panic). The sliding strict form fails the same way.
+query error the strict AS OF bound of CHANGES \(0\) is less than the earliest available history of its input
+SELECT * FROM CHANGES (t AS OF 0)
+
+query error is less than the earliest available history of its input
+SELECT * FROM CHANGES (t AS OF mz_now() - INTERVAL '1 day')
+
+# A durable maintained object (materialized view, index) requires a sliding
+# bound: a fixed lower bound would hold the input's `since` open indefinitely.
+statement error CHANGES with a fixed bound is only supported in one-off SELECT queries
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM CHANGES (t AS OF 0)
+
+# The conservative implementation also rejects a fixed bound when defining a
+# plain view (a maintained lifetime), since it is only useful once indexed or
+# materialized.
+statement error CHANGES with a fixed bound is only supported in one-off SELECT queries
+CREATE VIEW changes_view AS SELECT * FROM CHANGES (t AS OF 0)
+
+# A maintained materialized view supports a sliding, advisory bound: the window
+# trails mz_now() by the lag, retracting changes at the trailing edge.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv
+
+# The strict sliding form errors at creation unless the input retains a full
+# window of history (instead of silently aging in, as the advisory form does).
+# The freshly created default-retention table does not retain 30 minutes.
+statement error is less than the earliest available history of its input
+CREATE MATERIALIZED VIEW changes_mv_strict AS
+  SELECT * FROM CHANGES (t AS OF mz_now() - INTERVAL '30 minutes')
+
+# A strict zero-lag window requires no history at all and is always admissible.
+# The enforcement is creation-time only; restarts resolve the start advisorily.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_strict_zero AS
+  SELECT * FROM CHANGES (t AS OF mz_now())
+
+query I
+SELECT count(*) FROM changes_mv_strict_zero
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_strict_zero
+
+# Only the `mz_now() - <interval>` shape is blessed as a sliding bound;
+# anything else falls through to ordinary planning, where mz_timestamp
+# supports no arithmetic.
+statement error operator does not exist: mz_timestamp \+ interval
+CREATE MATERIALIZED VIEW changes_mv_lag AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() + INTERVAL '1 day')
+
+# A month interval's millisecond lag varies with the calendar; the maintained
+# window machinery requires a constant lag.
+statement error must trail mz_now\(\) by a constant amount
+CREATE MATERIALIZED VIEW changes_mv_month AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1 month')
+
+# REFRESH materialized views do not compose with the sliding window yet.
+statement error CHANGES is not supported in materialized views with a refresh schedule
+CREATE MATERIALIZED VIEW changes_mv_refresh
+  WITH (REFRESH EVERY '1 day')
+  AS SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+# The window holds back compaction of the input for its entire length, so it
+# is capped by the changes_max_window system variable (default 1 day). The cap
+# is enforced at creation only; lowering it does not affect existing objects.
+statement error trails mz_now\(\) by 172800000ms, more than the maximum allowed window of 86400000ms
+CREATE MATERIALIZED VIEW changes_mv_wide AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '2 days')
+
+# A window of exactly the cap is allowed.
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_cap AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '1 day')
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_cap
+
+# Raising the cap admits wider windows.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET changes_max_window = '2 d'
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_wide AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '2 days')
+
+# Lowering the cap leaves the existing materialized view intact.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET changes_max_window
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM changes_mv_wide
+----
+0
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_wide
+
+# A zero-lag sliding bound is the degenerate window: accepted, nothing ages in,
+# only changes after creation enter (and immediately age out of the empty
+# window in a maintained view).
+statement ok
+CREATE MATERIALIZED VIEW changes_mv_zero AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now())
+
+statement ok
+DROP MATERIALIZED VIEW changes_mv_zero
+
+# Reading a collection both directly and via CHANGES in one query: the import
+# binds the raw changelog stream, the changelog read nets and packs it at its
+# own site, and the direct read advances the raw times to the query time —
+# both views of one input coexist (regression: the direct read used to consume
+# changelog rows).
+query I
+SELECT count(*) FROM t AS u, CHANGES (t AS OF mz_now())
+----
+0
+
+# The same through scalar subqueries (one dataflow serves both). The data
+# round-trip with non-empty contents is covered in test/testdrive/changes.td.
+query II
+SELECT (SELECT count(*) FROM t), (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+----
+0
+0
+
+# The same through a view: the view is inlined into the dataflow, so its read
+# of `t` is a direct read alongside the changelog read.
+query I
+SELECT count(*) FROM v, CHANGES (t AS OF mz_now())
+----
+0
+
+# And in a materialized view definition.
+statement ok
+CREATE MATERIALIZED VIEW changes_mixed AS
+  SELECT u.a FROM t AS u, CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+statement ok
+DROP MATERIALIZED VIEW changes_mixed
+
+# Two CHANGES reads of the same input coexist as well, each at its own start,
+# as does a direct read of a *different* collection.
+statement ok
+CREATE TABLE t_other (a int)
+
+query I
+SELECT (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+  + (SELECT count(*) FROM CHANGES (t AS OF mz_now()))
+  + (SELECT count(*) FROM t_other)
+----
+0
+
+statement ok
+DROP TABLE t_other
+
+# EXPLAIN renders the Changes leaf with its bound and strictness.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM CHANGES (t AS OF AT LEAST 5)
+----
+Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM CHANGES (t AS OF AT LEAST 5)
+----
+Explained Query:
+  Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A strict sliding bound resolves to the query time and is always readable;
+# its EXPLAIN shows the strict spelling.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM CHANGES (t AS OF mz_now())
+----
+Explained Query:
+  Changes materialize.public.t as_of=mz_now()
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+----
+Explained Query:
+  Changes materialize.public.t as_of_at_least=timestamp_tz_to_mz_timestamp((mz_timestamp_to_timestamp_tz(mz_now()) - 00:30:00))
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A non-temporal predicate on an input column is pushed below the changelog
+# reinterpretation, into the source import (the `filter=` on the Source),
+# enabling persist part-stats pruning. It also remains above the Changes leaf.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+----
+Explained Query:
+  Filter (#0{a} = 3)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+  filter=((#0{a} = 3))
+
+Target cluster: quickstart
+
+EOF
+
+# A predicate on the appended changelog columns (mz_timestamp, mz_diff) does not
+# exist at the raw source and must not be pushed: the Source carries no filter.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE mz_diff < 0
+----
+Explained Query:
+  Filter (#2{mz_diff} < 0)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# An unfiltered second read of the same changelog blocks the pushdown: only
+# predicates common to every use of the input may be applied at the source.
+# (Common subexpression elimination binds the identical reads to one leaf.)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 5)
+----
+Explained Query:
+  With
+    cte l0 =
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+  Return
+    Union
+      Filter (#0{a} = 3)
+        Get l0
+      Get l0
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# The changelog is append-only (every update is emitted with diff +1), so the
+# Monotonic analysis lets aggregations over it render monotonically — here a
+# hierarchical max without retraction support.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+  SELECT max(mz_timestamp) FROM CHANGES (t AS OF AT LEAST 5)
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Get::Changelog materialize.public.t
+          project=(#1)
+          raw=true
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Distinct bounds keep the two reads as separate leaves; the unfiltered one
+# still blocks the pushdown.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 6)
+----
+Explained Query:
+  Union
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+    Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(6)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# A predicate common to every read of the input is pushed, even across reads
+# with distinct bounds.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+  SELECT * FROM CHANGES (t AS OF AT LEAST 5) WHERE a = 3
+  UNION ALL SELECT * FROM CHANGES (t AS OF AT LEAST 6) WHERE a = 3
+----
+Explained Query:
+  Union
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(5)
+    Filter (#0{a} = 3)
+      Changes materialize.public.t as_of_at_least=integer_to_mz_timestamp(6)
+
+Source materialize.public.t
+  filter=((#0{a} = 3))
+
+Target cluster: quickstart
+
+EOF
+
+# Other maintained contexts (a view, an index) are not wired up, even with a
+# sliding bound.
+statement error CHANGES outside a one-off SELECT or a materialized view
+CREATE VIEW changes_view_sliding AS
+  SELECT * FROM CHANGES (t AS OF AT LEAST mz_now() - INTERVAL '30 minutes')
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t

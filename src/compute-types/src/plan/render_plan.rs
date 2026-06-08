@@ -866,6 +866,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                     ),
                     GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Arranged {id}"),
                     GetPlan::Collection(_mfp) => write!(f, "Read {id}"),
+                    GetPlan::Changelog { .. } => write!(f, "Read Changelog {id}"),
                 }
             }
             Mfp {

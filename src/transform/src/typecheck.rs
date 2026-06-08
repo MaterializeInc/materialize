@@ -915,6 +915,11 @@ impl Typecheck {
 
                 Ok(typ.column_types.iter().cloned().collect_vec())
             }
+            // `Changes` is opaque to the typechecker: its output type is the input
+            // collection's columns plus `mz_timestamp`/`mz_diff`, which by design
+            // does not match the catalog type of `id`, so we accept the ascribed
+            // type as-is rather than cross-checking it against the context.
+            Changes { typ, .. } => Ok(typ.column_types.iter().cloned().collect_vec()),
             Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
@@ -1411,6 +1416,7 @@ impl Typecheck {
                 Get {
                     id: Id::Global(..), ..
                 }
+                | Changes { .. }
                 | Constant { .. } => (),
                 Let { id, value, body } => {
                     tc.collect_recursive_variable_types(value, ids, ctx)?;

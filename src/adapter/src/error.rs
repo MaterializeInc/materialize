@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
+use std::time::Duration;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
@@ -61,6 +62,14 @@ pub enum AdapterError {
     /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
     /// (e.g., in MV sequencing)
     ChangedPlan(String),
+    /// A maintained `CHANGES` changelog read requested a window wider than
+    /// `changes_max_window` permits.
+    ChangesWindowTooLarge {
+        /// The requested window.
+        window: Duration,
+        /// The configured cap.
+        max: Duration,
+    },
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
@@ -494,6 +503,11 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
+            AdapterError::ChangesWindowTooLarge { .. } => Some(
+                "Use a smaller window, or raise the changes_max_window system variable. The \
+                window holds back compaction of the input for its entire length."
+                    .to_string(),
+            ),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -589,6 +603,7 @@ impl AdapterError {
                 _ => SqlState::INTERNAL_ERROR,
             },
             AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ChangesWindowTooLarge { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -675,6 +690,9 @@ impl AdapterError {
                 OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UnsupportedTemporalExpression(_) => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::ChangesHistoryUnavailable { .. } => {
+                    SqlState::INVALID_PARAMETER_VALUE
+                }
                 OptimizerError::RestrictedFunction(_) => SqlState::INSUFFICIENT_PRIVILEGE,
                 // This should be handled by peek optimization, so it's an internal error if it
                 // reaches the user.
@@ -898,6 +916,15 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::ChangedPlan(e) => write!(f, "{}", e),
+            AdapterError::ChangesWindowTooLarge { window, max } => {
+                write!(
+                    f,
+                    "the AS OF bound of CHANGES trails mz_now() by {}ms, more than the maximum \
+                    allowed window of {}ms",
+                    window.as_millis(),
+                    max.as_millis(),
+                )
+            }
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())

@@ -534,6 +534,23 @@ pub enum GetPlan {
     Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MapFilterProject),
+    /// Read the input collection — a *raw* changelog import — as an append-only
+    /// changelog (`CHANGES`), then apply the MFP to the extended
+    /// `(input.., mz_timestamp, mz_diff)` rows.
+    ///
+    /// Rendering advances the raw updates' event times to the read's start
+    /// (collapsing this read's snapshot), nets them per `(row, time)` through an
+    /// arrangement, packs each netted update `(row, time, diff)` into an extended
+    /// row emitted with diff `+1`, and advances the emission times to the
+    /// dataflow `as_of`.
+    Changelog {
+        /// This read's resolved changelog start (a one-off read's evaluated
+        /// bound). `None` for maintained reads, which replay deltas strictly
+        /// after the import-level start and need no per-read collapse.
+        start: Option<mz_repr::Timestamp>,
+        /// The MFP to apply to the packed changelog rows.
+        mfp: MapFilterProject,
+    },
 }
 
 impl Plan {
@@ -631,6 +648,20 @@ impl Plan {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            // A changelog read (`CHANGES`) must not have its `Get`'s MFP pushed
+            // into the source operators: rendering reinterprets the raw source
+            // read into the extended `(input.., mz_timestamp, mz_diff)` rows
+            // *after* `persist_source` applies these operators. Pushing the MFP
+            // down would apply it (e.g. a projection referencing the appended
+            // `mz_timestamp`/`mz_diff` columns) to the raw, narrower rows and
+            // index out of bounds. The MFP stays on the `Get`, where rendering
+            // applies it to the reinterpreted, extended collection. The subset
+            // of predicates that commutes with the reinterpretation (those on
+            // input columns, non-temporal) is pushed at the MIR level instead,
+            // by `optimize_dataflow_filters`.
+            if source_import.read_as_changelog() {
+                continue;
+            }
             let source = &mut source_import.desc;
             let mut identity_present = false;
             let mut mfps = Vec::new();
@@ -643,6 +674,11 @@ impl Plan {
                             match plan {
                                 GetPlan::Collection(mfp) => mfps.push(mfp),
                                 GetPlan::PassArrangements => {
+                                    identity_present = true;
+                                }
+                                // Unreachable: changelog imports are skipped above. Treat as
+                                // identity to block hoisting defensively.
+                                GetPlan::Changelog { .. } => {
                                     identity_present = true;
                                 }
                                 GetPlan::Arrangement(..) => {

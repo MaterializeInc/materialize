@@ -132,6 +132,9 @@ impl ProjectionPushdown {
             // add a project around `relation`.
             let actual_projection = match relation {
                 MirRelationExpr::Constant { .. } => (0..relation.arity()).collect(),
+                // Opaque leaf: a changelog read produces a fixed set of columns,
+                // so we don't push a projection into it.
+                MirRelationExpr::Changes { .. } => (0..relation.arity()).collect(),
                 MirRelationExpr::Get { id, .. } => {
                     gets.entry(*id)
                         .or_insert_with(BTreeSet::new)

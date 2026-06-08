@@ -165,6 +165,20 @@ impl HirRelationExpr {
                     writeln!(f, "{}Get {}", ctx.indent, humanized_id)?;
                 }
             },
+            Changes {
+                id, bound, strict, ..
+            } => {
+                let humanized_id = ctx
+                    .humanizer
+                    .humanize_id(*id)
+                    .unwrap_or_else(|| id.to_string());
+                let kind = if *strict { "as_of" } else { "as_of_at_least" };
+                writeln!(
+                    f,
+                    "{}Changes {} {}={}",
+                    ctx.indent, humanized_id, kind, bound
+                )?;
+            }
             Project { outputs, input } => {
                 let outputs = Indices(outputs);
                 writeln!(f, "{}Project ({})", ctx.indent, outputs)?;

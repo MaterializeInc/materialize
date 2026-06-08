@@ -73,6 +73,8 @@ impl ProjectionLifting {
         self.checked_recur(|_| {
             match relation {
                 MirRelationExpr::Constant { .. } => Ok(()),
+                // Opaque leaf; don't lift a projection through a changelog read.
+                MirRelationExpr::Changes { .. } => Ok(()),
                 MirRelationExpr::Get {
                     id,
                     typ: _,

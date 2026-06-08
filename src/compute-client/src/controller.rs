@@ -42,7 +42,7 @@ use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{ChangelogMode, DataflowDescription};
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -786,6 +786,26 @@ impl ComputeController {
         for hold in &import_read_holds {
             if PartialOrder::less_than(as_of, hold.since()) {
                 return Err(SinceViolation(hold.id()));
+            }
+            // A changelog import (`CHANGES`) reads from its resolved `start`,
+            // at or below the `as_of`; the instance downgrades the import's
+            // read hold to it, so it must be readable. A strict (`AS OF`)
+            // bound pinned below the input's `since` fails here, surfacing
+            // the unavailable history. (A `Maintained` start is computed as
+            // `join(since, ...)` and so always passes.)
+            if let Some(import) = dataflow.source_imports.get(&hold.id()) {
+                let start = match &import.changelog {
+                    Some(ChangelogMode::OneShot { start }) => Some(start),
+                    Some(ChangelogMode::Maintained {
+                        start: Some(start), ..
+                    }) => Some(start),
+                    _ => None,
+                };
+                if let Some(start) = start {
+                    if PartialOrder::less_than(start, hold.since()) {
+                        return Err(SinceViolation(hold.id()));
+                    }
+                }
             }
         }
 

@@ -332,6 +332,25 @@ impl HirRelationExpr {
                         })
                     }
                 },
+                Changes {
+                    id,
+                    typ,
+                    bound,
+                    strict,
+                } => {
+                    // A changelog read is uncorrelated with `get_outer`, like a
+                    // global `Get`. The bound is already a lowered, uncorrelated
+                    // scalar, so it is copied through verbatim.
+                    get_outer.product(SR::Changes {
+                        id,
+                        typ: ReprRelationType::from(&typ),
+                        bound,
+                        strict,
+                        // Filled in by the peek optimizer at timestamp
+                        // resolution; maintained reads resolve on the import.
+                        resolved_start: None,
+                    })
+                }
                 Let {
                     name: _,
                     id,

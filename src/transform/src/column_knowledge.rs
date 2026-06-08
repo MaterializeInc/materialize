@@ -89,6 +89,10 @@ impl ColumnKnowledge {
                         typ.column_types.iter().map(DatumKnowledge::from).collect()
                     }))
                 }
+                MirRelationExpr::Changes { typ, .. } => {
+                    // Opaque leaf; derive column knowledge from its declared type.
+                    Ok(typ.column_types.iter().map(DatumKnowledge::from).collect())
+                }
                 MirRelationExpr::Constant { rows, typ } => {
                     // TODO: handle multi-row cases with some constant columns.
                     if let Ok([(row, _diff)]) = rows.as_deref() {

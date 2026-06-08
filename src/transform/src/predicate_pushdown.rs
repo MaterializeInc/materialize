@@ -197,6 +197,18 @@ impl PredicatePushdown {
                                 .or_insert_with(|| predicates.iter().cloned().collect())
                                 .retain(|p| predicates.contains(p));
                         }
+                        MirRelationExpr::Changes { id, .. } => {
+                            // As for `Get`: report the predicates upward, keyed by the
+                            // read collection. The changelog schema starts with the
+                            // input's columns, so predicates on those columns mean the
+                            // same thing at the source; `optimize_dataflow_filters`
+                            // pushes only such predicates into the changelog source
+                            // import (see the changelog handling there).
+                            get_predicates
+                                .entry(Id::Global(*id))
+                                .or_insert_with(|| predicates.iter().cloned().collect())
+                                .retain(|p| predicates.contains(p));
+                        }
                         MirRelationExpr::Join {
                             inputs,
                             equivalences,
@@ -510,6 +522,16 @@ impl PredicatePushdown {
                     // Purge all predicates associated with the id.
                     get_predicates
                         .entry(*id)
+                        .or_insert_with(BTreeSet::new)
+                        .clear();
+
+                    Ok(())
+                }
+                MirRelationExpr::Changes { id, .. } => {
+                    // As for `Get`: an unfiltered use means no predicate is common to
+                    // all uses of the id, so none may be pushed into the import.
+                    get_predicates
+                        .entry(Id::Global(*id))
                         .or_insert_with(BTreeSet::new)
                         .clear();
 

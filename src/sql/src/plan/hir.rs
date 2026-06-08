@@ -116,6 +116,23 @@ pub enum HirRelationExpr {
         id: mz_expr::Id,
         typ: SqlRelationType,
     },
+    /// Read a global collection as an append-only changelog (the `CHANGES`
+    /// table function), with lower bound `bound`. Lowers to
+    /// [`mz_expr::MirRelationExpr::Changes`].
+    Changes {
+        /// The global collection to read as a changelog.
+        id: GlobalId,
+        /// The extended schema: the input columns plus `mz_timestamp` and
+        /// `mz_diff`.
+        typ: SqlRelationType,
+        /// The changelog lower bound, as an already-lowered `mz_timestamp`-typed
+        /// scalar: a constant for a fixed bound, or an `mz_now()`-relative
+        /// expression for a sliding window. Evaluated by the coordinator (which
+        /// resolves `mz_now()` to the query time) to pin the dataflow `as_of`.
+        bound: mz_expr::MirScalarExpr,
+        /// Whether the bound is strict (`AS OF`) or advisory (`AS OF AT LEAST`).
+        strict: bool,
+    },
     /// Mutually recursive CTE
     LetRec {
         /// Maximum number of iterations to evaluate. If None, then there is no limit.
@@ -1638,6 +1655,7 @@ impl HirRelationExpr {
         stack::maybe_grow(|| match self {
             HirRelationExpr::Constant { typ, .. } => typ.clone(),
             HirRelationExpr::Get { typ, .. } => typ.clone(),
+            HirRelationExpr::Changes { typ, .. } => typ.clone(),
             HirRelationExpr::Let { body, .. } => body.typ(outers, params),
             HirRelationExpr::LetRec { body, .. } => body.typ(outers, params),
             HirRelationExpr::Project { input, outputs } => {
@@ -1722,6 +1740,7 @@ impl HirRelationExpr {
         match self {
             HirRelationExpr::Constant { typ, .. } => typ.column_types.len(),
             HirRelationExpr::Get { typ, .. } => typ.column_types.len(),
+            HirRelationExpr::Changes { typ, .. } => typ.column_types.len(),
             HirRelationExpr::Let { body, .. } => body.arity(),
             HirRelationExpr::LetRec { body, .. } => body.arity(),
             HirRelationExpr::Project { outputs, .. } => outputs.len(),
@@ -1993,6 +2012,7 @@ impl HirRelationExpr {
         match self {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
+            | HirRelationExpr::Changes { .. }
             | HirRelationExpr::CallTable { .. } => (),
             HirRelationExpr::Let { body, value, .. } => {
                 f(value, depth)?;
@@ -2084,6 +2104,7 @@ impl HirRelationExpr {
         match self {
             HirRelationExpr::Constant { .. }
             | HirRelationExpr::Get { .. }
+            | HirRelationExpr::Changes { .. }
             | HirRelationExpr::CallTable { .. } => (),
             HirRelationExpr::Let { body, value, .. } => {
                 f(value, depth)?;
@@ -2195,7 +2216,8 @@ impl HirRelationExpr {
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
-                | HirRelationExpr::Get { .. } => (),
+                | HirRelationExpr::Get { .. }
+                | HirRelationExpr::Changes { .. } => (),
             }
             Ok(())
         })
@@ -2253,7 +2275,8 @@ impl HirRelationExpr {
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
-                | HirRelationExpr::Get { .. } => (),
+                | HirRelationExpr::Get { .. }
+                | HirRelationExpr::Changes { .. } => (),
             }
             Ok(())
         })
@@ -2516,11 +2539,16 @@ impl CollectionPlan for HirRelationExpr {
     /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
-        if let Self::Get {
-            id: Id::Global(id), ..
-        } = self
-        {
-            out.insert(*id);
+        match self {
+            Self::Get {
+                id: Id::Global(id), ..
+            } => {
+                out.insert(*id);
+            }
+            Self::Changes { id, .. } => {
+                out.insert(*id);
+            }
+            _ => {}
         }
         self.visit_children(|expr: &HirRelationExpr| expr.depends_on_into(out))
     }
@@ -2545,7 +2573,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } | Changes { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2628,7 +2656,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } | Changes { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2712,7 +2740,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } | Changes { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2797,7 +2825,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } | Changes { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2881,6 +2909,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         match self {
             Constant { rows: _, typ: _ }
             | Get { id: _, typ: _ }
+            | Changes { .. }
             | Let {
                 name: _,
                 id: _,
@@ -2958,6 +2987,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         match self {
             Constant { rows: _, typ: _ }
             | Get { id: _, typ: _ }
+            | Changes { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3036,6 +3066,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         match self {
             Constant { rows: _, typ: _ }
             | Get { id: _, typ: _ }
+            | Changes { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3115,6 +3146,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         match self {
             Constant { rows: _, typ: _ }
             | Get { id: _, typ: _ }
+            | Changes { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3514,9 +3546,9 @@ impl HirScalarExpr {
         true
     }
 
-    pub fn call_unary(self, func: UnaryFunc) -> Self {
+    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
         HirScalarExpr::CallUnary {
-            func,
+            func: func.into(),
             expr: Box::new(self),
             name: NameMetadata::default(),
         }

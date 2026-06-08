@@ -106,6 +106,8 @@ impl Analysis for Equivalences {
                 }
                 Some(equivalences)
             }
+            // `Changes` is an opaque global leaf; no equivalences are known.
+            MirRelationExpr::Changes { .. } => Some(EquivalenceClasses::default()),
             MirRelationExpr::Get { id, typ, .. } => {
                 let mut equivalences = Some(EquivalenceClasses::default());
                 // Find local identifiers, but nothing for external identifiers.

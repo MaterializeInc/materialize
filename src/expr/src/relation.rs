@@ -128,6 +128,49 @@ pub enum MirRelationExpr {
         #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
     },
+    /// Read an existing global collection as an append-only changelog (the
+    /// `CHANGES` table function), with lower bound `bound`.
+    ///
+    /// This is a leaf, like [`MirRelationExpr::Get`], but it is deliberately
+    /// opaque to the optimizer: its output schema is the input collection's
+    /// columns plus `mz_timestamp` and `mz_diff` (so it does not match the
+    /// catalog type of `id`), and each input update `(row, time, diff)` is
+    /// reinterpreted as a forward-only append `((row, time, diff), max(time,
+    /// as_of), 1)`. It is lowered straight to a changelog source import.
+    ///
+    /// The runtime memory footprint of this operator is zero.
+    Changes {
+        /// The identifier of the global collection to read as a changelog.
+        #[mzreflect(ignore)]
+        id: GlobalId,
+        /// The (extended) schema of the changelog: the input columns followed by
+        /// `mz_timestamp` and `mz_diff`.
+        typ: ReprRelationType,
+        /// The changelog lower bound, as an `mz_timestamp`-typed scalar. It is a
+        /// constant for a fixed bound, or an `mz_now()`-relative expression for a
+        /// sliding window. The coordinator evaluates it (resolving `mz_now()` to
+        /// the query time) to pin the dataflow `as_of`; the snapshot collapses to
+        /// that time and changes after it are appended at the time they occurred.
+        /// It is opaque to the optimizer (not visited as a child scalar) and is
+        /// dropped when lowered to a changelog source import.
+        #[mzreflect(ignore)]
+        bound: MirScalarExpr,
+        /// Whether the bound is strict (`AS OF`) or advisory (`AS OF AT LEAST`).
+        /// A strict bound is pinned exactly (reading below the input's `since`
+        /// is an error); an advisory bound ages in, clamping up to `since`.
+        #[mzreflect(ignore)]
+        strict: bool,
+        /// This read's resolved changelog start. The peek optimizer fills it in
+        /// at timestamp resolution (evaluating `bound` at the query time and
+        /// clamping an advisory bound up to the input's `since`), and lowering
+        /// carries it into the LIR changelog read. `None` until then, and for
+        /// maintained reads, whose start is resolved on the source import
+        /// instead. Not displayed by EXPLAIN — the resolved value is
+        /// query-time-dependent — and deliberately part of equality: reads with
+        /// equal resolved starts are interchangeable.
+        #[mzreflect(ignore)]
+        resolved_start: Option<mz_repr::Timestamp>,
+    },
     /// Introduce a temporary dataflow.
     ///
     /// The runtime memory footprint of this operator is zero.
@@ -455,6 +498,7 @@ impl MirRelationExpr {
                 col_types
             }
             Get { typ, .. } => typ.column_types.clone(),
+            Changes { typ, .. } => typ.column_types.clone(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -606,7 +650,9 @@ impl MirRelationExpr {
                         .collect()
                 }
             }
-            Constant { rows: Err(_), typ } | Get { typ, .. } => typ.keys.clone(),
+            Constant { rows: Err(_), typ } | Get { typ, .. } | Changes { typ, .. } => {
+                typ.keys.clone()
+            }
             Threshold { .. } | ArrangeBy { .. } => input_keys.next().unwrap().clone(),
             Let { .. } => {
                 // skip over the unique keys for value
@@ -1028,6 +1074,7 @@ impl MirRelationExpr {
         match self {
             Constant { rows: _, typ } => typ.arity(),
             Get { typ, .. } => typ.arity(),
+            Changes { typ, .. } => typ.arity(),
             Let { .. } => {
                 input_arities.next();
                 input_arities.next().unwrap()
@@ -1775,6 +1822,7 @@ impl MirRelationExpr {
             }
             Constant { .. }
             | Get { .. }
+            | Changes { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
@@ -1904,6 +1952,7 @@ impl MirRelationExpr {
             }
             Constant { .. }
             | Get { .. }
+            | Changes { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
@@ -2231,11 +2280,16 @@ impl CollectionPlan for MirRelationExpr {
     /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
-        if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
-        } = self
-        {
-            out.insert(*id);
+        match self {
+            MirRelationExpr::Get {
+                id: Id::Global(id), ..
+            } => {
+                out.insert(*id);
+            }
+            MirRelationExpr::Changes { id, .. } => {
+                out.insert(*id);
+            }
+            _ => {}
         }
         self.visit_children(|expr| expr.depends_on_into(out))
     }
@@ -2251,7 +2305,7 @@ impl MirRelationExpr {
 
         use MirRelationExpr::*;
         match self {
-            Constant { .. } | Get { .. } => (),
+            Constant { .. } | Get { .. } | Changes { .. } => (),
             Let { value, body, .. } => {
                 first = Some(&**value);
                 second = Some(&**body);
@@ -2296,7 +2350,7 @@ impl MirRelationExpr {
 
         use MirRelationExpr::*;
         match self {
-            Constant { .. } | Get { .. } => (),
+            Constant { .. } | Get { .. } | Changes { .. } => (),
             Let { value, body, .. } => {
                 first = Some(&mut **value);
                 second = Some(&mut **body);
@@ -4118,6 +4172,32 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    fn changes_eq_agrees_with_cmp() {
+        // Regression test: `MirRelationExpr::eq` (via `MreDiff`) and `Ord::cmp`
+        // must agree for the `Changes` variant. A missing `MreDiff` arm made
+        // `eq` report two identical `Changes` nodes as unequal while `cmp` said
+        // equal, tripping the consistency soft-assert (and panicking the
+        // optimizer's fixpoint, which compares an expression to its prior form).
+        let changes = MirRelationExpr::Changes {
+            id: GlobalId::User(1),
+            typ: mz_repr::ReprRelationType::new(vec![
+                mz_repr::ReprScalarType::MzTimestamp.nullable(false),
+            ]),
+            bound: MirScalarExpr::literal_ok(
+                mz_repr::Datum::MzTimestamp(mz_repr::Timestamp::from(0u64)),
+                mz_repr::ReprScalarType::MzTimestamp,
+            ),
+            strict: true,
+            resolved_start: None,
+        };
+        let other = changes.clone();
+        // `eq` soft-asserts internally that it agrees with `cmp`; this would
+        // panic if the `MreDiff` arm were missing.
+        assert!(changes == other);
+        assert_eq!(changes.cmp(&other), Ordering::Equal);
+    }
+
+    #[mz_ore::test]
     fn test_row_set_finishing_as_text() {
         let finishing = RowSetFinishing {
             order_by: vec![ColumnOrder {
@@ -4458,6 +4538,32 @@ mod structured_diff {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.push((input1, input2));
+                        }
+                    }
+                    (
+                        MirRelationExpr::Changes {
+                            id: id1,
+                            typ: typ1,
+                            bound: bound1,
+                            strict: strict1,
+                            resolved_start: resolved_start1,
+                        },
+                        MirRelationExpr::Changes {
+                            id: id2,
+                            typ: typ2,
+                            bound: bound2,
+                            strict: strict2,
+                            resolved_start: resolved_start2,
+                        },
+                    ) => {
+                        // A leaf, like `Get`: no child relations to recurse into.
+                        if id1 != id2
+                            || typ1 != typ2
+                            || bound1 != bound2
+                            || strict1 != strict2
+                            || resolved_start1 != resolved_start2
+                        {
+                            return Some((expr1, expr2));
                         }
                     }
                     _ => {

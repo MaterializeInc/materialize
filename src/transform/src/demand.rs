@@ -119,6 +119,11 @@ impl Demand {
                     // Nothing clever to do with constants, that I can think of.
                     Ok(())
                 }
+                MirRelationExpr::Changes { .. } => {
+                    // Opaque leaf: a changelog read produces a fixed set of
+                    // columns, so we don't push demand into it.
+                    Ok(())
+                }
                 MirRelationExpr::Get { id, .. } => {
                     gets.entry(*id)
                         .or_insert_with(BTreeSet::new)

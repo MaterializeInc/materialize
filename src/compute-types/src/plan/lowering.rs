@@ -302,9 +302,9 @@ impl Context {
                 // both indexes and materialized views hold back future updates.
                 let has_future_updates = self.has_future_updates.contains(id)
                     || match &plan {
-                        GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
-                            mfp.has_temporal_predicates()
-                        }
+                        GetPlan::Arrangement(_, _, mfp)
+                        | GetPlan::Collection(mfp)
+                        | GetPlan::Changelog { mfp, .. } => mfp.has_temporal_predicates(),
                         GetPlan::PassArrangements => false,
                     };
 
@@ -318,6 +318,39 @@ impl Context {
                 LoweredExpr {
                     plan: node.as_plan(lir_id),
                     keys: out_keys,
+                    has_future_updates,
+                }
+            }
+            MirRelationExpr::Changes {
+                id, resolved_start, ..
+            } => {
+                // A changelog read lowers to a `Get` of the *raw* source import
+                // for `id` with `GetPlan::Changelog`: the reinterpretation
+                // (advance to this read's start, net per `(row, time)`, append
+                // `mz_timestamp`/`mz_diff`, emit at `max(time, as_of)` with diff
+                // `+1`) happens at this consumer, in rendering. A one-off read
+                // carries its own start, resolved by the peek optimizer into
+                // `resolved_start`; a maintained read's start lives in the
+                // import's `ChangelogMode::Maintained` and rendering needs no
+                // per-read collapse (deltas are replayed strictly after it). The
+                // raw import is a raw collection (no arrangement), so there are
+                // no input arrangements to surface or constrain; the leftover MFP
+                // applies to the packed changelog rows.
+                let id = Id::Global(*id);
+                let mfp = mfp.take();
+                let start = *resolved_start;
+                let has_future_updates = mfp.has_temporal_predicates();
+                let plan = GetPlan::Changelog { start, mfp };
+                let in_keys = AvailableCollections::new_raw();
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Get {
+                    id,
+                    keys: in_keys,
+                    plan,
+                };
+                LoweredExpr {
+                    plan: node.as_plan(lir_id),
+                    keys: AvailableCollections::new_raw(),
                     has_future_updates,
                 }
             }

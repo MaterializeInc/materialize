@@ -98,6 +98,11 @@ impl NonNullRequirements {
                     }
                     Ok(())
                 }
+                MirRelationExpr::Changes { .. } => {
+                    // Opaque leaf; non-null requirements don't propagate into a
+                    // changelog read.
+                    Ok(())
+                }
                 MirRelationExpr::Get { id, .. } => {
                     gets.entry(*id).or_insert_with(Vec::new).push(columns);
                     Ok(())

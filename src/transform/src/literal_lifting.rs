@@ -138,6 +138,8 @@ impl LiteralLifting {
     ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
         self.checked_recur(|_| {
             match relation {
+                // Opaque leaf; no literals to lift from a changelog read.
+                MirRelationExpr::Changes { .. } => Ok(Vec::new()),
                 MirRelationExpr::Constant { rows, typ } => {
                     // From the back to the front, check if all values are identical.
                     let mut the_same = vec![true; typ.arity()];

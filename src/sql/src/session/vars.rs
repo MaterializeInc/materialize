@@ -1162,6 +1162,7 @@ impl SystemVars {
             &STORAGE_STATISTICS_COLLECTION_INTERVAL,
             &STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO,
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
+            &CHANGES_MAX_WINDOW,
             &PERSIST_FAST_PATH_LIMIT,
             &METRICS_RETENTION,
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
@@ -1777,6 +1778,11 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_write_buffer_manager_allow_stall(&self) -> bool {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
+    }
+
+    /// Returns the `changes_max_window` configuration parameter.
+    pub fn changes_max_window(&self) -> Duration {
+        *self.expect_value(&CHANGES_MAX_WINDOW)
     }
 
     pub fn persist_fast_path_limit(&self) -> usize {

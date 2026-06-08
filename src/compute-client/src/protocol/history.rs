@@ -12,9 +12,11 @@
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_compute_types::dataflows::ChangelogMode;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::{assert_none, soft_assert_or_log};
+use mz_repr::Timestamp;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 
@@ -169,6 +171,33 @@ where
                         final_frontiers.remove(&id);
                     }
                 }
+            }
+
+            // Advance the read start of maintained changelog imports
+            // (`CHANGES`) along with the `as_of`: `start = join(start,
+            // as_of - window)`. The lagged dependency hold guarantees the
+            // advanced start is still readable (the hold trails the
+            // collection's read frontier — which bounds the compacted `as_of`
+            // above — by the window).
+            let changelog_updates: Vec<_> = dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, import)| match &import.changelog {
+                    Some(ChangelogMode::Maintained { window, .. }) => {
+                        let lagged: Antichain<_> = as_of
+                            .iter()
+                            .map(|t| {
+                                Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window)))
+                            })
+                            .collect();
+                        Some((*id, lagged))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (id, lagged) in changelog_updates {
+                // `set_changelog_start` joins with any existing start.
+                dataflow.set_changelog_start(&id, lagged);
             }
 
             dataflow.as_of = Some(as_of);

@@ -81,7 +81,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use mz_compute_types::dataflows::DataflowDescription;
+use differential_dataflow::lattice::Lattice;
+use mz_compute_types::dataflows::{ChangelogMode, DataflowDescription};
 use mz_compute_types::plan::Plan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
@@ -139,6 +140,15 @@ pub fn run(
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
     ctx.apply_downstream_storage_constraints();
 
+    // Apply soft constraints for maintained changelog imports (`CHANGES`):
+    // exact window reproduction wants `as_of >= since + window`. Applied after
+    // the downstream hard constraints so that a conflict (the input's `since`
+    // slipped too close to the output's write frontier) degrades to the
+    // already-bounded upper rather than overshooting it; the changelog start
+    // then clamps to the input's `since` and the persist sink corrects the
+    // output (the advisory fallback).
+    ctx.apply_changelog_storage_constraints(&storage_read_holds);
+
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
     // bounds are likely to be the empty frontier, so if we'd select as-ofs on this basis, the
@@ -164,12 +174,39 @@ pub fn run(
     ctx.apply_index_current_time_constraints();
 
     // Apply the derived as-of bounds to the dataflows.
-    for dataflow in dataflows {
+    for dataflow in dataflows.iter_mut() {
         // `AsOfBounds` are shared between the exports of a dataflow, so looking at just the first
         // export is sufficient.
         let first_export = dataflow.export_ids().next();
         let as_of = first_export.map_or_else(Antichain::new, |id| ctx.best_as_of(id));
         dataflow.as_of = Some(as_of);
+    }
+
+    // Resolve the read start of maintained changelog imports (`CHANGES`):
+    // `join(since, as_of - window)`. With the as-of constrained to
+    // `>= since + window` above this is `as_of - window` (exact window
+    // reproduction); if that constraint could not be applied, the start clamps
+    // to the input's `since` (the advisory fallback).
+    for dataflow in dataflows.iter_mut() {
+        let as_of = dataflow.as_of.clone().expect("as_of assigned above");
+        let changelog_starts: Vec<_> = dataflow
+            .source_imports
+            .iter()
+            .filter_map(|(id, import)| match &import.changelog {
+                Some(ChangelogMode::Maintained { window, .. }) => {
+                    let lagged: Antichain<_> = as_of
+                        .iter()
+                        .map(|t| Timestamp::from(u64::from(*t).saturating_sub(u64::from(*window))))
+                        .collect();
+                    let since = storage_read_holds[id].since();
+                    Some((*id, lagged.join(since)))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, start) in changelog_starts {
+            dataflow.set_changelog_start(&id, start);
+        }
     }
 
     storage_read_holds
@@ -320,6 +357,9 @@ impl Constraint<'_> {
 /// State tracked for a compute collection during as-of selection.
 struct Collection<'a> {
     storage_inputs: Vec<GlobalId>,
+    /// Storage inputs read as maintained changelogs (`CHANGES`), with their
+    /// sliding-window lags.
+    changelog_inputs: Vec<(GlobalId, Timestamp)>,
     compute_inputs: Vec<GlobalId>,
     read_policy: Option<&'a ReadPolicy>,
     /// The currently known as-of bounds.
@@ -350,6 +390,14 @@ impl<'a> Context<'a> {
         let mut collections = BTreeMap::new();
         for dataflow in dataflows {
             let storage_inputs: Vec<_> = dataflow.source_imports.keys().copied().collect();
+            let changelog_inputs: Vec<_> = dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, import)| match &import.changelog {
+                    Some(ChangelogMode::Maintained { window, .. }) => Some((*id, *window)),
+                    _ => None,
+                })
+                .collect();
             let compute_inputs: Vec<_> = dataflow.index_imports.keys().copied().collect();
 
             let bounds = match dataflow.as_of.clone() {
@@ -361,6 +409,7 @@ impl<'a> Context<'a> {
             for id in dataflow.export_ids() {
                 let collection = Collection {
                     storage_inputs: storage_inputs.clone(),
+                    changelog_inputs: changelog_inputs.clone(),
                     compute_inputs: compute_inputs.clone(),
                     read_policy: read_policies.get(&id),
                     bounds: Rc::clone(&bounds),
@@ -498,6 +547,44 @@ impl<'a> Context<'a> {
 
         // Propagate constraints upstream, restoring `AsOfBounds` invariant (2).
         self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Apply as-of constraints imposed by maintained changelog imports
+    /// (`CHANGES`).
+    ///
+    /// A collection's as-of _should_ be >= `since + window` for each of its
+    /// maintained changelog inputs, so that the delta replay from
+    /// `as_of - window` can reproduce the previously written window exactly.
+    ///
+    /// Failing to apply this constraint is not an error: the changelog start
+    /// clamps up to the input's `since` and the persist sink corrects the
+    /// previously written output (the advisory fallback). It is applied after
+    /// the downstream storage (hard) constraints so a conflict resolves to
+    /// their upper bound instead of overshooting it.
+    fn apply_changelog_storage_constraints(
+        &self,
+        storage_read_holds: &BTreeMap<GlobalId, ReadHold>,
+    ) {
+        for (id, collection) in &self.collections {
+            for (input_id, window) in &collection.changelog_inputs {
+                let read_hold = &storage_read_holds[input_id];
+                let stepped: Antichain<_> = read_hold
+                    .since()
+                    .iter()
+                    .map(|t| Timestamp::from(u64::from(*t).saturating_add(u64::from(*window))))
+                    .collect();
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Lower,
+                    frontier: &stepped,
+                    reason: &format!("changelog window over storage input {input_id}"),
+                };
+                self.apply_constraint(*id, constraint);
+            }
+        }
+
+        // Propagate constraints downstream, restoring `AsOfBounds` invariant (1).
+        self.propagate_bounds_downstream(BoundType::Lower);
     }
 
     /// Apply as-of constraints to ensure collections can hydrate immediately.
@@ -1080,6 +1167,7 @@ mod tests {
                         monotonic: Default::default(),
                         with_snapshot: true,
                         upper: Default::default(),
+                        changelog: None,
                     },
                 )
             })
@@ -1319,6 +1407,88 @@ mod tests {
         current_time: 15,
         read_only: true,
     });
+
+    /// Builds the single-dataflow setup for the changelog tests: an MV `u1`
+    /// over a maintained changelog read of `s1` with the given window, with
+    /// the given storage frontiers. Returns the selected `as_of` and the
+    /// resolved changelog `start`.
+    fn run_changelog_case(
+        s1_frontiers: (u64, u64),
+        u1_frontiers: (u64, u64),
+        window: u64,
+    ) -> (Antichain<Timestamp>, Antichain<Timestamp>) {
+        let storage_ids = BTreeSet::from(["s1", "u1"]);
+        let storage_frontiers = StorageFrontiers(BTreeMap::from([
+            (
+                "s1".parse().unwrap(),
+                (
+                    ts_to_frontier(s1_frontiers.0),
+                    ts_to_frontier(s1_frontiers.1),
+                ),
+            ),
+            (
+                "u1".parse().unwrap(),
+                (
+                    ts_to_frontier(u1_frontiers.0),
+                    ts_to_frontier(u1_frontiers.1),
+                ),
+            ),
+        ]));
+
+        let mut df = dataflow("u1", &["s1"], &storage_ids);
+        let s1: GlobalId = "s1".parse().unwrap();
+        df.source_imports.get_mut(&s1).unwrap().changelog = Some(ChangelogMode::Maintained {
+            window: window.into(),
+            start: None,
+            strict_window: None,
+            snapshot_for_direct_reads: false,
+        });
+
+        let mut dataflows = [df];
+        super::run(
+            &mut dataflows,
+            &BTreeMap::new(),
+            &storage_frontiers,
+            100.into(),
+            false,
+        );
+
+        let [df] = dataflows;
+        let as_of = df.as_of.expect("as_of assigned");
+        let Some(ChangelogMode::Maintained {
+            start: Some(start), ..
+        }) = df.source_imports[&s1].changelog.clone()
+        else {
+            panic!(
+                "changelog start not resolved: {:?}",
+                df.source_imports[&s1].changelog
+            );
+        };
+        (as_of, start)
+    }
+
+    /// A maintained changelog import constrains the as-of to `since + window`
+    /// (exact window reproduction), and the resolved start is `as_of - window`.
+    #[mz_ore::test]
+    fn changelog_storage_constraints() {
+        let (as_of, start) = run_changelog_case((10, 30), (10, 21), 5);
+        // The downstream constraint pins the as-of to `u1`'s write frontier
+        // - 1 = 20; the changelog lower bound (since + window = 15) is
+        // satisfied, and the start is `as_of - window`.
+        assert_eq!(as_of, ts_to_frontier(20));
+        assert_eq!(start, ts_to_frontier(15));
+    }
+
+    /// When the input's `since` has slipped too close to the output's write
+    /// frontier, the soft changelog constraint degrades: the as-of stays at
+    /// the downstream-imposed upper, and the start clamps to the input's
+    /// `since` (the advisory fallback).
+    #[mz_ore::test]
+    fn changelog_storage_constraints_conflict() {
+        let (as_of, start) = run_changelog_case((18, 30), (10, 21), 5);
+        assert_eq!(as_of, ts_to_frontier(20));
+        assert_eq!(start, ts_to_frontier(18));
+    }
 
     // Regression test for database-issues#9273.
     testcase!(github_9273, {

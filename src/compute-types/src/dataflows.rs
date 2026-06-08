@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use differential_dataflow::lattice::Lattice;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
@@ -148,7 +149,17 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
+    ///
+    /// `changelog` requests that the source be read as an append-only
+    /// changelog (the `CHANGES` table function) in the given mode, rather than
+    /// as its accumulated contents.
+    pub fn import_source(
+        &mut self,
+        id: GlobalId,
+        typ: SqlRelationType,
+        monotonic: bool,
+        changelog: Option<ChangelogMode>,
+    ) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         // Similarly, we require the snapshot by default, though optimization may choose to skip it.
@@ -163,8 +174,22 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 monotonic,
                 with_snapshot: true,
                 upper: Antichain::new(),
+                changelog,
             },
         );
+    }
+
+    /// Marks the source import for `id` to be read as an append-only changelog
+    /// (the `CHANGES` table function) in the given mode. Returns whether a
+    /// matching source import was found.
+    pub fn set_source_changelog(&mut self, id: &GlobalId, mode: ChangelogMode) -> bool {
+        match self.source_imports.get_mut(id) {
+            Some(import) => {
+                import.changelog = Some(mode);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Binds to `id` the relation expression `plan`.
@@ -255,6 +280,23 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
 }
 
 impl<P, S> DataflowDescription<P, S> {
+    /// Sets the resolved read start of the maintained changelog import for
+    /// `id` (the `CHANGES` table function), joining it with any previously
+    /// resolved start so the start only ever advances. Returns whether a
+    /// matching maintained changelog import was found.
+    pub fn set_changelog_start(&mut self, id: &GlobalId, new_start: Antichain<Timestamp>) -> bool {
+        match self.source_imports.get_mut(id).map(|i| &mut i.changelog) {
+            Some(Some(ChangelogMode::Maintained { start, .. })) => {
+                match start {
+                    Some(start) => start.join_assign(&new_start),
+                    None => *start = Some(new_start),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -608,6 +650,80 @@ pub struct SourceImport<S: 'static = ()> {
     pub with_snapshot: bool,
     /// The initial known upper frontier for the source.
     pub upper: Antichain<Timestamp>,
+    /// When set, read this source as an append-only changelog (the `CHANGES`
+    /// table function) in the given mode, rather than as its accumulated
+    /// contents. See [`ChangelogMode`] and the `CHANGES` design doc.
+    pub changelog: Option<ChangelogMode>,
+}
+
+impl<S> SourceImport<S> {
+    /// Whether this import is read as an append-only changelog (the `CHANGES`
+    /// table function). When so, rendering reinterprets each input update
+    /// `(row, time, diff)` as a forward-only append of the extended row (input
+    /// columns plus `mz_timestamp` and `mz_diff`); predicates and projections
+    /// must not be pushed below that reinterpretation.
+    pub fn read_as_changelog(&self) -> bool {
+        self.changelog.is_some()
+    }
+}
+
+/// How a changelog source import (the `CHANGES` table function) is read.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum ChangelogMode {
+    /// A one-off read (peek): the source is read at `start` — at or below the
+    /// dataflow `as_of` — with the snapshot included, so the input's history
+    /// collapses to the changelog start. Each import carries its own start,
+    /// so multiple changelog reads with distinct bounds coexist in one
+    /// dataflow while the dataflow `as_of` stays the query time.
+    OneShot {
+        /// The resolved persist read position: the changelog start.
+        ///
+        /// Computed by the peek optimizer from the bound (resolving
+        /// `mz_now()` to the query time and clamping an advisory bound up to
+        /// the input's `since`). The controller installs the import's read
+        /// hold here, keeping the start readable for the dataflow's lifetime.
+        start: Antichain<Timestamp>,
+    },
+    /// A maintained read (materialized view): the source is read from `start`
+    /// with the snapshot excluded, emitting only the deltas after `start` at
+    /// their true timestamps (in the `mz_timestamp` column), with the
+    /// differential timestamps clamped up to the dataflow `as_of`. The
+    /// compute controller additionally lags the import's dependency read hold
+    /// `window` behind the output frontier, so a restarted dataflow can
+    /// re-read its window. See the `CHANGES` design doc, "Maintained
+    /// materialized views: sliding execution".
+    Maintained {
+        /// The sliding window lag `i` of the changelog's `mz_now()`-relative
+        /// lower bound.
+        window: Timestamp,
+        /// The resolved persist read position: where the delta read starts.
+        ///
+        /// Always computed coordinator-side as
+        /// `join(since_at_decision, as_of - window)` — at creation (the
+        /// sequencer), at environment restart (as-of selection), and at
+        /// command-history reduction (replica reconnect) — and only ever
+        /// advanced (by `join`), so replicas observe a deterministic, readable
+        /// position. `None` until first resolved; must be `Some` by the time
+        /// the dataflow ships to a replica.
+        start: Option<Antichain<Timestamp>>,
+        /// `Some(w)` if any read of this import uses a *strict* (`AS OF`)
+        /// sliding bound; `w` is the widest such window. At creation the
+        /// sequencer errors unless the input retains a full strict window
+        /// (`since <= as_of - w`), instead of silently aging in. Creation-time
+        /// only: restarts resolve the start advisorily regardless (erroring an
+        /// existing materialized view at bootstrap would wedge the system).
+        ///
+        /// May be narrower than `window` (the max over *all* reads, which
+        /// sizes the hold) when strict and advisory reads of one input mix.
+        strict_window: Option<Timestamp>,
+        /// Whether the dataflow also reads this import *directly* (not via
+        /// `CHANGES`). A direct read needs the snapshot — its accumulation at
+        /// the `as_of` must be the input's contents — so the persist read
+        /// includes it; the maintained changelog reads then drop times at or
+        /// below `start` themselves (which they do unconditionally: under
+        /// `SnapshotMode::Exclude` nothing at or below `start` arrives).
+        snapshot_for_direct_reads: bool,
+    },
 }
 
 /// An association of a global identifier to an expression.

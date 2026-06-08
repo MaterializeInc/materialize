@@ -197,6 +197,9 @@ impl EquivalencePropagation {
                     get_equivalences.insert(*id, outer_equivalences);
                 }
             }
+            MirRelationExpr::Changes { .. } => {
+                // Opaque leaf; nothing to propagate into a changelog read.
+            }
             MirRelationExpr::Let { id, .. } => {
                 let id = *id;
                 // Traverse `body` first to assemble equivalences to push to `value`.

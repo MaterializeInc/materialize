@@ -23,7 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
-use crate::ast::{AstInfo, Expr, Function, Ident, ShowStatement, WithOptionValue};
+use crate::ast::{AsOf, AstInfo, Expr, Function, Ident, ShowStatement, WithOptionValue};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -582,6 +582,21 @@ pub enum TableFactor<T: AstInfo> {
         join: Box<TableWithJoins<T>>,
         alias: Option<TableAlias>,
     },
+    /// The `CHANGES(<relation> AS OF [AT LEAST] <bound>)` table function: reads
+    /// the given collection as an append-only changelog whose lower bound is
+    /// given by the `AS OF` clause, exposing the per-update timestamp and diff as
+    /// the `mz_timestamp` and `mz_diff` columns.
+    ///
+    /// `<relation>` is a collection named directly or a parenthesized subquery
+    /// (mirroring `SUBSCRIBE`). `AS OF` is a strict lower bound (error if the
+    /// history is unavailable); `AS OF AT LEAST` is advisory (age in from the
+    /// input's `since`). A fixed `<bound>` is a static changelog start; an
+    /// `mz_now()`-relative `<bound>` is a sliding window that trails real time.
+    Changes {
+        relation: ChangesRelation<T>,
+        as_of: AsOf<T>,
+        alias: Option<TableAlias>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
@@ -649,10 +664,49 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
             }
+            TableFactor::Changes {
+                relation,
+                as_of,
+                alias,
+            } => {
+                f.write_str("CHANGES (");
+                f.write_node(relation);
+                f.write_str(" ");
+                f.write_node(as_of);
+                f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
         }
     }
 }
 impl_display_t!(TableFactor);
+
+/// The collection argument of a `CHANGES(...)` table function: a collection
+/// named directly, or a parenthesized subquery (mirroring `SUBSCRIBE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ChangesRelation<T: AstInfo> {
+    /// A collection named directly, e.g. `CHANGES (t AS OF ...)`.
+    Name(T::ItemName),
+    /// A parenthesized subquery, e.g. `CHANGES ((SELECT ...) AS OF ...)`.
+    Query(Box<Query<T>>),
+}
+
+impl<T: AstInfo> AstDisplay for ChangesRelation<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ChangesRelation::Name(name) => f.write_node(name),
+            ChangesRelation::Query(query) => {
+                f.write_str("(");
+                f.write_node(query);
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display_t!(ChangesRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableAlias {

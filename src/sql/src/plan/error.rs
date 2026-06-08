@@ -166,6 +166,7 @@ pub enum PlanError {
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
+    ChangesRequiresSlidingBound,
     DropViewOnMaterializedView(String),
     DependentObjectsStillExist {
         object_type: String,
@@ -400,6 +401,12 @@ impl PlanError {
 
     pub fn hint(&self) -> Option<String> {
         match self {
+            Self::ChangesRequiresSlidingBound => Some(
+                "Use an `mz_now()`-relative bound, e.g. \
+                 `AS OF AT LEAST mz_now() - INTERVAL '30 minutes'`. A fixed lower bound would \
+                 hold the input's compaction frontier open indefinitely."
+                    .into(),
+            ),
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
@@ -667,6 +674,10 @@ impl fmt::Display for PlanError {
             Self::InvalidDependency { name, item_type } => {
                 write!(f, "{item_type} {name} cannot be depended upon")
             },
+            Self::ChangesRequiresSlidingBound => write!(
+                f,
+                "CHANGES with a fixed bound is only supported in one-off SELECT queries"
+            ),
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)

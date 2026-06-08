@@ -53,7 +53,7 @@ use mz_expr::func::variadic::{
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
     Eval, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME,
-    RowSetFinishing, TableFunc, func as expr_func,
+    RowSetFinishing, TableFunc, UnmaterializableFunc, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -76,18 +76,18 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    AsOf, Assignment, AstInfo, ChangesRelation, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
-    MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName,
-    SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    MutRecBlockOptionName, Op, OrderByExpr, Query, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowSpec, visit,
 };
 use mz_sql_parser::ident;
 
-use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
+use crate::catalog::{CatalogCollectionItem, CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec, TableFuncImpl};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
@@ -3026,7 +3026,280 @@ fn plan_table_factor(
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
+
+        TableFactor::Changes {
+            relation,
+            as_of,
+            alias,
+        } => plan_changes(qcx, relation, as_of, alias.as_ref()),
     }
+}
+
+/// Plans the `CHANGES(<relation> AS OF [AT LEAST] <bound>)` table function:
+/// reads the given collection as an append-only changelog whose lower bound is
+/// the `AS OF` clause.
+fn plan_changes(
+    qcx: &QueryContext,
+    relation: &ChangesRelation<Aug>,
+    as_of: &AsOf<Aug>,
+    alias: Option<&TableAlias>,
+) -> Result<(HirRelationExpr, Scope), PlanError> {
+    qcx.scx
+        .require_feature_flag(&vars::ENABLE_CHANGES_TABLE_FUNCTION)?;
+
+    // CHANGES reinterprets the object's persist shard directly, so the argument
+    // must resolve to a single persist-backed object: a table, source, or
+    // materialized view.
+    let (global_id, full_name, desc) = plan_changes_input(qcx, relation)?;
+
+    // The `AS OF` clause is the changelog's lower bound. It varies along two
+    // independent axes:
+    //   * strict (`AS OF`) vs. advisory (`AS OF AT LEAST`): whether an
+    //     unavailable history is an error or is clamped up to the input's
+    //     `since` (aging in).
+    //   * fixed (a constant timestamp) vs. sliding (`mz_now()`-relative): a
+    //     static changelog start vs. a window that trails real time.
+    // The strict/advisory distinction is carried by `AsOf::At`/`AsOf::AtLeast`;
+    // the fixed/sliding distinction is whether the bound references `mz_now()`.
+    //
+    // NOTE: advisory clamping to `since` is not yet differentiated in execution;
+    // A strict bound (`AS OF`) is pinned exactly; an advisory bound
+    // (`AS OF AT LEAST`) ages in, clamping up to the input's `since` rather than
+    // erroring when it precedes it.
+    let (bound_ast, strict) = match as_of {
+        AsOf::At(expr) => (expr.clone(), true),
+        AsOf::AtLeast(expr) => (expr.clone(), false),
+    };
+    let bound_hir = plan_changes_bound(qcx.scx, bound_ast.clone())?;
+    let sliding = bound_hir.contains_temporal();
+
+    // Execution is wired up for one-off `SELECT`s (the peek path) and for
+    // materialized views with a sliding bound (the maintained path). Gate
+    // everything else:
+    //   * A durable maintained object (materialized view, index) with a fixed
+    //     bound would pin the input's `since` open indefinitely, the retained
+    //     history growing without bound — rejected with a targeted message.
+    //   * Any other non-`SELECT` use (a sliding bound in an index, SUBSCRIBE,
+    //     a view, ...) is structurally fine but not yet wired up.
+    //
+    // A *strict* sliding bound in a materialized view is checked at creation:
+    // the sequencer errors unless the input retains a full window
+    // (`since <= as_of - window`); the advisory form ages in instead. The
+    // enforcement is creation-time only — restarts stay advisory, since
+    // erroring an existing materialized view at bootstrap would wedge the
+    // system — but the lagged dependency holds reproduce the window exactly
+    // across restarts regardless.
+    match qcx.lifetime {
+        QueryLifetime::OneShot => {}
+        QueryLifetime::MaterializedView if sliding => {}
+        lifetime => {
+            if lifetime.is_maintained() && !sliding {
+                return Err(PlanError::ChangesRequiresSlidingBound);
+            }
+            bail_unsupported!("CHANGES outside a one-off SELECT or a materialized view");
+        }
+    }
+
+    // The bound is carried as an already-lowered `mz_timestamp`-typed scalar that
+    // the coordinator evaluates at the query time (resolving `mz_now()`). A fixed
+    // bound is additionally validated here so a non-constant or out-of-range
+    // value is a plan-time error, exactly as in `SELECT ... AS OF`.
+    if !sliding {
+        plan_as_of_or_up_to(qcx.scx, bound_ast)?;
+    }
+    let bound = bound_hir.lower_uncorrelated(qcx.scx.catalog.system_vars())?;
+
+    // The changelog exposes the input columns plus the per-update `mz_timestamp`
+    // and `mz_diff` — the same columns as SUBSCRIBE's diff output, though
+    // appended rather than prepended, with `mz_timestamp` typed as
+    // `mz_timestamp` (SUBSCRIBE: `numeric`) and `mz_diff` non-null
+    // (SUBSCRIBE: nullable). Note that an input column already named
+    // `mz_timestamp` or `mz_diff` yields duplicate column names, as in
+    // SUBSCRIBE.
+    let changes_desc = RelationDesc::builder()
+        .with_columns(desc.iter().map(|(name, ty)| (name.clone(), ty.clone())))
+        .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(false))
+        .with_column("mz_diff", SqlScalarType::Int64.nullable(false))
+        .finish();
+
+    // NOTE: In a maintained materialized view the window slides forever, so
+    // the changelog must *retract* changes once they age past the bound. The
+    // MV optimizer installs the corresponding temporal filter over the
+    // changelog output (in the `mz_now() < <expr>` normal form the temporal
+    // MFP machinery requires), once it has extracted the constant window lag
+    // from the bound. (A one-off read needs no filter: the peek time is the
+    // window's upper edge and the bound is its lower edge by construction.)
+    let expr = HirRelationExpr::Changes {
+        id: global_id,
+        typ: changes_desc.typ().clone(),
+        bound,
+        strict,
+    };
+
+    let scope = Scope::from_source(
+        Some(Into::<PartialItemName>::into(full_name)),
+        changes_desc.iter_names().cloned(),
+    );
+    let scope = plan_table_alias(scope, alias)?;
+    Ok((expr, scope))
+}
+
+/// Resolves a [`ChangesRelation`] to the single persist-backed collection it
+/// reads, returning its global id, full name, and relation description. A named
+/// collection is resolved directly; a subquery is planned and must reduce to a
+/// bare read of a table, source, or materialized view (the initial scope —
+/// arbitrary queries are deferred, since their changelog is not a simple shard
+/// read).
+fn plan_changes_input(
+    qcx: &QueryContext,
+    relation: &ChangesRelation<Aug>,
+) -> Result<(mz_repr::GlobalId, FullItemName, RelationDesc), PlanError> {
+    let (item, full_name): (Box<dyn CatalogCollectionItem>, FullItemName) = match relation {
+        ChangesRelation::Name(name) => {
+            let (id, full_name, version) = match name {
+                ResolvedItemName::Item {
+                    id,
+                    full_name,
+                    version,
+                    ..
+                } => (*id, full_name.clone(), *version),
+                ResolvedItemName::Cte { .. } => sql_bail!(
+                    "CHANGES requires a persisted collection, but got a common table expression"
+                ),
+                ResolvedItemName::Error => {
+                    bail_internal!("should have been caught in name resolution")
+                }
+            };
+            (qcx.scx.get_item(&id).at_version(version), full_name)
+        }
+        ChangesRelation::Query(query) => {
+            // Plan the subquery and require it to reduce to a bare read of a
+            // single global collection; anything that filters or transforms is
+            // the (not-yet-supported) arbitrary-expression case.
+            let mut inner_qcx = (*qcx).clone();
+            let (expr, _scope) = plan_nested_query(&mut inner_qcx, query)?;
+            let Some(global_id) = changes_reduce_to_get(&expr) else {
+                bail_unsupported!(
+                    "CHANGES over an arbitrary query (its argument must resolve to a single \
+                     table, source, or materialized view)"
+                );
+            };
+            let item = qcx.scx.catalog.get_item_by_global_id(&global_id);
+            let full_name = qcx.scx.catalog.resolve_full_name(item.name());
+            (item, full_name)
+        }
+    };
+
+    match item.item_type() {
+        CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::MaterializedView => {}
+        other => sql_bail!(
+            "CHANGES requires a table, source, or materialized view, but {} is a {}",
+            full_name,
+            other,
+        ),
+    }
+    let desc = item
+        .relation_desc()
+        .ok_or_else(|| PlanError::InvalidDependency {
+            name: full_name.to_string(),
+            item_type: item.item_type().to_string(),
+        })?
+        .into_owned();
+    Ok((item.global_id(), full_name, desc))
+}
+
+/// Reduces a planned `CHANGES` subquery to the global collection it reads, if it
+/// is a bare read of one. Peels a leading identity projection and an empty map
+/// (the shapes `SELECT * FROM <obj>` produces) and matches a global `Get`.
+fn changes_reduce_to_get(expr: &HirRelationExpr) -> Option<mz_repr::GlobalId> {
+    match expr {
+        HirRelationExpr::Get {
+            id: mz_expr::Id::Global(id),
+            ..
+        } => Some(*id),
+        HirRelationExpr::Project { input, outputs }
+            if outputs.iter().copied().eq(0..input.arity()) =>
+        {
+            changes_reduce_to_get(input)
+        }
+        HirRelationExpr::Map { input, scalars } if scalars.is_empty() => {
+            changes_reduce_to_get(input)
+        }
+        _ => None,
+    }
+}
+
+/// Plans a `CHANGES` `AS OF` bound to an `mz_timestamp`-typed [`HirScalarExpr`],
+/// the same way [`plan_as_of_or_up_to`] does, but without folding it to a
+/// literal. The caller inspects it for `mz_now()` (a sliding, window-trailing
+/// bound) via [`HirScalarExpr::contains_temporal`] and lowers it for the
+/// coordinator to evaluate at the query time.
+///
+/// `mz_timestamp` deliberately supports no arithmetic (`mz_now()` must be
+/// directly compared in temporal filters), so the sliding form
+/// `mz_now() - <interval>` is not otherwise a plannable expression. `CHANGES`
+/// blesses exactly this shape as special syntax: it plans as
+/// `(mz_now()::timestamptz - <interval>)::mz_timestamp`, reusing the existing
+/// casts and `timestamptz - interval` arithmetic rather than introducing new
+/// operators on `mz_timestamp`. The bound never becomes a dataflow predicate
+/// (the coordinator or the MV optimizer evaluates it), so this does not widen
+/// what temporal filters accept.
+fn plan_changes_bound(
+    scx: &StatementContext,
+    mut bound: Expr<Aug>,
+) -> Result<HirScalarExpr, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    transform_ast::transform(scx, &mut bound)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CHANGES AS OF",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+
+    // The blessed sliding shape: a top-level `<lhs> - <rhs>` where `<lhs>`
+    // plans to exactly `mz_now()` and `<rhs>` to an interval.
+    if let Expr::Op {
+        op: Op {
+            namespace: None,
+            op,
+        },
+        expr1,
+        expr2: Some(expr2),
+    } = &bound
+    {
+        if op == "-" {
+            let lhs = plan_expr(ecx, expr1)?.type_as_any(ecx)?;
+            if matches!(
+                lhs,
+                HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow, _)
+            ) {
+                let rhs = plan_expr(ecx, expr2)?.cast_to(
+                    ecx,
+                    CastContext::Implicit,
+                    &SqlScalarType::Interval,
+                )?;
+                let hir = lhs
+                    .call_unary(expr_func::CastMzTimestampToTimestampTz)
+                    .call_binary(rhs, expr_func::SubTimestampTzInterval)
+                    .call_unary(expr_func::CastTimestampTzToMzTimestamp);
+                return Ok(hir);
+            }
+        }
+    }
+
+    let hir = plan_expr(ecx, &bound)?.cast_to(
+        ecx,
+        CastContext::Assignment,
+        &SqlScalarType::MzTimestamp,
+    )?;
+    Ok(hir)
 }
 
 /// Plans a `ROWS FROM` expression.

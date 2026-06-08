@@ -57,6 +57,7 @@ impl crate::Transform for ReduceScalars {
             match expr {
                 MirRelationExpr::Constant { .. }
                 | MirRelationExpr::Get { .. }
+                | MirRelationExpr::Changes { .. }
                 | MirRelationExpr::Let { .. }
                 | MirRelationExpr::LetRec { .. }
                 | MirRelationExpr::Project { .. }
