@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use sqlparser::ast::{ObjectType, Statement};
+use sqlparser::dialect::MySqlDialect;
+use sqlparser::parser::Parser;
 use std::collections::BTreeMap;
-use std::str::SplitAsciiWhitespace;
 
 use maplit::btreemap;
 use mysql_async::binlog::events::OptionalMetaExtractor;
@@ -28,11 +30,12 @@ use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
 use super::context::ReplContext;
 
+const DIALECT: MySqlDialect = MySqlDialect {};
+
 /// Returns the MySqlTableName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
 fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
-    let stripped = name.trim_end_matches(',');
-    let stripped = stripped.replace('`', "");
+    let stripped = name.replace('`', "");
     let mut name_iter = stripped.split('.');
     match (name_iter.next(), name_iter.next()) {
         (Some(t_name), None) => Ok(MySqlTableName::new(current_schema, t_name)),
@@ -117,7 +120,7 @@ pub(super) async fn handle_query_event(
         // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
         // this can drop multiple tables we just check all tables we care about
         (Some("drop"), Some("table")) => {
-            let dropped_tables = drop_table_identifiers(&mut query_iter, &current_schema, &query)?;
+            let dropped_tables = drop_table_identifiers(&current_schema, &query)?;
 
             let tables_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
                 .iter()
@@ -222,33 +225,43 @@ pub(super) async fn handle_query_event(
     Ok(is_complete_event)
 }
 
-/// Assumes "DROP TABLE" has been checked/consumed. Parses [IF EXISTS] <tbl>, <tbl>, ... <tbl>.
+/// Handles parsing table names from "DROP TABLE [IF EXISTS] table1, table2, table3".
 fn drop_table_identifiers(
-    query_iter: &mut SplitAsciiWhitespace<'_>,
     current_schema: &str,
     query: &str,
 ) -> Result<Vec<MySqlTableName>, TransientError> {
     let invalid = || TransientError::Generic(anyhow::anyhow!("Invalid DDL query: {}", query));
-    let mut first_table: &str = query_iter.next().ok_or_else(invalid)?;
 
-    // We may (or may not) have an IF EXISTS clause here. A table could be named 'if' too, but should arrive quoted if that's the case.
-    if first_table.eq_ignore_ascii_case("if") {
-        // Expect EXISTS after an IF, fail if that's not the case.
-        if !query_iter
-            .next()
-            .ok_or_else(invalid)?
-            .eq_ignore_ascii_case("exists")
-        {
-            return Err(invalid());
-        }
-        first_table = query_iter.next().ok_or_else(invalid)?
+    let parse_result = match Parser::parse_sql(&DIALECT, query) {
+        Ok(result) => result,
+        Err(e) => return Err(TransientError::Generic(anyhow::anyhow!(e))),
+    };
+
+    if parse_result.len() != 1 {
+        return Err(invalid());
     }
+    let stmt = parse_result.get(0).unwrap();
+    let table_identifiers: Vec<String> = match stmt {
+        Statement::Drop {
+            object_type,
+            temporary,
+            names,
+            ..
+        } => match object_type {
+            ObjectType::Table => {
+                if *temporary {
+                    return Err(invalid());
+                }
+                names.iter().map(|name| format!("{name}")).collect()
+            }
+            _ => return Err(invalid()),
+        },
+        _ => return Err(invalid()),
+    };
 
-    let mut result: Vec<MySqlTableName> = Vec::new();
-    let mut current_table = Some(first_table);
-    while let Some(table) = current_table {
-        result.push(table_ident(table, current_schema)?);
-        current_table = query_iter.next();
+    let mut result: Vec<MySqlTableName> = Vec::with_capacity(table_identifiers.len());
+    for id in table_identifiers {
+        result.push(table_ident(&id, current_schema)?);
     }
     Ok(result)
 }
@@ -414,4 +427,123 @@ pub(super) async fn handle_rows_event(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Convenience constructor mirroring how the production code builds names.
+    fn table(schema: &str, name: &str) -> MySqlTableName {
+        MySqlTableName::new(schema, name)
+    }
+
+    /// Parse the table list of a `DROP TABLE` statement exactly as
+    /// [`handle_query_event`] does: the leading `DROP TABLE` keywords are
+    /// consumed first, then the remaining tokens are handed to
+    /// [`drop_table_identifiers`].
+    fn parse_drop(
+        query: &str,
+        current_schema: &str,
+    ) -> Result<Vec<MySqlTableName>, TransientError> {
+        drop_table_identifiers(current_schema, query)
+    }
+
+    #[mz_ore::test]
+    fn table_ident_unqualified_uses_current_schema() {
+        assert_eq!(
+            table_ident("orders", "shop").unwrap(),
+            table("shop", "orders")
+        );
+    }
+
+    #[mz_ore::test]
+    fn table_ident_qualified_overrides_current_schema() {
+        assert_eq!(
+            table_ident("inventory.orders", "shop").unwrap(),
+            table("inventory", "orders"),
+        );
+    }
+
+    #[mz_ore::test]
+    fn table_ident_strips_backtick_quoting() {
+        assert_eq!(
+            table_ident("`inventory`.`orders`", "shop").unwrap(),
+            table("inventory", "orders"),
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_single_unqualified_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_qualified_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE inventory.orders", "shop").unwrap(),
+            vec![table("inventory", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_backtick_quoted_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE `inventory`.`orders`", "shop").unwrap(),
+            vec![table("inventory", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_if_exists_clause_case_insensitively() {
+        // The optional `IF EXISTS` clause must be skipped before the table name.
+        assert_eq!(
+            parse_drop("DROP TABLE IF EXISTS orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+        assert_eq!(
+            parse_drop("DROP TABLE if exists orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_rejects_if_without_exists() {
+        // A lone `IF` is malformed; it must error rather than be parsed as a
+        // table named "if".
+        assert!(parse_drop("DROP TABLE IF orders", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_rejects_missing_table_name() {
+        // `DROP TABLE` with no table list cannot be parsed.
+        assert!(parse_drop("DROP TABLE", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_multiple_space_separated_tables() {
+        // MySQL allows dropping several tables in one statement. Each tracked
+        // table must be recognized so every affected output gets a
+        // `TableDropped` error. Here the names are separated by ", ", so each
+        // arrives as its own whitespace token with a trailing comma.
+        assert_eq!(
+            parse_drop("DROP TABLE orders, customers, items", "shop").unwrap(),
+            vec![
+                table("shop", "orders"),
+                table("shop", "customers"),
+                table("shop", "items"),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_comma_joined_tables_without_spaces() {
+        assert_eq!(
+            parse_drop("DROP TABLE `shop`.`orders`,`shop`.`customers`", "shop").unwrap(),
+            vec![table("shop", "orders"), table("shop", "customers")],
+        );
+    }
 }
