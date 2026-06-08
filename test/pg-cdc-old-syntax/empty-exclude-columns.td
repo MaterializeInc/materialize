@@ -7,13 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
 # Regression test for ss-159: an empty `EXCLUDE COLUMNS ()` on the legacy
 # `CREATE SOURCE .. FOR TABLES` (subsource-creating) syntax is treated as
-# though the option were omitted and must succeed. This differs from the
-# `CREATE TABLE .. FROM SOURCE` syntax, where an empty set is rejected with
-# `invalid EXCLUDE COLUMNS option value: cannot be empty`.
-#
+# though the option were omitted and must succeed.
+
 # EXCLUDE COLUMNS on the legacy Postgres source syntax was introduced in
 # v0.162, so skip on older binaries in the multi-version upgrade path that
 # cannot parse the option.

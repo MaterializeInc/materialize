@@ -7,11 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
 # Regression test for ss-159: an empty `EXCLUDE COLUMNS = ()` on a
 # `CREATE TABLE .. FROM SOURCE` statement is treated as though the option
 # were omitted and must succeed.
-#
 
 # Test Postgres version
 
