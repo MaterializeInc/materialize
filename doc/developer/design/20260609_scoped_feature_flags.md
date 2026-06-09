@@ -39,6 +39,11 @@ not wired to LaunchDarkly.
 - A flag can be assigned a value scoped to (a) a specific cluster and (b) a
   specific replica / replica size family, with a well-defined precedence
   relative to the environment-wide value.
+- Every synced parameter **declares its scope class** (environment-only,
+  cluster-coherent, or replica-local) at its definition. The declaration is
+  required, is surfaced in documentation / introspection, and is the single
+  source of truth for which contexts the sync loop evaluates and where the value
+  may be overridden.
 - Those scoped values are driven from LaunchDarkly using LD's existing targeting
   primitives, so they can be rolled out / rolled back without a deploy, exactly
   like environment-wide flags today.
@@ -162,6 +167,66 @@ replica-local flags can still be cluster-targeted without a second evaluation;
 the standalone `cluster` kind exists specifically for the replica-free,
 cluster-coherent case.
 
+### Size family taxonomy
+
+The `replica_size_family` attribute needs a `size name -> family` mapping
+(`D.1 -> D`, t-shirt sizes -> `legacy`, …) that **does not exist today and must
+be introduced**. It belongs in the **cluster replica size map**
+(`ClusterReplicaSizeMap` in `mz_catalog::config`, parsed from the
+`--cluster-replica-sizes` configuration that already defines each named size's
+allocation), as a new per-size `family` field. That makes the size definitions
+the single authoritative source: it is available both to the sync loop (to
+enumerate the in-use families and which `replica` contexts to evaluate) and to
+the controller (to resolve a given replica's family at dyncfg-push time), and it
+versions and deploys with the rest of the size configuration rather than living
+in a second place that could drift.
+
+### Scope declaration is required, per parameter
+
+Every synced parameter must declare its scope class as part of its definition.
+This is a hard requirement, not an opt-in convenience: it is what lets the sync
+loop know which contexts to build, lets resolution know where a value may be
+overridden, gives us a basis to reject nonsensical targeting, and documents the
+surface area of each flag.
+
+```rust
+enum ParameterScope {
+    /// Environment-wide only; no cluster/replica overrides. The default, so all
+    /// existing synced parameters are unchanged.
+    Environment,
+    /// Cluster-coherent: env-wide base + per-cluster overrides. Evaluated with
+    /// the `cluster` context (replica-free) and resolved at plan time via
+    /// `OptimizerFeatureOverrides`. e.g. optimizer features.
+    Cluster,
+    /// Replica-local: env-wide base + per-replica / per-size-family overrides.
+    /// Evaluated with the `replica` context and resolved at the controller's
+    /// per-replica dyncfg push. e.g. `lgalloc`, persist pager, LZ4.
+    Replica,
+}
+```
+
+The class is declared where the parameter is defined — on the `Var` builder for
+system vars and on the dyncfg `Config` definition — defaulting to `Environment`.
+The scope class is a property of the parameter's **consumption site / coherence**,
+not of any targeting attribute, so a single class per parameter is sufficient
+(`Replica` already covers both size-family and per-replica targeting).
+
+The declaration drives three things:
+
+1. **Documentation.** Surfaced in the generated parameter docs and in an
+   introspection relation, so the scope of every flag is discoverable.
+2. **Evaluation.** The sync loop only builds and evaluates a `cluster` context
+   for `Cluster` parameters, and a `replica` context for `Replica` parameters.
+   This bounds the per-tick evaluation work to exactly what is in use and is the
+   answer to the sync-cadence/cardinality concern: an environment with no
+   `Replica`-scoped flags pays nothing for replica evaluation.
+3. **Validation.** Because we know a parameter's class, we can detect and warn on
+   an LD rule that targets an out-of-class dimension (e.g. an `Environment` or
+   `Cluster` parameter targeted by `replica_size_family`). Such a rule would
+   simply never match (we never build that context for that parameter), so the
+   behavior is safe-by-construction; the declaration lets us surface it as a lint
+   rather than a silent no-op.
+
 ### Identity & recreate semantics: dual id/name attributes
 
 Catalog object ids are allocated from a monotonic counter
@@ -280,6 +345,11 @@ env-wide value automatically.
 
 Ordered to de-risk the cleaner boundary first:
 
+0. **Scope declaration.** Add the `ParameterScope` enum and the declaration hook
+   on the `Var` / dyncfg `Config` definitions, defaulting to `Environment`.
+   Annotate the parameters the two use cases need (the target optimizer features
+   as `Cluster`; `lgalloc` / pager / LZ4 as `Replica`). This is a prerequisite
+   for the evaluation steps below, since the sync loop keys off the class.
 1. **Replica-local dyncfg push (use case 2).** Add the `replica` context kind and
    per-replica evaluation; compute per-replica/size override maps in
    `environmentd` (in-memory); resolve at the controller's dyncfg push.
@@ -324,20 +394,19 @@ with `contextKind = "cluster"` and `"replica"` cases.
 
 ## Open questions
 
-- **Opt-in surface.** Should every synced parameter be scopable, or should
-  parameters declare whether they are cluster-coherent, replica-local, or neither
-  (e.g. on the `Var` / dyncfg definition)? Declaring it bounds the evaluation
-  surface and prevents nonsensical scoping (e.g. an optimizer flag targeted by
-  size family).
-- **Size family taxonomy.** Where is the authoritative `size name -> size family`
-  mapping (`D.1 -> D`, t-shirt -> `legacy`)? It must be available to the sync loop
-  (which families to evaluate) and the controller (resolve per replica). Likely
-  the cluster replica size configuration; confirm.
-- **User-cluster context-list growth.** Billing is unaffected, but keying cluster
-  contexts by id means resized/recreated objects accumulate in the dashboard
-  Contexts list over time. Is `anonymous` enough, or do we want a periodic prune /
-  to only emit contexts for objects matching an active rule?
-- **Sync cadence.** Per-tick evaluation grows from 1 to roughly
-  `1 + |clusters| + |live replicas|`. With anonymous server-side contexts this is
-  free billing-wise, but confirm the SDK evaluation cost is acceptable, and
-  whether scoped evaluation should run on a slower cadence than the base pull.
+Both remaining items are **deferrable** — they are operational tuning concerns,
+not design decisions, and neither blocks the MVP. Both can be revisited once the
+mechanism is in use and we have real numbers.
+
+- **User-cluster context-list growth (deferred).** Billing is unaffected, but
+  keying cluster contexts by id means resized/recreated objects accumulate in the
+  dashboard Contexts list over time. `anonymous` contexts are likely enough; if
+  the list becomes unwieldy we can add a periodic prune or only emit contexts for
+  objects matching an active rule. Not a blocker — for the MVP (builtin clusters
+  + a handful of size families) the list stays small.
+- **Sync cadence (deferred).** Per-tick evaluation grows from 1 to roughly
+  `1 + |Cluster-scoped objects| + |live replicas with Replica-scoped flags|`.
+  The scope-declaration requirement already bounds this to parameters actually in
+  use, and on the server SDK it is free billing-wise. If the per-tick cost ever
+  matters, scoped evaluation can run on a slower cadence than the base pull. Defer
+  until we have evaluation-cost numbers.
