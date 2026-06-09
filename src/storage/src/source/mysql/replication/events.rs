@@ -63,7 +63,7 @@ fn table_ident_from_object_name(
     let processed_name_parts: Vec<String> = name.0.iter().map(|part| match part {
         ObjectNamePart::Identifier(ident) => Ok(ident.value.clone()),
         // Functions for table name identifiers are a snowflake-specific concept, unexpected for mysql so we should fail hard.
-        ObjectNamePart::Function(_) => return Err(TransientError::Generic(anyhow::anyhow!(
+        ObjectNamePart::Function(_) => Err(TransientError::Generic(anyhow::anyhow!(
             "Invalid table name from QueryEvent, function identifiers not supported in mysql: {}", name
         ))),
     }).collect::<Result<_, _>>()?;
