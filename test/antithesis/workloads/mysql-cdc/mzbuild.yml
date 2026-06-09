@@ -1,0 +1,75 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Per-group Antithesis workload image.  The Dockerfile is shared across
+# every group via a symlink to test/antithesis/workload/Dockerfile and
+# selects the group's script subset at build time using the
+# ANTITHESIS_WORKLOAD_GROUP build arg.
+
+name: antithesis-workload-mysql-cdc
+publish: false
+
+build-args:
+  ANTITHESIS_WORKLOAD_GROUP: mysql-cdc
+
+pre-image:
+  # Source files shared with the other workload-<group> images.  The
+  # canonical location is test/antithesis/workload/; mzbuild build
+  # contexts can't reach upward in the tree, so each per-group image
+  # copies them in here.
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: test/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: stubs/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: setup-complete.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: workload-entrypoint.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: bake-test-templates.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: scripts-for-group.py
+  - type: copy
+    source: test/antithesis
+    destination: .
+    matching: groups.yaml
+  # `materialize/__init__.py` only — this group's drivers don't
+  # import any heavy `materialize.*` modules.  The __init__.py is
+  # kept so the workload Dockerfile's `COPY materialize/` step has
+  # a non-empty source directory.  Everything else is mocked by
+  # `stubs/materialize/...`.
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/__init__.py
+  # Repository-checked-in testdrive scripts that the testdrive-runner
+  # drivers execute under Antithesis fault injection.  Keeping the
+  # source-of-truth path means new tests in `test/pg-cdc/` are exercised
+  # against Antithesis as soon as their filenames are referenced by a
+  # singleton driver.
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/pg-cdc/*.td
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/mysql-cdc/*.td

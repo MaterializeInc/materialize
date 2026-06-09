@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import dataclasses
 import random
 import threading
 import uuid
@@ -885,16 +886,54 @@ class Index:
 class Role:
     role_id: int
     lock: threading.Lock
+    # Inserted between `role` and `{role_id}` in the generated name. Empty by
+    # default (giving the historical `role0` shape). When set, gives
+    # `role{name_scope}{role_id}` — used by callers like the Antithesis
+    # parallel-driver where many concurrent Database instances against one
+    # materialize would otherwise collide on the same `role0..roleN` names.
+    name_scope: str
 
-    def __init__(self, role_id: int):
+    def __init__(self, role_id: int, name_scope: str = ""):
         self.role_id = role_id
         self.lock = threading.Lock()
+        self.name_scope = name_scope
 
     def __str__(self) -> str:
+        # Format: `role[-{name_scope}-]{role_id}`. The bracketed segment is
+        # only present when seed-scoping is on, so the historical `role0`
+        # shape (which non-Antithesis consumers parse) is preserved.
+        # Scoped names need identifier-quoting because dashes aren't valid
+        # in an unquoted identifier; unscoped names stay bare to match the
+        # original SQL the framework emits.
+        if self.name_scope:
+            return identifier(f"role-{self.name_scope}-{self.role_id}")
         return f"role{self.role_id}"
 
     def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
+
+
+@dataclasses.dataclass(frozen=True)
+class ClusterdPoolMember:
+    """Address+config of one external clusterd container the SUT will host an
+    unmanaged cluster replica on.
+
+    Used by the Antithesis compose bootstrap (see test/antithesis/mzcompose.py)
+    to build the CREATE CLUSTER REPLICAS clause for each long-lived pool
+    cluster: one cluster per pool member, with this member as its sole
+    replica. After bootstrap the framework only references the cluster by
+    name (`existing_cluster_name`); pool members aren't passed into
+    `Database` directly.
+
+    Default ports match clusterd's defaults; override per environment.
+    """
+
+    host: str
+    storagectl_port: int = 2100
+    computectl_port: int = 2101
+    compute_port: int = 2102
+    storage_port: int = 2103
+    workers: int = 4
 
 
 class ClusterReplica:
@@ -904,7 +943,12 @@ class ClusterReplica:
     rename: int
     lock: threading.Lock
 
-    def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
+    def __init__(
+        self,
+        replica_id: int,
+        size: str,
+        cluster: "Cluster",
+    ):
         self.replica_id = replica_id
         self.size = size
         self.cluster = cluster
@@ -935,6 +979,18 @@ class Cluster:
     introspection_interval: str
     rename: int
     lock: threading.Lock
+    # Inserted between `cluster` and `-{cluster_id}` in the generated name.
+    # Empty by default (giving the historical `cluster-N` shape). When set,
+    # gives `cluster{name_scope}-N` — used by callers like the Antithesis
+    # parallel-driver, where many concurrent Database instances against one
+    # materialize would otherwise collide on the same `cluster-N` names.
+    name_scope: str
+    # When set, the cluster represents a pre-existing cluster the framework
+    # did not create and must not drop. `name()` returns this literally
+    # (bypassing cluster_id / rename / name_scope), and `create()` / `drop()`
+    # are no-ops. The replicas list is empty in this mode — the framework
+    # doesn't model the pre-existing replicas because it never touches them.
+    pre_existing_name: str | None
 
     def __init__(
         self,
@@ -943,27 +999,64 @@ class Cluster:
         size: str,
         replication_factor: int,
         introspection_interval: str,
+        name_scope: str = "",
+        pre_existing_name: str | None = None,
     ):
         self.cluster_id = cluster_id
         self.managed = managed
         self.size = size
-        self.replicas = [
-            ClusterReplica(i, size, self) for i in range(replication_factor)
-        ]
+        self.pre_existing_name = pre_existing_name
+        if pre_existing_name is not None:
+            # Pre-existing cluster: framework only models its name. The actual
+            # replicas live in materialize's catalog from the bootstrap step
+            # that created the cluster (see test/antithesis/mzcompose.py).
+            # Empty replicas list flips `is_pool_backed` to True, which is
+            # what the action classes use to skip DDL on this cluster.
+            self.managed = False
+            self.replicas = []
+        else:
+            self.replicas = [
+                ClusterReplica(i, size, self) for i in range(replication_factor)
+            ]
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
         self.rename = 0
         self.lock = threading.Lock()
+        self.name_scope = name_scope
+
+    @property
+    def is_pool_backed(self) -> bool:
+        """True for clusters the framework didn't create itself and won't
+        mutate (replica count, drop). Currently set when `pre_existing_name`
+        was passed in. Action classes that would CREATE/ALTER/DROP REPLICA
+        check this and bail."""
+        return self.pre_existing_name is not None
 
     def name(self) -> str:
+        # Pre-existing clusters: name is fixed by the caller (typically a
+        # pool-cluster the Antithesis compose bootstrapped). Don't apply
+        # naughtify / name_scope / rename — they don't apply to objects we
+        # didn't create.
+        if self.pre_existing_name is not None:
+            return self.pre_existing_name
+        # Format: `cluster[-{name_scope}]-{cluster_id}[-{rename}]`. The
+        # bracketed `-{name_scope}` segment is only present when seed-
+        # scoping is on, so the historical `cluster-0` / `cluster-0-1`
+        # shapes (which non-Antithesis consumers parse) are preserved.
+        prefix = f"cluster-{self.name_scope}" if self.name_scope else "cluster"
         if self.rename:
-            return naughtify(f"cluster-{self.cluster_id}-{self.rename}")
-        return naughtify(f"cluster-{self.cluster_id}")
+            return naughtify(f"{prefix}-{self.cluster_id}-{self.rename}")
+        return naughtify(f"{prefix}-{self.cluster_id}")
 
     def __str__(self) -> str:
         return identifier(self.name())
 
     def create(self, exe: Executor) -> None:
+        # Pre-existing cluster: the SUT already has it (bootstrapped at
+        # compose-up). The framework's only responsibility for the cluster
+        # is to use its name; never DDL it.
+        if self.pre_existing_name is not None:
+            return
         query = f"CREATE CLUSTER {self} "
         if self.managed:
             query += f"SIZE = '{self.size}', REPLICATION FACTOR = {len(self.replicas)}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
@@ -1025,12 +1118,35 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        # When True, top-level objects whose names are not schema-qualified
+        # (clusters and roles) are scoped by the database seed so concurrent
+        # Database instances against one materialize don't collide. Off by
+        # default; opted into by the Antithesis parallel-driver where many
+        # invocations share the SUT. Tables / schemas / views are already
+        # qualified by DB.name() which includes the seed, so they don't
+        # need this.
+        seed_scoped_names: bool = False,
+        # When set, the Database runs against a pre-existing cluster the
+        # framework didn't create and won't drop. CreateClusterAction is
+        # disabled in this mode; the single initial cluster wraps the
+        # supplied name. Used by the Antithesis parallel-driver to bind
+        # each invocation to one of the long-lived pool clusters that the
+        # compose creates at bootstrap (see test/antithesis/mzcompose.py).
+        existing_cluster_name: str | None = None,
     ):
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
+        self.seed_scoped_names = seed_scoped_names
+        self.existing_cluster_name = existing_cluster_name
+        # The bare seed (no leading/trailing punctuation) used by Cluster /
+        # Role / etc. to assemble their scoped names. Empty when seed-scoping
+        # is off, in which case those classes fall back to their historical
+        # `cluster-N` / `role0` shapes. See Cluster.name() and Role.__str__()
+        # for how the seed gets inlaid.
+        self.name_scope = seed if seed_scoped_names else ""
         set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
@@ -1064,21 +1180,46 @@ class Database:
             )
             self.views.append(view)
         self.view_id = len(self.views)
-        self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
-        self.role_id = len(self.roles)
-        # At least one storage cluster required for WebhookSources
-        self.clusters = [
-            Cluster(
-                i,
-                managed=rng.choice([True, False]),
-                size=rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
-                replication_factor=1,
-                introspection_interval="1s",
-            )
-            for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+        self.roles = [
+            Role(i, name_scope=self.name_scope)
+            for i in range(rng.randint(0, MAX_INITIAL_ROLES))
         ]
+        self.role_id = len(self.roles)
+        # At least one storage cluster required for WebhookSources.
+        # In existing-cluster mode the framework's sole initial cluster
+        # wraps a pre-existing cluster (typically a pool cluster the
+        # Antithesis compose bootstrapped). The wrapper's create()/drop()
+        # are no-ops; CreateClusterAction / CreateClusterReplicaAction /
+        # DropClusterReplicaAction are also disabled for it.
+        if existing_cluster_name is not None:
+            self.clusters = [
+                Cluster(
+                    0,
+                    # managed / size / replication_factor are ignored when
+                    # `pre_existing_name` is set — the wrapper never emits
+                    # CREATE CLUSTER.
+                    managed=False,
+                    size="",
+                    replication_factor=1,
+                    introspection_interval="1s",
+                    name_scope=self.name_scope,
+                    pre_existing_name=existing_cluster_name,
+                )
+            ]
+        else:
+            self.clusters = [
+                Cluster(
+                    i,
+                    managed=rng.choice([True, False]),
+                    size=rng.choice(
+                        ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+                    ),
+                    replication_factor=1,
+                    introspection_interval="1s",
+                    name_scope=self.name_scope,
+                )
+                for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+            ]
         self.cluster_id = len(self.clusters)
         self.indexes = set()
         self.webhook_sources = [

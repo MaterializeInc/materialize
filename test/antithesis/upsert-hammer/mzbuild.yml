@@ -1,0 +1,36 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Standalone continuous-load image for the INC-936 upsert-stress group.
+# Pulled in only by the `upsert-stress` group's compose; sees one
+# fingerprint regardless of group because the source files don't vary
+# by group.  See Dockerfile for why this is separate from the per-group
+# `antithesis-workload-<group>` images.
+
+name: antithesis-upsert-hammer
+publish: false
+
+pre-image:
+  # The helper modules the hammer imports.  Three named files instead
+  # of `helpers/**` so we don't accidentally drag the heavyweight
+  # helpers (helper_pg, helper_mysql, etc.) and their deps into this
+  # otherwise-minimal image.  Source of truth lives in the workload
+  # tree so a refactor there propagates here.
+  - type: copy
+    source: test/antithesis/workload/test
+    destination: .
+    matching: helpers/helper_kafka.py
+  - type: copy
+    source: test/antithesis/workload/test
+    destination: .
+    matching: helpers/helper_random.py
+  - type: copy
+    source: test/antithesis/workload/test
+    destination: .
+    matching: helpers/helper_upsert_stress_const.py

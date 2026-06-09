@@ -34,18 +34,41 @@ def main() -> None:
         set_build_status("pending")
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+        antithesis = ui.env_is_truthy("CI_ANTITHESIS")
 
         repo = mzbuild.Repository(
             Path("."),
             coverage=coverage,
             sanitizer=sanitizer,
+            antithesis=antithesis,
             image_registry="materialize",
         )
 
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
-        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        if antithesis:
+            # Antithesis only consumes a small set of mzbuild images;
+            # everything else in the repo (balancerd, sqllogictest, ...) is
+            # wasted CI time for this pipeline. `resolve_dependencies` walks
+            # `depends_on` transitively, so anything materialized actually
+            # needs still comes along.  The per-group `antithesis-workload-*`
+            # and `antithesis-config-*` images are discovered by walking
+            # the mzbuild tree under test/antithesis/workloads/ and
+            # test/antithesis/configs/ respectively.  Keep this list in
+            # sync with SHARED_IMAGES + manifest groups in
+            # push-antithesis.py.
+            antithesis_images = ["materialized"] + [
+                name
+                for name in repo.images
+                if name.startswith("antithesis-workload-")
+                or name.startswith("antithesis-config-")
+            ]
+            deps = repo.resolve_dependencies(
+                repo.images[name] for name in antithesis_images
+            )
+        else:
+            deps = repo.resolve_dependencies(image for image in repo if image.publish)
         deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)

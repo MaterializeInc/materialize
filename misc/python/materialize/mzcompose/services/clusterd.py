@@ -30,7 +30,7 @@ class Clusterd(Service):
         options: list[str] = [],
         restart: str = "no",
         stop_grace_period: str = "120s",
-        scratch_directory: str = "/scratch",
+        scratch_directory: str | None = "/scratch",
         volumes: list[str] = [],
         workers: int = 1,
         process_names: list[str] = [],
@@ -70,7 +70,13 @@ class Clusterd(Service):
             f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
         ]
 
-        options = ["clusterd", f"--scratch-directory={scratch_directory}", *options]
+        # `scratch_directory=None` omits the CLI flag entirely. clusterd
+        # treats this as "no scratch" — RocksDB switches to its in-memory
+        # env (`Env::mem_env()`), matching the production deployment shape
+        # where cluster replicas have no scratch disk attached.
+        options = ["clusterd", *options]
+        if scratch_directory is not None:
+            options.insert(1, f"--scratch-directory={scratch_directory}")
 
         config: ServiceConfig = {}
 

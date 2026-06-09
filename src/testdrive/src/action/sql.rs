@@ -10,7 +10,7 @@
 use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as _};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, bail};
 use itertools::Itertools;
@@ -94,13 +94,17 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
     .retry_async_with_state(state, |retry_state, state| async move {
         let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
-        let start = SystemTime::now();
+        // `Instant` is monotonic; the wall-clock `SystemTime` can step
+        // backward (clock drift, NTP correction, fault injection) and
+        // `duration_since` would then panic on its `unwrap`.
+        let start = Instant::now();
         match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
-                let now = SystemTime::now();
-                let epoch = SystemTime::UNIX_EPOCH;
-                let ts = now.duration_since(epoch).unwrap().as_secs_f64();
-                let delay = now.duration_since(start).unwrap().as_secs_f64();
+                let ts = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64();
+                let delay = start.elapsed().as_secs_f64();
                 println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }

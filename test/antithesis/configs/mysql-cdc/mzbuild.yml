@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# FROM-scratch image holding the per-group docker-compose.yaml + .env.
+# Antithesis pulls this image and reads `/docker-compose.yaml` to bring
+# up the system under test; `.env` supplies `${MATERIALIZED_IMAGE}` /
+# `${ANTITHESIS_WORKLOAD_IMAGE}` at compose-parse time.
+#
+# The compose YAML is generated from test/antithesis/mzcompose.py and
+# test/antithesis/groups.yaml via:
+#   bin/pyactivate test/antithesis/export-compose.py --group=mysql-cdc \
+#     > test/antithesis/configs/mysql-cdc/docker-compose.yaml
+# Regenerate when the topology or manifest changes; CI verifies the
+# committed copy is up to date.
+#
+# `.env` (generated, gitignored) is written by export-env.py at build
+# time. Its content changes every materialized fingerprint shift, which
+# is what propagates fresh fingerprints into this image without touching
+# the committed YAML.
+#
+# `publish: false` keeps the standard `ci.test.build` flow from trying
+# to build this image — it would fail on `COPY docker-compose.yaml .env /`
+# because `.env` is gitignored and only build-antithesis.sh writes it.
+# The antithesis nightly step builds and pushes via push-antithesis.py.
+
+name: antithesis-config-mysql-cdc
+publish: false

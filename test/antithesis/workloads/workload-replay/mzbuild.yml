@@ -1,0 +1,80 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Per-group Antithesis workload image.  The Dockerfile is shared across
+# every group via a symlink to test/antithesis/workload/Dockerfile and
+# selects the group's script subset at build time using the
+# ANTITHESIS_WORKLOAD_GROUP build arg.
+#
+# The workload-replay driver is intentionally minimal: it loads a
+# bundled captured-workload YAML and replays its queries against
+# materialized over pgwire.  No parallel-workload framework, no
+# checks framework, no testdrive — but the shared Dockerfile still
+# COPY's `materialize/` and `testdrive-files/` unconditionally, so
+# this manifest copies just enough of each to satisfy those steps
+# (a single .td for testdrive-files; `materialize/__init__.py` +
+# `materialize/util.py` for the materialize package).
+
+name: antithesis-workload-workload-replay
+publish: false
+
+build-args:
+  ANTITHESIS_WORKLOAD_GROUP: workload-replay
+
+pre-image:
+  # Source files shared with the other workload-<group> images.  The
+  # canonical location is test/antithesis/workload/; mzbuild build
+  # contexts can't reach upward in the tree, so each per-group image
+  # copies them in here.
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: test/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: stubs/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: setup-complete.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: workload-entrypoint.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: bake-test-templates.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: scripts-for-group.py
+  - type: copy
+    source: test/antithesis
+    destination: .
+    matching: groups.yaml
+  # Minimum `materialize.*` Python slice to satisfy the shared
+  # Dockerfile's `COPY materialize/ /opt/antithesis-pkg/materialize/`
+  # step.  The driver itself doesn't import any `materialize.*` module;
+  # `__init__.py` is shipped because the shared Dockerfile would fail
+  # the COPY on an empty source dir.  Everything else is mocked by
+  # `stubs/materialize/`.
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/__init__.py
+  # Satisfies the shared Dockerfile's `COPY testdrive-files/ /opt/testdrive-files/`
+  # — workload-replay doesn't run any .td scripts, but the COPY would
+  # error on a missing directory.  Single placeholder .td keeps the
+  # bake context minimal.
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/pg-cdc/*.td

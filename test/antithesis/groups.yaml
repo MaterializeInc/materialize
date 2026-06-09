@@ -1,0 +1,484 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis workload-group manifest.
+#
+# Each top-level group entry defines a focused Antithesis topology:
+#
+#   services:  service names from mzcompose.py to include in this group's
+#              docker-compose.yaml. The universal services
+#              (postgres-metadata, minio, materialized, clusterd1,
+#              fault-orchestrator, workload, plus the network) are
+#              added automatically — listing them again here is allowed
+#              but redundant.
+#   setup:     `first_*` scripts run during Antithesis's setup phase.
+#   drivers:   `parallel_driver_*` and `singleton_driver_*` scripts that
+#              run during the test phase.
+#   anytime:   `anytime_*` scripts that run continuously. The two
+#              listed under `default_anytime:` below are added to every
+#              group automatically.
+#
+# Script entries use `<template>/<basename>` paths.  Source files live
+# under `test/antithesis/workload/test/<template>/<basename>.py` and
+# get baked into `/opt/antithesis/test/v1/<template>/` at image build
+# time.  Antithesis treats each `/opt/antithesis/test/v1/<template>/`
+# directory as a single test template — it picks exactly one template
+# per execution history, so commands from different templates never
+# interleave within a single history.  Focused groups (kafka, pg-cdc,
+# …) have exactly one template; the kitchen-sink `combined` group has
+# four (one per focused group).
+#
+# The pseudo-template `defaults/` is not a runtime template directory.
+# Scripts under that prefix are physically copied into every real
+# template directory at image build time, so the catalog/persist
+# drivers in `default_drivers:` get exercised regardless of which
+# template Antithesis selects for a given execution history.
+
+# Services every group gets, regardless of `services:` entries below.
+universal_services:
+  - postgres-metadata
+  - minio
+  - materialized
+  - clusterd1
+  - fault-orchestrator
+  - workload
+
+# Anytime scripts auto-added to every group.  Baked into every
+# template directory at image build time so Antithesis sees them
+# regardless of template selection.
+default_anytime:
+  - defaults/anytime_health_check
+  # Continuous probe asserting `read_frontier <= write_frontier`
+  # (since <= upper) and write_frontier monotonicity per object.
+  # Catches the persist state-machine corruption class that today
+  # only surfaces as the gc.rs:417 panic cascade — at the first
+  # invariant violation rather than at the eventual SIGABRT.
+  - defaults/anytime_persist_invariants
+  # Continuous probe asserting fault-recovery visibility on the
+  # universal antithesis_cluster: at least one timeline observes a
+  # replica going non-online and recovering, and at least one
+  # timeline observes a `SELECT 1` succeeding after a previous
+  # fault-shaped connect failure.  Fires the two `fault recovery: …`
+  # legacy property names that were 9× unfound across the May 25
+  # batch because no driver was actively polling for them.
+  - defaults/anytime_replica_status
+  # Continuous internal-error escape probe: runs a rotating set of valid
+  # catalog/arithmetic queries and asserts none ever return Materialize's
+  # `internal error` class, plus scans source/sink statuses for objects
+  # stuck in an internal-error state.  Turns silent internal errors —
+  # panics-adjacent optimizer/runtime invariant violations that don't
+  # crash — into caught findings.
+  - defaults/anytime_internal_error_scan
+  # Source/sink status convergence (port of test/source-sink-errors).
+  # Tracks per-user-object healthy/unhealthy transitions across the
+  # probe launch and asserts none stays in `stalled`/`failed`/`ceased`
+  # without a subsequent healthy observation past the MIN_RECOVERY
+  # budget.  Catches the bug class where mz_source_statuses /
+  # mz_sink_statuses don't converge to ground truth after the upstream
+  # disruption clears.
+  - defaults/anytime_source_status_convergence
+
+# Setup / driver scripts auto-added to every group.  The catalog,
+# persist, and reclock SUT-anchored properties don't need any
+# upstream sources — they just need a writable Materialize plus the
+# universal antithesis_cluster — so we run them under every group's
+# topology.
+default_drivers:
+  - defaults/singleton_driver_catalog_recovery_consistency
+  - defaults/parallel_driver_strict_serializable_reads
+  - defaults/parallel_driver_mv_reflects_table_updates
+  # Model-vs-SUT row-data integrity check.  Counterpart to the
+  # catalog driver above — that one tracks table names, this one
+  # tracks (id, value) pairs in a user table and asserts the SUT
+  # matches the in-process model after every DML cycle.  Catches
+  # silent data loss / duplication / torn updates under crash
+  # recovery, which today has no Antithesis coverage at all.
+  - defaults/singleton_driver_table_data_integrity
+  # SUBSCRIBE stream correctness: producer commits monotone-counter
+  # INSERTs while a consumer reads SUBSCRIBE WITH (PROGRESS),
+  # reconnecting AS OF on fault.  Asserts every committed row
+  # eventually appears in the stream (no missed events) and no
+  # spurious events ever appear.  Customer-facing streaming-read
+  # API; zero coverage today.
+  - defaults/singleton_driver_subscribe_correctness
+  # Differential query oracle: base table vs non-materialized view vs
+  # materialized view of the same aggregate, compared at one consistent
+  # timestamp.  Catches incremental-maintenance / optimizer wrong-results
+  # — the silent-correctness bug class no other driver exercises.
+  - defaults/parallel_driver_differential_query
+  # Cross-replica result consistency: the same indexed view read from
+  # each replica of antithesis_cluster must agree.  Catches replica
+  # divergence / non-deterministic execution.  Self-skips in
+  # single-replica groups.
+  - defaults/parallel_driver_cross_replica_consistency
+  # Append-only count monotonicity: long-running singleton inserts
+  # monotonically into a self-owned table and asserts count(*) never
+  # decreases across observations and never exceeds the in-process
+  # committed_count.  Catches the persist / storage data-loss bug
+  # class where a committed row silently disappears after a fault or
+  # compaction.
+  - defaults/singleton_driver_append_only_monotonic
+
+groups:
+  kafka:
+    description: >-
+      Kafka source + upsert envelope correctness under broker / clusterd
+      fault injection. Multi-replica antithesis_cluster (clusterd1 +
+      clusterd2) exercises compute-replica-epoch-isolation.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - clusterd2
+    setup:
+      - kafka/first_select_upsert_implementation
+    drivers:
+      - kafka/parallel_driver_kafka_none_envelope
+      - kafka/parallel_driver_upsert_latest_value
+      - kafka/parallel_driver_upsert_ancient_key_writable
+      - kafka/singleton_driver_upsert_state_rehydration
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
+
+  testdrive:
+    description: >-
+      Repository-checked-in `test/testdrive/*.td` files run under
+      Antithesis fault injection. Counterpart to the per-source CDC
+      testdrive runners (`{pg,mysql,sql-server}-cdc` groups) — same
+      `singleton_driver_*_testdrive.py` shape, same `helper_testdrive`
+      plumbing, but pointed at the broader generic-testdrive suite.
+
+      Topology mirrors `kafka` (kafka + zookeeper + schema-registry +
+      clusterd2 on top of the universal services). Most files in
+      `test/testdrive/` exercise the Kafka source/sink + materialized-
+      view paths and need no upstream beyond that; the per-driver
+      `_EXCLUDE_FILES` set in `singleton_driver_testdrive.py`
+      explicitly lists files that need postgres-source, mysql,
+      ssh-bastion, SSL/SASL Kafka, AWS/S3, or the fivetran-destination
+      sidecar — services this group's compose deliberately does not
+      include.
+
+      Singleton (not parallel) because most `test/testdrive/*.td`
+      files take exclusive ownership of identifier names in `public`
+      (`t1`, `src1`, `cluster1`, …) with no DROP cleanup. Two
+      concurrent files in the same execution history would collide on
+      those names; Antithesis's singleton primitive runs at most once
+      per timeline, so each file gets the schema to itself.
+
+      No `anytime_kafka_*` probes here: the kafka-group anytime drivers
+      scope to `cluster = 'antithesis_cluster'`, but this group has no
+      `first_*` setup that creates that cluster — every .td file under
+      `test/testdrive/` lands its sources in `quickstart` (via the
+      `$ set-arg-default single-replica-cluster=quickstart` header most
+      of them carry). The probes would simply observe zero sources.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - clusterd2
+    setup: []
+    drivers:
+      - testdrive/singleton_driver_testdrive
+    anytime: []
+
+  upsert-stress:
+    description: >-
+      Focused stress test for INC-936 ("invalid upsert state" panic).
+      The load generator is intentionally NOT a Test Composer driver —
+      Antithesis's engagement-team plan called for "a simple script
+      that writes to / deletes a limited population of keys forever
+      forever, and containerize that," so the produce loop runs in
+      dedicated `upsert-hammer-{i}` containers outside the workload
+      service. Multiple replicas race on a shared ~100-key space
+      against a multi-partition upsert-envelope source — sized so the
+      sole timely worker sees high-density consolidation traffic and
+      hammers pile concurrent retract+insert events on the same per-
+      (key, ts) windows where the bug manifests.
+
+      Topology is intentionally minimal: one clusterd replica
+      (clusterd1) running one timely worker.  This matches the Flare
+      50cc single-worker shape that actually panicked in the wild and
+      frees Antithesis compute budget for exploring more distinct
+      interleavings per timeline.  The bug-relevant concurrency comes
+      from the hammer producers (multi-partition Kafka source
+      capabilities) and the RocksDB foreground/background thread
+      boundary inside the upsert operator — neither of which needs
+      additional timely workers or a second replica.  Other groups
+      that care about compute-replica-epoch-isolation still run with
+      replica1 + replica2 (see workload-entrypoint.sh).
+
+      Uses kafka/first_pin_upsert_v1 to pin the upsert continual-feedback
+      operator to v1 (the existing operator) for every timeline.  The
+      kafka group's `first_select_upsert_implementation` rolls v1/v2
+      from SDK entropy, but here we deliberately *don't* — INC-936
+      reproduces against v1, and splitting timelines across two
+      operator implementations would dilute the v1-side signal.
+
+      Uses the `kafka` runtime template so the kafka anytime safety
+      drivers (frontier monotonicity, `offset_known >= offset_committed`)
+      run continuously against the stress source — they may surface
+      diagnostic signal in the lead-up to the panic itself, which
+      Antithesis catches via the built-in process-termination property.
+
+      The hammer container count is set by `UPSERT_HAMMER_REPLICAS` in
+      mzcompose.py (default 6). If you raise it, list the new
+      `upsert-hammer-{i}` names below — export-compose validates that
+      every referenced service exists in mzcompose's output.
+
+      Single-worker / single-replica override: export-compose.py rewrites
+      clusterd1's `CLUSTERD_{COMPUTE,STORAGE}_TIMELY_CONFIG` and the
+      workload service's `CLUSTERD_WORKERS` to `1` for this group, and
+      workload-entrypoint.sh branches on `ANTITHESIS_WORKLOAD_GROUP` to
+      provision only `replica1`.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - upsert-hammer-0
+      - upsert-hammer-1
+      - upsert-hammer-2
+      - upsert-hammer-3
+      - upsert-hammer-4
+      - upsert-hammer-5
+    setup:
+      - kafka/first_pin_upsert_v1
+      - kafka/first_upsert_stress_setup
+    drivers: []
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
+
+  pg-cdc:
+    description: >-
+      Postgres CDC source correctness under upstream PG / clusterd /
+      environmentd fault injection. Multi-replica antithesis_cluster.
+    services:
+      - postgres-source
+      - clusterd2
+    setup:
+      - pg-cdc/first_pg_cdc_setup
+    drivers:
+      - pg-cdc/parallel_driver_pg_cdc
+      - pg-cdc/singleton_driver_pg_cdc_testdrive
+    anytime: []
+
+  mysql-cdc:
+    description: >-
+      MySQL CDC source correctness, including the MyISAM no-data-loss
+      property and GTID monotonicity at the source. Multithreaded
+      replica + multi-replica antithesis_cluster.
+
+      The data-loss workload owns `antithesis.cdc_test` (InnoDB) and
+      `antithesis.cdc_test_myisam` (MyISAM). The testdrive runner
+      (singleton_driver_mysql_cdc_testdrive) operates on whatever
+      schemas the repo's `test/mysql-cdc/*.td` files own (most use
+      their own `CREATE SCHEMA` blocks and DROP cleanly), with no
+      overlap on the `antithesis` schema.
+    services:
+      - mysql
+      - mysql-replica
+      - clusterd2
+    setup:
+      - mysql-cdc/first_mysql_replica_setup
+    drivers:
+      - mysql-cdc/parallel_driver_mysql_cdc
+      - mysql-cdc/parallel_driver_mysql_myisam
+      - mysql-cdc/singleton_driver_mysql_cdc_testdrive
+    anytime: []
+
+  sql-server-cdc:
+    description: >-
+      SQL Server CDC source correctness under upstream SQL Server /
+      clusterd / environmentd fault injection. Multi-replica
+      antithesis_cluster (clusterd1 + clusterd2).
+
+      The data-loss workload owns the dedicated `antithesis_test`
+      database (CDC enabled, ALLOW_SNAPSHOT_ISOLATION ON). The
+      testdrive runner (singleton_driver_sql_server_cdc_testdrive)
+      operates on the `test` database — DROPped and recreated by the
+      repo's `test/sql-server-cdc/setup/setup.td` prelude before each
+      .td run, so the two layers can't collide.
+    services:
+      - sql-server
+      - clusterd2
+    setup:
+      - sql-server-cdc/first_sql_server_cdc_setup
+    drivers:
+      - sql-server-cdc/parallel_driver_sql_server_cdc
+      - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
+    anytime: []
+
+  workload-replay:
+    description: >-
+      Replays queries from a captured Materialize web-console workload
+      against a live `materialized` under fault injection.  The bundled
+      capture (`workload/test/workload-replay/captured/console_cluster_tabs.yml`)
+      is a one-hour slice of console introspection traffic — 212
+      distinct query shapes (mostly catalog SELECTs plus a handful of
+      SUBSCRIBEs) that all target the built-in `mz_catalog_server`
+      cluster and the built-in `materialize` database.  Every
+      invocation samples a random subset, runs them concurrently via
+      worker threads, and asserts that nothing escaped the fault-
+      tolerance or capture-vs-current-build mismatch tolerance lists.
+
+      Topology is the bare universal set: postgres-metadata, minio,
+      materialized, clusterd1, fault-orchestrator, workload.  No
+      upstream sources / sinks are involved because the captured
+      workload's queries don't reference user objects — they only read
+      the system catalog.  That keeps the fault domain tightly focused
+      on pgwire / adapter / catalog paths and makes this the cheapest
+      of the focused groups to bring up.
+
+      The bundled capture lives under
+      `test/antithesis/workload/test/workload-replay/captured/` and is
+      a deduplicated-by-SQL slice of the upstream
+      `MaterializeInc/captured-workloads` repository's
+      `workload_console_cluster_tabs.yml` — see that file's header
+      comment for the provenance.
+    services: []
+    setup:
+      - workload-replay/first_setup
+    drivers:
+      - workload-replay/parallel_driver_workload_replay
+    anytime: []
+
+  parallel-workload:
+    description: >-
+      Randomized concurrent SQL stress (parallel_workload framework)
+      against a pool of long-lived clusterd processes. Includes the
+      SinceViolation drivers (#11200 / #11224).
+
+      This is the broadest of the focused groups — parallel_workload's
+      DDL action list spans Kafka source/sink, Postgres source,
+      Iceberg sink, and webhook source, so the topology has to mirror
+      most of `combined` for the framework's source-creation actions
+      to land instead of silent-failing under Scenario.Kill.  Of the
+      five focused groups this one benefits the least from the split;
+      its value vs. running on `combined` is mostly the pool clusters
+      and the dedicated SinceViolation drivers.
+
+      Services included:
+        - kafka stack (zookeeper, kafka, schema-registry): active
+          Create/Drop {Kafka,Iceberg}Sink and CreateKafkaSourceAction
+        - postgres-source: active CreatePostgresSourceAction
+        - polaris + polaris-bootstrap: active CreateIcebergSinkAction
+          (without polaris in the topology the action silent-fails on
+          `unknown catalog item polaris_conn` under Scenario.Kill)
+        - mysql / mysql-replica: CreateMySqlSourceAction is currently
+          disabled in the framework (TODO #8237), but the upstream
+          bootstrap path still wires mysql_conn at Database.create
+          and validates the host
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - postgres-source
+      - mysql
+      - mysql-replica
+      - polaris-bootstrap
+      - polaris
+      - clusterd2
+      - clusterd-pool-0
+      - clusterd-pool-1
+    setup:
+      - parallel-workload/first_setup
+    drivers:
+      - parallel-workload/parallel_driver_parallel_workload
+      - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_explicit_txn_prepare_execute
+      - parallel-workload/parallel_driver_pw_hot_objects
+    anytime: []
+
+  platform-checks:
+    description: >-
+      Survives-faults coverage for the existing `test/platform-checks`
+      Check class catalog. Each Antithesis timeline picks one Check
+      class from a curated allow-list (table/MV/cluster-DDL-only — no
+      external sources) and runs its
+      `initialize -> manipulate(0) -> manipulate(1) -> validate ->
+      validate` testdrive fragments end-to-end.  Antithesis injects
+      container kills between phases.  Property: validate() must pass
+      after any sequence of injected faults during initialize /
+      manipulate, mirroring what the upstream `RestartEntireMz`,
+      `RestartCockroach`, and `KillClusterdStorage` scenarios verify
+      by hand — but with fault timing randomized rather than
+      enumerated.
+
+      The Antithesis port reuses the real `materialize.checks` Python
+      package (Check base class + all_checks/*.py) bundled into the
+      workload image.  Adding a Check to upstream
+      `misc/python/materialize/checks/all_checks/` automatically
+      extends Antithesis coverage as long as the Check is in the
+      allow-list — no driver edit needed.
+
+      Topology is intentionally minimal: universal services +
+      clusterd2 (so multi-replica scenarios are exercised by the
+      compute-replica-epoch-isolation path).  External sources
+      (Kafka, Postgres, MySQL, SQL Server) deliberately not included
+      — Checks that need them stay out of the allow-list and run in
+      their dedicated cdc groups via the testdrive-runner drivers
+      instead.
+    services:
+      - clusterd2
+    setup: []
+    drivers:
+      - platform-checks/singleton_driver_platform_check
+    anytime: []
+
+  combined:
+    description: >-
+      Kitchen-sink topology: every service + every driver.  Antithesis
+      picks exactly one template per execution history so the driver
+      classes of different focused groups never interleave within a
+      single history, eliminating most of the cross-template
+      namespacing complexity that a single all-in-one template would
+      have to carry.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - postgres-source
+      - mysql
+      - mysql-replica
+      - sql-server
+      - polaris-bootstrap
+      - polaris
+      - clusterd2
+      - clusterd-pool-0
+      - clusterd-pool-1
+    setup:
+      - kafka/first_select_upsert_implementation
+      - pg-cdc/first_pg_cdc_setup
+      - mysql-cdc/first_mysql_replica_setup
+      - sql-server-cdc/first_sql_server_cdc_setup
+      - parallel-workload/first_setup
+      - workload-replay/first_setup
+    drivers:
+      - kafka/parallel_driver_kafka_none_envelope
+      - kafka/parallel_driver_upsert_latest_value
+      - kafka/parallel_driver_upsert_ancient_key_writable
+      - kafka/singleton_driver_upsert_state_rehydration
+      - pg-cdc/parallel_driver_pg_cdc
+      - pg-cdc/singleton_driver_pg_cdc_testdrive
+      - mysql-cdc/parallel_driver_mysql_cdc
+      - mysql-cdc/parallel_driver_mysql_myisam
+      - mysql-cdc/singleton_driver_mysql_cdc_testdrive
+      - sql-server-cdc/parallel_driver_sql_server_cdc
+      - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
+      - testdrive/singleton_driver_testdrive
+      - parallel-workload/parallel_driver_parallel_workload
+      - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_explicit_txn_prepare_execute
+      - parallel-workload/parallel_driver_pw_hot_objects
+      - platform-checks/singleton_driver_platform_check
+      - workload-replay/parallel_driver_workload_replay
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
