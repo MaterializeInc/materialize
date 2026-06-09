@@ -314,7 +314,7 @@ pub fn tiered_policy() -> &'static policy::TieredPolicy {
 /// it via `reconfigure`.
 ///
 /// `swap_pageout` toggles `MADV_PAGEOUT` on the lz4 + swap spill path (see
-/// [`SWAP_PAGEOUT`]); it is stored unconditionally so the next `page` call
+/// `SWAP_PAGEOUT`); it is stored unconditionally so the next `page` call
 /// observes it regardless of `enabled`.
 pub fn apply_tiered_config(
     enabled: bool,
