@@ -965,13 +965,23 @@ where
                 return;
             }
 
+            if failed {
+                // Frozen after a fetch error: retain every outstanding
+                // capability so the output frontier stays at the missing part
+                // and never advances past data we did not emit. Crucially, we
+                // must NOT keep draining `blob_rx`: a later, successfully
+                // fetched part would otherwise pop the failed part's capability
+                // off the front of `inflight_caps` (FIFO) and advance the
+                // frontier past it. Still drain the input to avoid stalling the
+                // dataflow.
+                descs_input.for_each(|_cap, _data| {});
+                return;
+            }
+
             // Forward incoming descs to the fetch task, retaining a capability
             // pair for each.
             descs_input.for_each(|cap, data| {
                 for (_idx, part) in data.drain(..) {
-                    if failed {
-                        continue;
-                    }
                     let fetched_cap = cap.delayed(cap.time(), 0);
                     let completed_cap = cap.delayed(cap.time(), 1);
                     inflight_caps.push_back((fetched_cap, completed_cap));
@@ -1055,15 +1065,19 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use mz_persist::location::SeqNo;
+    use mz_persist::location::{Blob, SeqNo};
+    use mz_persist_types::codec_impls::StringSchema;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
     use timely::dataflow::operators::capture::{Capture, Event as CaptureEvent};
     use timely::dataflow::operators::probe::Handle as ProbeHandle;
     use timely::progress::Antichain;
 
+    use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES};
+    use crate::cache::PersistClientCache;
+    use crate::internal::paths::PartialBlobKey;
     use crate::operators::shard_source::shard_source;
-    use crate::{Diagnostics, ShardId};
+    use crate::{Diagnostics, PersistLocation, ShardId};
 
     #[mz_ore::test]
     fn test_lease_manager() {
@@ -1485,6 +1499,141 @@ mod tests {
         });
 
         assert!(errored);
+        assert_eq!(frontier, Antichain::from_elem(1));
+    }
+
+    /// Regression test for the `shard_source_fetch` freeze path: a blob that
+    /// goes missing while *fetching* (the listing path is covered by
+    /// `test_shard_source_error_freeze`) must freeze the output frontier at the
+    /// missing part, not keep draining later results — which would match them
+    /// to earlier capabilities and advance the frontier past data never emitted.
+    ///
+    /// With `as_of = 0` over three batches, the descs operator emits parts at
+    /// t=0 (snapshot + first listen), t=1, and t=2. Deleting the t=1 batch's
+    /// blob makes only its fetch fail: a frozen source keeps the frontier at 1,
+    /// while the bug drains the t=2 result against the t=1 capability, advancing
+    /// it to 2.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetch_error_freeze() {
+        // Force writes to real blobs (inline parts have no blob to delete) and
+        // disable compaction so the three batches stay distinct and deletable.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.compaction_enabled = false;
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let persist_client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid");
+        let shard_id = ShardId::new();
+        // Clones of a `PersistClient` share the blob `Arc`, so deleting via this
+        // handle is visible to the reader the source opens.
+        let blob = Arc::clone(&persist_client.blob);
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+
+        // The data-part (non-rollup) blob keys currently present.
+        async fn batch_keys(blob: &dyn Blob) -> std::collections::BTreeSet<String> {
+            let mut keys = std::collections::BTreeSet::new();
+            blob.list_keys_and_metadata("", &mut |meta| {
+                if let Ok((_, PartialBlobKey::Batch(..))) = BlobKey::parse_ids(meta.key) {
+                    keys.insert(meta.key.to_owned());
+                }
+            })
+            .await
+            .expect("list keys");
+            keys
+        }
+
+        let row = |t: u64| ((format!("k{t}"), format!("v{t}")), t, 1u64);
+        write.expect_compare_and_append(&[row(0)], 0, 1).await;
+        let before = batch_keys(blob.as_ref()).await;
+        write.expect_compare_and_append(&[row(1)], 1, 2).await;
+        let after = batch_keys(blob.as_ref()).await;
+        write.expect_compare_and_append(&[row(2)], 2, 3).await;
+
+        // Delete exactly the middle (t=1) batch's data part(s).
+        let missing: Vec<_> = after.difference(&before).cloned().collect();
+        assert!(!missing.is_empty(), "middle batch wrote no blob part");
+        for key in &missing {
+            blob.delete(key).await.expect("delete");
+        }
+
+        let frontier = timely::execute::execute_directly(move |worker| {
+            let errored = Rc::new(std::cell::Cell::new(false));
+            let error_handler = ErrorHandler::signal({
+                let errored = Rc::clone(&errored);
+                move |_err| errored.set(true)
+            });
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(Antichain::from_elem(0)),
+                        SnapshotMode::Include,
+                        Antichain::new(),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        error_handler,
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Step until the fetch error fires, then keep stepping: the source
+            // must stay frozen at the missing part and not advance onto the
+            // later, fetchable part. Step until the dataflow quiesces, with
+            // brief parks so the tokio fetch task can finish: this guarantees
+            // the later part's fetch result is produced and — under the bug —
+            // drained against the frozen capability, which is exactly what we
+            // must rule out. A fixed-iteration wait would race the task and
+            // mask the bug whenever the later result lands too late.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !errored.get() {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for fetch error"
+                );
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+            }
+            let mut last = probe.with_frontier(|f| f.to_owned());
+            let mut stable = 0;
+            while stable < 100 {
+                assert!(Instant::now() < deadline, "timed out waiting for quiesce");
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+                let now = probe.with_frontier(|f| f.to_owned());
+                if now == last {
+                    stable += 1;
+                } else {
+                    stable = 0;
+                    last = now;
+                }
+            }
+            last
+        });
+
+        // Frozen at the missing part (t=1); the bug advanced this past it.
         assert_eq!(frontier, Antichain::from_elem(1));
     }
 
