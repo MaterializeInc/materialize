@@ -88,7 +88,15 @@ class Polaris(Service):
                 "interval": "1s",
                 "timeout": "5s",
                 "retries": 10,
-                "start_period": "2s",
+                # The Quarkus JVM plus its JDBC connection to Postgres can take
+                # well over a minute to start listening on the management port
+                # when the CI host is under heavy load (every container starting
+                # at once). A short start_period made `docker compose up --wait`
+                # declare Polaris unhealthy, which triggered an `up` retry that
+                # re-ran polaris-bootstrap and failed with "realm already
+                # bootstrapped" (exit 3). Give Polaris generous time to come up
+                # so it reliably passes its health check on the first attempt.
+                "start_period": "120s",
             },
         }
         super().__init__(name, config)

@@ -531,7 +531,15 @@ class Composition:
                             ), f"Unknown build status {build_status}"
                             time.sleep(1)
                     else:
-                        time.sleep(3)
+                        # Back off exponentially rather than sleeping a flat
+                        # 3s each time. The only `invoke` callers that retry
+                        # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                        # freshly-built mzbuild image can briefly fail to
+                        # resolve in the registry ("failed to resolve reference
+                        # ... not found") before it has propagated. With a flat
+                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
+                        # too short to ride out the propagation delay.
+                        time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(

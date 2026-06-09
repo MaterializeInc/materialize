@@ -49,7 +49,7 @@ SERVICES = [
     Mz(app_password=""),
     Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(),
-    Testdrive(),
+    Testdrive(default_timeout="60s"),
     SqlServer(),
 ]
 
