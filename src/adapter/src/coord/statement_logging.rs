@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::CollectionLookupError;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
-use mz_ore::{cast::CastFrom, cast::CastInto, soft_panic_or_log};
+use mz_ore::{cast::CastFrom, cast::CastInto};
 use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
@@ -392,13 +392,13 @@ impl Coordinator {
     }
 
     /// Record the end of statement execution for a statement whose beginning was logged.
-    /// It is an error to call this function for a statement whose beginning was not logged
-    /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
-    /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
-    /// should prevent this.
     ///
-    /// It is also an error to end the same execution twice; the duplicate end is
-    /// reported and ignored, keeping the first end.
+    /// Ends are idempotent: the first end wins and any later end for the same
+    /// statement is ignored. While each holder of end-of-execution ownership
+    /// emits at most one end, ownership handoffs between the frontend and the
+    /// coordinator can leave both sides emitting when execution is torn down
+    /// concurrently, so duplicate ends are tolerated here rather than treated
+    /// as an error.
     pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
@@ -413,13 +413,20 @@ impl Coordinator {
         };
 
         let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
-            // A `StatementLoggingId` is only minted when a begin is logged, so
-            // a missing entry means this execution was already ended: some bug
-            // ended it twice. That's worth a loud report, but statement
-            // logging must never abort environmentd in production.
-            soft_panic_or_log!(
-                "duplicate end_statement_execution for statement {uuid}, reason: {:?}",
-                ended_record.reason
+            // The statement has already been ended. `StatementLoggingId`s are
+            // only minted when a begin is logged, and every end is processed
+            // after its begin (begins and the commands that hand statements to
+            // the coordinator travel the same command channel, in FIFO order),
+            // so a missing entry can only mean a duplicate end. Duplicates are
+            // legitimate, if rare: ends race when execution is torn down
+            // concurrently — e.g. a frontend that owns the end of a statement
+            // is dropped by a client disconnect just after handing the
+            // statement off to the coordinator, leaving both sides emitting an
+            // end.
+            tracing::warn!(
+                statement_uuid = %uuid,
+                reason = ?ended_record.reason,
+                "duplicate end_statement_execution, keeping the first end",
             );
             return;
         };

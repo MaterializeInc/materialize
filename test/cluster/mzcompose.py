@@ -4295,8 +4295,8 @@ def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
 
 def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     """Race registered *slow-path* peeks against DROP/CREATE of their target
-    cluster; environmentd must not panic with a statement-logging begin/end
-    mismatch in `end_statement_execution`.
+    cluster; environmentd must survive. (It historically panicked on a
+    statement-logging begin/end mismatch in `end_statement_execution`.)
 
     Unlike `workflow_test_drop_cluster_during_peeks`, which runs `SELECT 1` (a
     *constant* fast path that is handled inline and never registered with the
@@ -4304,12 +4304,12 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
     produces a `standard` slow-path dataflow peek (`ExecuteSlowPathPeek`) that
     registers a pending peek with the coordinator. When a concurrent
     `DROP CLUSTER` makes the peek fail, `implement_peek_plan` returns an error
-    before taking ownership of its `ExecuteContextExtra`, so the throwaway
-    `ExecuteContextGuard` auto-emits an `Aborted` end (the coordinator's end of
-    the statement) while the frontend *also* ends it via `log_ended_execution`.
-    That double `end_statement_execution` panics with "matched
-    `begin_statement_execution` and `end_statement_execution` invocations". The
-    fix defuses the guard on error.
+    before taking ownership of its `ExecuteContextExtra`. The frontend owns
+    end-of-execution logging on the error path, so the `ExecuteSlowPathPeek`
+    handler must defuse its throwaway `ExecuteContextGuard`; letting the
+    guard's `Drop` emit a spurious `Aborted` end on top of the frontend's
+    `Errored` end is the double end that historically panicked and aborted
+    environmentd (it is now also dropped at the sink, with a warning).
 
     The narrow fast-path variant of this race (a `PeekExisting` peek retired by
     the teardown in the window between `RegisterFrontendPeek` and `client.peek()`)
@@ -4412,38 +4412,51 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
             for t in threads:
                 t.join(timeout=30)
 
-        # The whole point: if the double-end bug is present, the coordinator
-        # thread panics during the race, which aborts the entire environmentd
-        # process (src/ore/src/panic.rs). With no restart policy the container
-        # then stays down, so this fresh connection raises. (An unrelated clusterd
-        # crash propagates to environmentd too, and is also worth failing on.)
+        # A panic on the coordinator thread during the race aborts the entire
+        # environmentd process (src/ore/src/panic.rs). With no restart policy
+        # the container then stays down, so this fresh connection raises. (An
+        # unrelated clusterd crash propagates to environmentd too, and is also
+        # worth failing on.)
         with c.sql_cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
+
+        # All the raced statements must have been ended exactly once; a
+        # duplicate end is dropped at the sink (so environmentd survives either
+        # way), but it means end-of-execution ownership was held by two parties
+        # at once and the handoff protocol regressed.
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
 def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     c: Composition,
 ) -> None:
-    """Deterministically reproduce the *fast-path* variant of the registered-peek
-    double-end (see `workflow_test_drop_cluster_during_registered_peeks` for the
-    slow-path variant and the shared symptom).
+    """Deterministically exercise the *fast-path* variant of the registered-peek
+    teardown race (see `workflow_test_drop_cluster_during_registered_peeks` for
+    the slow-path variant).
 
     A `PeekExisting` fast-path peek registers with the coordinator
-    (`RegisterFrontendPeek`) and only *then* issues `client.peek()`. If a
-    `DROP CLUSTER` lands in that window, the coordinator retires the pending peek
-    (logging its end) while `client.peek()` fails and the frontend ends the
-    statement too — a double `end_statement_execution` that panics with "matched
-    `begin_statement_execution` and `end_statement_execution` invocations".
+    (`RegisterFrontendPeek`) and only *then* issues `client.peek()`. Successful
+    registration hands ownership of end-of-execution logging to the
+    coordinator. If a `DROP CLUSTER` lands in the registration/issue window,
+    the coordinator's teardown retires the pending peek and logs its end, while
+    `client.peek()` fails on the frontend; the frontend's subsequent
+    `UnregisterFrontendPeek` finds the peek already retired and must be a
+    no-op. (Historically the frontend ended the statement itself here, a
+    double `end_statement_execution` that panicked and aborted environmentd.)
 
     That window is a sub-millisecond cross-thread gap, hopeless to hit by brute
     force (unlike the slow-path variant, whose error window spans a whole
     `ExecuteSlowPathPeek` command). So we make it deterministic with the
     `peek_after_register_before_issue` failpoint: pause a peek right after it
-    registers, drop its cluster while it's parked (coordinator logs end #1), then
-    resume so `client.peek()` fails (frontend logs end #2). With the fix the
-    frontend learns the coordinator already ended the statement and stays silent;
-    without it, environmentd panics.
+    registers, drop its cluster while it's parked (the coordinator retires the
+    peek and logs its end), then resume so `client.peek()` fails. The test
+    asserts that environmentd survives *and* that the statement was not ended
+    twice (a duplicate end is dropped at the sink with a warning, which we
+    check the logs for).
     """
 
     failpoint = "peek_after_register_before_issue"
@@ -4503,11 +4516,11 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             # `RegisterFrontendPeek`, not race a narrow window.
             time.sleep(5)
             # Drop the cluster while the peek is parked: the coordinator retires
-            # the pending peek and logs its end (#1).
+            # the pending peek and logs its end of execution.
             control.execute("DROP CLUSTER victim CASCADE")
             # Resume the peek: `client.peek()` now fails (cluster gone) and the
-            # frontend logs the end (#2). Without the fix this double-ends and
-            # panics the coordinator.
+            # frontend asks the coordinator to retire the already-retired peek,
+            # which must be a no-op.
             control.execute(f"SET failpoints = '{failpoint}=off'")
 
         peek_thread.join(timeout=30)
@@ -4519,12 +4532,21 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             "error"
         ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
 
-        # If the double-end bug is present, the coordinator thread panics, which
-        # aborts the entire environmentd process (src/ore/src/panic.rs). With no
-        # restart policy the container stays down, so this fresh connection raises.
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs). With no restart policy the container
+        # stays down, so this fresh connection raises.
         with c.sql_cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
+
+        # The race must have been single-ended: registration handed
+        # end-of-execution ownership to the coordinator, whose teardown logged
+        # the only end. A duplicate end is dropped at the sink (so environmentd
+        # survives either way), but it means the ownership handoff regressed.
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
 def workflow_test_refresh_mv_warmup(
