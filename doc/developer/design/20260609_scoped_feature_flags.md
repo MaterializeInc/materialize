@@ -227,8 +227,35 @@ overrides at plan time, at the (already cluster-aware) sequencing sites in
 
 Precedence for replica-local flags, lowest to highest:
 `Global < ReplicaSizeFamily < Replica(id)` (a specific replica pin beats a size
-family rule). Cluster-coherent flags resolve `Global < Cluster`. Interaction with
-manually-set `CREATE CLUSTER ... FEATURES` is covered in Open Questions.
+family rule).
+
+For cluster-coherent flags the ordering is **specificity-then-source**, lowest
+to highest:
+
+```
+env-wide LD  <  manual CREATE CLUSTER ... FEATURES  <  cluster-scoped LD
+```
+
+i.e. a more specific scope wins, and at equal specificity **LD beats manual**.
+This is consistent with the existing global behavior — LD already overrides a
+manual `ALTER SYSTEM SET` wherever LD serves a value (the sync loop rewrites the
+param every tick), and `FEATURES` is likewise a system-only operator knob, so it
+gets the same treatment. It also *preserves* today's behavior that a manual
+`FEATURES` override beats the env-wide defaults (confirmed by `override_from` in
+`src/repr/src/optimize.rs`): env-wide LD is not cluster-specific, so a deliberate
+per-cluster manual pin still beats it, while a cluster-specific *LD* rule beats
+the manual pin.
+
+Crucially this is decided **per feature, only where LD actually serves a value**,
+mirroring the global case (where a manual value survives exactly when LD is
+silent). The implementation uses the LD evaluation *reason* from
+`variation_detail` to distinguish "LD has an opinion" (`RULE_MATCH` /
+`TARGET_MATCH` / `FALLTHROUGH`) from "LD is silent" (`FLAG_NOT_FOUND` / error);
+where LD is silent, the manual `FEATURES` value stands.
+
+The accepted trade-off, stated plainly: an operator's manual `FEATURES` pin can
+be overridden by a cluster-scoped LD rule. That is the same bargain operators
+already accept for `ALTER SYSTEM`, so it is consistent rather than novel.
 
 ### Worked examples
 
@@ -297,11 +324,6 @@ with `contextKind = "cluster"` and `"replica"` cases.
 
 ## Open questions
 
-- **Manual `FEATURES` vs LD-driven cluster overrides.** A cluster can already
-  carry manual `OptimizerFeatureOverrides` via `CREATE CLUSTER ... FEATURES`. When
-  both exist for the same feature, which wins? Proposed: manual DDL wins (explicit
-  operator intent), with the LD layer applying only where no manual override is
-  set. Confirm.
 - **Opt-in surface.** Should every synced parameter be scopable, or should
   parameters declare whether they are cluster-coherent, replica-local, or neither
   (e.g. on the `Var` / dyncfg definition)? Declaring it bounds the evaluation
