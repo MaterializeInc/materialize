@@ -295,7 +295,7 @@ contains:table was dropped
 
 > DROP SOURCE mz_source CASCADE;
 
-# 9. Comments in awkward positions must not cause missed drop. This test is 
+# 9. Comments in awkward positions must not cause missed drop. This test is
 # more testing mysql's binlog replication scrubbing comments than excercising Materialize
 # but is an important confirmation (especially because DROP /* comment */ TABLE) would fail
 # in Materialize today if it got through.
