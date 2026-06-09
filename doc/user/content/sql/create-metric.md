@@ -72,14 +72,17 @@ CREATE METRIC materialize.public.orders_open
   );
 ```
 
-A scrape of the API now returns one `orders_open{status="..."}` sample per
-row of `orders_by_status`:
+A scrape of the API now returns one `mz_custom_orders_open{status="..."}`
+sample per row of `orders_by_status`. Every exposed metric name is prefixed
+with `mz_custom_` to namespace it from Materialize's built-in metrics; the
+name you give in `CREATE METRIC` (here, `orders_open`) is what appears in the
+catalog:
 
 ```nofmt
-# HELP orders_open Number of open orders by status
-# TYPE orders_open gauge
-orders_open{status="open"} 2
-orders_open{status="closed"} 1
+# HELP mz_custom_orders_open Number of open orders by status
+# TYPE mz_custom_orders_open gauge
+mz_custom_orders_open{status="open"} 2
+mz_custom_orders_open{status="closed"} 1
 ```
 
 ## Related pages
