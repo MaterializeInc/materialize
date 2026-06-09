@@ -156,6 +156,12 @@ struct Args {
     /// alone establishes the resident footprint we compare; the drain adds throughput data at
     /// a large wall-time cost. Defaults to on.
     drain: bool,
+    /// Number of worker threads. Each fills/drains its own `CorrectionV2` over a disjoint
+    /// `num_ts/threads` shard, in one address space, sharing the process-global pager and its
+    /// budget — mirroring multiple timely workers in one pod. Total work is held constant as
+    /// `threads` varies, isolating parallel contention (mmap_lock on swap-in faults, pager
+    /// lock, reclaim/device queues). Defaults to 1.
+    threads: usize,
 }
 
 impl Args {
@@ -168,6 +174,7 @@ impl Args {
         let mut scratch = None;
         let mut proportionality = CHAIN_PROPORTIONALITY;
         let mut drain = true;
+        let mut threads = 1_usize;
 
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -196,6 +203,12 @@ impl Args {
                         .map_err(|e| format!("--proportionality: {e}"))?
                 }
                 "--no-drain" => drain = false,
+                "--threads" => {
+                    threads = value()?.parse().map_err(|e| format!("--threads: {e}"))?;
+                    if threads == 0 {
+                        return Err("--threads must be >= 1".to_string());
+                    }
+                }
                 "--help" | "-h" => return Err(HELP.to_string()),
                 other => return Err(format!("unknown flag {other:?}\n{HELP}")),
             }
@@ -217,6 +230,7 @@ impl Args {
             scratch,
             proportionality,
             drain,
+            threads,
         })
     }
 }
@@ -230,7 +244,8 @@ usage: correction_v2_pager [options]
   --budget-mib M                                (default 64; spill budget)
   --scratch  DIR                                (required for --backend file with spill)
   --proportionality P                           (default 3.0; chain size ratio)
-  --no-drain                                    (fill only; skip the slow stepwise drain)";
+  --no-drain                                    (fill only; skip the slow stepwise drain)
+  --threads  T                                  (default 1; workers sharing the global pager, total work constant)";
 
 /// Wraps a [`TieredPolicy`] to count the bytes the pager moves.
 ///
@@ -332,10 +347,14 @@ fn sink_metrics() -> SinkMetrics {
     metrics.sink.clone()
 }
 
-fn make_correction(metrics: &SinkMetrics, proportionality: f64) -> CorrectionV2<Row> {
+fn make_correction(
+    metrics: &SinkMetrics,
+    proportionality: f64,
+    worker: usize,
+) -> CorrectionV2<Row> {
     CorrectionV2::new(
         metrics.clone(),
-        metrics.for_worker(0),
+        metrics.for_worker(worker),
         None,
         proportionality,
         CHUNK_SIZE,
@@ -373,8 +392,8 @@ fn gen_batch(t: u64, pattern: Pattern) -> Vec<(Row, Timestamp, Diff)> {
 /// Drain the correction buffer one timestamp at a time, mirroring the `write_batches`
 /// operator: read updates before each `upper`, feed back their negations (persist
 /// feedback), and advance the since.
-fn drain_stepwise(correction: &mut CorrectionV2<Row>, num_ts: u64) {
-    for t in 0..num_ts {
+fn drain_range(correction: &mut CorrectionV2<Row>, lo: u64, hi: u64) {
+    for t in lo..hi {
         let upper = Antichain::from_elem(Timestamp::from(t + 1));
         let mut written: Vec<_> = correction.updates_before(&upper).collect();
         correction.insert_negated(&mut written);
@@ -414,28 +433,62 @@ fn main() {
 
     // Fill: insert one freshly generated batch per timestamp. Each batch is dropped after
     // `insert` drains it, so the resident set reflects the correction buffer, not the input.
-    let fill_start = Instant::now();
-    let mut correction = make_correction(&metrics, args.proportionality);
-    for t in 0..args.num_ts {
-        let mut batch = gen_batch(t, args.pattern);
-        correction.insert(&mut batch);
-    }
-    let fill_ms = u64::try_from(fill_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    // Resident set with the whole working set buffered: VmRSS is the live footprint, VmHWM the
-    // peak reached so far. For the spill configs the buffer is paged out, so VmRSS should drop
-    // below baseline (file always; swap only under a memory cap).
-    let rss_fill_kib = proc_status_kib("VmRSS");
+    // Parallel fill/drain across `args.threads` workers sharing the process-global pager and a
+    // single address space (the contention point swap suffers from: concurrent swap-in faults
+    // serialize on `mmap_lock`). Total work `num_ts` is split into disjoint shards, so each
+    // phase's wall-time is the slowest worker. A barrier separates fill from drain for clean
+    // per-phase timing, and the barrier leader snapshots live RSS once filling is complete.
+    let threads = args.threads;
+    let num_ts = args.num_ts;
+    let pattern = args.pattern;
+    let proportionality = args.proportionality;
+    let do_drain = args.drain;
+    let metrics_ref = &metrics;
+    let rss_fill_capture = AtomicU64::new(0);
+    let barrier = std::sync::Barrier::new(threads);
+
+    let times: Vec<(u64, u64)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|w| {
+                let barrier = &barrier;
+                let rss_fill_capture = &rss_fill_capture;
+                scope.spawn(move || {
+                    let lo = (w as u64) * num_ts / (threads as u64);
+                    let hi = ((w as u64) + 1) * num_ts / (threads as u64);
+                    let mut correction = make_correction(metrics_ref, proportionality, w);
+                    let fill_start = Instant::now();
+                    for t in lo..hi {
+                        let mut batch = gen_batch(t, pattern);
+                        correction.insert(&mut batch);
+                    }
+                    let fill_ms =
+                        u64::try_from(fill_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    // Leader snapshots live RSS once every worker has finished filling.
+                    if barrier.wait().is_leader() {
+                        rss_fill_capture.store(proc_status_kib("VmRSS"), Ordering::Relaxed);
+                    }
+                    let drain_start = Instant::now();
+                    if do_drain {
+                        drain_range(&mut correction, lo, hi);
+                    }
+                    let drain_ms =
+                        u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    (fill_ms, drain_ms)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker panicked"))
+            .collect()
+    });
+
+    // Per-phase wall-time = slowest worker (the barrier makes drain start together). VmHWM is
+    // the process-wide peak; spill configs page out, so it should sit far below baseline.
+    let fill_ms = times.iter().map(|&(f, _)| f).max().unwrap_or(0);
+    let drain_ms = times.iter().map(|&(_, d)| d).max().unwrap_or(0);
+    let rss_fill_kib = rss_fill_capture.load(Ordering::Relaxed);
     let rss_fill_peak_kib = proc_status_kib("VmHWM");
-
-    let drain_ms = if args.drain {
-        let drain_start = Instant::now();
-        drain_stepwise(&mut correction, args.num_ts);
-        u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX)
-    } else {
-        0
-    };
-    drop(correction);
-
     let rss_end_kib = proc_status_kib("VmRSS");
 
     // Pager I/O tallies (0 for baseline, which has no counting policy). `bytes_out` is the
@@ -472,13 +525,14 @@ fn main() {
         Backend::File => "file",
     };
     println!(
-        "config,backend,num_ts,pattern,prop,budget_mib,fill_ms,drain_ms,rss_fill_kib,rss_fill_peak_kib,rss_end_kib,pageouts,out_mib,out_raw_mib,pageins,pagein_mib,write_mibps"
+        "config,backend,num_ts,threads,pattern,prop,budget_mib,fill_ms,drain_ms,rss_fill_kib,rss_fill_peak_kib,rss_end_kib,pageouts,out_mib,out_raw_mib,pageins,pagein_mib,write_mibps"
     );
     println!(
-        "{},{},{},{},{:.1},{},{},{},{},{},{},{},{:.1},{:.1},{},{:.1},{:.1}",
+        "{},{},{},{},{},{:.1},{},{},{},{},{},{},{},{:.1},{:.1},{},{:.1},{:.1}",
         args.config.name(),
         backend,
         args.num_ts,
+        args.threads,
         args.pattern.name(),
         args.proportionality,
         args.budget_mib,
