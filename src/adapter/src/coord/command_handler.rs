@@ -500,8 +500,8 @@ impl Coordinator {
                         Err(e) => {
                             // On success the guard's contents moved into the
                             // `Subscribing` response. On error the frontend
-                            // logs the error end, so defuse rather than
-                            // letting the guard's `Drop` emit a spurious
+                            // logs the error end, so we defuse rather than
+                            // let the guard's `Drop` emit a spurious
                             // `Aborted`.
                             let _ = ctx_extra.defuse();
                             let _ = tx.send(Err(e));

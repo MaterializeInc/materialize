@@ -111,10 +111,10 @@ impl PeekClient {
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {
             if let Err(err) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-                // An inherited outer statement (e.g. EXECUTE) ends here, and
-                // its end is owned here, so log it. Discarding the id instead
-                // would leave the statement "running" forever in
-                // `mz_statement_execution_history`.
+                // An inherited outer statement (e.g. EXECUTE) ends here and we
+                // own its end, so we log it. If we discarded the id instead,
+                // the statement would stay "running" forever in
+                // mz_statement_execution_history.
                 if let Some(id) = outer_ctx_extra
                     .take()
                     .and_then(|guard| guard.defuse().retire())
@@ -226,12 +226,11 @@ impl PeekClient {
             .try_frontend_peek_inner(session, catalog, stmt, params, &mut logging_guard)
             .await;
 
-        // If end-of-execution logging is still owned here, retire it with the
-        // execution's outcome. It is not owned here when a dispatch site in
-        // `try_frontend_peek_inner` handed it off (see the doc comment there):
-        // for streaming responses the end is logged asynchronously — by the
-        // coordinator for registered peeks, by the protocol layer for
-        // subscribes.
+        // If we still own end-of-execution logging, retire it with the
+        // execution's outcome. We don't own it when a dispatch site in
+        // `try_frontend_peek_inner` handed it off: for streaming responses the
+        // end is logged asynchronously, by the coordinator for registered
+        // peeks and by the protocol layer for subscribes.
         if logging_guard.id().is_some() {
             let reason = match &result {
                 // Bailout case, which should not happen.
@@ -246,9 +245,9 @@ impl PeekClient {
                             .to_string(),
                     }
                 }
-                // Success responses — use the `From` implementation. Streaming
-                // responses cannot reach this: their dispatch sites hand off
-                // the guard (and the `From` impl panics on them).
+                // Success responses use the `From` implementation. Streaming
+                // responses cannot reach this arm: their dispatch sites hand
+                // off the guard, and the `From` impl panics on them.
                 Ok(Some(resp)) => resp.into(),
                 Err(e) => StatementEndedExecutionReason::Errored {
                     error: e.to_string(),
@@ -267,7 +266,7 @@ impl PeekClient {
     /// `logging_guard` owns end-of-execution logging for this statement.
     /// Dispatch sites that hand the statement to the coordinator for
     /// asynchronous completion (registered peeks, subscribes) `defuse` the
-    /// guard at the point where the coordinator takes over; everywhere else
+    /// guard at the point where the coordinator takes over. Everywhere else
     /// the guard stays armed and the caller logs the end from the returned
     /// result.
     async fn try_frontend_peek_inner(
@@ -1354,12 +1353,11 @@ impl PeekClient {
                                 tx,
                             })
                             .await?;
-                        // On success the coordinator has registered the peek in
-                        // `pending_peeks`, which owns end-of-execution logging
-                        // (`handle_peek_notification` or a concurrent teardown
-                        // logs it). On error the coordinator has logged nothing
-                        // (see `implement_slow_path_peek`), the guard stays
-                        // armed, and the caller logs the error.
+                        // On success the peek is registered in `pending_peeks`,
+                        // which now owns end-of-execution logging. On error the
+                        // coordinator logs nothing (see
+                        // `implement_slow_path_peek`), so the guard stays armed
+                        // and the caller logs the error.
                         logging_guard.defuse();
                         response
                     }
@@ -1421,10 +1419,10 @@ impl PeekClient {
                     })
                     .await?;
                 // On success the `Subscribing` response carries the
-                // coordinator-side logging guard, and the protocol layer logs
+                // coordinator-side logging guard and the protocol layer logs
                 // the end when the subscribe terminates. On error the
-                // coordinator has logged nothing (see the `ExecuteSubscribe`
-                // handler), the guard stays armed, and the caller logs the
+                // coordinator logs nothing (see the `ExecuteSubscribe`
+                // handler), so the guard stays armed and the caller logs the
                 // error.
                 logging_guard.defuse();
                 Ok(Some(response))
@@ -1482,9 +1480,10 @@ impl PeekClient {
                     )
                 });
 
-                // End-of-execution logging stays owned here: `implement_copy_to`
-                // logs nothing, and the final response (success or error) comes
-                // back through this command and is logged by the caller.
+                // We keep ownership of end-of-execution logging:
+                // `implement_copy_to` logs nothing, and the final response,
+                // success or error, comes back through this command and is
+                // logged by the caller.
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
                         df_desc: Box::new(df_desc),
