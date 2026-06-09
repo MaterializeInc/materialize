@@ -76,7 +76,10 @@ impl SystemParameterFrontend {
             SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
                     client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
-                    ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
+                    // The environment-wide context carries no cluster/replica
+                    // scope. Scoped evaluation passes a `cluster` or `replica`
+                    // context per pass via [`scoped_ld_ctx`].
+                    ctx: ld_ctx(&sync_config.env_id, sync_config.build_info, None, None)?,
                 },
                 metrics: sync_config.metrics.clone(),
                 key_map: sync_config.key_map.clone(),
@@ -209,9 +212,105 @@ async fn ld_client(
     Ok(ld_client)
 }
 
+/// Identity of a cluster, used to build a `cluster` context kind for
+/// cluster-coherent scoped feature flags.
+///
+/// Exposes both `id` and `name`: an LD rule that targets `cluster_id` is an
+/// incarnation pin that dies on drop/recreate (ids are never reused), while a
+/// rule targeting `cluster_name` / `is_builtin` is a durable role predicate
+/// that re-applies to any matching cluster. See the scoped feature flags
+/// design.
+#[derive(Clone, Debug)]
+pub struct ClusterScopeContext {
+    /// The cluster's catalog id, e.g. `s2` or `u1`.
+    pub id: String,
+    /// The cluster's name, e.g. `mz_catalog_server`.
+    pub name: String,
+    /// Whether the cluster is a builtin (system) cluster.
+    pub is_builtin: bool,
+}
+
+/// Identity of a replica, used to build a `replica` context kind for
+/// replica-local scoped feature flags.
+///
+/// Carries the owning cluster's identity as attributes so that replica-local
+/// flags can be cluster-targeted without a second evaluation, and the replica
+/// size and size *family* so flags can be keyed by size family (e.g. legacy
+/// sizes keep `lgalloc`). See the scoped feature flags design.
+#[derive(Clone, Debug)]
+pub struct ReplicaScopeContext {
+    /// The replica's catalog id.
+    pub id: String,
+    /// The replica's name.
+    pub name: String,
+    /// Whether the replica belongs to a builtin (system) cluster.
+    pub is_builtin: bool,
+    /// The replica's size name, e.g. `D.1` or a legacy t-shirt size.
+    pub size: String,
+    /// The replica's size family, e.g. `D` or `legacy`.
+    pub size_family: String,
+    /// The owning cluster's catalog id.
+    pub cluster_id: String,
+    /// The owning cluster's name.
+    pub cluster_name: String,
+}
+
+/// Builds a single `cluster` context kind from a [`ClusterScopeContext`].
+///
+/// Deliberately replica-free: cluster-coherent flags must resolve identically
+/// across a cluster's replicas, so no replica/size attributes appear here.
+fn cluster_context(cluster: &ClusterScopeContext) -> Result<ld::Context, anyhow::Error> {
+    ld::ContextBuilder::new(cluster.id.as_str())
+        .anonymous(true) // keep the LD dashboard Contexts list clean
+        .kind("cluster")
+        .set_string("cluster_id", cluster.id.clone())
+        .set_string("cluster_name", cluster.name.clone())
+        .set_string("is_builtin", cluster.is_builtin.to_string())
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Builds a single `replica` context kind from a [`ReplicaScopeContext`].
+///
+/// Includes the owning cluster's identity so a rule can combine both axes,
+/// e.g. "size family `D` *and* cluster `foo`".
+fn replica_context(replica: &ReplicaScopeContext) -> Result<ld::Context, anyhow::Error> {
+    ld::ContextBuilder::new(replica.id.as_str())
+        .anonymous(true) // keep the LD dashboard Contexts list clean
+        .kind("replica")
+        .set_string("replica_id", replica.id.clone())
+        .set_string("replica_name", replica.name.clone())
+        .set_string("is_builtin", replica.is_builtin.to_string())
+        .set_string("replica_size", replica.size.clone())
+        .set_string("replica_size_family", replica.size_family.clone())
+        .set_string("cluster_id", replica.cluster_id.clone())
+        .set_string("cluster_name", replica.cluster_name.clone())
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Builds a multi-context for evaluating scoped feature flags.
+///
+/// Composes the base contexts (`environment` + `organization` + `build`) with:
+/// - a `cluster` context for cluster-coherent (replica-free) resolution, and/or
+/// - a `replica` context for replica-local resolution.
+///
+/// The environment-wide pass passes `None` for both. This is the single entry
+/// point the sync loop uses to evaluate each scoped pass.
+pub fn scoped_ld_ctx(
+    env_id: &EnvironmentId,
+    build_info: &'static BuildInfo,
+    cluster: Option<&ClusterScopeContext>,
+    replica: Option<&ReplicaScopeContext>,
+) -> Result<ld::Context, anyhow::Error> {
+    ld_ctx(env_id, build_info, cluster, replica)
+}
+
 fn ld_ctx(
     env_id: &EnvironmentId,
     build_info: &'static BuildInfo,
+    cluster: Option<&ClusterScopeContext>,
+    replica: Option<&ReplicaScopeContext>,
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //
@@ -271,5 +370,67 @@ fn ld_ctx(
             .map_err(|e| anyhow::anyhow!(e))?,
     );
 
+    // Cluster-coherent resolution evaluates with a `cluster` context (no
+    // replica attributes); replica-local resolution additionally carries a
+    // `replica` context. The environment-wide pass carries neither.
+    if let Some(cluster) = cluster {
+        ctx_builder.add_context(cluster_context(cluster)?);
+    }
+    if let Some(replica) = replica {
+        ctx_builder.add_context(replica_context(replica)?);
+    }
+
     ctx_builder.build().map_err(|e| anyhow::anyhow!(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+
+    use super::*;
+
+    fn env_id() -> EnvironmentId {
+        EnvironmentId::for_tests()
+    }
+
+    #[mz_ore::test]
+    fn builds_cluster_scoped_context() {
+        // Cluster-coherent resolution evaluates with a replica-free `cluster`
+        // context.
+        let cluster = ClusterScopeContext {
+            id: "s2".into(),
+            name: "mz_catalog_server".into(),
+            is_builtin: true,
+        };
+        scoped_ld_ctx(&env_id(), &DUMMY_BUILD_INFO, Some(&cluster), None)
+            .expect("cluster-scoped context builds");
+    }
+
+    #[mz_ore::test]
+    fn builds_replica_scoped_context() {
+        // Replica-local resolution carries both a `cluster` and a `replica`
+        // context so a rule can combine size family and cluster.
+        let cluster = ClusterScopeContext {
+            id: "u1".into(),
+            name: "quickstart".into(),
+            is_builtin: false,
+        };
+        let replica = ReplicaScopeContext {
+            id: "u1-replica-1".into(),
+            name: "r1".into(),
+            is_builtin: false,
+            size: "D.1".into(),
+            size_family: "D".into(),
+            cluster_id: "u1".into(),
+            cluster_name: "quickstart".into(),
+        };
+        scoped_ld_ctx(&env_id(), &DUMMY_BUILD_INFO, Some(&cluster), Some(&replica))
+            .expect("replica-scoped context builds");
+    }
+
+    #[mz_ore::test]
+    fn environment_wide_context_is_unscoped() {
+        scoped_ld_ctx(&env_id(), &DUMMY_BUILD_INFO, None, None)
+            .expect("environment-wide context builds");
+    }
 }

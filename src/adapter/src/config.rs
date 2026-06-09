@@ -23,7 +23,9 @@ mod params;
 mod sync;
 
 pub use backend::SystemParameterBackend;
-pub use frontend::SystemParameterFrontend;
+pub use frontend::{
+    ClusterScopeContext, ReplicaScopeContext, SystemParameterFrontend, scoped_ld_ctx,
+};
 pub use params::{ModifiedParameter, SynchronizedParameters};
 pub use sync::system_parameter_sync;
 
