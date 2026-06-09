@@ -276,27 +276,25 @@ fn drop_table_identifiers(
     if parse_result.len() != 1 {
         return Err(invalid());
     }
-    let stmt = parse_result.get(0).unwrap();
-    let table_identifiers: Vec<MySqlTableName> = match stmt {
-        Statement::Drop {
-            object_type,
-            temporary,
-            names,
-            ..
-        } => match object_type {
-            ObjectType::Table => {
-                if *temporary {
-                    return Err(invalid());
-                }
-                names
-                    .iter()
-                    .map(|name| table_ident_from_object_name(name.clone(), current_schema))
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            _ => return Err(invalid()),
-        },
-        _ => return Err(invalid()),
+    let stmt = parse_result.first().unwrap();
+
+    let Statement::Drop {
+        object_type,
+        temporary,
+        names,
+        ..
+    } = stmt
+    else {
+        return Err(invalid());
     };
+
+    if *object_type != ObjectType::Table || *temporary {
+        return Err(invalid());
+    }
+    let table_identifiers: Vec<MySqlTableName> = names
+        .iter()
+        .map(|name| table_ident_from_object_name(name.clone(), current_schema))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(table_identifiers)
 }
 
