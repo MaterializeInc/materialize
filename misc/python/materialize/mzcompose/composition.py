@@ -201,11 +201,17 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
+            def _register(python_service: Any) -> None:
+                if python_service.name in self.compose["services"]:
+                    raise UIError(
+                        f"service {python_service.name!r} specified more than once"
+                    )
+                self.compose["services"][python_service.name] = python_service.config
+                for companion in getattr(python_service, "companions", []):
+                    _register(companion)
+
             for python_service in getattr(module, "SERVICES", []):
-                name = python_service.name
-                if name in self.compose["services"]:
-                    raise UIError(f"service {name!r} specified more than once")
-                self.compose["services"][name] = python_service.config
+                _register(python_service)
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
