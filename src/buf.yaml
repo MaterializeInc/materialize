@@ -25,6 +25,5 @@ lint:
 build:
   excludes:
     # external code
-    - fivetran-destination/proto
     - testdrive/ci/protobuf-bin
     - testdrive/ci/protobuf-include

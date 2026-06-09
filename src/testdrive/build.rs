@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::PathBuf;
-
 fn main() {
     // `libduckdb-sys` copies the downloaded shared library into
     // `target/<profile>/deps`. Ensure `target/debug/testdrive` can resolve it
@@ -24,36 +22,4 @@ fn main() {
             _ => {}
         }
     }
-
-    let mut config = prost_build::Config::new();
-    config
-        .protoc_executable(mz_build_tools::protoc())
-        .btree_map(["."])
-        .message_attribute(".", ATTR)
-        .enum_attribute(".", ATTR)
-        .compile_well_known_types()
-        // Disable comments because the Google well known types have comments
-        // that get mistreated as doc tests.
-        .disable_comments(["."]);
-
-    let includes_directories = &[
-        PathBuf::from("../../src/fivetran-destination/proto"),
-        mz_build_tools::protoc_include(),
-    ];
-
-    const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
-
-    tonic_prost_build::configure()
-        // Enabling `emit_rerun_if_changed` will rerun the build script when
-        // anything in the include directory (..) changes. This causes quite a
-        // bit of spurious recompilation, so we disable it. The default behavior
-        // is to re-run if any file in the crate changes; that's still a bit too
-        // broad, but it's better.
-        .emit_rerun_if_changed(false)
-        .compile_with_config(
-            config,
-            &[PathBuf::from("destination_sdk.proto")],
-            includes_directories,
-        )
-        .unwrap();
 }

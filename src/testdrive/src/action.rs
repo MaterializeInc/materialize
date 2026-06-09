@@ -59,7 +59,6 @@ pub mod consistency;
 
 mod duckdb;
 mod file;
-mod fivetran;
 mod http;
 mod kafka;
 mod mysql;
@@ -185,12 +184,6 @@ pub struct Config {
     pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
-
-    // === Fivetran options. ===
-    /// Address of the Fivetran Destination that is currently running.
-    pub fivetran_destination_url: String,
-    /// Directory that is accessible to the Fivetran Destination.
-    pub fivetran_destination_files_path: String,
 }
 
 pub struct MaterializeState {
@@ -261,10 +254,6 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
-
-    // === Fivetran state. ===
-    fivetran_destination_url: String,
-    fivetran_destination_files_path: String,
 
     // === Rewrite state. ===
     rewrite_results: bool,
@@ -349,14 +338,6 @@ impl State {
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.fivetran-destination-url".into(),
-            self.fivetran_destination_url.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.fivetran-destination-files-path".into(),
-            self.fivetran_destination_files_path.clone(),
         );
 
         for (key, value) in env::vars() {
@@ -853,9 +834,6 @@ impl Run for PosCommand {
                     }
                     "duckdb-execute" => duckdb::run_execute(builtin, state).await,
                     "duckdb-query" => duckdb::run_query(builtin, state).await,
-                    "fivetran-destination" => {
-                        fivetran::run_destination_command(builtin, state).await
-                    }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
@@ -1157,10 +1135,6 @@ pub async fn create_state(
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
-
-        // === Fivetran state. ===
-        fivetran_destination_url: config.fivetran_destination_url.clone(),
-        fivetran_destination_files_path: config.fivetran_destination_files_path.clone(),
 
         rewrites: Vec::new(),
         rewrite_pos_start: 0,
