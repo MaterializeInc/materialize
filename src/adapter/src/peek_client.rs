@@ -223,6 +223,11 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
+    ///
+    /// `end_already_logged` is an out-parameter. It is set to `true` if the peek
+    /// failed to issue *and* a concurrent teardown (e.g. a `DROP CLUSTER`) had
+    /// already retired the statement on the coordinator, which logged the end of
+    /// execution. The caller uses this to avoid logging the end a second time.
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -240,6 +245,7 @@ impl PeekClient {
         conn_id: mz_adapter_types::connection::ConnectionId,
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
+        end_already_logged: &mut bool,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -371,6 +377,16 @@ impl PeekClient {
         })
         .await?;
 
+        // Test-only synchronization point. The peek is now registered with the
+        // coordinator but not yet issued; a `pause` failpoint here lets a test
+        // deterministically land a concurrent `DROP CLUSTER` in this window, so
+        // the coordinator retires (and logs the end of) this peek before
+        // `client.peek()` below fails. See the
+        // `workflow_test_drop_cluster_during_registered_peeks_fast_path` test.
+        // Negligible cost when not configured (a registry lookup miss), which
+        // is the only case outside of tests.
+        fail::fail_point!("peek_after_register_before_issue");
+
         let finishing_for_instance = finishing.clone();
         let peek_result = client
             .peek(
@@ -389,9 +405,16 @@ impl PeekClient {
 
         if let Err(err) = peek_result {
             // Clean up the registered peek since the peek failed to issue.
-            // The frontend will handle statement logging for the error.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
+            let still_registered = self
+                .call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
                 .await;
+            // If the peek was no longer registered, then a concurrent teardown
+            // (e.g. a `DROP CLUSTER`) already removed and retired it, which
+            // logged the end of execution. Signal this to the caller so it
+            // doesn't log the end a second time (which would double-end and
+            // panic in `end_statement_execution`). Otherwise, the frontend will
+            // log the error end itself.
+            *end_already_logged = !still_registered;
             return Err(
                 AdapterError::concurrent_dependency_drop_from_instance_peek_error(
                     err,
