@@ -774,10 +774,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn drop_with_catalog_drops_catalog() {
-        assert_eq!(
-            parse_drop("DROP TABLE alpha.def.shop.customer", "shop").unwrap(),
-            vec![table("shop", "customer")],
-        );
+    fn identifier_with_multiple_dots_errors() {
+        assert!(parse_drop("DROP TABLE def.shop.customer", "shop").is_err());
     }
 }
