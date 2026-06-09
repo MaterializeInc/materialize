@@ -79,7 +79,7 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::statement_logging::WatchSetCreation;
+use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
@@ -465,6 +465,13 @@ impl Coordinator {
                             plan,
                         )
                         .await;
+                    // On success the guard's contents moved into the
+                    // `Subscribing` response. On error the frontend logs the
+                    // error end, so defuse rather than letting the guard's
+                    // `Drop` emit a spurious `Aborted`.
+                    if result.is_err() {
+                        let _ = ctx_extra.defuse();
+                    }
                     let _ = tx.send(result);
                 }
 
@@ -548,8 +555,8 @@ impl Coordinator {
                         tx,
                     );
                 }
-                Command::UnregisterFrontendPeek { uuid, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, tx);
+                Command::UnregisterFrontendPeek { uuid, reason, tx } => {
+                    self.handle_unregister_frontend_peek(uuid, reason, tx);
                 }
                 Command::ExplainTimestamp {
                     conn_id,
@@ -2110,23 +2117,20 @@ impl Coordinator {
     /// Handle unregistration of a frontend peek that was registered but failed to issue.
     /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
     ///
-    /// Sends back whether the peek was still registered (`true`) or had already
-    /// been removed and retired by a concurrent teardown (`false`). In the
-    /// latter case the end of execution was already logged, so the frontend
-    /// must not log it again.
-    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<bool>) {
+    /// Registration made the coordinator the owner of end-of-execution
+    /// logging, so the peek is retired with the given reason. If a concurrent
+    /// teardown (e.g. a `DROP CLUSTER`) already removed and retired the peek,
+    /// its end has already been logged and there is nothing left to do.
+    fn handle_unregister_frontend_peek(
+        &mut self,
+        uuid: Uuid,
+        reason: StatementEndedExecutionReason,
+        tx: oneshot::Sender<()>,
+    ) {
         // Remove from pending_peeks (this also removes from client_pending_peeks).
-        let still_registered = match self.remove_pending_peek(&uuid) {
-            Some(pending_peek) => {
-                // Retire `ExecuteContextExtra` without logging the end, because
-                // the frontend will log the peek's error result.
-                let _ = pending_peek.ctx_extra.defuse();
-                true
-            }
-            // A concurrent teardown already removed and retired this peek, so
-            // the end of execution has already been logged.
-            None => false,
-        };
-        let _ = tx.send(still_registered);
+        if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+            self.retire_execution(reason, pending_peek.ctx_extra.defuse());
+        }
+        let _ = tx.send(());
     }
 }

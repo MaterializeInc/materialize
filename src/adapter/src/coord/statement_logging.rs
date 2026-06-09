@@ -391,10 +391,13 @@ impl Coordinator {
     }
 
     /// Record the end of statement execution for a statement whose beginning was logged.
-    /// It is an error to call this function for a statement whose beginning was not logged
-    /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
-    /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
-    /// should prevent this.
+    ///
+    /// Ends are idempotent: the first end wins and any later end for the same
+    /// statement is ignored. While each holder of end-of-execution ownership
+    /// emits at most one end, ownership handoffs between the frontend and the
+    /// coordinator can leave both sides emitting when execution is torn down
+    /// concurrently, so duplicate ends are tolerated here rather than treated
+    /// as an error.
     pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
@@ -408,13 +411,24 @@ impl Coordinator {
             ended_at: now,
         };
 
-        let began_record = self
-            .statement_logging
-            .executions_begun
-            .remove(&uuid)
-            .expect(
-                "matched `begin_statement_execution` and `end_statement_execution` invocations",
+        let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
+            // The statement has already been ended. `StatementLoggingId`s are
+            // only minted when a begin is logged, and every end is processed
+            // after its begin (begins and the commands that hand statements to
+            // the coordinator travel the same command channel, in FIFO order),
+            // so a missing entry can only mean a duplicate end. Duplicates are
+            // legitimate, if rare: ends race when execution is torn down
+            // concurrently — e.g. a frontend that owns the end of a statement
+            // is dropped by a client disconnect just after handing the
+            // statement off to the coordinator, leaving both sides emitting an
+            // end.
+            tracing::warn!(
+                statement_uuid = %uuid,
+                reason = ?ended_record.reason,
+                "duplicate end_statement_execution, keeping the first end",
             );
+            return;
+        };
         for (row, diff) in
             Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
         {
