@@ -751,17 +751,73 @@ async fn raw_stream<'a>(
         })
         .abort_on_drop();
 
-    let stream = async_stream::try_stream!({
-        // Ensure we don't pre-drop the task
-        let _max_lsn_task_handle = max_lsn_task_handle;
+    // Spawn a dedicated task that owns the replication stream. It delivers received replication
+    // messages via `msg_rx` and accepts standby-status-update commands via `cmd_rx`. Moving the
+    // stream off the operator's select! lets the operator drain many buffered messages per wake-up
+    // instead of paying the 4-way poll assembly cost per message.
+    //
+    // `STREAM_MSG_CAPACITY` bounds how many messages may buffer between the stream task and the
+    // outer operator before the task back-pressures on `msg_tx.send()`. The outer loop drains up
+    // to this many messages per wake-up.
+    const STREAM_MSG_CAPACITY: usize = 1024;
+    const STREAM_CMD_CAPACITY: usize = 8;
+    let (msg_tx, msg_rx) =
+        mpsc::channel::<Result<LogicalReplMsg, tokio_postgres::Error>>(STREAM_MSG_CAPACITY);
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<StandbyStatusUpdate>(STREAM_CMD_CAPACITY);
+    let stream_task = mz_ore::task::spawn(
+        || format!("pg_replication_stream:{}", config.id),
+        async move {
+            // Keep the replication client alive for the lifetime of the stream.
+            let _replication_client = replication_client;
+            let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
+            loop {
+                tokio::select! {
+                    biased;
+                    Some(update) = cmd_rx.recv() => {
+                        let StandbyStatusUpdate { lsn, ts } = update;
+                        // Postgres only sends PrimaryKeepAlive messages when *it* wants a reply,
+                        // which happens when our status update is late. Since we send them
+                        // proactively this may never happen. It is therefore *crucial* that we
+                        // set the last parameter (the reply flag) to 1 here. This will cause the
+                        // upstream server to send us a PrimaryKeepAlive message promptly which
+                        // will give us frontier advancement information in the absence of data
+                        // updates.
+                        if let Err(err) =
+                            stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await
+                        {
+                            let _ = msg_tx.send(Err(err)).await;
+                            return;
+                        }
+                    }
+                    // `StreamExt::next` is cancel-safe when the underlying stream is cancel-safe.
+                    // `LogicalReplicationStream` reads from `tokio_postgres::CopyBothStream`, which
+                    // is backed by an mpsc — safe to drop in favour of a pending `cmd_rx.recv()`.
+                    msg = stream.next() => match msg {
+                        Some(Ok(m)) => {
+                            if msg_tx.send(Ok(m)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Some(Err(err)) => {
+                            let _ = msg_tx.send(Err(err)).await;
+                            return;
+                        }
+                        None => return,
+                    },
+                }
+            }
+        },
+    )
+    .abort_on_drop();
 
-        // ensure we don't drop the replication client!
-        let _replication_client = replication_client;
+    let stream = async_stream::try_stream!({
+        // Ensure we don't pre-drop the tasks.
+        let _max_lsn_task_handle = max_lsn_task_handle;
+        let _stream_task = stream_task;
+        let mut msg_rx = msg_rx;
 
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
-
-        let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
 
         if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
@@ -772,63 +828,80 @@ async fn raw_stream<'a>(
             Err(err)?;
         }
 
+        let mut batch: Vec<Result<LogicalReplMsg, tokio_postgres::Error>> =
+            Vec::with_capacity(STREAM_MSG_CAPACITY);
         loop {
-            tokio::select! {
-                Some(next_message) = stream.next() => match next_message {
-                    Ok(ReplicationMessage::XLogData(data)) => {
-                        yield ReplicationMessage::XLogData(data);
-                        Ok(())
-                    }
-                    Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
-                        yield ReplicationMessage::PrimaryKeepAlive(keepalive);
-                        Ok(())
-                    }
-                    Err(err) => Err(err.into()),
-                    _ => Err(TransientError::UnknownReplicationMessage),
-                },
-                _ = feedback_timer.tick() => {
-                    let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
-                    let lsn = PgLsn::from(last_committed_upper.offset);
-                    trace!("timely-{} ({}) sending keepalive {lsn:?}", config.worker_id, config.id);
-                    // Postgres only sends PrimaryKeepAlive messages when *it* wants a reply, which
-                    // happens when out status update is late. Since we send them proactively this
-                    // may never happen. It is therefore *crucial* that we set the last parameter
-                    // (the reply flag) to 1 here. This will cause the upstream server to send us a
-                    // PrimaryKeepAlive message promptly which will give us frontier advancement
-                    // information in the absence of data updates.
-                    let res = stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await;
-                    res.map_err(|e| e.into())
-                },
-                Some(upper) = uppers.next() => match upper.into_option() {
-                    Some(lsn) => {
-                        if last_committed_upper < lsn {
-                            last_committed_upper = lsn;
-                            for stat in config.statistics.values() {
-                                stat.set_offset_committed(last_committed_upper.offset);
+            let result: Result<(), TransientError> = 'arm: {
+                tokio::select! {
+                    n = msg_rx.recv_many(&mut batch, STREAM_MSG_CAPACITY) => {
+                        if n == 0 {
+                            // Stream task exited without surfacing an error.
+                            break 'arm Err(TransientError::ReplicationEOF);
+                        }
+                        for msg in batch.drain(..) {
+                            match msg {
+                                Ok(ReplicationMessage::XLogData(data)) => {
+                                    yield ReplicationMessage::XLogData(data);
+                                }
+                                Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
+                                    yield ReplicationMessage::PrimaryKeepAlive(keepalive);
+                                }
+                                Ok(_) => {
+                                    break 'arm Err(TransientError::UnknownReplicationMessage);
+                                }
+                                Err(err) => break 'arm Err(err.into()),
                             }
                         }
                         Ok(())
                     }
-                    None => Ok(()),
-                },
-                Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
-                    Some(Ok(probe)) => {
-                        if let Some(offset_known) = probe.upstream_frontier.as_option() {
-                            for stat in config.statistics.values() {
-                                stat.set_offset_known(offset_known.offset);
+                    _ = feedback_timer.tick() => {
+                        let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
+                        let lsn = PgLsn::from(last_committed_upper.offset);
+                        trace!("timely-{} ({}) sending keepalive {lsn:?}", config.worker_id, config.id);
+                        if cmd_tx.send(StandbyStatusUpdate { lsn, ts }).await.is_err() {
+                            break 'arm Err(TransientError::ReplicationEOF);
+                        }
+                        Ok(())
+                    }
+                    Some(upper) = uppers.next() => {
+                        if let Some(lsn) = upper.into_option() {
+                            if last_committed_upper < lsn {
+                                last_committed_upper = lsn;
+                                for stat in config.statistics.values() {
+                                    stat.set_offset_committed(last_committed_upper.offset);
+                                }
                             }
                         }
-                        probe_output.give(probe_cap, probe);
                         Ok(())
+                    }
+                    Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
+                        Some(Ok(probe)) => {
+                            if let Some(offset_known) = probe.upstream_frontier.as_option() {
+                                for stat in config.statistics.values() {
+                                    stat.set_offset_known(offset_known.offset);
+                                }
+                            }
+                            probe_output.give(probe_cap, probe);
+                            Ok(())
+                        }
+                        Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
+                        None => Ok(()),
                     },
-                    Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
-                    None => Ok(()),
-                },
-                else => return
-            }?;
+                    else => return,
+                }
+            };
+            result?;
         }
     });
     Ok(Ok(stream))
+}
+
+/// A command sent to the replication stream task requesting that it issue a standby status update
+/// to the upstream Postgres server.
+#[derive(Debug)]
+struct StandbyStatusUpdate {
+    lsn: PgLsn,
+    ts: i64,
 }
 
 /// Extracts a single transaction from the replication stream delimited by a BEGIN and COMMIT
