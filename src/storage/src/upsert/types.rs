@@ -88,11 +88,13 @@ use std::num::Wrapping;
 use std::sync::Arc;
 use std::time::Instant;
 
+use antithesis_sdk::{assert_always, assert_unreachable};
 use bincode::Options;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, GlobalId};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::json;
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::statistics::SourceStatistics;
@@ -294,6 +296,10 @@ impl<T, O> StateValue<T, O> {
         match self {
             Self::Value(value) => value,
             Self::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: into_decoded on Consolidating StateValue",
+                    &json!({"accessor": "into_decoded"})
+                );
                 panic!("called `into_decoded without calling `ensure_decoded`")
             }
         }
@@ -366,6 +372,10 @@ impl<T: Eq, O> StateValue<T, O> {
                 }),
             }),
             StateValue::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: into_provisional_value on Consolidating StateValue",
+                    &json!({"accessor": "into_provisional_value"})
+                );
                 panic!("called `into_provisional_value` without calling `ensure_decoded`")
             }
         }
@@ -400,6 +410,10 @@ impl<T: Eq, O> StateValue<T, O> {
                 }),
             }),
             StateValue::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: into_provisional_tombstone on Consolidating StateValue",
+                    &json!({"accessor": "into_provisional_tombstone"})
+                );
                 panic!("called `into_provisional_tombstone` without calling `ensure_decoded`")
             }
         }
@@ -413,6 +427,10 @@ impl<T: Eq, O> StateValue<T, O> {
                 _ => None,
             },
             Self::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: provisional_order on Consolidating StateValue",
+                    &json!({"accessor": "provisional_order"})
+                );
                 panic!("called `provisional_order` without calling `ensure_decoded`")
             }
         }
@@ -427,6 +445,10 @@ impl<T: Eq, O> StateValue<T, O> {
                 _ => value.finalized.as_ref(),
             },
             Self::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: provisional_value_ref on Consolidating StateValue",
+                    &json!({"accessor": "provisional_value_ref"})
+                );
                 panic!("called `provisional_value_ref` without calling `ensure_decoded`")
             }
         }
@@ -437,6 +459,10 @@ impl<T: Eq, O> StateValue<T, O> {
         match self {
             Self::Value(v) => v.finalized,
             Self::Consolidating(_) => {
+                assert_unreachable!(
+                    "upsert: into_finalized_value on Consolidating StateValue",
+                    &json!({"accessor": "into_finalized_value"})
+                );
                 panic!("called `into_finalized_value` without calling `ensure_decoded`")
             }
         }
@@ -577,7 +603,13 @@ impl<T: Eq, O> StateValue<T, O> {
                     *acc ^= val;
                 }
             }
-            _ => panic!("`merge_update_state` called with non-consolidating state"),
+            _ => {
+                assert_unreachable!(
+                    "upsert: merge_update_state on non-Consolidating state",
+                    &json!({"site": "merge_update_state"})
+                );
+                panic!("`merge_update_state` called with non-consolidating state")
+            }
         }
     }
 
@@ -618,29 +650,61 @@ impl<T: Eq, O> StateValue<T, O> {
                             })
                             .expect("invalid upsert state");
                         // Truncation is fine (using `as`) as this is just a checksum
+                        let want_checksum = seahash::hash(value) as i64;
+                        assert_always!(
+                            consolidating.checksum_sum.0 == want_checksum,
+                            "upsert: consolidating checksum_sum mismatch (diff_sum=1)",
+                            &json!({
+                                "source_id": source_id.to_string(),
+                                "checksum_sum": consolidating.checksum_sum.0,
+                                "expected_seahash": want_checksum,
+                            })
+                        );
                         assert_eq!(
-                            consolidating.checksum_sum.0,
-                            // Hash the value, not the full buffer, which may have extra 0's
-                            seahash::hash(value) as i64,
+                            consolidating.checksum_sum.0, want_checksum,
                             "invalid upsert state: checksum_sum does not match, state: {}, {}",
-                            consolidating,
-                            source_id,
+                            consolidating, source_id,
                         );
                         *self = Self::finalized_value(bincode_opts.deserialize(value).unwrap());
                     }
                     0 => {
+                        assert_always!(
+                            consolidating.len_sum.0 == 0,
+                            "upsert: consolidating len_sum nonzero (diff_sum=0)",
+                            &json!({
+                                "source_id": source_id.to_string(),
+                                "len_sum": consolidating.len_sum.0,
+                            })
+                        );
                         assert_eq!(
                             consolidating.len_sum.0, 0,
                             "invalid upsert state: len_sum is non-0, state: {}, {}",
                             consolidating, source_id,
+                        );
+                        assert_always!(
+                            consolidating.checksum_sum.0 == 0,
+                            "upsert: consolidating checksum_sum nonzero (diff_sum=0)",
+                            &json!({
+                                "source_id": source_id.to_string(),
+                                "checksum_sum": consolidating.checksum_sum.0,
+                            })
                         );
                         assert_eq!(
                             consolidating.checksum_sum.0, 0,
                             "invalid upsert state: checksum_sum is non-0, state: {}, {}",
                             consolidating, source_id,
                         );
+                        let all_zero = consolidating.value_xor.iter().all(|&x| x == 0);
+                        assert_always!(
+                            all_zero,
+                            "upsert: consolidating value_xor nonzero (diff_sum=0)",
+                            &json!({
+                                "source_id": source_id.to_string(),
+                                "value_xor_len": consolidating.value_xor.len(),
+                            })
+                        );
                         assert!(
-                            consolidating.value_xor.iter().all(|&x| x == 0),
+                            all_zero,
                             "invalid upsert state: value_xor not all 0s with 0 diff. \
                             Non-zero positions: {:?}, state: {}, {}",
                             consolidating
@@ -669,6 +733,15 @@ impl<T: Eq, O> StateValue<T, O> {
                                 ),
                                 Err(_) => "Err(UpsertValueError)".to_string(),
                             });
+                        assert_unreachable!(
+                            "upsert: consolidating diff_sum not in {0,1}",
+                            &json!({
+                                "source_id": source_id.to_string(),
+                                "diff_sum": other,
+                                "value_byte_len": value_byte_len,
+                                "decodable": decode_ok,
+                            })
+                        );
                         panic!(
                             "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}, \
                             key: {:?}, value_byte_len: {:?}, decodable: {:?}",
@@ -1059,6 +1132,10 @@ where
         });
 
         if completed && self.snapshot_completed {
+            assert_unreachable!(
+                "upsert: snapshot completion called twice",
+                &json!({"site": "consolidate_chunk"})
+            );
             panic!("attempted completion of already completed upsert snapshot")
         }
 

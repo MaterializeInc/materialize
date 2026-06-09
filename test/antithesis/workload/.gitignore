@@ -1,0 +1,3 @@
+# Populated at image-build time by the `pre-image: type: copy` directives in
+# mzbuild.yml — committing them would diverge from the source tree.
+/materialize/

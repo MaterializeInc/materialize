@@ -398,6 +398,11 @@ ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
+# Antithesis coverage instrumentation library (used when --antithesis is passed)
+RUN curl -sSL https://antithesis.com/assets/instrumentation/libvoidstar.so \
+      -o /usr/lib/libvoidstar.so \
+    && ldconfig
+
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
 FROM ubuntu:noble-20260410 AS ci-builder-console
 

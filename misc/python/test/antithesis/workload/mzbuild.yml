@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+name: antithesis-workload
+
+# The parallel-workload driver reuses the real `materialize.parallel_workload`
+# Python package rather than reimplementing it. Copy the slice of
+# `misc/python/materialize/` it needs into the build context so the Dockerfile
+# can bundle it into the image. Everything in `materialize.mzcompose.*` is
+# replaced by tiny stubs (see `stubs/materialize/mzcompose/`) — Antithesis
+# injects faults at the container layer, so the workload container has no
+# docker-compose orchestration to call into.
+pre-image:
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/__init__.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/util.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/sqlsmith.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/parallel_workload
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/data_ingest

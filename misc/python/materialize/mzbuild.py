@@ -187,6 +187,7 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        antithesis: bool = False,
     ):
         self.root = root
         self.arch = arch
@@ -196,6 +197,7 @@ class RepositoryDetails:
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
+        self.antithesis = antithesis
 
     def build(
         self,
@@ -471,13 +473,21 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
+        source = Path(self.source)
         for src in self.inputs():
-            dst = self.path / self.destination / src
+            rel = Path(src).relative_to(source)
+            dst = self.path / self.destination / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.root / self.source / src, dst)
+            shutil.copy(self.rd.root / src, dst)
 
     def inputs(self) -> set[str]:
-        return set(git.expand_globs(self.rd.root / self.source, self.matching))
+        # Return repo-root-relative paths so that `ResolvedImage.fingerprint`
+        # (which resolves each input as `rd.root / rel_path`) can lstat them.
+        source = Path(self.source)
+        return {
+            str(source / p)
+            for p in git.expand_globs(self.rd.root / self.source, self.matching)
+        }
 
 
 class CargoPreImage(PreImage):
@@ -513,6 +523,8 @@ class CargoPreImage(PreImage):
             flags += "optimized"
         if self.rd.coverage:
             flags += "coverage"
+        if self.rd.antithesis:
+            flags += ["antithesis"]
         if self.rd.sanitizer != Sanitizer.none:
             flags += self.rd.sanitizer.value
         flags.sort()
@@ -547,15 +559,14 @@ class CargoBuild(CargoPreImage):
         examples: list[str],
         features: list[str] | None = None,
     ) -> list[str]:
-        rustflags = (
-            rustc_flags.coverage
-            if rd.coverage
-            else (
-                rustc_flags.sanitizer[rd.sanitizer]
-                if rd.sanitizer != Sanitizer.none
-                else ["--cfg=tokio_unstable"]
-            )
-        )
+        if rd.antithesis:
+            rustflags = rustc_flags.antithesis
+        elif rd.coverage:
+            rustflags = rustc_flags.coverage
+        elif rd.sanitizer != Sanitizer.none:
+            rustflags = rustc_flags.sanitizer[rd.sanitizer]
+        else:
+            rustflags = ["--cfg=tokio_unstable"]
         cflags = (
             [
                 f"--target={target(rd.arch)}",
@@ -568,8 +579,8 @@ class CargoBuild(CargoPreImage):
             if rd.sanitizer != Sanitizer.none
             else []
         )
-        extra_env = (
-            {
+        if rd.sanitizer != Sanitizer.none:
+            extra_env = {
                 "CFLAGS": " ".join(cflags),
                 "CXXFLAGS": " ".join(cflags),
                 "LDFLAGS": " ".join(cflags),
@@ -582,9 +593,8 @@ class CargoBuild(CargoPreImage):
                 "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
-            if rd.sanitizer != Sanitizer.none
-            else {}
-        )
+        else:
+            extra_env = {}
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -672,7 +682,11 @@ class CargoBuild(CargoPreImage):
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, exe_path)
 
-            if self.strip:
+            if self.rd.antithesis:
+                # Antithesis needs full debug symbols for symbolization.
+                # Don't strip anything.
+                pass
+            elif self.strip:
                 # The debug information is large enough that it slows down CI,
                 # since we're packaging these binaries up into Docker images and
                 # shipping them around.
@@ -945,6 +959,7 @@ class ResolvedImage:
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
             "CI_SANITIZER": str(self.image.rd.sanitizer),
+            "ANTITHESIS": "1" if self.image.rd.antithesis else "",
         }
         f = self.write_dockerfile()
 
@@ -1416,6 +1431,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = image_registry(),
         image_prefix: str = "",
+        antithesis: bool = False,
     ):
         self.rd = RepositoryDetails(
             root,
@@ -1425,6 +1441,7 @@ class Repository:
             sanitizer,
             image_registry,
             image_prefix,
+            antithesis=antithesis,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -1527,6 +1544,12 @@ class Repository:
             default="",
             help="a prefix to apply to all Docker image names",
         )
+        parser.add_argument(
+            "--antithesis",
+            help="whether to enable Antithesis coverage instrumentation",
+            default=ui.env_is_truthy("CI_ANTITHESIS"),
+            action="store_true",
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -1554,6 +1577,7 @@ class Repository:
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
+            antithesis=args.antithesis,
         )
 
     @property

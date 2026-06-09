@@ -122,6 +122,12 @@ so it is executed.""",
         choices=Sanitizer,
     )
     parser.add_argument(
+        "--antithesis",
+        action="store_true",
+        default=ui.env_is_truthy("CI_ANTITHESIS"),
+        help="enable Antithesis coverage instrumentation",
+    )
+    parser.add_argument(
         "--priority",
         type=int,
         default=os.getenv("CI_PRIORITY", 0),
@@ -166,6 +172,7 @@ so it is executed.""",
             arch=arch,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
+            antithesis=args.antithesis,
         )
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         check = deps.check()
@@ -209,6 +216,7 @@ so it is executed.""",
                 args.coverage,
                 args.sanitizer,
                 lto,
+                args.antithesis,
             )
             trim_ci_glue_exempt_steps(pipeline)
         else:
@@ -218,9 +226,11 @@ so it is executed.""",
                 args.coverage,
                 args.sanitizer,
                 lto,
+                args.antithesis,
             )
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
+    handle_antithesis_skip(pipeline, args.antithesis)
     increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     prioritize_pipeline(pipeline, args.priority)
     switch_jobs_to_aws(pipeline, args.priority)
@@ -240,6 +250,7 @@ so it is executed.""",
         args.coverage,
         args.sanitizer,
         lto,
+        args.antithesis,
     )
     add_nightly_deploy_dependency(pipeline, args.pipeline)
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
@@ -325,6 +336,21 @@ def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
 
         for step in steps(pipeline):
             if step.get("sanitizer") == "only":
+                step["skip"] = True
+
+
+def handle_antithesis_skip(pipeline: Any, antithesis: bool) -> None:
+    if antithesis:
+        pipeline.setdefault("env", {})["CI_ANTITHESIS"] = "1"
+
+        for step in steps(pipeline):
+            if step.get("antithesis") == "skip":
+                step["skip"] = True
+
+    else:
+
+        for step in steps(pipeline):
+            if step.get("antithesis") == "only":
                 step["skip"] = True
 
 
@@ -713,6 +739,7 @@ def trim_tests_pipeline(
     coverage: bool,
     sanitizer: Sanitizer,
     lto: bool,
+    antithesis: bool = False,
 ) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
@@ -733,6 +760,7 @@ def trim_tests_pipeline(
         profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
+        antithesis=antithesis,
     )
     deps = repo.resolve_dependencies(image for image in repo)
 
@@ -919,6 +947,7 @@ def add_cargo_test_dependency(
     coverage: bool,
     sanitizer: Sanitizer,
     lto: bool,
+    antithesis: bool = False,
 ) -> None:
     """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
     if pipeline_name not in ("test", "nightly"):
@@ -935,6 +964,7 @@ def add_cargo_test_dependency(
         profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
+        antithesis=antithesis,
     )
     composition = Composition(repo, name="cargo-test")
     deps = composition.dependencies
@@ -1092,6 +1122,8 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             del step["coverage"]
         if "sanitizer" in step:
             del step["sanitizer"]
+        if "antithesis" in step:
+            del step["antithesis"]
         if "ci_glue_exempt" in step:
             del step["ci_glue_exempt"]
         if (
