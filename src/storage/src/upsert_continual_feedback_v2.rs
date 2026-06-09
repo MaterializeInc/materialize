@@ -75,9 +75,10 @@ use columnar::Index as _;
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::trace::{Batcher, Cursor, TraceReader};
+use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_row_spine::{DatumSeq, ValRowColPagedBuilder, ValRowSpine};
@@ -90,12 +91,13 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
 use std::convert::Infallible;
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::operators::{Capability, CapabilitySet, Exchange as _};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -104,6 +106,52 @@ use crate::metrics::upsert::UpsertMetrics;
 use crate::upsert::UpsertKey;
 use crate::upsert::UpsertSourceTime;
 use crate::upsert::UpsertValue;
+
+/// The persist-feedback arrangement's batcher, wrapping [`Col2ValPagedBatcher`]
+/// only to capture the storage upsert-stash pager at construction.
+///
+/// `arrange_core` builds its batcher via [`Batcher::new`], which has no pager
+/// hook, so a plain `Col2ValPagedBatcher` falls back to the process-global
+/// (compute) pager — meaning the feedback arrangement's spill would be gated by
+/// compute's `enable_column_paged_batcher_spill` rather than storage's
+/// `enable_upsert_paged_spill`. Injecting `upsert_stash_pager::pager()` in `new`
+/// puts the feedback arrangement under the same flag as the source stash. Every
+/// other method delegates to the inner batcher unchanged.
+struct UpsertFeedbackBatcher<T: columnar::Columnar>(Col2ValPagedBatcher<UpsertKey, Row, T, Diff>);
+
+impl<T> Batcher for UpsertFeedbackBatcher<T>
+where
+    T: Timestamp + columnar::Columnar + Default + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+{
+    type Output = Column<((UpsertKey, Row), T, Diff)>;
+    type Time = T;
+
+    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        let mut batcher =
+            <Col2ValPagedBatcher<UpsertKey, Row, T, Diff> as Batcher>::new(logger, operator_id);
+        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
+        Self(batcher)
+    }
+
+    fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
+        self.0.seal(upper)
+    }
+
+    fn frontier(&mut self) -> AntichainRef<'_, T> {
+        self.0.frontier()
+    }
+}
+
+impl<T> PushInto<Column<((UpsertKey, Row), T, Diff)>> for UpsertFeedbackBatcher<T>
+where
+    T: Timestamp + columnar::Columnar + Default + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+{
+    fn push_into(&mut self, chunk: Column<((UpsertKey, Row), T, Diff)>) {
+        self.0.push_into(chunk)
+    }
+}
 
 // ── Source stash diff type ───────────────────────────────────────────────────
 // The source stash carries the upsert payload in a custom diff type so the
@@ -362,7 +410,7 @@ where
         _,
         _,
         ColumnChunker<((UpsertKey, Row), T, Diff)>,
-        Col2ValPagedBatcher<UpsertKey, Row, T, Diff>,
+        UpsertFeedbackBatcher<T>,
         ValRowColPagedBuilder<UpsertKey, T, Diff>,
         ValRowSpine<UpsertKey, T, Diff>,
     >(encoded, Pipeline, "Persist feedback");
