@@ -739,17 +739,16 @@ impl Instance {
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling decisions.
             match self.active_ingestions.get(ingestion_id) {
                 Some(ingestion) => ingestion.active_replicas.clone(),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    BTreeSet::new()
-                }
+                None => BTreeSet::new(),
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            ingestion.active_replicas.clone()
+        } else if let Some(export) = self.active_exports.get(id) {
+            export.active_replicas.clone()
         } else {
-            // For non-ingestion objects, all replicas are active
-            self.replicas.keys().copied().collect()
+            BTreeSet::new()
         }
     }
 }
@@ -958,6 +957,98 @@ impl ReplicaTask {
     fn specialize_command(&self, command: &mut StorageCommand) {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn active_replicas_for_export() {
+        let reg = mz_ore::metrics::MetricsRegistry::new();
+        let ctrl = mz_cluster_client::metrics::ControllerMetrics::new(&reg);
+        let sm = mz_storage_client::metrics::StorageControllerMetrics::new(&reg, ctrl);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut inst = Instance::new(
+            None,
+            sm.for_instance(mz_storage_types::instances::StorageInstanceId::System(0)),
+            mz_ore::now::NOW_ZERO.clone(),
+            tx,
+        );
+
+        let r1 = ReplicaId::User(1);
+        let sink = GlobalId::User(100);
+        inst.active_exports.insert(
+            sink,
+            ActiveExport {
+                active_replicas: BTreeSet::from([r1]),
+            },
+        );
+        assert_eq!(
+            inst.get_active_replicas_for_object(&sink),
+            BTreeSet::from([r1]),
+        );
+    }
+
+    /// Exposes the `dropped_objects` leak: when an object is no longer tracked
+    /// in `active_ingestions` / `active_exports` (e.g. after `allow_compaction`
+    /// during a drop), `get_active_replicas_for_object` falls through to
+    /// `replicas.keys()`. The caller in `drop_*_unvalidated` then records every
+    /// replica in `dropped_objects` — but phantom replicas that never ran the
+    /// object will never reply with `DroppedId`, so the entry leaks forever.
+    /// Both removal paths in `lib.rs` (`DroppedId` handling and replica-drop
+    /// cleanup) require either a `DroppedId` from the listed replica or the id
+    /// to still be in `active_exports` / `active_ingestions`, and neither holds
+    /// once compaction has run.
+    ///
+    /// The safe answer is `BTreeSet::new()`; this test fails today and will
+    /// pass once the fall-through is fixed.
+    #[mz_ore::test(tokio::test)]
+    async fn unknown_object_does_not_overclaim_replicas() {
+        let reg = mz_ore::metrics::MetricsRegistry::new();
+        let ctrl = mz_cluster_client::metrics::ControllerMetrics::new(&reg);
+        let sm = mz_storage_client::metrics::StorageControllerMetrics::new(&reg, ctrl);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut inst = Instance::new(
+            None,
+            sm.for_instance(mz_storage_types::instances::StorageInstanceId::System(0)),
+            mz_ore::now::NOW_ZERO.clone(),
+            tx,
+        );
+
+        let r1 = ReplicaId::User(1);
+        let r2 = ReplicaId::User(2);
+        inst.replicas.insert(r1, fake_replica());
+        inst.replicas.insert(r2, fake_replica());
+
+        let id = GlobalId::User(100);
+        assert!(!inst.active_exports.contains_key(&id));
+        assert!(!inst.active_ingestions.contains_key(&id));
+        assert!(!inst.ingestion_exports.contains_key(&id));
+
+        assert_eq!(
+            inst.get_active_replicas_for_object(&id),
+            BTreeSet::new(),
+            "compacted/unknown object must not over-claim replicas: \
+             phantom replicas never reply with DroppedId, leaking the \
+             dropped_objects entry indefinitely",
+        );
+    }
+
+    fn fake_replica() -> Replica {
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+        let task = mz_ore::task::spawn(|| "fake-replica", async {});
+        Replica {
+            config: ReplicaConfig {
+                build_info: &mz_build_info::DUMMY_BUILD_INFO,
+                location: ClusterReplicaLocation { ctl_addrs: vec![] },
+                grpc_client: GrpcClientParameters::default(),
+            },
+            command_tx,
+            task: task.abort_on_drop(),
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 }
