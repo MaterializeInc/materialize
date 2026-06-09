@@ -951,6 +951,7 @@ impl Instance {
             // `ReplicaTask::specialize_command`.
             logging: Default::default(),
             expiration_offset: Default::default(),
+            arrangement_dictionary_compression: Default::default(),
         };
 
         self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
