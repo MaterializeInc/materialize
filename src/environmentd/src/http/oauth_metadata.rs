@@ -691,10 +691,7 @@ mod tests {
             McpOAuthDiscovery::Disabled,
         );
         assert_eq!(
-            McpOAuthDiscovery::for_authenticator(
-                AuthenticatorKind::Frontegg,
-                Some("not a url"),
-            ),
+            McpOAuthDiscovery::for_authenticator(AuthenticatorKind::Frontegg, Some("not a url"),),
             McpOAuthDiscovery::Disabled,
         );
         assert_eq!(
