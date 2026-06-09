@@ -10,10 +10,15 @@ Tests live in `src/environmentd/tests/server.rs`, prefixed `qa_occ_` /
 ```
 METADATA_BACKEND_URL=postgres://root@localhost:26257/materialize \
   cargo nextest run -p mz-environmentd -E 'test(/qa_occ_/)'
-# bug repros are #[ignore]d; reproduce with:
-METADATA_BACKEND_URL=... cargo nextest run -p mz-environmentd --run-ignored only \
-  -E 'test(qa_occ_far_future_refresh_mv_respects_statement_timeout) | test(qa_occ_far_future_rtw_starves_permit_pool)'
 ```
+
+All `qa_occ_` tests — including the two former bug repros
+(`qa_occ_far_future_refresh_mv_respects_statement_timeout` and
+`qa_occ_far_future_rtw_starves_permit_pool`) — are now active and passing; they
+verify the fix described below. The only `#[ignore]`d test is
+`qa_legacy_far_future_refresh_mv_statement_timeout`, which documents the
+pre-existing far-future hang on the legacy coordinator path (out of scope for
+this OCC-only fix).
 
 ## What was verified correct (passing tests)
 
@@ -42,61 +47,67 @@ The core OCC retry/consolidation logic, the timestamped-write/oracle
 interaction, and the snapshot/progress `NoRowsMatched` reasoning were also
 reviewed statically and found sound.
 
-## Bug found: `ensure_read_linearized` ignores `statement_timeout`
+## Fixed: OCC read-then-write now honors `statement_timeout` everywhere
 
-`frontend_read_then_write::ensure_read_linearized` loops `tokio::time::sleep`
-until the oracle reaches `as_of`, with **no `statement_timeout` check**. When a
-read-then-write's `as_of` is far in the future — e.g. the read depends on a
-`REFRESH AT <far future>` materialized view — the session hangs indefinitely.
-Only client cancellation / disconnect frees it; `statement_timeout` does not.
+**Original bug.** `frontend_read_then_write::ensure_read_linearized` loops
+`tokio::time::sleep` until the oracle reaches `as_of`, with no
+`statement_timeout` check. When a read-then-write's `as_of` was far in the
+future — e.g. the read depends on a `REFRESH AT <far future>` materialized
+view — the session hung indefinitely; only client cancellation / disconnect
+freed it. `statement_timeout` was only enforced inside `run_occ_loop` (via
+`tokio::time::timeout` on `recv`), which is reached *after* linearization, so
+the pre-loop phases (planning, OCC permit acquisition, timestamp determination,
+linearization) were all unbounded. This contradicted the call-site comment,
+which claimed a pathological RTW "hits `statement_timeout` and returns".
 
-This directly contradicts the code comment at the call site, which claims:
+The OCC-specific amplification was the real concern: the parked op holds an OCC
+semaphore permit (`max_concurrent_occ_writes`, default 4) for its entire
+lifetime. A handful of such ops exhausted the global permit pool and wedged
+**all** read-then-writes process-wide — including ones on unrelated tables —
+because those victims block on permit acquisition *before* the OCC loop, so
+they too ignored `statement_timeout`. The legacy path only blocks writes to the
+*target* table (per-table write lock), so OCC widened the blast radius from one
+table to the whole RTW pipeline.
 
-> By waiting here, a pathological RTW hits `statement_timeout` and returns
-> without ever touching the oracle.
+**The fix.** `statement_timeout` is now enforced **centrally**, in the
+`tokio::select!` of `SessionClient::try_frontend_read_then_write_with_cancel`
+(`src/adapter/src/client.rs`) — the one place that already owns the whole
+operation's lifetime and handles cancellation. A new select arm sleeps for
+`*session.vars().statement_timeout()` (treating `Duration::ZERO` as "off /
+wait forever" via `futures::future::pending`, mirroring `run_occ_loop`'s
+`effective_timeout`). When it fires it returns `AdapterError::StatementTimeout`
+and forwards `Command::PrivilegedCancelRequest` to the coordinator (mirroring
+the existing `cancel_future` arm) to clean up any in-flight coordinator-owned
+work. Because the whole `try_frontend_read_then_write` future is dropped, the
+OCC permit, read holds, and `SubscribeHandle` (whose `Drop` sends
+`DropInternalSubscribe`) are all released.
 
-The "without ever touching the oracle" half holds (the write is never
-submitted, so the EpochMilliseconds oracle is not bumped — good). The "hits
-`statement_timeout`" half does not: `statement_timeout` is only enforced inside
-`run_occ_loop` (via `tokio::time::timeout` on `recv`), which is reached *after*
-linearization.
+This single deadline now bounds *every* phase: planning, OCC permit
+acquisition, timestamp determination, `ensure_read_linearized`, **and** the OCC
+loop. The far-future op times out promptly and releases its permit, so victims
+behind a starved pool also honor their own `statement_timeout`. The in-loop
+`run_occ_loop` timeout is kept as defense-in-depth (it also bounds a single
+blocking `recv`); the call-site comment in `frontend_read_then_write.rs` was
+corrected to point at the central enforcement.
 
-Repro: `qa_occ_far_future_refresh_mv_respects_statement_timeout` (#[ignore]d).
-With `statement_timeout = '3s'`, `INSERT INTO dst SELECT a FROM mv` does not
-return within 45s.
+Verified by `qa_occ_far_future_refresh_mv_respects_statement_timeout` (the
+far-future op returns a timeout error well within budget) and
+`qa_occ_far_future_rtw_starves_permit_pool` (the unrelated victim times out on
+permit acquisition within its own `statement_timeout` instead of hanging).
+Both are now active (no longer `#[ignore]`d) and passing.
 
-### Severity / scope
+### Out of scope / unchanged
 
-- **Not a pure regression**: the legacy (lock-based) path also hangs on a
+- **Legacy path.** The legacy (lock-based) coordinator path also hangs on a
   far-future read past `statement_timeout`
-  (`qa_legacy_far_future_refresh_mv_statement_timeout`). The indefinite hang is
-  pre-existing.
-- **OCC-specific amplification (the real concern)**: the hung op holds an OCC
-  semaphore permit (`max_concurrent_occ_writes`, default 4) for its entire
-  indefinite lifetime, plus read holds on the read dependencies (pinning
-  compaction). A handful of such ops exhaust the global permit pool and wedge
-  **all** read-then-writes process-wide — including ones on unrelated tables —
-  and those victims also ignore `statement_timeout` because they block on
-  permit acquisition *before* the OCC loop. The legacy path only blocks writes
-  to the *target* table (per-table write lock), so OCC widens the blast radius
-  from one table to the whole RTW pipeline. Repro:
-  `qa_occ_far_future_rtw_starves_permit_pool` (#[ignore]d) — an unrelated
-  `UPDATE` does not return within 25s while one far-future RTW holds the sole
-  permit (pool sized to 1).
+  (`qa_legacy_far_future_refresh_mv_statement_timeout`, still `#[ignore]`d).
+  This pre-existing hang is intentionally left unchanged; the fix is OCC-only.
 
-### Corollary / operational footgun
+### Corollary / operational footgun (still open)
 
-The same "block before the timeout is enforced" structure means
+The same "block before the timeout is enforced" structure used to mean
 `max_concurrent_occ_writes = 0` (settable via `system_parameter_default`;
 `ALTER SYSTEM SET` is correctly rejected) sizes the semaphore to zero permits
-and bricks every read-then-write after restart, with no `statement_timeout`
-relief. Consider rejecting `0` (require `>= 1`).
-
-### Suggested fixes (any of)
-
-- Enforce `statement_timeout` (and ideally cancellation is already handled) in
-  `ensure_read_linearized` — e.g. wrap the wait in `tokio::time::timeout`, or
-  bound the as_of wait and return `AdapterError::StatementTimeout`.
-- Acquire the OCC permit (and read holds) *after* linearization, or release the
-  permit while parked, so a parked far-future op cannot starve the pool.
-- Cap how far into the future an RTW `as_of` may be before erroring fast.
+and bricks every read-then-write after restart. With the central timeout, such
+operations now at least *time out* instead of hanging forever, but a value of
+`0` is still a footgun — consider rejecting it (require `>= 1`).
