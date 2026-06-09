@@ -100,9 +100,6 @@ known_errors = [
     "not supported for type time",
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
-    "is out of range for type numeric: exceeds maximum precision",
-    "is out of range for type date",
-    "is out of range for type timestamp",
     "CAST does not support casting from ",  # TODO: Improve type system
     "SET clause does not support casting from ",  # TODO: Improve type system
     "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)

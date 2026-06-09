@@ -24,8 +24,11 @@ use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
+use mz_repr::strconv::{ParseError, ParseErrorKind};
 use mz_repr::{ColumnDiff, ColumnName, KeyDiff, NotNullViolation, RelationDescDiff, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
@@ -279,6 +282,164 @@ pub enum AuthenticationError {
     RoleNotFound,
     #[error("password is required")]
     PasswordRequired,
+}
+
+/// Maps a parse/cast [`ParseError`] to the appropriate `DATA_EXCEPTION` (class
+/// 22) SQLSTATE. Out-of-range values map to overflow codes and malformed input
+/// maps to invalid-representation codes, in both cases distinguishing datetime
+/// types from everything else, matching PostgreSQL.
+fn parse_error_code(err: &ParseError) -> SqlState {
+    let is_datetime = matches!(
+        &*err.type_name,
+        "date" | "time" | "timestamp" | "timestamp with time zone" | "interval"
+    );
+    match (err.kind, is_datetime) {
+        (ParseErrorKind::OutOfRange, true) => SqlState::DATETIME_FIELD_OVERFLOW,
+        (ParseErrorKind::OutOfRange, false) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        (ParseErrorKind::InvalidInputSyntax, true) => SqlState::INVALID_DATETIME_FORMAT,
+        (ParseErrorKind::InvalidInputSyntax, false) => SqlState::INVALID_TEXT_REPRESENTATION,
+    }
+}
+
+/// Maps an [`EvalError`] to the appropriate SQLSTATE.
+///
+/// Historically every `EvalError` fell through to `INTERNAL_ERROR` (`XX000`),
+/// but the overwhelming majority are user-facing data exceptions (class 22) or
+/// other well-defined conditions, not internal errors. This match is
+/// deliberately exhaustive — with no wildcard — so that adding a new
+/// `EvalError` variant is a compile error until it is assigned a code, and we
+/// never silently regress to `XX000`. Codes are chosen to match PostgreSQL
+/// where an equivalent error exists.
+fn eval_error_code(err: &EvalError) -> SqlState {
+    match err {
+        // Division and mathematical domain errors.
+        EvalError::DivisionByZero => SqlState::DIVISION_BY_ZERO,
+        EvalError::NegSqrt | EvalError::ComplexOutOfRange(_) => {
+            SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION
+        }
+        EvalError::InfinityOutOfDomain(_)
+        | EvalError::NegativeOutOfDomain(_)
+        | EvalError::ZeroOutOfDomain(_)
+        | EvalError::OutOfDomain(..)
+        | EvalError::Undefined(_) => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Out-of-range numeric, integer, and float values.
+        EvalError::FloatOverflow
+        | EvalError::FloatUnderflow
+        | EvalError::NumericFieldOverflow
+        | EvalError::Float32OutOfRange(_)
+        | EvalError::Float64OutOfRange(_)
+        | EvalError::Int16OutOfRange(_)
+        | EvalError::Int32OutOfRange(_)
+        | EvalError::Int64OutOfRange(_)
+        | EvalError::UInt16OutOfRange(_)
+        | EvalError::UInt32OutOfRange(_)
+        | EvalError::UInt64OutOfRange(_)
+        | EvalError::OidOutOfRange(_)
+        | EvalError::MzTimestampOutOfRange(_)
+        | EvalError::MzTimestampStepOverflow
+        | EvalError::CharOutOfRange => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+
+        // Out-of-range datetime and interval values.
+        EvalError::DateOutOfRange
+        | EvalError::TimestampOutOfRange
+        | EvalError::TimestampCannotBeNan
+        | EvalError::DateBinOutOfRange(_)
+        | EvalError::DateDiffOverflow { .. } => SqlState::DATETIME_FIELD_OVERFLOW,
+        EvalError::IntervalOutOfRange(_) => SqlState::INTERVAL_FIELD_OVERFLOW,
+
+        // Parse/cast failures, plus other malformed textual/encoded input.
+        EvalError::Parse(e) => parse_error_code(e),
+        EvalError::ParseHex(_)
+        | EvalError::InvalidBase64Equals
+        | EvalError::InvalidBase64Symbol(_)
+        | EvalError::InvalidBase64EndSequence => SqlState::INVALID_TEXT_REPRESENTATION,
+        EvalError::InvalidByteSequence { .. } => SqlState::CHARACTER_NOT_IN_REPERTOIRE,
+        EvalError::CharacterNotValidForEncoding(_) | EvalError::CharacterTooLargeForEncoding(_) => {
+            SqlState::PROGRAM_LIMIT_EXCEEDED
+        }
+
+        // Invalid argument values.
+        EvalError::InvalidTimezone(_)
+        | EvalError::InvalidTimezoneInterval
+        | EvalError::InvalidTimezoneConversion
+        | EvalError::InvalidIanaTimezoneId(_)
+        | EvalError::InvalidLayer { .. }
+        | EvalError::InvalidEncodingName(_)
+        | EvalError::InvalidHashAlgorithm(_)
+        | EvalError::InvalidDatePart(_)
+        | EvalError::InvalidParameterValue(_)
+        | EvalError::InvalidJsonbCast { .. }
+        | EvalError::UnknownUnits(_)
+        | EvalError::UnsupportedUnits(..)
+        | EvalError::InvalidIdentifier { .. }
+        | EvalError::InvalidRoleId(_)
+        | EvalError::InvalidPrivileges(_)
+        | EvalError::NegLimit => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Regular expressions.
+        EvalError::InvalidRegex(_) | EvalError::InvalidRegexFlag(_) => {
+            SqlState::INVALID_REGULAR_EXPRESSION
+        }
+
+        // LIKE escape sequences.
+        EvalError::UnterminatedLikeEscapeSequence | EvalError::LikeEscapeTooLong => {
+            SqlState::INVALID_ESCAPE_SEQUENCE
+        }
+
+        // NULL values where they are not permitted.
+        EvalError::KeyCannotBeNull
+        | EvalError::MustNotBeNull(_)
+        | EvalError::AclArrayNullElement
+        | EvalError::MzAclArrayNullElement => SqlState::NULL_VALUE_NOT_ALLOWED,
+
+        // Array subscript/dimension errors.
+        EvalError::IndexOutOfRange { .. }
+        | EvalError::ArrayFillWrongArraySubscripts
+        | EvalError::IncompatibleArrayDimensions { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        EvalError::InvalidArray(e) => match e {
+            InvalidArrayError::TooManyDimensions(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+            InvalidArrayError::WrongCardinality { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        },
+
+        // Range errors.
+        EvalError::InvalidRange(e) => match e {
+            InvalidRangeError::CanonicalizationOverflow(_) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+            InvalidRangeError::MisorderedRangeBounds
+            | InvalidRangeError::InvalidRangeBoundFlags
+            | InvalidRangeError::NullRangeBoundFlags
+            | InvalidRangeError::DiscontiguousUnion
+            | InvalidRangeError::DiscontiguousDifference => SqlState::DATA_EXCEPTION,
+        },
+
+        // Cardinality violations from scalar subqueries.
+        EvalError::MultipleRowsFromSubquery | EvalError::NegativeRowsFromSubquery => {
+            SqlState::CARDINALITY_VIOLATION
+        }
+
+        // Length, size, and resource limits.
+        EvalError::StringValueTooLong { .. } => SqlState::STRING_DATA_RIGHT_TRUNCATION,
+        EvalError::LikePatternTooLong
+        | EvalError::LengthTooLarge
+        | EvalError::NullCharacterNotPermitted
+        | EvalError::MaxArraySizeExceeded(_)
+        | EvalError::LetRecLimitExceeded(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+
+        // Unsupported features.
+        EvalError::Unsupported { .. }
+        | EvalError::MultidimensionalArrayRemovalNotSupported
+        | EvalError::MultiDimensionalArraySearch => SqlState::FEATURE_NOT_SUPPORTED,
+
+        // User-raised errors (e.g. `error_if_null`).
+        EvalError::IfNullError(_) => SqlState::DATA_EXCEPTION,
+
+        // Genuinely internal errors.
+        EvalError::Internal(_)
+        | EvalError::InvalidCatalogJson(_)
+        | EvalError::TypeFromOid(_)
+        | EvalError::PrettyError(_)
+        | EvalError::RedactError(_) => SqlState::INTERNAL_ERROR,
+    }
 }
 
 impl AdapterError {
@@ -590,17 +751,11 @@ impl AdapterError {
             },
             AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
-            AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::LengthTooLarge) => SqlState::PROGRAM_LIMIT_EXCEEDED,
-            AdapterError::Eval(EvalError::NullCharacterNotPermitted) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
+            // Evaluation errors are almost all user-facing data exceptions, not
+            // internal errors. `eval_error_code` matches every variant
+            // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
+            // to errors that are really the user's fault. See SQL-326.
+            AdapterError::Eval(e) => eval_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
