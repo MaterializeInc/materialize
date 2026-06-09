@@ -1227,13 +1227,22 @@ async fn http_auth(
     )
     .await;
 
-    let group_claim = group_claim_for(&adapter_client_rx).await;
+    // Only the Frontegg arm consumes `group_claim`; resolving it requires a
+    // coordinator round-trip (`Command::GetSystemVars`), so skip it for
+    // None/Password/OIDC paths. Otherwise unauth'd probes like `/api/livez`,
+    // `/api/readyz`, and `/metrics` on a `None`-auth listener would couple
+    // liveness to coordinator health. Mirrors the pgwire path.
+    let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
+        Some(group_claim_for(&adapter_client_rx).await)
+    } else {
+        None
+    };
     let user = auth(
         &authenticator,
         creds,
         allowed_roles,
         &challenges,
-        Some(&group_claim),
+        group_claim.as_deref(),
     )
     .await?;
 
@@ -1328,13 +1337,19 @@ async fn init_ws(
             // client is reading WS frames, not parsing HTTP headers, so
             // we just suppress challenge emission entirely.
             let no_challenges = WwwAuthenticateChallenges::default();
-            let group_claim = group_claim_for(&adapter_client_rx).await;
+            // See `http_auth`: only Frontegg uses `group_claim`, and the
+            // fetch costs a coordinator round-trip.
+            let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
+                Some(group_claim_for(&adapter_client_rx).await)
+            } else {
+                None
+            };
             let user = auth(
                 &authenticator,
                 Some(creds),
                 allowed_roles,
                 &no_challenges,
-                Some(&group_claim),
+                group_claim.as_deref(),
             )
             .await?;
             user
