@@ -2146,3 +2146,19 @@ mod hydration_burst {
         assert_eq!(burst.steady_hydrated_at, Some(now(2000)));
     }
 }
+
+#[mz_ore::test]
+fn replica_name_gen_is_one_based_and_avoids_used() {
+    use crate::ReplicaNameGen;
+
+    // Managed-replica names are 1-based: an empty cluster's first generated
+    // name is `r1`.
+    let mut name_gen = ReplicaNameGen::new(&[]);
+    assert_eq!(name_gen.next_name(), "r1");
+    assert_eq!(name_gen.next_name(), "r2");
+
+    // Fresh names start past the highest observed `rNN` index and skip names
+    // in use.
+    let mut name_gen = ReplicaNameGen::new(&["r2", "custom"]);
+    assert_eq!(name_gen.next_name(), "r3");
+}

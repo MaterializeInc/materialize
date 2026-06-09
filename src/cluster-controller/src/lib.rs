@@ -404,7 +404,8 @@ struct DesiredShape {
 /// renaming existing replicas, which keeps re-emission harmless. The concrete
 /// naming convention (the `rNN` managed-replica scheme) is the environment's; the
 /// kernel only needs distinct, stable-per-tick names, so it uses a simple
-/// monotonic scheme starting past the highest observed `rNN` index.
+/// monotonic scheme starting past the highest observed `rNN` index, and never
+/// below `r1` since managed-replica names are 1-based.
 struct ReplicaNameGen {
     next: u32,
     used: BTreeSet<String>,
@@ -412,7 +413,7 @@ struct ReplicaNameGen {
 
 impl ReplicaNameGen {
     fn new(used: &[&str]) -> Self {
-        let mut highest = 0;
+        let mut highest = 1;
         for name in used {
             if let Some(idx) = name.strip_prefix('r').and_then(|n| n.parse::<u32>().ok()) {
                 highest = highest.max(idx + 1);
