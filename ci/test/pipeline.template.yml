@@ -291,6 +291,18 @@ steps:
     agents:
       queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
 
+  - id: mz-deploy
+    label: "mz-deploy"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [src/mz-deploy, test/mz-deploy]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-deploy
+          ci-builder: stable
+    agents:
+      queue: hetzner-x86-64-8cpu-16gb
+
   - id: testdrive
     label: "Testdrive"
     depends_on: build-aarch64

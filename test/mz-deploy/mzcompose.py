@@ -949,6 +949,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "no profile selected" in combined
         ), f"Expected 'no profile selected' error, got: {combined}"
 
+    # Run every other workflow as a sub-case so the default workflow exercises
+    # the full suite.
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
 
 def workflow_dev(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test the dev command — developer-role overlay for inner-loop iteration."""
@@ -1205,9 +1214,7 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
         project_toml.write_text(original_toml)
 
 
-def workflow_connection_updates(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
+def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise `apply` re-runs for CONNECTION objects.
 
     For each scenario the workflow:
@@ -1240,9 +1247,7 @@ def workflow_connection_updates(
         return rows[0][1]
 
     def assert_alter_plan(project: str, expected_altered: int) -> None:
-        result = run_mz_deploy(
-            c, project, "apply", "--dry-run", "--output", "json"
-        )
+        result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
         dry_run = parse_dry_run_json(result)
         conn_phase = find_phase(dry_run["phases"], "connections")
         altered = phase_actions(conn_phase, "altered")
@@ -1252,9 +1257,7 @@ def workflow_connection_updates(
         )
 
     def assert_idempotent_after_update(project: str) -> None:
-        result = run_mz_deploy(
-            c, project, "apply", "--dry-run", "--output", "json"
-        )
+        result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
         dry_run = parse_dry_run_json(result)
         conn_phase = find_phase(dry_run["phases"], "connections")
         altered = phase_actions(conn_phase, "altered")
@@ -1264,17 +1267,14 @@ def workflow_connection_updates(
             f"got {len(altered)} altered: {altered}"
         )
         assert len(up_to_date) >= 1, (
-            f"[{project}] re-apply should report up_to_date, "
-            f"got {len(up_to_date)}"
+            f"[{project}] re-apply should report up_to_date, " f"got {len(up_to_date)}"
         )
 
     # ── 1. Initial baseline apply ────────────────────────────────────────
     # First baseline apply also creates the `app` database, secrets, and the
     # connection — every subsequent baseline apply is a reset to that shape.
     result = run_mz_deploy(c, "connection-updates/baseline", "apply")
-    assert result.returncode == 0, (
-        f"initial baseline apply failed: {result.stderr}"
-    )
+    assert result.returncode == 0, f"initial baseline apply failed: {result.stderr}"
     assert "PORT = 5432" in show_create()
 
     with c.test_case("connection-add-option"):
@@ -1282,36 +1282,28 @@ def workflow_connection_updates(
         # branch of the SET/DROP diff for an option absent from the catalog.
         assert_alter_plan("connection-updates/add-option", expected_altered=1)
         result = run_mz_deploy(c, "connection-updates/add-option", "apply")
-        assert result.returncode == 0, (
-            f"add-option apply failed: {result.stderr}"
-        )
-        assert "ssl mode" in show_create().lower(), (
-            f"expected SSL MODE in SHOW CREATE after add, got:\n{show_create()}"
-        )
+        assert result.returncode == 0, f"add-option apply failed: {result.stderr}"
+        assert (
+            "ssl mode" in show_create().lower()
+        ), f"expected SSL MODE in SHOW CREATE after add, got:\n{show_create()}"
         assert_idempotent_after_update("connection-updates/add-option")
 
     with c.test_case("connection-drop-option"):
         # Reset to baseline (which has PORT and lacks SSL MODE), then drop
         # PORT. The reset itself drops SSL MODE — sanity check the reset
         # also reports altered=1.
-        assert_alter_plan(
-            "connection-updates/baseline", expected_altered=1
-        )
+        assert_alter_plan("connection-updates/baseline", expected_altered=1)
         result = run_mz_deploy(c, "connection-updates/baseline", "apply")
-        assert result.returncode == 0, (
-            f"baseline reset apply failed: {result.stderr}"
-        )
+        assert result.returncode == 0, f"baseline reset apply failed: {result.stderr}"
         assert "ssl mode" not in show_create().lower()
 
         # Now drop PORT.
         assert_alter_plan("connection-updates/drop-port", expected_altered=1)
         result = run_mz_deploy(c, "connection-updates/drop-port", "apply")
-        assert result.returncode == 0, (
-            f"drop-port apply failed: {result.stderr}"
-        )
-        assert "PORT = 5432" not in show_create(), (
-            f"expected PORT removed from SHOW CREATE, got:\n{show_create()}"
-        )
+        assert result.returncode == 0, f"drop-port apply failed: {result.stderr}"
+        assert (
+            "PORT = 5432" not in show_create()
+        ), f"expected PORT removed from SHOW CREATE, got:\n{show_create()}"
         assert_idempotent_after_update("connection-updates/drop-port")
 
     with c.test_case("connection-change-option-value"):
@@ -1321,18 +1313,16 @@ def workflow_connection_updates(
         # and the SHOW CREATE output's exact quoting around USER is
         # version-sensitive.
         run_mz_deploy(c, "connection-updates/baseline", "apply")
-        assert "mz_alt_user" not in show_create(), (
-            f"expected no mz_alt_user in baseline SHOW CREATE, got:\n{show_create()}"
-        )
+        assert (
+            "mz_alt_user" not in show_create()
+        ), f"expected no mz_alt_user in baseline SHOW CREATE, got:\n{show_create()}"
 
         assert_alter_plan("connection-updates/change-user", expected_altered=1)
         result = run_mz_deploy(c, "connection-updates/change-user", "apply")
-        assert result.returncode == 0, (
-            f"change-user apply failed: {result.stderr}"
-        )
-        assert "mz_alt_user" in show_create(), (
-            f"expected mz_alt_user in SHOW CREATE after change, got:\n{show_create()}"
-        )
+        assert result.returncode == 0, f"change-user apply failed: {result.stderr}"
+        assert (
+            "mz_alt_user" in show_create()
+        ), f"expected mz_alt_user in SHOW CREATE after change, got:\n{show_create()}"
         assert_idempotent_after_update("connection-updates/change-user")
 
     with c.test_case("connection-change-secret-ref"):
@@ -1343,16 +1333,11 @@ def workflow_connection_updates(
         assert "SECRET app.public.pgpass" in show_create()
         assert "SECRET app.public.pgpass_v2" not in show_create()
 
-        assert_alter_plan(
-            "connection-updates/change-secret", expected_altered=1
-        )
+        assert_alter_plan("connection-updates/change-secret", expected_altered=1)
         result = run_mz_deploy(c, "connection-updates/change-secret", "apply")
-        assert result.returncode == 0, (
-            f"change-secret apply failed: {result.stderr}"
-        )
+        assert result.returncode == 0, f"change-secret apply failed: {result.stderr}"
         sql = show_create()
         assert "SECRET app.public.pgpass_v2" in sql, (
-            f"expected pgpass_v2 in SHOW CREATE after secret change, "
-            f"got:\n{sql}"
+            f"expected pgpass_v2 in SHOW CREATE after secret change, " f"got:\n{sql}"
         )
         assert_idempotent_after_update("connection-updates/change-secret")
