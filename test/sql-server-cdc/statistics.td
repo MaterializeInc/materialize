@@ -27,9 +27,6 @@ INSERT INTO t1 VALUES ('one');
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
 ALTER SYSTEM SET storage_statistics_interval = 2000;
-# The controller reconciles a replica-set change asynchronously; drive the
-# tick down so the replica-drop wait below converges quickly.
-ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
 
 > CREATE SECRET IF NOT EXISTS mspass AS '${arg.default-sql-server-password}'
 
