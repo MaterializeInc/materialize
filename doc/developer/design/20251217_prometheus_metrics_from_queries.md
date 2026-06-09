@@ -5,8 +5,6 @@
 Users want to be able to monitor their Materialize workloads and data products.
 Setting up external tools to convert SQL queries into prometheus metrics is labor intensive, error prone, and often buggy.
 
-This also applies to Materialize Cloud, as we run our own external SQL exporter which could be removed if this could be hosted by environmentd.
-
 ## Success Criteria
 
 - Users can define SQL queries that get turned into prometheus metrics.
@@ -32,9 +30,9 @@ This also applies to Materialize Cloud, as we run our own external SQL exporter 
 Allow users to create HTTP endpoints in SQL with custom prometheus metrics.
 
 ```sql
-CREATE API mydatabase.myschema.myprometheus FORMAT PROMETHEUS ON CLUSTER "mycluster" ON LISTENER "external";
+CREATE API mydatabase.myschema.myprometheus FORMAT PROMETHEUS ON CLUSTER "mycluster";
 ```
-This will create an HTTP endpoint at `/metrics/custom/mydatabase/myschema/myprometheus` on the "external" HTTP listener (as named in the listeners configmap).
+This will create an HTTP endpoint at `/metrics/custom/mydatabase/myschema/myprometheus` on all HTTP listeners with the `endpoint_api` enabled in the listeners configmap.
 
 This new api object would be added to a system table `mz_apis` for later reference.
 
@@ -117,5 +115,4 @@ We currently use one of our own in Materialize Cloud, which we wrote after we hi
 ## Open questions
 
 - Exact syntax and SQL object types. We might want to have dedicated SQL syntax for creating metrics, or have some dedicated reference to the views rather than text fields, for example.
-- How to specify which listener a metrics endpoint is on. Users don't define the listeners configmap, so referencing the names we define there seems a bit weird.
 - Should we require indexed or materialized views?
