@@ -9,7 +9,6 @@
 
 import time
 from textwrap import dedent
-from threading import Thread
 from typing import Any
 
 from pg8000 import Connection
@@ -143,49 +142,82 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
 
 
 def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
+    # Drive the controller tick down so background reconfigurations converge
+    # within the short poll loops below.
     mz.environmentd.sql(
         """
         ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+        ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         """,
         port="internal",
         user="mz_system",
     )
 
-    def assert_replica_names(names, allow_pending=False):
-        replicas = mz.environmentd.sql_query("""
+    def get_replica_names(cluster: str) -> list[str]:
+        replicas = mz.environmentd.sql_query(f"""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
-            AND mz_clusters.name = 'zdtaltertest';
+            AND mz_clusters.name = '{cluster}';
             """)
-        assert [replica[0] for replica in replicas] == names
-        if not allow_pending:
-            assert len(mz.environmentd.sql_query("""
-                        SELECT cr.name
-                        FROM mz_internal.mz_pending_cluster_replicas  ur
-                        INNER join mz_cluster_replicas cr ON cr.id=ur.id
-                        INNER join mz_clusters c ON c.id=cr.cluster_id
-                        WHERE c.name = 'zdtaltertest';
-                        """)) == 0, "There should be no pending replicas"
+        return sorted(replica[0] for replica in replicas)
+
+    def assert_no_pending(cluster: str) -> None:
+        # The controller never creates a legacy "-pending" replica.
+        pending = mz.environmentd.sql_query(f"""
+            SELECT cr.name
+            FROM mz_internal.mz_pending_cluster_replicas pr
+            INNER JOIN mz_cluster_replicas cr ON cr.id = pr.id
+            INNER JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = '{cluster}';
+            """)
+        assert (
+            len(pending) == 0
+        ), f"There should be no pending replicas, found {pending}"
+
+    def wait_for_replica_names(names: list[str], cluster: str = "zdtaltertest"):
+        """Poll until the cluster's replica set settles on `names`.
+
+        A background ALTER returns immediately and the controller converges the
+        replica set on its tick, so readbacks have to wait for the settled
+        state.
+        """
+        observed = None
+        for _ in range(240):
+            observed = get_replica_names(cluster)
+            if observed == sorted(names):
+                break
+            time.sleep(0.25)
+        assert observed == sorted(
+            names
+        ), f"expected replicas {names} on {cluster}, found {observed}"
+        assert_no_pending(cluster)
 
     # Basic zero-downtime reconfig test cases matrix
     # - size change, no replica change
-    # - replica size up, no other change
-    # - replica size down, with size change
-    # - replica size down, no other change
-    # - replica size up, with size change
+    # - size down, with replication factor up
+    # - replication factor down, no other change
+    # - size up, with replication factor up
+    # - size down, with replication factor down
     # Other assertions
-    # - no pending replicas after alter finishes
-    # - names should match r# patter, not end with `-pending`
-    # - cancelled statements correctly roll back
-    # - timedout until ready queries take the appropriate action
-    # - Fails to zero-downtime alter cluster with source
+    # - replica names churn across reshapes: the controller realizes a
+    #   config-shape change by bringing up freshly-named target replicas and
+    #   dropping the old set at cut-over, never renaming back
+    # - no pending replicas at any point
+    # - a session cancel does not abort a durable background reconfiguration
+    # - an ON TIMEOUT ROLLBACK reconfiguration that cannot hydrate in time
+    #   rolls back in the background, leaving the realized config untouched
+    # - fails to alter replication factor beyond max_replicas_per_cluster
     mz.environmentd.sql(
         'CREATE CLUSTER zdtaltertest ( SIZE = "scale=1,workers=1" )',
         port="internal",
         user="mz_system",
     )
+    wait_for_replica_names(["r1"])
 
+    # A size change reshapes in the background: a fresh target replica comes
+    # up, the realized config cuts over, and the old replica is dropped
+    # (r1 -> r2).
     mz.environmentd.sql(
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT FOR '1ms' )
@@ -193,8 +225,15 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    assert_replica_names(["r1"])
+    wait_for_replica_names(["r2"])
+    assert (
+        mz.environmentd.sql_query("""
+        SELECT size FROM mz_clusters WHERE name='zdtaltertest';
+        """) == (["scale=1,workers=2"],)
+    ), "Realized size should have cut over to the target"
 
+    # A size change with a replication-factor increase brings up two fresh
+    # target replicas.
     mz.environmentd.sql(
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
@@ -202,8 +241,10 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    assert_replica_names(["r1", "r2"])
+    wait_for_replica_names(["r3", "r4"])
 
+    # A replication-factor-only decrease reconciles in place (no reshape): the
+    # oldest replica is kept.
     mz.environmentd.sql(
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
@@ -211,8 +252,9 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    assert_replica_names(["r1"])
+    wait_for_replica_names(["r3"])
 
+    # Fresh names continue past the highest index ever observed.
     mz.environmentd.sql(
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
@@ -220,7 +262,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    assert_replica_names(["r1", "r2"])
+    wait_for_replica_names(["r4", "r5"])
 
     mz.environmentd.sql(
         """
@@ -229,7 +271,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    assert_replica_names(["r1"])
+    wait_for_replica_names(["r6"])
 
     # Setup for validating cancelation and
     # replica checks during alter
@@ -272,37 +314,39 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """),
     )
 
-    # Valudate replicas are correct during an ongoing alter
-    def zero_downtime_alter():
-        mz.environmentd.sql(
-            """
-            ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
-            """,
-            port="internal",
-            user="mz_system",
-        )
+    # Validate replicas are correct during an ongoing alter. The background
+    # ALTER returns immediately; the controller brings the fresh target replica
+    # up next to r1 (both serve while the target hydrates), then cuts over and
+    # drops r1. The in-flight window may be short, so don't require observing
+    # the overlap, but any state we do observe must never include a legacy
+    # "-pending" replica.
+    mz.environmentd.sql(
+        """
+        ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+        """,
+        port="internal",
+        user="mz_system",
+    )
+    for _ in range(240):
+        names = get_replica_names("zdtaltertest")
+        assert not any(
+            name.endswith("-pending") for name in names
+        ), f"controller reconfiguration must not use pending replicas, found {names}"
+        if names == ["r2"]:
+            break
+        time.sleep(0.25)
 
-    thread = Thread(target=zero_downtime_alter)
-    thread.start()
-    time.sleep(1)
-
-    assert_replica_names(["r1", "r1-pending"], allow_pending=True)
-    assert (
-        mz.environmentd.sql_query("""
-        SELECT size FROM mz_clusters WHERE name='zdtaltertest';
-        """) == (["scale=1,workers=1"],)
-    ), "Cluster should use original config during alter"
-
-    thread.join()
-
-    assert_replica_names(["r1"], allow_pending=False)
+    wait_for_replica_names(["r2"])
     assert (
         mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='zdtaltertest';
         """) == (["scale=1,workers=2"],)
     ), "Cluster should use new config after alter completes"
 
-    # Validate cancelation of alter cluster..with
+    # Validate cancelation around alter cluster..with: the reconfiguration is a
+    # durable record the controller converges on independently of the session,
+    # so canceling the issuing backend does not abort it. The cluster still
+    # cuts over to the target config.
     mz.environmentd.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
@@ -311,6 +355,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
+    wait_for_replica_names(["r1"], cluster="cluster1")
 
     # We need persistent connection that we can later issue a cancel backend to
     conn = mz.environmentd.sql_conn(
@@ -335,31 +380,25 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
                 raise
 
     pid = query_with_conn("select pg_backend_pid();", conn)[0][0]
-    thread = Thread(
-        target=query_with_conn,
-        args=[
-            """
-            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
-            """,
-            conn,
-            True,
-        ],
+    query_with_conn(
+        """
+        ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+        """,
+        conn,
+        True,
     )
-    thread.start()
-    time.sleep(1)
     mz.environmentd.sql(
         f"select pg_cancel_backend({pid});",
         port="internal",
         user="mz_system",
     )
-    time.sleep(1)
 
-    assert_replica_names(["r1"], allow_pending=False)
+    wait_for_replica_names(["r2"], cluster="cluster1")
     assert (
         mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='cluster1';
-        """) == (["scale=1,workers=1"],)
-    ), "Cluster should not have updated if canceled during alter"
+        """) == (["scale=1,workers=2"],)
+    ), "Cancel must not abort the durable background reconfiguration"
 
     # Test zero-downtime reconfig wait until ready
     mz.environmentd.sql(
@@ -387,13 +426,26 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         CREATE INDEX test_view_idx ON test_view(id);
         """)
 
-    mz.testdrive.run(
-        input=dedent("""
-            ! ALTER CLUSTER slow_hydration set (size='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
-            contains: canceling statement, provided timeout lapsed
-            """),
-        no_reset=True,
-    )
+    # The background ALTER returns immediately; the target replica cannot
+    # hydrate the slow view within the timeout, so the controller rolls back at
+    # the deadline: it drops the target set, leaves the realized config
+    # untouched, and parks the record as a tombstone.
+    mz.environmentd.sql("""
+        ALTER CLUSTER slow_hydration SET (SIZE='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
+        """)
+
+    # Wait out the deadline, then for the controller to drop the target set.
+    time.sleep(3)
+    wait_for_replica_names(["r1"], cluster="slow_hydration")
+    reconfiguration = mz.environmentd.sql_query("""
+        SELECT recon.current_size, recon.target_size, recon.reconfiguration_in_flight
+        FROM mz_internal.mz_cluster_reconfigurations recon
+        JOIN mz_clusters c ON c.id = recon.cluster_id
+        WHERE c.name = 'slow_hydration';
+        """)
+    assert reconfiguration == (
+        ["scale=1,workers=1", "scale=1,workers=4", True],
+    ), f"Expected a rolled-back reconfiguration tombstone, found {reconfiguration}"
 
     # Test fails to alter with source
     mz.environmentd.sql("""
