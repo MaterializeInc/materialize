@@ -30,11 +30,22 @@ Setting up external tools to convert SQL queries into prometheus metrics is labo
 Allow users to create HTTP endpoints in SQL with custom prometheus metrics.
 
 ```sql
-CREATE API mydatabase.myschema.myprometheus FORMAT PROMETHEUS ON CLUSTER "mycluster";
+CREATE API mydatabase.myschema.myprometheus FORMAT PROMETHEUS IN CLUSTER "mycluster";
 ```
 This will create an HTTP endpoint at `/metrics/custom/mydatabase/myschema/myprometheus` on all HTTP listeners with the `endpoint_api` enabled in the listeners configmap.
 
-This new api object would be added to a system table `mz_apis` for later reference.
+This new api object would be added to a system table `mz_apis` for later reference:
+```
+id TEXT,
+oid OID,
+schema_id TEXT,
+name TEXT,
+cluster_id TEXT,
+owner_id TEXT,
+privileges mz_aclitem[]
+```
+
+The `cluster_id` references the cluster used to peek the metric source relations (corresponds to `mz_clusters.id`).
 
 Users can then add metrics to that endpoint using SQL commands:
 ```sql
@@ -42,22 +53,27 @@ CREATE METRIC <name>
 IN API <api>
 AS (TYPE <prometheus_type>,
     HELP <help_text>,
-    VALUES_FROM <reference_to_view>,
-    VALUE_COLUMN <name_of_value_column>);
+    VALUES FROM <reference_to_view>,
+    VALUE COLUMN <name_of_value_column>);
 ```
 
 This will add a new metric object to a system table `mz_metrics` for later reference:
 ```
-metric_name TEXT,
-metric_type TEXT,
+id TEXT,
+oid OID,
+schema_id TEXT,
+name TEXT,
+api_id TEXT,
+type TEXT,
 help TEXT,
 values_from TEXT,
-value_column_name TEXT
+value_column TEXT,
+owner_id TEXT
 ```
 
-The `metric_name`, `metric_type`, and `help` fields describe the prometheus metric itself.
+The `name`, `type`, and `help` fields describe the prometheus metric itself. `api_id` references the `mz_apis` entry the metric is attached to.
 
-The `values_from` field is a reference to a view containing the metric data. The `value_column_name` is the name of a column in that view which contains the value of the metric. All other columns in the view will be used as labels.
+The `values_from` field is the ID of the relation containing the metric data (corresponds to `mz_catalog.mz_relations.id`). The `value_column` is the name of a column in that relation which contains the value of the metric. All other columns in the relation will be used as labels.
 
 An example metric view:
 ```sql
@@ -86,8 +102,8 @@ CREATE METRIC leads
 IN API mydatabase.myschema.myprometheus
 AS (TYPE 'gauge',
     HELP 'Count of leads and whether they have been converted',
-    VALUES_FROM mydatabase.myschema.converted_leads,
-    VALUE_COLUMN 'count');
+    VALUES FROM mydatabase.myschema.converted_leads,
+    VALUE COLUMN 'count');
 ```
 
 When querying the HTTP endpoint at `/metrics/custom/mydatabase/myschema/myprometheus`, they would then get a response like:
