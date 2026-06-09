@@ -25,6 +25,7 @@
 //! catalog's bootstrap migration owns their replicas.)
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter_types::dyncfgs::{
@@ -192,8 +193,15 @@ impl Coordinator {
     /// round-trip), so a runtime change to either takes effect without a restart.
     /// It owns the controller and a [`CoordCtx`] that marshals back to this
     /// Coordinator.
+    ///
+    /// The interval is the fallback cadence: `cluster_controller_kick` cuts the
+    /// sleep short after a catalog transaction changes durable cluster state. A
+    /// kick only wakes the task — the tick still pulls fresh state through the
+    /// coordinator loop — and the controller's own applies re-kick at the cost
+    /// of one no-op tick.
     pub(crate) fn spawn_cluster_controller_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let kick = Arc::clone(&self.cluster_controller_kick);
 
         spawn(|| "cluster_controller", async move {
             let controller = ClusterController::new();
@@ -211,7 +219,10 @@ impl Coordinator {
                 else {
                     break;
                 };
-                tokio::time::sleep(interval.max(Duration::from_millis(1))).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(interval.max(Duration::from_millis(1))) => {}
+                    _ = kick.notified() => {}
+                }
 
                 if ctx.internal_cmd_tx.is_closed() {
                     // Coordinator gone; stop ticking.

@@ -172,7 +172,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -1868,6 +1868,10 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
+    /// Kicks the cluster controller task to reconcile immediately instead of
+    /// waiting out its tick interval. Notified after catalog transactions that
+    /// change durable cluster state.
+    cluster_controller_kick: Arc<Notify>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -4746,6 +4750,7 @@ pub fn serve(
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
+                    cluster_controller_kick: Arc::new(Notify::new()),
                     strict_serializable_reads_tx,
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
