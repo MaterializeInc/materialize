@@ -2187,12 +2187,24 @@ impl Coordinator {
 
     /// Handle unregistration of a frontend peek that was registered but failed to issue.
     /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
-        // Remove from pending_peeks (this also removes from client_pending_peeks)
-        if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-            // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
-            let _ = pending_peek.ctx_extra.defuse();
-        }
-        let _ = tx.send(());
+    ///
+    /// Sends back whether the peek was still registered (`true`) or had already
+    /// been removed and retired by a concurrent teardown (`false`). In the
+    /// latter case the end of execution was already logged, so the frontend
+    /// must not log it again.
+    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<bool>) {
+        // Remove from pending_peeks (this also removes from client_pending_peeks).
+        let still_registered = match self.remove_pending_peek(&uuid) {
+            Some(pending_peek) => {
+                // Retire `ExecuteContextExtra` without logging the end, because
+                // the frontend will log the peek's error result.
+                let _ = pending_peek.ctx_extra.defuse();
+                true
+            }
+            // A concurrent teardown already removed and retired this peek, so
+            // the end of execution has already been logged.
+            None => false,
+        };
+        let _ = tx.send(still_registered);
     }
 }

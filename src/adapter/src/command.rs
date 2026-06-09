@@ -353,11 +353,16 @@ pub enum Command {
 
     /// Unregister a pending peek that was registered but failed to issue.
     /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    /// The `ExecuteContextExtra` is dropped without logging the statement retirement, because the
-    /// frontend will log the error.
+    ///
+    /// Sends back whether the peek was still registered. If it was, its
+    /// `ExecuteContextExtra` is dropped without logging the statement
+    /// retirement, because the frontend will log the error. If it was *not*
+    /// still registered, then a concurrent teardown (e.g. a `DROP CLUSTER`)
+    /// already removed and retired it, which logged the end of execution; the
+    /// frontend uses this to avoid logging the end a second time.
     UnregisterFrontendPeek {
         uuid: Uuid,
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<bool>,
     },
 
     /// Generate a timestamp explanation.

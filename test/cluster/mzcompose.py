@@ -23,7 +23,7 @@ from copy import copy
 from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
-from threading import Thread
+from threading import Event, Thread
 
 import psycopg
 import requests
@@ -4417,6 +4417,111 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
         # process (src/ore/src/panic.rs). With no restart policy the container
         # then stays down, so this fresh connection raises. (An unrelated clusterd
         # crash propagates to environmentd too, and is also worth failing on.)
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+
+def workflow_test_drop_cluster_during_registered_peeks_fast_path(
+    c: Composition,
+) -> None:
+    """Deterministically reproduce the *fast-path* variant of the registered-peek
+    double-end (see `workflow_test_drop_cluster_during_registered_peeks` for the
+    slow-path variant and the shared symptom).
+
+    A `PeekExisting` fast-path peek registers with the coordinator
+    (`RegisterFrontendPeek`) and only *then* issues `client.peek()`. If a
+    `DROP CLUSTER` lands in that window, the coordinator retires the pending peek
+    (logging its end) while `client.peek()` fails and the frontend ends the
+    statement too — a double `end_statement_execution` that panics with "matched
+    `begin_statement_execution` and `end_statement_execution` invocations".
+
+    That window is a sub-millisecond cross-thread gap, hopeless to hit by brute
+    force (unlike the slow-path variant, whose error window spans a whole
+    `ExecuteSlowPathPeek` command). So we make it deterministic with the
+    `peek_after_register_before_issue` failpoint: pause a peek right after it
+    registers, drop its cluster while it's parked (coordinator logs end #1), then
+    resume so `client.peek()` fails (frontend logs end #2). With the fix the
+    frontend learns the coordinator already ended the statement and stays silent;
+    without it, environmentd panics.
+    """
+
+    failpoint = "peek_after_register_before_issue"
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        c.sql("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+        # The index makes `SELECT * FROM t` on `victim` a `PeekExisting` fast path
+        # (without it the bare scan would be a `standard` slow-path dataflow).
+        c.sql("CREATE INDEX victim_idx IN CLUSTER victim ON t (a)")
+
+        peeker_ready = Event()
+        failpoint_armed = Event()
+        peek_outcome: list[str] = []
+
+        def peeker() -> None:
+            try:
+                with c.sql_cursor() as cur:
+                    cur.execute("SET auto_route_catalog_queries = false")
+                    cur.execute("SET cluster = victim")
+                    # We connect and configure *before* the failpoint is armed so
+                    # that connection-setup peeks aren't caught by it.
+                    peeker_ready.set()
+                    failpoint_armed.wait()
+                    # `PeekExisting` fast path: this registers with the
+                    # coordinator and then parks at the failpoint before issuing
+                    # `client.peek()`. It fails once `victim` is dropped.
+                    cur.execute("SELECT * FROM t")
+                    cur.fetchall()
+                    peek_outcome.append("ok")
+            except Exception as e:
+                peek_outcome.append(f"error: {e}")
+
+        peek_thread = PropagatingThread(target=peeker, name="peeker")
+        peek_thread.start()
+
+        # Drive the race from a single control connection opened *before* the
+        # failpoint is armed — so its own connection-setup peeks don't park, which
+        # would otherwise deadlock it against the very failpoint it must turn off.
+        with c.sql_cursor() as control:
+            assert peeker_ready.wait(timeout=30), "peeker failed to connect"
+            # Arm: every fast-path peek now parks right after registering.
+            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            failpoint_armed.set()
+            # Give the peeker time to issue its SELECT and park. It stays parked
+            # until we turn the failpoint off, so this only has to outlast plan +
+            # `RegisterFrontendPeek`, not race a narrow window.
+            time.sleep(5)
+            # Drop the cluster while the peek is parked: the coordinator retires
+            # the pending peek and logs its end (#1).
+            control.execute("DROP CLUSTER victim CASCADE")
+            # Resume the peek: `client.peek()` now fails (cluster gone) and the
+            # frontend logs the end (#2). Without the fix this double-ends and
+            # panics the coordinator.
+            control.execute(f"SET failpoints = '{failpoint}=off'")
+
+        peek_thread.join(timeout=30)
+
+        # The parked peek must actually have failed on the dropped cluster;
+        # otherwise the race didn't happen and the test is silently vacuous.
+        assert peek_outcome, "peeker thread did not finish"
+        assert peek_outcome[0].startswith(
+            "error"
+        ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
+
+        # If the double-end bug is present, the coordinator thread panics, which
+        # aborts the entire environmentd process (src/ore/src/panic.rs). With no
+        # restart policy the container stays down, so this fresh connection raises.
         with c.sql_cursor() as cur:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
