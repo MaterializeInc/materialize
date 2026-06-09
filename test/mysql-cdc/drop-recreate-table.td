@@ -60,10 +60,17 @@ CREATE TABLE drop_recreate (f1 INTEGER, f2 TEXT);
 INSERT INTO drop_recreate VALUES (3, 'three');
 COMMIT;
 
+# Create an additional table after the drop & recreate to ensure that the table doesn't get accepted and erroneously dropped
+# Note that without gating application of a drop on its gtid being after the create we could get a double-drop due to the async
+# nature of the binlog -- the part of the test interacting with "created_after" catches that regression.
+> CREATE TABLE created_after FROM SOURCE mz_source (REFERENCE public.drop_recreate);
 > ALTER CLUSTER drop_recreate_cluster SET (REPLICATION FACTOR 1)
 
 # The table was dropped and recreated, so Materialize should emit a definite error.
 ! SELECT * FROM drop_recreate;
 contains:table was dropped
+
+> SELECT * FROM created_after;
+3 three
 
 > DROP CLUSTER drop_recreate_cluster CASCADE;

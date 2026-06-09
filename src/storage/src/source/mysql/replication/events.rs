@@ -153,12 +153,13 @@ pub(super) async fn handle_query_event(
                 }
             }
         }
-        // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
-        // this can drop multiple tables we just check all tables we care about
+        // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements.
         (Some("drop"), Some("table")) => {
             let dropped_tables = drop_table_identifiers(&current_schema, &query)?;
 
-            let tables_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
+            // Sources referencing the dropped table name that were created before the table was dropped. Before is determined
+            // by looking at the initial gtid set for the source and ensuring that's before the new gitid.
+            let sources_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
                 .iter()
                 .filter_map(|table_name| {
                     ctx.table_info
@@ -168,6 +169,8 @@ pub(super) async fn handle_query_event(
                                 .iter()
                                 .filter(|output| {
                                     !ctx.errored_outputs.contains(&output.output_index)
+                                    // Only drop sources that were created before the table was dropped.
+                                    && output.initial_gtid_set.less_equal(new_gtid)
                                 })
                                 .collect();
                             (name, kept)
@@ -175,7 +178,7 @@ pub(super) async fn handle_query_event(
                 })
                 .collect();
             is_complete_event = true;
-            for (table_name, outputs) in tables_to_drop {
+            for (table_name, outputs) in sources_to_drop {
                 for output in outputs {
                     let err = DefiniteError::TableDropped(table_name.to_string());
                     tracing::info!(%id, "timely-{worker_id} DDL change \
