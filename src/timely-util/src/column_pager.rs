@@ -323,6 +323,25 @@ pub fn global_pager() -> ColumnPager {
     GLOBAL_PAGER.read().expect("global pager poisoned").clone()
 }
 
+/// A pager that, when `enabled`, draws from the shared [`tiered_policy`] budget
+/// pool — the same pool `apply_tiered_config` sizes for the process-global
+/// pager — and otherwise is a disabled (always-resident) pager.
+///
+/// This lets a second consumer (e.g. the storage upsert source stash) opt into
+/// the one shared budget independently of whether `apply_tiered_config` enabled
+/// the process-global pager for its own (compute) batchers. There is still a
+/// single budget pool and a single underlying `mz_ore::pager`; only the
+/// enable decision is per-consumer.
+pub fn shared_pager(enabled: bool) -> ColumnPager {
+    if enabled {
+        #[allow(clippy::clone_on_ref_ptr)]
+        let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
+        ColumnPager::new(dyn_policy)
+    } else {
+        ColumnPager::disabled()
+    }
+}
+
 impl ColumnPager {
     /// Drains `col` into a [`PagedColumn`]. After return `col` is left as a
     /// fresh `Column::default()` (typed, empty), ready to be refilled by the

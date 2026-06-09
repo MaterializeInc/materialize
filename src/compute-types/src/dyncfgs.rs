@@ -79,6 +79,20 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
      before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
 );
 
+/// Compress chunks the column-paged batcher spills, using lz4. Only
+/// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
+/// is applied on the pageout path and reversed on page-in. Trades CPU for a
+/// smaller on-storage (and, for the swap backend, resident) footprint.
+///
+/// Off by default so the spill path's cost stays a pure copy until compression
+/// is shown to pay for itself on the target workload.
+pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
+    "column_paged_batcher_lz4",
+    false,
+    "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
+     `enable_column_paged_batcher_spill = true`.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -483,4 +497,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
+        .add(&COLUMN_PAGED_BATCHER_LZ4)
 }

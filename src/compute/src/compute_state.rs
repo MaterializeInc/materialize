@@ -319,9 +319,10 @@ impl ComputeState {
         // available, swap otherwise.
         {
             use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::apply_tiered_config;
+            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
+            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
 
             // Budget derivation: fraction × announced memory limit, with a
             // 128 MiB floor so the no-pressure case doesn't page per chunk.
@@ -342,12 +343,13 @@ impl ComputeState {
             debug!(
                 enabled,
                 ?backend,
+                ?codec,
                 fraction,
                 mem_limit,
                 budget_bytes = total,
                 "column-paged batcher: applying tiered config",
             );
-            apply_tiered_config(enabled, total, backend, None);
+            apply_tiered_config(enabled, total, backend, codec);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

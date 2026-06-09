@@ -23,7 +23,8 @@ pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
     RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
-    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowSpine,
+    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
+    ValRowColPagedBuilder, ValRowSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -79,6 +80,13 @@ mod spines {
     pub type ValRowBuilder<K, T, R> = RcBuilder<
         OrdValBuilder<ValRowLayout<((K, Row), T, R)>, ColumnationStack<((K, Row), T, R)>>,
     >;
+
+    /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
+    /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
+    /// keys are arbitrary `Columnar` values (e.g. `UpsertKey`) and values are
+    /// packed `Row` bytes.
+    pub type ValRowColPagedBuilder<K, T, R> =
+        RcBuilder<OrdValBuilder<ValRowLayout<((K, Row), T, R)>, Column<((K, Row), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {

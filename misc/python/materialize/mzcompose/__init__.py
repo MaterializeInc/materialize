@@ -497,6 +497,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
     "column_paged_batcher_budget_fraction",
+    "column_paged_batcher_lz4",
+    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
