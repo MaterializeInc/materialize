@@ -628,13 +628,13 @@ impl CatalogState {
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
-        let cluster = self
-            .clusters_by_id
-            .get(&cluster_replica.cluster_id)
-            .expect("catalog out of sync");
-        let azs = cluster.availability_zones();
+        // Pass no availability-zone override: a rebuild from the durable record
+        // keeps the AZ list the replica was provisioned under, which may differ
+        // from the cluster's current pool while a graceful reconfiguration is in
+        // flight — the cluster controller tells realized- from target-shape
+        // replicas by exactly this list.
         let location = self
-            .concretize_replica_location(cluster_replica.config.location, &vec![], azs)
+            .concretize_replica_location(cluster_replica.config.location, &vec![], None)
             .expect("catalog in unexpected state");
         let cluster = self
             .clusters_by_id

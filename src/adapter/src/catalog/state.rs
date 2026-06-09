@@ -2400,13 +2400,11 @@ impl CatalogState {
             }
             mz_catalog::durable::ReplicaLocation::Managed {
                 size,
-                // For a managed cluster the placement pool is re-derived from
-                // the cluster's current `availability_zones` (passed as
-                // `allowed_availability_zones`) below; the durable list — what
-                // the replica was provisioned under — is read by the cluster
-                // controller, not here, and may legitimately diverge from the
-                // cluster's current list. For an unmanaged cluster's replica it
-                // is the single user-pinned AZ.
+                // The AZ list the replica was provisioned under: provisioning
+                // paths pass the cluster's pool as `allowed_availability_zones`
+                // to stamp it, while rebuilds from durable state pass `None` to
+                // keep it. For an unmanaged cluster's replica it is the single
+                // user-pinned AZ.
                 availability_zones,
                 billed_as,
                 internal,
