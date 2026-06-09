@@ -1483,6 +1483,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6a120d2e16b3e1b4a24bd70f23b12d3e16b81f113364a26935f8db7245452d"
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5801,7 +5807,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "bincode",
+ "bincode 3.0.0",
  "bytes",
  "bytesize",
  "chrono",
@@ -7504,7 +7510,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
- "bincode",
+ "bincode 3.0.0",
  "bitflags 1.3.2",
  "bytemuck",
  "bytes",
@@ -7574,7 +7580,7 @@ name = "mz-rocksdb"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bincode",
+ "bincode 3.0.0",
  "derivative",
  "itertools 0.14.0",
  "mz-ore",
@@ -7687,7 +7693,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "bincode",
+ "bincode 3.0.0",
  "clap",
  "futures",
  "itertools 0.14.0",
@@ -7971,7 +7977,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-sts",
  "axum",
- "bincode",
+ "bincode 3.0.0",
  "bytes",
  "bytesize",
  "chrono",
@@ -8347,7 +8353,7 @@ version = "0.0.0"
 dependencies = [
  "ahash 0.8.12",
  "allocation-counter",
- "bincode",
+ "bincode 3.0.0",
  "bytemuck",
  "columnar",
  "columnation",
@@ -11995,7 +12001,7 @@ version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5af6859fde675a87f12da672e0bdf08bfc809e68d8c6728f50942d09c0480a3"
 dependencies = [
- "bincode",
+ "bincode 1.3.3",
  "byteorder",
  "columnar",
  "columnation",
