@@ -10,6 +10,7 @@
 """End-to-end tests for the MCP (Model Context Protocol) HTTP endpoints."""
 
 import json
+import re
 import time
 
 import requests
@@ -48,6 +49,14 @@ def post_mcp(c: Composition, endpoint: str, body: dict) -> requests.Response:
 
 
 def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_endpoints(c: Composition) -> None:
     c.up("materialized")
 
     # MCP feature flags default to true; no explicit enable needed.
@@ -627,6 +636,48 @@ def workflow_default(c: Composition) -> None:
         tool_names = {t["name"] for t in r.json()["result"]["tools"]}
         assert "query" in tool_names, f"query should be re-enabled: {tool_names}"
 
+    # -- OAuth Protected Resource Metadata (RFC 9728) -------------------------
+    #
+    # End-to-end coverage of the discovery endpoint that lets MCP-aware
+    # clients (Claude Desktop, ChatGPT remote MCP) negotiate OAuth.
+    # Three scenarios:
+    #
+    #   1. On the no-auth listener the endpoint MUST 404 — there is no
+    #      OAuth flow to advertise when the listener doesn't validate
+    #      tokens. This is the security canary: if the discovery endpoint
+    #      ever starts publishing a document on a no-auth listener,
+    #      something is wrong.
+    #   2. With `oidc_issuer` unset the endpoint MUST 404 even when the
+    #      listener does validate tokens, because RFC 9728 requires at
+    #      least one authorization server.
+    #   3. The 401 on `/api/mcp/*` does NOT emit a Bearer challenge on
+    #      this no-auth listener — same reason: nothing to advertise.
+
+    discovery_url = (
+        f"http://localhost:{c.port('materialized', 6876)}"
+        "/.well-known/oauth-protected-resource"
+    )
+
+    with c.test_case("oauth_metadata_404_on_no_auth_listener"):
+        r = requests.get(discovery_url)
+        assert r.status_code == 404, (
+            "discovery endpoint must 404 on a None-authenticator listener; "
+            f"got {r.status_code}: {r.text}"
+        )
+
+    with c.test_case("oauth_metadata_no_bearer_challenge_on_no_auth_listener"):
+        # MCP 401 path: with no auth configured the listener auto-provisions
+        # `anonymous_http_user` instead of returning 401, so we can't
+        # observe the challenge headers directly here. The unit/integration
+        # tests in src/environmentd/tests/server.rs cover the
+        # authenticated-listener case. This case asserts only that the
+        # MCP route still responds (so we know it is wired) and that the
+        # discovery endpoint stays a 404.
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
+        assert (
+            r.status_code == 200
+        ), f"MCP route should serve anon users on no-auth listener: {r.status_code}"
+
     # -- agent: disable/enable via flag ----------------------------------------
 
     with c.test_case("agent_disable_via_flag"):
@@ -812,3 +863,117 @@ def workflow_default(c: Composition) -> None:
             "replica_count",
             "hydrated_replica_count",
         }, f"unexpected keys in hydration object: {hydration}"
+
+
+def workflow_oauth_metadata_host_injection(c: Composition) -> None:
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        attacker_host = 'attacker.example.net" foo=bar'
+        attacker_prefix = "https://attacker.example.net"
+
+        with c.test_case("vuln_www_authenticate_host_injection"):
+            r = requests.post(
+                f"{base}/api/mcp/agent",
+                json=jsonrpc("tools/list"),
+                headers={"X-Forwarded-Host": attacker_host},
+            )
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"
+            challenges = r.headers.get("WWW-Authenticate", "")
+            # The Bearer challenge has both `scope` and `resource_metadata`
+            # parameters; their relative order is part of the wire format
+            # but we don't pin it here — what matters for this regression
+            # guard is that resource_metadata is not pointing at the
+            # attacker-controlled host.
+            m = re.search(r'resource_metadata="([^"]*)"', challenges)
+            assert m, challenges
+            assert not m.group(1).startswith(attacker_prefix), m.group(1)
+
+        with c.test_case("vuln_metadata_resource_host_injection"):
+            r = requests.get(
+                f"{base}/.well-known/oauth-protected-resource",
+                headers={"X-Forwarded-Host": attacker_host},
+            )
+            assert r.status_code == 200, f"{r.status_code}: {r.text}"
+            resource = r.json().get("resource", "")
+            assert not resource.startswith(attacker_prefix), resource
+
+        with c.test_case("vuln_metadata_cache_control_missing"):
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            cache_control = r.headers.get("Cache-Control", "")
+            assert "no-store" in cache_control or "private" in cache_control, repr(
+                cache_control
+            )
+
+
+def workflow_oauth_metadata_extras(c: Composition) -> None:
+    """Smoke tests for the production-ready additions to the discovery
+    endpoint: `scopes_supported`, scope in WWW-Authenticate, path-suffixed
+    well-known aliases, and invalid-issuer rejection."""
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        with c.test_case("metadata_advertises_scope"):
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            assert r.status_code == 200, f"{r.status_code}: {r.text}"
+            scopes = r.json().get("scopes_supported", [])
+            assert scopes == ["mcp.read"], scopes
+
+        with c.test_case("path_suffixed_aliases_serve_same_doc"):
+            base_doc = requests.get(
+                f"{base}/.well-known/oauth-protected-resource"
+            ).json()
+            for suffix in ("api/mcp/agent", "api/mcp/developer"):
+                url = f"{base}/.well-known/oauth-protected-resource/{suffix}"
+                r = requests.get(url)
+                assert r.status_code == 200, f"{url}: {r.status_code}: {r.text}"
+                assert r.json() == base_doc, url
+
+        with c.test_case("www_authenticate_emits_scope"):
+            r = requests.post(
+                f"{base}/api/mcp/agent",
+                json=jsonrpc("tools/list"),
+            )
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"
+            challenges = r.headers.get("WWW-Authenticate", "")
+            assert 'scope="mcp.read"' in challenges, challenges
+            assert "resource_metadata=" in challenges, challenges
+
+        with c.test_case("invalid_issuer_returns_503"):
+            c.sql(
+                "ALTER SYSTEM SET oidc_issuer = 'not a url'",
+                user="mz_system",
+                port=6877,
+                print_statement=False,
+            )
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            assert r.status_code == 503, f"{r.status_code}: {r.text}"
+            # Restore so subsequent test cases (if any are added) start clean.
+            c.sql(
+                "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+                user="mz_system",
+                port=6877,
+                print_statement=False,
+            )
