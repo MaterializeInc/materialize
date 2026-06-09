@@ -8,4 +8,3 @@ CONTRIBUTING.md
 **/*.map
 **/*.ts
 !out/**/*.js
-
