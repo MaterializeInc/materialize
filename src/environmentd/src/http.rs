@@ -587,6 +587,9 @@ impl HttpServer {
             let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
             mcp_router = mcp_router
                 .layer(auth_middleware.clone())
+                .layer(Extension(BearerChallengeConfig {
+                    scope: oauth_metadata::MCP_SCOPE,
+                }))
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
@@ -947,13 +950,24 @@ where
     }
 }
 
+/// Route-attached marker that opts a route into OAuth Bearer challenges on a
+/// 401. The auth middleware reads this as a request extension instead of
+/// switching on the URL path, so the middleware stays path-agnostic. Set on
+/// `mcp_router` today; add to other routers if they later want to advertise
+/// OAuth discovery via RFC 9728.
+#[derive(Debug, Clone)]
+pub(crate) struct BearerChallengeConfig {
+    /// OAuth scope advertised in the `Bearer` challenge's `scope=` parameter.
+    pub scope: &'static str,
+}
+
 /// Per-request decision about which `WWW-Authenticate` challenges to emit
-/// on a 401, computed by the auth middleware based on the request path.
+/// on a 401, computed by the auth middleware.
 ///
 /// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
 /// layer and friends) and an optional `Bearer` challenge with a
-/// `resource_metadata` URL per RFC 9728. The latter is only set on routes
-/// that opt in to OAuth discovery (today: `/api/mcp/*`); other routes
+/// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set
+/// on routes that attach a [`BearerChallengeConfig`] extension; other routes
 /// emit only `Basic` so their behavior is unchanged.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WwwAuthenticateChallenges {
@@ -1176,25 +1190,25 @@ async fn http_auth(
     }
 
     let path = req.uri().path();
+    // Routes that advertise OAuth opt in via the `BearerChallengeConfig`
+    // extension; the middleware stays path-agnostic. Routes that opt in also
+    // get a `Basic` challenge so existing curl/Bearer-already users still see
+    // a usable challenge. See `crate::http::oauth_metadata` for the discovery
+    // document; the challenge and the discovery handler share
+    // `McpOAuthDiscovery` so they never disagree about whether OAuth is
+    // advertised on this listener.
+    let bearer_config = req.extensions().get::<BearerChallengeConfig>().cloned();
     let include_basic = path == "/"
         || PROFILING_API_ENDPOINTS
             .iter()
             .any(|prefix| path.starts_with(prefix))
-        || path.starts_with("/api/mcp/");
-    // For the MCP routes we additionally advertise OAuth via RFC 9728 so
-    // clients like Claude Desktop's Custom Connectors and ChatGPT remote
-    // MCP can discover the authorization server. The `Basic` challenge
-    // stays on these routes so existing curl/Bearer-already users still
-    // see a usable challenge. See `crate::http::oauth_metadata` for the
-    // discovery document. The challenge and the discovery handler share
-    // `McpOAuthDiscovery` so they never disagree about whether OAuth is
-    // advertised on this listener.
-    let (bearer_resource_metadata, bearer_scope) = if path.starts_with("/api/mcp/")
+        || bearer_config.is_some();
+    let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &bearer_config
         && oauth_metadata::McpOAuthDiscovery::for_authenticator(authenticator_kind).is_enabled()
     {
         (
             oauth_metadata::metadata_url(&req, http_host_name.as_deref()),
-            Some(oauth_metadata::MCP_SCOPE),
+            Some(config.scope),
         )
     } else {
         (None, None)
