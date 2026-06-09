@@ -359,6 +359,20 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Enable per-column dictionary compression for row containers in arrangements.
+///
+/// The `_alpha` suffix is load-bearing: this feature is not yet considered
+/// production-ready, and the name is meant to make that unmissable at the
+/// `ALTER SYSTEM SET` call site rather than relying on out-of-band warnings.
+///
+/// Disposition: added 2026-06-09, default off; solicit feedback for one month
+/// and remove in the absence of a positive response.
+pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config::new(
+    "enable_arrangement_dictionary_compression_alpha",
+    false,
+    "Enable arrangement dictionary compression (alpha; not yet production-ready).",
+);
+
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed
 /// `compute_peek_response_stash_threshold_bytes`.
@@ -484,6 +498,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
