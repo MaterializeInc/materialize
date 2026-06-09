@@ -10,7 +10,7 @@
     ]
     <FOR ALL TABLES | FOR SCHEMAS ( <schema1> [, ...] ) | FOR TABLES ( <table1> [AS <subsrc_name>] [, ...] )>
     [EXPOSE PROGRESS AS <progress_subsource_name>]
-    [WITH (RETAIN HISTORY FOR <retention_period>)]
+    [WITH ( <with_option> [, ...] )]
   syntax_elements:
     - name: "`<src_name>`"
       description: |
@@ -49,3 +49,4 @@
         | Option | Description |
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `TIMESTAMP INTERVAL [=] <interval>` | The interval at which timestamps are assigned to data read from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). The value must be between the system parameters `min_timestamp_interval` and `max_timestamp_interval`. Default: the value of the `default_timestamp_interval` system parameter (`1s`). The interval can also be changed after creation with [`ALTER SOURCE`](/sql/alter-source/). |
