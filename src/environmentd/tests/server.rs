@@ -8153,23 +8153,17 @@ fn qa_occ_concurrent_mixed_dml_no_internal_error() {
     assert!(cnt >= 0);
 }
 
-/// BUG REPRO (ignored): A read-then-write whose read resolves to a far-future
-/// timestamp (here, a `REFRESH AT <far future>` materialized view) hangs in
-/// `ensure_read_linearized`'s sleep loop and ignores `statement_timeout`. The
-/// code comment in `frontend_read_then_write` claims such an op "hits
-/// statement_timeout and returns"; it does not. Only client cancellation /
-/// disconnect can free it.
+/// FIX VERIFICATION: A read-then-write whose read resolves to a far-future
+/// timestamp (here, a `REFRESH AT <far future>` materialized view) used to hang
+/// in `ensure_read_linearized`'s sleep loop, ignoring `statement_timeout`. The
+/// fix bounds the *entire* OCC read-then-write operation by `statement_timeout`
+/// centrally, in `SessionClient::try_frontend_read_then_write_with_cancel`'s
+/// `select!`, so the parked far-future op now hits the timeout and returns
+/// promptly with a statement-timeout error.
 ///
-/// NOTE: the indefinite far-future hang is *not* OCC-specific (the legacy path
-/// hangs too — see `qa_legacy_far_future_refresh_mv_statement_timeout`); what
-/// is OCC-specific is the false safety claim in the comment, plus the
-/// permit-pool amplification demonstrated by
-/// `qa_occ_far_future_rtw_starves_permit_pool`.
-///
-/// Ignored because it reproduces an open bug (it would fail/hang in CI). Run
-/// with `--ignored` to reproduce.
+/// NOTE: the fix is OCC-path-only. The legacy path still hangs on the same
+/// scenario — see `qa_legacy_far_future_refresh_mv_statement_timeout`.
 #[mz_ore::test]
-#[ignore = "reproduces bug: ensure_read_linearized ignores statement_timeout for far-future as_of"]
 fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -8205,7 +8199,15 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
             .unwrap();
         let started = Instant::now();
         let res = worker.batch_execute("INSERT INTO dst SELECT a FROM mv");
-        let _ = tx.send((started.elapsed(), res.map_err(|e| e.to_string())));
+        // `tokio_postgres::Error::to_string()` is just "db error"; preserve the
+        // SqlState code and server message so the assertion can inspect them.
+        let res = res.map_err(|e| {
+            (
+                e.code().cloned(),
+                e.as_db_error().map(|d| d.message().to_string()),
+            )
+        });
+        let _ = tx.send((started.elapsed(), res));
     });
 
     let outcome = rx.recv_timeout(Duration::from_secs(45));
@@ -8217,22 +8219,37 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
 
     match outcome {
         Ok((elapsed, res)) => {
-            if let Err(msg) = res {
-                assert!(
-                    msg.to_lowercase().contains("timeout") || msg.to_lowercase().contains("cancel"),
-                    "far-future RTW failed with non-timeout error: {msg}"
-                );
-                assert!(
-                    elapsed < Duration::from_secs(30),
-                    "statement_timeout was 3s but the op took {elapsed:?} to return",
-                );
-            }
+            // The fix bounds the whole operation by `statement_timeout`, so the
+            // far-future op must error out (not silently succeed) and do so
+            // promptly — well within the 45s recv budget.
+            let (code, message) = res.expect_err(
+                "far-future RTW should have failed with a statement-timeout error, \
+                 but it returned successfully",
+            );
+            // `StatementTimeout` surfaces as QUERY_CANCELED with the standard
+            // "canceling statement due to statement timeout" message.
+            assert_eq!(
+                code.as_ref(),
+                Some(&SqlState::QUERY_CANCELED),
+                "far-future RTW failed with unexpected SqlState {code:?} (message: {message:?})"
+            );
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|m| m.to_lowercase().contains("timeout")),
+                "far-future RTW error did not mention a timeout: {message:?}"
+            );
+            assert!(
+                elapsed < Duration::from_secs(15),
+                "statement_timeout was 3s but the op took {elapsed:?} to return",
+            );
         }
         Err(recv_err) => {
             panic!(
-                "BUG: INSERT...SELECT from a far-future REFRESH AT MV did not return \
-                 within 45s despite statement_timeout = '3s'; ensure_read_linearized \
-                 ignores the statement timeout (hangs in its sleep loop) ({recv_err})."
+                "INSERT...SELECT from a far-future REFRESH AT MV did not return \
+                 within 45s despite statement_timeout = '3s'; the central \
+                 statement_timeout enforcement in \
+                 try_frontend_read_then_write_with_cancel did not fire ({recv_err})."
             );
         }
     }
@@ -8241,9 +8258,14 @@ fn qa_occ_far_future_refresh_mv_respects_statement_timeout() {
 /// CONTEXT (ignored): the same far-future scenario on the LEGACY (non-OCC)
 /// path also hangs past `statement_timeout`. This documents that the
 /// indefinite hang is pre-existing behavior, not a regression introduced by
-/// the OCC path. Ignored for the same reason as the OCC repro above.
+/// the OCC path.
+///
+/// Stays `#[ignore]`d: the statement-timeout fix is OCC-path-only (it lives in
+/// `try_frontend_read_then_write_with_cancel`). The legacy coordinator path is
+/// intentionally left unchanged and out of scope for this fix, so this would
+/// still hang in CI.
 #[mz_ore::test]
-#[ignore = "documents pre-existing far-future hang on the legacy path"]
+#[ignore = "legacy path far-future hang is out of scope for the OCC statement_timeout fix"]
 fn qa_legacy_far_future_refresh_mv_statement_timeout() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -8297,18 +8319,18 @@ fn qa_legacy_far_future_refresh_mv_statement_timeout() {
     }
 }
 
-/// BUG REPRO (ignored): the op hung in `ensure_read_linearized` holds an OCC
-/// semaphore permit for its entire (indefinite) lifetime. With a bounded
-/// permit pool, a single such op starves *all* other read-then-writes — even
-/// on unrelated tables — and those victims also ignore `statement_timeout`
-/// because they block on permit acquisition before reaching the OCC loop where
-/// the timeout is enforced. This is the OCC-specific amplification of the
-/// far-future hang: the legacy path only blocks writes to the *target* table
-/// (via its per-table write lock), whereas OCC wedges the whole RTW pipeline.
+/// FIX VERIFICATION: a far-future RTW parked in `ensure_read_linearized` holds
+/// an OCC semaphore permit while parked. With a bounded permit pool, a single
+/// such op used to starve *all* other read-then-writes — even on unrelated
+/// tables — because those victims block on permit acquisition *before* the OCC
+/// loop, and `statement_timeout` was only enforced inside the loop.
 ///
-/// Ignored because it reproduces an open bug. Run with `--ignored`.
+/// The fix moves `statement_timeout` enforcement up into
+/// `try_frontend_read_then_write_with_cancel`'s `select!`, which bounds the
+/// *whole* operation — including the permit-acquisition wait. So a victim
+/// blocked behind the starved pool now honors its own `statement_timeout` and
+/// returns promptly with a statement-timeout error instead of hanging.
 #[mz_ore::test]
-#[ignore = "reproduces bug: a hung far-future RTW starves the global OCC permit pool"]
 fn qa_occ_far_future_rtw_starves_permit_pool() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -8356,8 +8378,17 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
         victim
             .batch_execute("SET statement_timeout = '3s'")
             .unwrap();
+        let started = Instant::now();
         let res = victim.execute("UPDATE other SET v = v + 1 WHERE id = 1", &[]);
-        let _ = tx.send(res.map_err(|e| e.to_string()));
+        // Preserve the SqlState code and server message (`to_string()` is just
+        // "db error").
+        let res = res.map_err(|e| {
+            (
+                e.code().cloned(),
+                e.as_db_error().map(|d| d.message().to_string()),
+            )
+        });
+        let _ = tx.send((started.elapsed(), res));
     });
 
     let outcome = rx.recv_timeout(Duration::from_secs(25));
@@ -8368,16 +8399,41 @@ fn qa_occ_far_future_rtw_starves_permit_pool() {
     let _ = hung_handle.join();
 
     match outcome {
-        Ok(res) => {
-            eprintln!("victim UPDATE completed: {res:?}");
+        Ok((elapsed, res)) => {
+            // The far-future op holds the sole permit for its (default 60s)
+            // lifetime, so the victim cannot acquire a permit. With the fix,
+            // the victim's own `statement_timeout = '3s'` now bounds the
+            // permit-acquisition wait, so it returns a timeout error rather
+            // than hanging. (Before the fix this never returned within 25s.)
+            let (code, message) = res.expect_err(
+                "victim UPDATE should have timed out waiting on the starved permit pool, \
+                 but it returned successfully",
+            );
+            assert_eq!(
+                code.as_ref(),
+                Some(&SqlState::QUERY_CANCELED),
+                "victim UPDATE failed with unexpected SqlState {code:?} (message: {message:?})"
+            );
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|m| m.to_lowercase().contains("timeout")),
+                "victim UPDATE error did not mention a timeout: {message:?}"
+            );
+            // It should time out on its own 3s budget, well within the 25s
+            // recv guard.
+            assert!(
+                elapsed < Duration::from_secs(15),
+                "victim statement_timeout was 3s but it took {elapsed:?} to return",
+            );
         }
         Err(recv_err) => {
             panic!(
-                "BUG: an unrelated UPDATE on a different table did not return within 25s \
+                "an unrelated UPDATE on a different table did not return within 25s \
                  (statement_timeout = '3s'). A single far-future read-then-write holds the \
-                 sole OCC permit while parked in ensure_read_linearized, starving all other \
-                 read-then-writes; permit acquisition happens before the OCC loop where \
-                 statement_timeout is enforced, so the victim cannot time out either ({recv_err})."
+                 sole OCC permit while parked in ensure_read_linearized; with the central \
+                 statement_timeout fix the victim should time out on permit acquisition \
+                 within ~3s instead of hanging ({recv_err})."
             );
         }
     }

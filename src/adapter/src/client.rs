@@ -1515,6 +1515,12 @@ impl SessionClient {
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let conn_id = self.session().conn_id().clone();
 
+        // Bound the whole operation by `statement_timeout`: the select! below
+        // owns the operation's lifetime, so a deadline here covers every phase,
+        // including the pre-OCC-loop ones (e.g. `ensure_read_linearized`, which
+        // can park indefinitely for a far-future `as_of`). 0 means "off".
+        let statement_timeout = *self.session().vars().statement_timeout();
+
         let inner_client = self.inner().clone();
         let mut cancel_future = pin::pin!(cancel_future);
 
@@ -1560,6 +1566,17 @@ impl SessionClient {
         };
         tokio::pin!(connection_cancel);
 
+        // A zero timeout means "wait forever": use a future that never resolves
+        // rather than a zero-duration sleep that would fire immediately.
+        let statement_timeout = async move {
+            if statement_timeout.is_zero() {
+                futures::future::pending::<()>().await;
+            } else {
+                tokio::time::sleep(statement_timeout).await;
+            }
+        };
+        tokio::pin!(statement_timeout);
+
         let mut frontend_read_then_write =
             pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
 
@@ -1576,6 +1593,17 @@ impl SessionClient {
             }
             _ = &mut connection_cancel => {
                 Err(AdapterError::Canceled)
+            }
+            _ = &mut statement_timeout => {
+                // Dropping the operation future (by returning) releases the OCC
+                // permit, read holds, and subscribe handle. Forward a privileged
+                // cancel, like the `cancel_future` arm, to clean up any
+                // coordinator-owned work.
+                inner_client.send(Command::PrivilegedCancelRequest {
+                    conn_id: conn_id.clone(),
+                });
+
+                Err(AdapterError::StatementTimeout)
             }
         }
     }
