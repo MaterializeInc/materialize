@@ -10,20 +10,32 @@
 mod doc;
 mod util;
 
-use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_parser::ast::*;
 use mz_sql_parser::parser::{ParserStatementError, parse_statements};
 use pretty::RcDoc;
 use thiserror::Error;
 
+pub use mz_sql_parser::ast::display::FormatMode;
+
 pub const DEFAULT_WIDTH: usize = 100;
 
-const TAB: isize = 4;
+pub const DEFAULT_INDENT: isize = 4;
 
 #[derive(Clone, Copy)]
 pub struct PrettyConfig {
     pub width: usize,
+    pub indent: isize,
     pub format_mode: FormatMode,
+}
+
+impl Default for PrettyConfig {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_WIDTH,
+            indent: DEFAULT_INDENT,
+            format_mode: FormatMode::Simple,
+        }
+    }
 }
 
 /// Pretty prints a statement at a width.
@@ -52,7 +64,7 @@ pub fn pretty_strs_simple(str: &str, width: usize) -> Result<Vec<String>, Error>
         str,
         PrettyConfig {
             width,
-            format_mode: FormatMode::Simple,
+            ..Default::default()
         },
     )
 }
@@ -63,7 +75,7 @@ pub fn pretty_str_simple(str: &str, width: usize) -> Result<String, Error> {
         str,
         PrettyConfig {
             width,
-            format_mode: FormatMode::Simple,
+            ..Default::default()
         },
     )
 }

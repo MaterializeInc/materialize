@@ -10,10 +10,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use datadriven::walk;
-use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{parse_expr, parse_statements};
-use mz_sql_pretty::{Pretty, PrettyConfig, to_pretty};
+use mz_sql_pretty::{Pretty, PrettyConfig, pretty_str, to_pretty};
 
 // Use the parser's datadriven tests to get a comprehensive set of SQL statements. Assert they all
 // generate identical ASTs when pretty printed. Output the same output as the parser so datadriven
@@ -48,7 +48,7 @@ fn verify_pretty_expr(expr: &str) {
             Pretty {
                 config: PrettyConfig {
                     width: n,
-                    format_mode: FormatMode::Simple
+                    ..Default::default()
                 }
             }
             .doc_expr(&original)
@@ -61,7 +61,7 @@ fn verify_pretty_expr(expr: &str) {
             Pretty {
                 config: PrettyConfig {
                     width: n,
-                    format_mode: FormatMode::Simple
+                    ..Default::default()
                 }
             }
             .doc_expr(&prettied)
@@ -90,7 +90,7 @@ fn verify_pretty_statement(stmt: &str) {
             &original.ast,
             PrettyConfig {
                 width,
-                format_mode: FormatMode::Simple,
+                ..Default::default()
             },
         );
         let prettied = parse_statements(&pretty1)
@@ -102,7 +102,7 @@ fn verify_pretty_statement(stmt: &str) {
             &prettied.ast,
             PrettyConfig {
                 width,
-                format_mode: FormatMode::Simple,
+                ..Default::default()
             },
         );
         assert_eq!(pretty1, pretty2);
@@ -114,4 +114,22 @@ fn verify_pretty_statement(stmt: &str) {
         // It'd be nice to assert that this squashes to a single line at high Ns, but literals and
         // idents can contain newlines so that's not always possible.
     }
+}
+
+#[mz_ore::test]
+fn test_indent_config() {
+    let pretty = pretty_str(
+        "CREATE TABLE t (a int, b int)",
+        PrettyConfig {
+            width: 1,
+            indent: 2,
+            ..Default::default()
+        },
+    )
+    .expect("valid SQL");
+
+    assert_eq!(
+        pretty,
+        "CREATE TABLE\n  t\n    (\n      a int4,\n      b int4\n    );"
+    );
 }
