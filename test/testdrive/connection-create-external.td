@@ -263,3 +263,28 @@ contains:token_uri must be https://oauth2.googleapis.com/token
 # In fact, the GCP allowlist should even apply when VALIDATE = false.
 ! CREATE CONNECTION gcp_ssrf_private_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = false);
 contains:token_uri must be https://oauth2.googleapis.com/token
+
+# The CREATE-time check is not enough: ALTER CONNECTION and ALTER SECRET can both
+# install a malicious token_uri into an already-created GCP connection, so the
+# allowlist must guard those paths too.
+
+# A benign service-account key whose token_uri is the real Google endpoint. It
+# passes the allowlist, so the connection and secret below are created cleanly
+# and give the ALTER paths a valid starting point to subvert.
+> CREATE SECRET gcp_good AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"https://oauth2.googleapis.com/token"}'
+> CREATE CONNECTION gcp_alter_conn TO GCP (SERVICE ACCOUNT KEY = SECRET gcp_good) WITH (VALIDATE = false);
+
+# ALTER CONNECTION: swapping in a SERVICE ACCOUNT KEY that points at a private
+# token_uri is the same SSRF primitive as CREATE and must be rejected, whether or
+# not validation is requested.
+! ALTER CONNECTION gcp_alter_conn SET (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = true);
+contains:token_uri must be https://oauth2.googleapis.com/token
+
+! ALTER CONNECTION gcp_alter_conn SET (SERVICE ACCOUNT KEY = SECRET gcp_ssrf_private) WITH (VALIDATE = false);
+contains:token_uri must be https://oauth2.googleapis.com/token
+
+# ALTER SECRET: rewriting the secret behind a GCP connection slips a malicious
+# token_uri past the CREATE-time check entirely, since the connection was already
+# validated against the benign key above. This must be rejected as well.
+! ALTER SECRET gcp_good AS '{"type":"service_account","project_id":"x","client_email":"a@b.com","private_key":"${gcp-ssrf-key}","token_uri":"http://127.0.0.1:1/token"}'
+contains:token_uri must be https://oauth2.googleapis.com/token
