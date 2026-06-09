@@ -425,13 +425,15 @@ $ set-max-tries max-tries=5000
 > SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'scheduled_cluster';
 0
 
-# We should have a "drop" in `mz_audit_events`
+# We should have a "drop" in `mz_audit_events`; the controller retires the
+# replica when the refresh window closes.
 > SELECT count(*) > 0
   FROM mz_audit_events
   WHERE
     event_type = 'drop' AND
     object_type = 'cluster-replica' AND
     (details->'cluster_name')::text = '"scheduled_cluster"' AND
+    (details->'reason')::text = '"retired"' AND
     user IS NULL;
 true
 
@@ -445,13 +447,15 @@ true
 > SELECT * FROM mv11;
 0
 
-# We should have a "create" in `mz_audit_events`
+# We should have a "create" in `mz_audit_events`; a window-open create carries
+# the schedule reason.
 > SELECT count(*) > 0
   FROM mz_audit_events
   WHERE
     event_type = 'create' AND
     object_type = 'cluster-replica' AND
     (details->'cluster_name')::text = '"scheduled_cluster"' AND
+    (details->'reason')::text = '"schedule"' AND
     user IS NULL;
 true
 

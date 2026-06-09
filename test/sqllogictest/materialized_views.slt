@@ -1279,6 +1279,18 @@ UNION ALL
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
 
+# The controller owns scheduled clusters (the legacy scheduler is inert while the
+# gate is on): it holds the realized `replication_factor` at 0 and toggles a
+# single replica in and out of the refresh window, so on/off is checked by the
+# replica count in `mz_cluster_replicas` rather than `replication_factor`. It
+# audits the window-open creates as `schedule` with the legacy scheduler's
+# `scheduling_policies` detail, and the window-close drops as `retired` with
+# none. Drive the tick down so the transitions settle within the sleeps below.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cluster_schedule_refresh = false
 ----
@@ -1340,7 +1352,7 @@ SELECT mz_unsafe.mz_sleep(3+2);
 
 # Should turn off.
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_1';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_1';
 ----
 0
 
@@ -1429,7 +1441,7 @@ SELECT * FROM mv10
 
 # The other refresh cluster should be off, because there is no refresh MV on it yet.
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_3';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_3';
 ----
 0
 
@@ -1481,7 +1493,7 @@ SELECT mz_unsafe.mz_sleep(3);
 
 # Should stay off, because it was reset to manual.
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_4';
 ----
 0
 
@@ -1578,6 +1590,14 @@ c_schedule_hydration_time_estimate  on-refresh  00:16:35
 statement ok
 SELECT mz_unsafe.mz_sleep(8);
 
+# The controller audits the window-open creates as "schedule", carrying the
+# same per-decision `scheduling_policies` detail the legacy scheduler recorded
+# (objects needing compaction/refresh, hydration time estimate). Window-close
+# drops are "retired" with no detail: a drop happens exactly when no strategy
+# desires the replica, so there is no decision to record (the legacy "off"
+# blob does not come back). The "manual" rows are user-issued: replica creates
+# at CREATE CLUSTER and the replica drops cascading from DROP CLUSTER (the
+# `other` cluster).
 query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
@@ -1598,8 +1618,8 @@ create  cluster-replica  "other"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
-drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_1"  "retired"  true  NULL
+drop  cluster-replica  "c_schedule_3"  "retired"  true  NULL
 create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
@@ -1615,7 +1635,7 @@ statement ok
 CREATE CLUSTER c_schedule_6 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_6';
 ----
 0
 
@@ -1636,7 +1656,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(3+1+1);
 
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_6';
 ----
 1
 
@@ -1650,7 +1670,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(3+1+1);
 
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_6';
 ----
 0
 
@@ -1664,11 +1684,14 @@ statement ok
 SELECT mz_unsafe.mz_sleep(3+1+1);
 
 query I
-SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c_schedule_6';
 ----
 1
 
-# The audit events should now have a row that has a non-empty `objects_needing_compaction`.
+# The audit events should now have a creation row with a non-empty
+# `objects_needing_compaction`: the controller records the compaction-driven
+# window decision just as the legacy scheduler did. The window-close drop is
+# `retired` with no detail.
 query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
@@ -1683,7 +1706,7 @@ WHERE
   object_type = 'cluster-replica' AND
   (details->'cluster_name')::text = '"c_schedule_6"';
 ----
-drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_6"  "retired"  true  NULL
 create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":["uXXX"],"objects_needing_refresh":[]}
 create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 
