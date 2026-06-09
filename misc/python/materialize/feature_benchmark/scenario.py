@@ -28,6 +28,10 @@ class RootScenario:
         # that we take the run with the minimum wallclock time:
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
+        # Peak RSS is reset per iteration so it should be tighter than the
+        # post-workload sample, but allocator decay still drives variance.
+        MeasurementType.MEMORY_PEAK_MZ: 0.20,
+        MeasurementType.MEMORY_PEAK_CLUSTERD: 0.50,
     }
 
     def __init__(
