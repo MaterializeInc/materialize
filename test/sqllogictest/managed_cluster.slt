@@ -14,6 +14,18 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
+# The controller owns the managed replica set: a replication-factor change
+# updates the realized config immediately but reconciles the replica set on its
+# next tick, and a SIZE change reshapes in the background (the realized size and
+# the replicas advance only at cut-over, which also brings up a freshly-named
+# replica and drops the old one). Drive the tick down so those background
+# reconciles settle within the short mz_sleep waits the replica-set readbacks
+# below use.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
+----
+COMPLETE 0
+
 statement ok
 CREATE CLUSTER foo SIZE 'scale=1,workers=1'
 
@@ -212,6 +224,11 @@ ALTER CLUSTER REPLICA foo.r2 RENAME TO bar
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
 
+# The controller reconciles the replica count down in the background; it keeps
+# the oldest (r1) and drops the rest.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
@@ -227,6 +244,10 @@ u5  foo  true  1  scale=1,workers=1
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
+
+# The controller brings the new replica up in the background.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
@@ -245,6 +266,10 @@ u5  foo  true  2  scale=1,workers=1
 statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 
+# The controller reconciles the replica count back down in the background.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
@@ -261,10 +286,16 @@ u5  foo  true  1  scale=1,workers=1
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2')
 
+# The controller reshapes a SIZE change in the background: it brings up a fresh
+# replica at the new size, cuts over, and drops the old one — so the realized
+# size advances only at cut-over and the surviving replica is renamed (r1 -> r2).
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  scale=1,workers=2
+foo  r2  scale=1,workers=2
 mz_catalog_server  r1  scale=1,workers=2
 mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
@@ -277,10 +308,14 @@ u5  foo  true  1  scale=1,workers=2
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 
+# Another background reshape; the surviving replica churns again (r2 -> r3).
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  scale=1,workers=1
+foo  r3  scale=1,workers=1
 mz_catalog_server  r1  scale=1,workers=2
 mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
@@ -290,8 +325,10 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name L
 ----
 u5  foo  true  1  scale=1,workers=1
 
+# The cluster's sole replica is now r3 (renamed by the reshapes above); a managed
+# cluster still rejects manual replica drops.
 statement error cannot drop replica of managed cluster
-DROP CLUSTER REPLICA foo.r1
+DROP CLUSTER REPLICA foo.r3
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
@@ -311,6 +348,10 @@ DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 statement error CLUSTER foo has no CLUSTER REPLICA named "r1"
 DROP CLUSTER REPLICA foo.r1
 
+# foo went to REPLICATION FACTOR 0 above; wait for the controller to drop its
+# last replica so the readback sees an empty managed cluster.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
