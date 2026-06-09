@@ -353,6 +353,26 @@ mod container {
         fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }
+        #[inline]
+        fn extend_datums<'a>(&'a self, target: &mut Vec<Datum<'a>>, max: Option<usize>) {
+            // Tight loop over packed row bytes: push directly instead of going
+            // through `Iterator::extend`/`take`, branching on the bound once.
+            let mut bytes = self.bytes;
+            match max {
+                Some(max) => {
+                    let mut n = 0;
+                    while n < max && !bytes.is_empty() {
+                        target.push(unsafe { read_datum(&mut bytes) });
+                        n += 1;
+                    }
+                }
+                None => {
+                    while !bytes.is_empty() {
+                        target.push(unsafe { read_datum(&mut bytes) });
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(test)]

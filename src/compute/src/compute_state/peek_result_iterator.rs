@@ -214,16 +214,14 @@ where
         let arena = RowArena::new();
 
         let key_item = self.cursor.key(&self.storage);
-        let key = key_item.to_datum_iter();
         let row_item = self.cursor.val(&self.storage);
-        let row = row_item.to_datum_iter();
 
         // An optional literal that we might have added to the borrow. Needs to be declared
         // before the borrow to ensure correct drop order.
         let maybe_literal;
         let mut borrow = self.datum_vec.borrow();
-        borrow.extend(key);
-        borrow.extend(row);
+        key_item.extend_datums(&mut borrow, None);
+        row_item.extend_datums(&mut borrow, None);
 
         if let Some(literals) = &mut self.literals
             && let Some(literal) = literals.peek()
@@ -231,7 +229,7 @@ where
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
             maybe_literal = literal;
-            borrow.extend(maybe_literal.to_datum_iter());
+            maybe_literal.extend_datums(&mut borrow, None);
         }
         if let Some(result) = self
             .map_filter_project
