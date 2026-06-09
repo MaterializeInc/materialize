@@ -268,6 +268,12 @@ pub async fn handle_promsql(
     metrics_registry
 }
 
+/// Prefix prepended to every user-defined metric name in the Prometheus
+/// exposition. Namespaces custom metrics so they can't collide with
+/// Materialize's built-in `mz_*` metrics. Injected here at scrape time; the
+/// user-supplied name is what lives in the catalog and `mz_metrics`.
+const CUSTOM_METRIC_PREFIX: &str = "mz_custom_";
+
 /// One metric resolved from the catalog, with everything needed to scrape it.
 struct ResolvedMetric {
     name: String,
@@ -468,8 +474,11 @@ pub async fn handle_metrics_custom(
                 // offending metric rather than aborting the whole scrape.
                 let registered = metrics_registry.try_register::<GenericGaugeVec<AtomicF64>>(
                     MakeCollectorOpts {
-                        opts: Opts::new(metric.name.clone(), metric.help.clone())
-                            .variable_labels(label_names),
+                        opts: Opts::new(
+                            format!("{CUSTOM_METRIC_PREFIX}{}", metric.name),
+                            metric.help.clone(),
+                        )
+                        .variable_labels(label_names),
                         buckets: None,
                         rules: Vec::new(),
                     },

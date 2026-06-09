@@ -6483,10 +6483,17 @@ async fn test_metrics_custom_endpoint() {
     let resp = reqwest::get(&external_url).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("# HELP m leads"), "body: {body}");
-    assert!(body.contains("# TYPE m gauge"), "body: {body}");
-    assert!(body.contains("m{status=\"open\"} 7"), "body: {body}");
-    assert!(body.contains("m{status=\"closed\"} 3"), "body: {body}");
+    // Exposed names carry the `mz_custom_` prefix; the catalog name stays `m`.
+    assert!(body.contains("# HELP mz_custom_m leads"), "body: {body}");
+    assert!(body.contains("# TYPE mz_custom_m gauge"), "body: {body}");
+    assert!(
+        body.contains("mz_custom_m{status=\"open\"} 7"),
+        "body: {body}"
+    );
+    assert!(
+        body.contains("mz_custom_m{status=\"closed\"} 3"),
+        "body: {body}"
+    );
 
     // Both listeners have `endpoint_api: true` in the test harness, so the
     // same URL on the internal listener serves the same exposition.
@@ -6510,7 +6517,10 @@ async fn test_metrics_custom_endpoint() {
     let resp = reqwest::get(&external_url).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.text().await.unwrap();
-    assert!(!body.contains("m{"), "body should not list m: {body}");
+    assert!(
+        !body.contains("mz_custom_m{"),
+        "body should not list m: {body}"
+    );
 
     // Revoke the HTTP user's privileges on the view, recreate the metric,
     // and verify the scrape returns 403 instead of 200 with empty data or 500.
