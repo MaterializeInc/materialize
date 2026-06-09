@@ -323,6 +323,7 @@ impl ComputeState {
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
+            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
             // Budget derivation: fraction × announced memory limit, with a
             // 128 MiB floor so the no-pressure case doesn't page per chunk.
@@ -344,12 +345,13 @@ impl ComputeState {
                 enabled,
                 ?backend,
                 ?codec,
+                swap_pageout,
                 fraction,
                 mem_limit,
                 budget_bytes = total,
                 "column-paged batcher: applying tiered config",
             );
-            apply_tiered_config(enabled, total, backend, codec);
+            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

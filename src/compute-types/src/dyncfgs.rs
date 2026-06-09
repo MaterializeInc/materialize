@@ -93,6 +93,26 @@ pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
      `enable_column_paged_batcher_spill = true`.",
 );
 
+/// Proactively evict the column-paged batcher's lz4-compressed spill chunks
+/// from RSS via `MADV_PAGEOUT` when spilling to the swap backend. Only
+/// meaningful when [`COLUMN_PAGED_BATCHER_LZ4`] is `true` and the active
+/// backend is swap (no scratch directory): the compressed bytes are kept
+/// resident in the process address space, and `MADV_PAGEOUT` swaps them out at
+/// spill time so RSS is held at the budget instead of the kernel reclaiming
+/// lazily at the pressure cliff (the `MADV_COLD` default). A later page-in
+/// re-faults the pages back — cheap because lz4 shrank the byte volume.
+///
+/// Off by default: the eager-reclaim syscall is the one kernel interaction the
+/// pager design singled out as risky, so it stays gated until proven on the
+/// target workload.
+pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
+    "column_paged_batcher_swap_pageout",
+    false,
+    "Evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS via \
+     `MADV_PAGEOUT`. Only meaningful when `column_paged_batcher_lz4 = true` and the swap backend \
+     is active.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -498,4 +518,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
+        .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
 }

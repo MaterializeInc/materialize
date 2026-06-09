@@ -59,20 +59,62 @@ pub(crate) fn pageout_swap(chunks: &mut [Vec<u64>]) -> Handle {
     Handle::from_swap(SwapInner::new(taken))
 }
 
+/// Proactively reclaims (swaps out) the resident pages of `bytes` via
+/// `MADV_PAGEOUT`, holding RSS at the caller's budget right now rather than
+/// waiting for kernel LRU to reclaim under pressure the way [`pageout_swap`]'s
+/// `MADV_COLD` hint does.
+///
+/// Unlike [`pageout_swap`], this takes a borrow and does **not** transfer
+/// ownership: the allocation stays addressable in the caller's address space,
+/// so a later read simply re-faults the swapped-out pages back in. That suits a
+/// buffer the caller must keep reachable — e.g. the column pager's
+/// lz4-compressed bytes kept in memory — but still wants evicted eagerly so the
+/// budget is real instead of a fiction the kernel only honors at the pressure
+/// cliff.
+///
+/// On non-Linux targets this is a no-op (matching `MADV_COLD`).
+pub fn advise_pageout(bytes: &[u8]) {
+    madvise_pageout(bytes);
+}
+
 #[cfg(target_os = "linux")]
 fn madvise_cold(chunk: &[u64]) {
-    if chunk.is_empty() {
-        return;
-    }
-    let page = page_size();
-    let base_ptr = chunk.as_ptr();
-    let base_addr = base_ptr.addr();
     // `Vec<u64>` cannot exceed `isize::MAX` bytes, so this multiplication
     // cannot overflow on any supported target. Use `checked_mul` for
     // defense-in-depth: a corrupted length should fail loudly, not wrap.
     let Some(len_bytes) = chunk.len().checked_mul(std::mem::size_of::<u64>()) else {
         return;
     };
+    // SAFETY: `(ptr, len_bytes)` describes the live `&[u64]` exactly.
+    unsafe { madvise_aligned(chunk.as_ptr().cast::<u8>(), len_bytes, libc::MADV_COLD) }
+}
+
+#[cfg(target_os = "linux")]
+fn madvise_pageout(bytes: &[u8]) {
+    // SAFETY: `(ptr, len)` describes the live `&[u8]` exactly.
+    unsafe { madvise_aligned(bytes.as_ptr(), bytes.len(), libc::MADV_PAGEOUT) }
+}
+
+/// Issues `madvise(advice)` over the page-aligned interior of the byte range
+/// `[base_ptr, base_ptr + len_bytes)`. `madvise` operates at page granularity,
+/// so the start rounds up and the end rounds down to page boundaries; a range
+/// that contains no whole page is skipped so we never advise pages we only
+/// partially own.
+///
+/// # Safety
+///
+/// `base_ptr` must point to the start of a live allocation of at least
+/// `len_bytes` bytes that stays valid for the duration of the call. `advice`
+/// must be a non-mutating hint (`MADV_COLD`/`MADV_PAGEOUT`): both only change
+/// the kernel's reclaim decision and leave the bytes readable, so concurrent
+/// reads of the range remain sound.
+#[cfg(target_os = "linux")]
+unsafe fn madvise_aligned(base_ptr: *const u8, len_bytes: usize, advice: libc::c_int) {
+    if len_bytes == 0 {
+        return;
+    }
+    let page = page_size();
+    let base_addr = base_ptr.addr();
     // Round the start up and the end down to page boundaries. Both additions
     // use `checked_add` so that an allocation sitting near the top of the
     // address space can never silently wrap into a tiny range.
@@ -91,22 +133,25 @@ fn madvise_cold(chunk: &[u64]) {
     // SAFETY: `aligned_start_addr` lies in `[base_addr, base_addr + len_bytes]`
     // by construction (rounding up the start cannot exceed `end_unaligned`,
     // which equals `base_addr + len_bytes`; the early-return above guarantees
-    // `start ≤ end`). That interval is exactly the range covered by the live
-    // `&[u64]`, so `byte_add` stays in-bounds and preserves provenance.
+    // `start ≤ end`). That interval is within the live allocation the caller
+    // promised, so `byte_add` stays in-bounds and preserves provenance.
     let aligned_ptr = unsafe { base_ptr.byte_add(aligned_start_addr - base_addr) }
         .cast::<libc::c_void>()
         .cast_mut();
     // SAFETY: pointer/length describe a fully page-aligned subrange contained
-    // within the live `&[u64]` (justified above). `MADV_COLD` is non-mutating;
-    // it only signals reclaim preference to the kernel, so concurrent reads
-    // of the slice remain sound.
+    // within the live allocation (justified above). The caller guarantees
+    // `advice` is a non-mutating reclaim hint, so concurrent reads of the range
+    // remain sound.
     unsafe {
-        libc::madvise(aligned_ptr, aligned_len, libc::MADV_COLD);
+        libc::madvise(aligned_ptr, aligned_len, advice);
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn madvise_cold(_chunk: &[u64]) {}
+
+#[cfg(not(target_os = "linux"))]
+fn madvise_pageout(_bytes: &[u8]) {}
 
 #[cfg(target_os = "linux")]
 fn page_size() -> usize {
@@ -249,5 +294,25 @@ mod tests {
         let mut dst = Vec::new();
         take_swap(h, &mut dst);
         assert_eq!(dst, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
+    fn advise_pageout_leaves_bytes_readable() {
+        // `MADV_PAGEOUT` is a reclaim hint: the bytes must remain addressable
+        // and unchanged afterwards (a read re-faults the pages back in). Use a
+        // multi-page buffer so the page-aligned interior is non-empty.
+        let bytes: Vec<u8> = (0..(64 * 1024)).map(|i| (i % 251) as u8).collect();
+        advise_pageout(&bytes);
+        // Re-read after the advice; contents are preserved.
+        assert!(bytes.iter().enumerate().all(|(i, &b)| b == (i % 251) as u8));
+    }
+
+    #[mz_ore::test]
+    fn advise_pageout_empty_and_subpage_are_noops() {
+        // Neither an empty slice nor a sub-page slice contains a whole page, so
+        // both skip the syscall entirely; they must not panic.
+        advise_pageout(&[]);
+        advise_pageout(&[1u8, 2, 3, 4]);
     }
 }

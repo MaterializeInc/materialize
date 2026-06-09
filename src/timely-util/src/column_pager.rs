@@ -36,6 +36,7 @@ pub mod metrics;
 pub mod policy;
 
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
 use columnar::Columnar;
@@ -257,6 +258,17 @@ impl PagingPolicy for AlwaysResidentPolicy {
 static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
     LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
 
+/// Process-global toggle for `MADV_PAGEOUT` on the lz4 + swap spill path.
+///
+/// When set, [`ColumnPager::page`] issues `MADV_PAGEOUT` over the compressed
+/// bytes it keeps resident in [`CompressedInner::Memory`], proactively evicting
+/// them at spill time instead of leaving them for lazy kernel reclaim. A single
+/// process-global flag (set by [`apply_tiered_config`]) mirrors the backend /
+/// codec selection: it is a process-wide operational choice, not a per-column
+/// one, and every consumer of the shared pager reads the same value. Defaults
+/// to off; the eager-reclaim syscall stays gated until proven.
+static SWAP_PAGEOUT: AtomicBool = AtomicBool::new(false);
+
 /// Install `pager` as the process-wide active pager. Subsequent
 /// [`global_pager`] calls return a clone of this value across all threads.
 ///
@@ -300,12 +312,18 @@ pub fn tiered_policy() -> &'static policy::TieredPolicy {
 /// in-flight tickets still credit the singleton, which is harmless: the
 /// budget grows above the configured total until the next enable reconciles
 /// it via `reconfigure`.
+///
+/// `swap_pageout` toggles `MADV_PAGEOUT` on the lz4 + swap spill path (see
+/// [`SWAP_PAGEOUT`]); it is stored unconditionally so the next `page` call
+/// observes it regardless of `enabled`.
 pub fn apply_tiered_config(
     enabled: bool,
     total_budget: usize,
     backend: Backend,
     codec: Option<Codec>,
+    swap_pageout: bool,
 ) {
+    SWAP_PAGEOUT.store(swap_pageout, Ordering::Relaxed);
     let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
     p.reconfigure(total_budget, backend, codec);
     if enabled {
@@ -431,7 +449,21 @@ impl ColumnPager {
                     codec: Some(Codec::Lz4),
                 });
                 let inner = match backend {
-                    Backend::Swap => CompressedInner::Memory(out),
+                    Backend::Swap => {
+                        // The compressed bytes stay resident in our own address
+                        // space (we read them back in `take` via `FrameDecoder`),
+                        // so the pager's ownership-transferring `pageout` does not
+                        // fit. When `SWAP_PAGEOUT` is set, hint `MADV_PAGEOUT`
+                        // instead: it proactively swaps the pages out now, holding
+                        // RSS at the budget rather than leaving them as unmanaged
+                        // anonymous memory the kernel only reclaims lazily at the
+                        // pressure cliff. A later read re-faults them back in —
+                        // cheap, since lz4 shrank the byte volume.
+                        if SWAP_PAGEOUT.load(Ordering::Relaxed) {
+                            pager::advise_pageout(&out);
+                        }
+                        CompressedInner::Memory(out)
+                    }
                     Backend::File => {
                         // The pager deals in `Vec<u64>`, so the framed bytes
                         // must be widened. `out` is already compressed (~4x
@@ -638,6 +670,31 @@ mod tests {
         ));
         let rt = cp.take(paged);
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+    }
+
+    /// With the swap-pageout flag on, the lz4 + swap path issues `MADV_PAGEOUT`
+    /// over the compressed bytes; the round-trip must still reproduce the input
+    /// (the advice is a non-destructive reclaim hint). Drives the global pager
+    /// through `apply_tiered_config` — the only path that sets the flag — with a
+    /// zero budget so every column spills. Resets the globals on the way out so
+    /// peer tests see the default disabled pager.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
+    fn round_trip_swap_lz4_pageout() {
+        apply_tiered_config(true, 0, Backend::Swap, Some(Codec::Lz4), true);
+        let cp = global_pager();
+        let mut col = sample_typed();
+        let paged = cp.page(&mut col);
+        assert!(matches!(
+            paged,
+            PagedColumn::Compressed {
+                inner: CompressedInner::Memory(_),
+                ..
+            }
+        ));
+        let rt = cp.take(paged);
+        assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+        apply_tiered_config(false, 0, Backend::Swap, None, false);
     }
 
     #[mz_ore::test]
