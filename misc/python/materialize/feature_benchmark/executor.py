@@ -44,6 +44,9 @@ class Executor:
     def DockerMemClusterd(self) -> int:
         raise NotImplementedError
 
+    def RestartClusterdJoin(self) -> None:
+        raise NotImplementedError
+
 
 class Docker(Executor):
     def __init__(
@@ -52,20 +55,42 @@ class Docker(Executor):
         seed: int,
         materialized: Materialized,
         clusterd: Clusterd,
+        clusterd_join: Clusterd | None = None,
     ) -> None:
         self._composition = composition
         self._seed = seed
         self._materialized = materialized
         self._clusterd = clusterd
+        self._clusterd_join = clusterd_join
 
     def RestartMzClusterd(self) -> None:
         self._composition.kill("materialized")
         self._composition.kill("clusterd")
+        if self._clusterd_join is not None:
+            self._composition.kill("clusterd_join")
         # Make sure we are restarting Materialized() with the
         # same parameters (docker tag, SIZE) it was initially started with
-        with self._composition.override(self._materialized, self._clusterd):
+        overrides = [self._materialized, self._clusterd]
+        if self._clusterd_join is not None:
+            overrides.append(self._clusterd_join)
+        with self._composition.override(*overrides):
             self._composition.up("materialized")
             self._composition.up("clusterd")
+            if self._clusterd_join is not None:
+                self._composition.up("clusterd_join")
+        return None
+
+    def RestartClusterdJoin(self) -> None:
+        """Recreate the `clusterd_join` container so the next unmanaged
+        replica created on it gets a fresh process: no allocator reuse,
+        leftover swap, or stale scratch-directory spill files from the
+        previous iteration. `rm` (not just `kill` + `up`) because a killed
+        container keeps its filesystem, including the scratch directory."""
+        assert self._clusterd_join is not None
+        self._composition.kill("clusterd_join")
+        self._composition.rm("clusterd_join")
+        with self._composition.override(self._clusterd_join):
+            self._composition.up("clusterd_join")
         return None
 
     def Td(self, input: str) -> Any:
@@ -91,7 +116,10 @@ class Docker(Executor):
         return self._composition.mem("materialized")
 
     def DockerMemClusterd(self) -> int:
-        return self._composition.mem("clusterd")
+        mem = self._composition.mem("clusterd")
+        if self._clusterd_join is not None:
+            mem += self._composition.mem("clusterd_join")
+        return mem
 
 
 class MzCloud(Executor):

@@ -159,6 +159,7 @@ SERVICES = [
     # Overridden below
     Materialized(),
     Clusterd(),
+    Clusterd(name="clusterd_join"),
     Testdrive(),
     Mz(app_password=""),
 ]
@@ -251,6 +252,14 @@ def run_one_scenario(
             memory_swap=memory_swap,
             mem_swappiness=mem_swappiness,
         )
+        clusterd_join = create_join_clusterd_service(
+            clusterd_image,
+            size,
+            additional_system_parameter_defaults,
+            memory=memory,
+            memory_swap=memory_swap,
+            mem_swappiness=mem_swappiness,
+        )
 
         if tag is not None and not c.try_pull_service_image(mz):
             print(
@@ -276,9 +285,17 @@ def run_one_scenario(
                 memory_swap=memory_swap,
                 mem_swappiness=mem_swappiness,
             )
+            clusterd_join = create_join_clusterd_service(
+                clusterd_image,
+                size,
+                additional_system_parameter_defaults,
+                memory=memory,
+                memory_swap=memory_swap,
+                mem_swappiness=mem_swappiness,
+            )
 
         start_overridden_mz_clusterd_and_cockroach(
-            c, mz, clusterd, instance, balancerd, first_run
+            c, mz, clusterd, clusterd_join, instance, balancerd, first_run
         )
         first_run = False
 
@@ -314,7 +331,11 @@ def run_one_scenario(
             )
 
             executor = Docker(
-                composition=c, seed=common_seed, materialized=mz, clusterd=clusterd
+                composition=c,
+                seed=common_seed,
+                materialized=mz,
+                clusterd=clusterd,
+                clusterd_join=clusterd_join,
             )
             mz_version = MzVersion.parse_mz(c.query_mz_version())
 
@@ -352,8 +373,8 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("cockroach", "materialized", "clusterd", "clusterd_join", "testdrive")
+        c.rm("cockroach", "materialized", "clusterd", "clusterd_join", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -416,12 +437,42 @@ def create_clusterd_service(
     memory: str | None = None,
     memory_swap: str | None = None,
     mem_swappiness: int | None = None,
+    name: str = "clusterd",
+    workers: int = 1,
 ) -> Clusterd:
     return Clusterd(
+        name=name,
         image=clusterd_image,
         memory=memory,
         memory_swap=memory_swap,
         mem_swappiness=mem_swappiness,
+        workers=workers,
+    )
+
+
+def create_join_clusterd_service(
+    clusterd_image: str | None,
+    default_size: int,
+    additional_system_parameter_defaults: dict[str, str] | None,
+    memory: str | None = None,
+    memory_swap: str | None = None,
+    mem_swappiness: int | None = None,
+) -> Clusterd:
+    # Hosts unmanaged replicas for scenarios that want a cluster isolated
+    # from both the `materialized` container and the default cluster's
+    # `clusterd` (e.g. the `DifferentialJoinHydration` family's
+    # `join_cluster`), so any `--this-memory` cap confines the benchmarked
+    # dataflow alone. The worker count must match the `WORKERS` option of
+    # the unmanaged replicas the scenarios create on it.
+    return create_clusterd_service(
+        clusterd_image,
+        default_size,
+        additional_system_parameter_defaults,
+        memory=memory,
+        memory_swap=memory_swap,
+        mem_swappiness=mem_swappiness,
+        name="clusterd_join",
+        workers=16,
     )
 
 
@@ -429,15 +480,17 @@ def start_overridden_mz_clusterd_and_cockroach(
     c: Composition,
     mz: Materialized,
     clusterd: Clusterd,
+    clusterd_join: Clusterd,
     instance: str,
     balancerd: bool,
     first_run: bool,
 ) -> None:
-    with c.override(mz, clusterd):
+    with c.override(mz, clusterd, clusterd_join):
         c.up(
             "cockroach",
             "materialized",
             "clusterd",
+            "clusterd_join",
             *(["balancerd"] if balancerd else []),
         )
         if first_run:

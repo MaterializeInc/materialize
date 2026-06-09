@@ -16,7 +16,7 @@ from textwrap import dedent
 from parameterized import parameterized_class  # type: ignore
 
 import materialize.optbench.sql
-from materialize.feature_benchmark.action import Action, Kgen, TdAction
+from materialize.feature_benchmark.action import Action, Kgen, LambdaAction, TdAction
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
@@ -1000,9 +1000,17 @@ class DifferentialJoinHydration(Dataflow):
     treats it as non-leaf and never executes it directly — pick one of the
     leaf classes via `--root-scenario`.
 
-    Run both leaves under a memory-capped Materialized (`--this-memory=2g`)
-    so the baseline has to swap and the paged-file variant has somewhere
-    predictable to spill.
+    `join_cluster` runs as an unmanaged replica on the dedicated external
+    `clusterd_join` container rather than as a managed replica inside the
+    `materialized` container. With a managed replica, a `--this-memory` cap
+    is shared with environmentd and the persist cache, so swap pressure on
+    the baseline depended on unrelated allocations; the external container
+    confines the cap (and the MEMORY_CLUSTERD measurement) to the join
+    dataflow alone.
+
+    Run both leaves with a memory cap (`--this-memory=2g`) so the baseline
+    has to swap and the paged-file variant has somewhere predictable to
+    spill.
     """
 
     # SCALE=8 → 100M rows per side, ~1.6 GiB per side input. Two sides plus
@@ -1011,6 +1019,14 @@ class DifferentialJoinHydration(Dataflow):
     # baseline. File variant's 16 MiB per-worker + 128 MiB shared budget
     # means almost everything spills under that cap.
     SCALE = 8
+
+    # Must match the `workers` of the `clusterd_join` service in
+    # test/feature-benchmark/mzcompose.py.
+    JOIN_REPLICA_OPTIONS = """STORAGECTL ADDRESSES ['clusterd_join:2100'],
+  STORAGE ADDRESSES ['clusterd_join:2103'],
+  COMPUTECTL ADDRESSES ['clusterd_join:2101'],
+  COMPUTE ADDRESSES ['clusterd_join:2102'],
+  WORKERS 16"""
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
@@ -1022,9 +1038,9 @@ class DifferentialJoinHydration(Dataflow):
 
     def init(self) -> list[Action]:
         # `v1` lives on the default cluster, not `join_cluster`, so the
-        # replication-factor toggle in `benchmark` only tears down `v2`'s
-        # dataflow. Keeps the measurement scoped to the join-arrangement
-        # rebuild we're trying to measure.
+        # replica toggle in `benchmark` only tears down `v2`'s dataflow.
+        # Keeps the measurement scoped to the join-arrangement rebuild we're
+        # trying to measure.
         return [
             self.view_ten(),
             TdAction(f"""
@@ -1033,19 +1049,28 @@ class DifferentialJoinHydration(Dataflow):
 > SELECT COUNT(*) FROM v1
 {self.n()}
 
-> CREATE CLUSTER join_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
+> CREATE CLUSTER join_cluster REPLICAS (r1 (
+  {self.JOIN_REPLICA_OPTIONS}))
 """),
         ]
+
+    def before(self) -> Action:
+        # Restart the external clusterd before each measurement so every
+        # hydration starts from a fresh process, matching the old
+        # managed-cluster behavior where `REPLICATION FACTOR 0` killed the
+        # replica processes: no allocator reuse, leftover swap, or warm
+        # spill files from the previous iteration.
+        return LambdaAction(lambda e: e.RestartClusterdJoin())
 
     def benchmark(self) -> MeasurementSource:
         # Match HydrateIndex's pattern: take the cluster offline *before*
         # defining the object so the dataflow doesn't pre-hydrate. The
-        # `REPLICATION FACTOR 1` flip after `/* A */` is the actual
-        # hydration trigger we want to time.
+        # replica re-creation after `/* A */` is the actual hydration
+        # trigger we want to time.
         return Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2
 
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 0)
+> DROP CLUSTER REPLICA IF EXISTS join_cluster.r1
 
 > CREATE MATERIALIZED VIEW v2
   IN CLUSTER join_cluster
@@ -1054,7 +1079,8 @@ class DifferentialJoinHydration(Dataflow):
 > SELECT 1
   /* A */
 1
-> ALTER CLUSTER join_cluster SET (REPLICATION FACTOR 1)
+> CREATE CLUSTER REPLICA join_cluster.r1 (
+  {self.JOIN_REPLICA_OPTIONS})
 > SET CLUSTER = join_cluster
 > SELECT * FROM v2
   /* B */
