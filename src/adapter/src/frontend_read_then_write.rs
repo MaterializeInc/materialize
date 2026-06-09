@@ -286,9 +286,9 @@ impl PeekClient {
         // since), submitting a write at `chosen_ts >= as_of` would have
         // the group commit bump the oracle to that far-future value,
         // stalling every subsequent write on the `EpochMilliseconds`
-        // timeline until then. By waiting here, a pathological RTW hits
-        // `statement_timeout` and returns without ever touching the
-        // oracle.
+        // timeline until then. So a pathological far-future RTW must park
+        // here without ever touching the oracle. This park is unbounded on
+        // its own; the caller bounds it by `statement_timeout`.
         self.ensure_read_linearized(&timeline, as_of).await?;
 
         let subscribe_handle = self
