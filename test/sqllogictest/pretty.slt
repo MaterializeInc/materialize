@@ -125,7 +125,7 @@ SELECT
     "false",
     "null",
     "array",
-    list,
+    "list",
     map,
     "case",
     "cast",

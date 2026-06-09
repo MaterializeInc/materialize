@@ -672,7 +672,7 @@ Explained Query:
                 Get l5 // { types: "(r_int32, r_bool?)" }
             Get l1 // { types: "(r_int32)" }
   Return // { types: "(r_bool?, r_bool?, r_bool?)" }
-    Project (#2{any}, #4{"all"}, #2{any}) // { types: "(r_bool?, r_bool?, r_bool?)" }
+    Project (#2{"any"}, #4{"all"}, #2{"any"}) // { types: "(r_bool?, r_bool?, r_bool?)" }
       Join on=(#0{col_not_null} = #1{col_not_null} = #3{col_not_null}) type=delta // { types: "(r_int32, r_int32, r_bool?, r_int32, r_bool?)" }
         ArrangeBy keys=[[#0{col_not_null}]] // { types: "(r_int32)" }
           Get l0 // { types: "(r_int32)" }
@@ -852,7 +852,7 @@ Explained Query:
                 Get l3 // { types: "(r_int32?, r_bool?)" }
             Get l2 // { types: "(r_int32?)" }
   Return // { types: "(r_bool, r_bool, r_bool?)" }
-    Project (#2, #5, #7{any}) // { types: "(r_bool, r_bool, r_bool?)" }
+    Project (#2, #5, #7{"any"}) // { types: "(r_bool, r_bool, r_bool?)" }
       Join on=(#0{col_null} = #3{col_null} = #6{col_null} AND #1{col_not_null} = #4{col_not_null}) type=delta // { types: "(r_int32?, r_int32, r_bool, r_int32?, r_int32, r_bool, r_int32?, r_bool?)" }
         ArrangeBy keys=[[], [#0{col_null}], [#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
           ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }

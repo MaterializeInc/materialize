@@ -247,6 +247,9 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && if [ "$RUST_VERSION" = "nightly" ]; then \
+           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+       fi \
     && rm -rf /cargo/registry /cargo/git
 
 # Shims for sanitizers

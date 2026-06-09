@@ -108,6 +108,9 @@ tokio.workspace = true
 
 [features]
 default = []
+# Exposes the in-memory upsert backend and `FuzzUpsertParts` so the fuzz crate
+# can drive the upsert state machine. Not enabled in production builds.
+fuzzing = []
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

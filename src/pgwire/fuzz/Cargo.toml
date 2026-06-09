@@ -1,0 +1,42 @@
+# Fuzz crate for mz-pgwire: drive the frontend-message decoder over random
+# bytes. The decoder sits at the trust boundary between an untrusted SQL
+# client and environmentd, so any panic/SEGV reachable from the wire format
+# is a real availability bug.
+
+[package]
+name = "mz-pgwire-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-pgwire = { path = "..", features = ["fuzz"] }
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[[bin]]
+name = "codec_decode"
+path = "fuzz_targets/codec_decode.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev = "64ca594cc22ed67d072c2d0110455da50539e1cd" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }

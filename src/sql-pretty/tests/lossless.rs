@@ -72,7 +72,10 @@ fn declare_inner_secret_not_redacted() {
 
     // And the inner statement is still printed via the recursive doc printer.
     let pretty = pretty_str_simple("DECLARE c CURSOR FOR SELECT 1", 100).expect("pretty-prints");
-    assert!(pretty.starts_with("DECLARE c CURSOR FOR SELECT"), "{pretty}");
+    assert!(
+        pretty.starts_with("DECLARE c CURSOR FOR SELECT"),
+        "{pretty}"
+    );
 }
 
 #[mz_ore::test]

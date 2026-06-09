@@ -1,0 +1,43 @@
+# Fuzz crate for mz-sql-parser and mz-sql-pretty round-trip properties.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/sql-parser/fuzz
+#     cargo +nightly fuzz run grammar_roundtrip -- -max_total_time=60
+#
+# Both targets generate SQL from the libFuzzer byte stream as grammar choices,
+# so neither needs a seed corpus or dictionary.
+
+[package]
+name = "mz-sql-parser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Establish this crate as its own workspace root so it doesn't try to join the
+# main workspace (libFuzzer requires nightly Rust; the main workspace is on
+# stable).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-sql-parser = { path = ".." }
+mz-sql-pretty = { path = "../../sql-pretty" }
+
+[[bin]]
+name = "parse_expr_roundtrip"
+path = "fuzz_targets/parse_expr_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grammar_roundtrip"
+path = "fuzz_targets/grammar_roundtrip.rs"
+test = false
+doc = false
+bench = false

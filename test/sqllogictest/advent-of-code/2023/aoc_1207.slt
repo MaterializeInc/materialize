@@ -324,7 +324,7 @@ Explained Query:
                 Get l6 // { arity: 2 }
             Get l5 // { arity: 1 }
     cte l8 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l0[#0]K
@@ -341,7 +341,7 @@ Explained Query:
                   Get l5 // { arity: 1 }
     cte l9 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l8 // { arity: 3 }
     cte l10 =
       Distinct project=[#0] // { arity: 1 }
@@ -368,7 +368,7 @@ Explained Query:
                 Get l11 // { arity: 2 }
             Get l10 // { arity: 1 }
     cte l13 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l9[#0]Kenf
@@ -385,7 +385,7 @@ Explained Query:
                   Get l10 // { arity: 1 }
     cte l14 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l13 // { arity: 3 }
     cte l15 =
       Distinct project=[#0] // { arity: 1 }
@@ -414,7 +414,7 @@ Explained Query:
                 Get l17 // { arity: 2 }
             Get l15 // { arity: 1 }
     cte l19 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l14[#0]Kenf
@@ -456,7 +456,7 @@ Explained Query:
                 Get l22 // { arity: 2 }
             Get l20 // { arity: 1 }
     cte l24 =
-      Project (#0..=#2{any}, #4{any}) // { arity: 4 }
+      Project (#0..=#2{"any"}, #4{"any"}) // { arity: 4 }
         Join on=(#0 = #3) type=differential // { arity: 5 }
           implementation
             %1[#0]UK » %0:l19[#0]K
@@ -474,7 +474,7 @@ Explained Query:
     cte l25 =
       Project (#0, #1) // { arity: 2 }
         Filter ((#4) IS NULL OR (#4 = false)) // { arity: 5 }
-          Map ((#2{any} AND #3{any})) // { arity: 5 }
+          Map ((#2{"any"} AND #3{"any"})) // { arity: 5 }
             Get l24 // { arity: 4 }
     cte l26 =
       Distinct project=[#0] // { arity: 1 }
@@ -498,7 +498,7 @@ Explained Query:
                 Get l27 // { arity: 2 }
             Get l26 // { arity: 1 }
     cte l29 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l25[#0]Kenf
@@ -515,7 +515,7 @@ Explained Query:
                   Get l26 // { arity: 1 }
     cte l30 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l29 // { arity: 3 }
     cte l31 =
       Distinct project=[#0] // { arity: 1 }
@@ -542,7 +542,7 @@ Explained Query:
                 Get l32 // { arity: 2 }
             Get l31 // { arity: 1 }
     cte l34 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l30[#0]Kenf
@@ -559,7 +559,7 @@ Explained Query:
                   Get l31 // { arity: 1 }
     cte l35 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l34 // { arity: 3 }
     cte l36 =
       Distinct project=[#0] // { arity: 1 }
@@ -587,27 +587,27 @@ Explained Query:
         Map (translate(#0{hand}, "AKQJT98765432", "ABCDEFGHIJKLM")) // { arity: 4 }
           Union // { arity: 3 }
             Project (#0, #1, #3) // { arity: 3 }
-              Filter #2{any} // { arity: 4 }
+              Filter #2{"any"} // { arity: 4 }
                 Map (1) // { arity: 4 }
                   Get l8 // { arity: 3 }
             Project (#0, #1, #3) // { arity: 3 }
-              Filter #2{any} // { arity: 4 }
+              Filter #2{"any"} // { arity: 4 }
                 Map (2) // { arity: 4 }
                   Get l13 // { arity: 3 }
             Project (#0, #1, #4) // { arity: 3 }
-              Filter #2{any} AND #3{any} // { arity: 5 }
+              Filter #2{"any"} AND #3{"any"} // { arity: 5 }
                 Map (3) // { arity: 5 }
                   Get l24 // { arity: 4 }
             Project (#0, #1, #3) // { arity: 3 }
-              Filter #2{any} // { arity: 4 }
+              Filter #2{"any"} // { arity: 4 }
                 Map (4) // { arity: 4 }
                   Get l29 // { arity: 3 }
             Project (#0, #1, #3) // { arity: 3 }
-              Filter #2{any} // { arity: 4 }
+              Filter #2{"any"} // { arity: 4 }
                 Map (5) // { arity: 4 }
                   Get l34 // { arity: 3 }
             Project (#0, #1, #4) // { arity: 3 }
-              Map (case when #3{any} then 6 else 7 end) // { arity: 5 }
+              Map (case when #3{"any"} then 6 else 7 end) // { arity: 5 }
                 Join on=(#0 = #2) type=differential // { arity: 4 }
                   implementation
                     %1[#0]UK » %0:l35[#0]Kenf
@@ -722,7 +722,7 @@ Explained Query:
                 Get l47 // { arity: 2 }
             Get l46 // { arity: 1 }
     cte l49 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l43[#1]K
@@ -739,7 +739,7 @@ Explained Query:
                   Get l46 // { arity: 1 }
     cte l50 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l49 // { arity: 3 }
     cte l51 =
       Distinct project=[#0] // { arity: 1 }
@@ -766,7 +766,7 @@ Explained Query:
                 Get l52 // { arity: 2 }
             Get l51 // { arity: 1 }
     cte l54 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l50[#1]Kenf
@@ -783,7 +783,7 @@ Explained Query:
                   Get l51 // { arity: 1 }
     cte l55 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l54 // { arity: 3 }
     cte l56 =
       Distinct project=[#0] // { arity: 1 }
@@ -812,7 +812,7 @@ Explained Query:
                 Get l58 // { arity: 2 }
             Get l56 // { arity: 1 }
     cte l60 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l55[#1]Kenf
@@ -854,7 +854,7 @@ Explained Query:
                 Get l63 // { arity: 2 }
             Get l61 // { arity: 1 }
     cte l65 =
-      Project (#0..=#2{any}, #4{any}) // { arity: 4 }
+      Project (#0..=#2{"any"}, #4{"any"}) // { arity: 4 }
         Join on=(#1 = #3) type=differential // { arity: 5 }
           implementation
             %1[#0]UK » %0:l60[#1]K
@@ -872,7 +872,7 @@ Explained Query:
     cte l66 =
       Project (#0, #1) // { arity: 2 }
         Filter ((#4) IS NULL OR (#4 = false)) // { arity: 5 }
-          Map ((#2{any} AND #3{any})) // { arity: 5 }
+          Map ((#2{"any"} AND #3{"any"})) // { arity: 5 }
             Get l65 // { arity: 4 }
     cte l67 =
       Distinct project=[#0] // { arity: 1 }
@@ -896,7 +896,7 @@ Explained Query:
                 Get l68 // { arity: 2 }
             Get l67 // { arity: 1 }
     cte l70 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l66[#1]Kenf
@@ -913,7 +913,7 @@ Explained Query:
                   Get l67 // { arity: 1 }
     cte l71 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l70 // { arity: 3 }
     cte l72 =
       Distinct project=[#0] // { arity: 1 }
@@ -940,7 +940,7 @@ Explained Query:
                 Get l73 // { arity: 2 }
             Get l72 // { arity: 1 }
     cte l75 =
-      Project (#0, #1, #3{any}) // { arity: 3 }
+      Project (#0, #1, #3{"any"}) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
           implementation
             %1[#0]UK » %0:l71[#1]Kenf
@@ -957,7 +957,7 @@ Explained Query:
                   Get l72 // { arity: 1 }
     cte l76 =
       Project (#0, #1) // { arity: 2 }
-        Filter ((#2{any}) IS NULL OR (#2{any} = false)) // { arity: 3 }
+        Filter ((#2{"any"}) IS NULL OR (#2{"any"} = false)) // { arity: 3 }
           Get l75 // { arity: 3 }
     cte l77 =
       Distinct project=[#0] // { arity: 1 }
@@ -993,27 +993,27 @@ Explained Query:
               Map (translate(#0{hand}, "AKQT98765432J", "ABCDEFGHIJKLM")) // { arity: 3 }
                 Union // { arity: 2 }
                   Project (#0, #3) // { arity: 2 }
-                    Filter #2{any} // { arity: 4 }
+                    Filter #2{"any"} // { arity: 4 }
                       Map (1) // { arity: 4 }
                         Get l49 // { arity: 3 }
                   Project (#0, #3) // { arity: 2 }
-                    Filter #2{any} // { arity: 4 }
+                    Filter #2{"any"} // { arity: 4 }
                       Map (2) // { arity: 4 }
                         Get l54 // { arity: 3 }
                   Project (#0, #4) // { arity: 2 }
-                    Filter #2{any} AND #3{any} // { arity: 5 }
+                    Filter #2{"any"} AND #3{"any"} // { arity: 5 }
                       Map (3) // { arity: 5 }
                         Get l65 // { arity: 4 }
                   Project (#0, #3) // { arity: 2 }
-                    Filter #2{any} // { arity: 4 }
+                    Filter #2{"any"} // { arity: 4 }
                       Map (4) // { arity: 4 }
                         Get l70 // { arity: 3 }
                   Project (#0, #3) // { arity: 2 }
-                    Filter #2{any} // { arity: 4 }
+                    Filter #2{"any"} // { arity: 4 }
                       Map (5) // { arity: 4 }
                         Get l75 // { arity: 3 }
                   Project (#0, #4) // { arity: 2 }
-                    Map (case when #3{any} then 6 else 7 end) // { arity: 5 }
+                    Map (case when #3{"any"} then 6 else 7 end) // { arity: 5 }
                       Join on=(#1 = #2) type=differential // { arity: 4 }
                         implementation
                           %1[#0]UK » %0:l76[#1]Kenf

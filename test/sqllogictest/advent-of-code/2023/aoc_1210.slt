@@ -550,7 +550,7 @@ Explained Query:
                 Map (false) // { arity: 4 }
                   Get l0 // { arity: 3 }
             Project (#2, #3, #6) // { arity: 3 }
-              Map (case when #5{any} then NOT(#0{encl}) else #0{encl} end) // { arity: 7 }
+              Map (case when #5{"any"} then NOT(#0{encl}) else #0{encl} end) // { arity: 7 }
                 Join on=(#1 = #4) type=differential // { arity: 6 }
                   implementation
                     %0:l11[#1]K » %1[#0]K

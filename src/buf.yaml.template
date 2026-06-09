@@ -24,3 +24,9 @@ build:
     # external code
     - testdrive/ci/protobuf-bin
     - testdrive/ci/protobuf-include
+    # Fuzz crates have their own `[workspace]` (required for nightly +
+    # libFuzzer) so each maintains its own `target/`. Build-script deps
+    # like `protobuf-native` extract `.proto` files into that tree —
+    # don't scan it. This list is auto-generated from `src/*/fuzz` by
+    # generate-buf-config.py, so new fuzz crates are covered automatically.
+    ${fuzz-target-excludes}

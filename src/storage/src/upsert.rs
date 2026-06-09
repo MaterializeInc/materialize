@@ -55,11 +55,14 @@ use types::{
     upsert_bincode_opts,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 pub mod memory;
 pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
-pub(crate) mod types;
+// `pub` (rather than `pub(crate)`) only so the fuzz crate can reach the upsert
+// state machine; not a stable public API.
+#[doc(hidden)]
+pub mod types;
 
 pub type UpsertValue = Result<Row, Box<UpsertError>>;
 
@@ -967,6 +970,76 @@ async fn drain_staged_input<S, T, FromTime, E>(
                 .await;
         }
     }
+}
+
+/// A no-op-ish error emitter for the fuzzing hook. With the in-memory backend
+/// and the well-formed inputs the fuzzer builds, `multi_get`/`multi_put` never
+/// error, so reaching this is itself a finding.
+#[cfg(any(test, feature = "fuzzing"))]
+struct PanicErrorEmitter;
+
+#[cfg(any(test, feature = "fuzzing"))]
+#[async_trait::async_trait(?Send)]
+impl<T> UpsertErrorEmitter<T> for PanicErrorEmitter {
+    async fn emit(&mut self, context: String, e: anyhow::Error) {
+        panic!("unexpected upsert state error during fuzzing: {context}: {e}");
+    }
+}
+
+/// Fuzzing hook: run a single `drain_staged_input` over `commands` (each a
+/// `(timestamp, key, order, value)`, where `value == None` is a delete) against
+/// a fresh empty in-memory state, draining everything strictly below
+/// `drain_to`. Returns the emitted output updates and the final finalized value
+/// of each key in `all_keys`. Exposed only for fuzzing — not a stable public
+/// API.
+#[cfg(any(test, feature = "fuzzing"))]
+pub async fn fuzz_drain_staged_input(
+    parts: &types::FuzzUpsertParts,
+    source_config: &crate::source::SourceExportCreationConfig,
+    commands: Vec<(u64, UpsertKey, u64, Option<UpsertValue>)>,
+    drain_to: u64,
+    all_keys: &[UpsertKey],
+) -> (Vec<(UpsertValue, u64, Diff)>, Vec<Option<UpsertValue>>) {
+    let mut state = parts.state();
+    let mut stash: Vec<(u64, UpsertKey, Reverse<u64>, Option<UpsertValue>)> = commands
+        .into_iter()
+        .map(|(ts, key, order, value)| (ts, key, Reverse(order), value))
+        .collect();
+    let mut commands_state = indexmap::IndexMap::new();
+    let mut output = Vec::new();
+    let mut multi_get_scratch = Vec::new();
+    let mut emitter = PanicErrorEmitter;
+
+    drain_staged_input(
+        &mut stash,
+        &mut commands_state,
+        &mut output,
+        &mut multi_get_scratch,
+        DrainStyle::ToUpper(&Antichain::from_elem(drain_to)),
+        &mut emitter,
+        &mut state,
+        source_config,
+    )
+    .await;
+
+    let bincode_opts = types::upsert_bincode_opts();
+    let mut results = vec![types::UpsertValueAndSize::default(); all_keys.len()];
+    state
+        .multi_get(all_keys.iter().copied(), results.iter_mut())
+        .await
+        .expect("multi_get in fuzz hook should not error");
+    let final_state = results
+        .into_iter()
+        .map(|r| match r.value {
+            None => None,
+            Some(mut sv) => {
+                sv.ensure_decoded(bincode_opts, GlobalId::User(0), None);
+                sv.into_decoded().finalized
+            }
+        })
+        .collect();
+
+    (output, final_state)
 }
 
 // Created a struct to hold the configs for upserts.
