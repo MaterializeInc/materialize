@@ -397,7 +397,7 @@ mysql_common = { version = "0.35.5", default-features = false, features = ["chro
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
-native-tls = { version = "=0.2.15", features = ["alpn"] }
+native-tls = { version = "=0.2.18", features = ["alpn"] }
 nix = { version = "0.31.3", features = ["fs", "signal"] }
 num = "0.4.3"
 num-traits = "0.2.15"
@@ -438,7 +438,7 @@ proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = "0.14.3"
-prost-reflect = { version = "0.16.3", features = ["serde"] }
+prost-reflect = { version = "0.16.4", features = ["serde"] }
 prost-types = "0.14.3"
 protobuf-native = "0.3.3"
 protobuf-src = "2.1.1"
@@ -458,7 +458,7 @@ reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
-rpassword = "7.5.1"
+rpassword = "7.5.4"
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
@@ -483,7 +483,7 @@ similar = "2.7.0"
 similar-asserts = "2.0"
 smallvec = "1.15.1"
 snap = "1.1.1"
-socket2 = "0.6.3"
+socket2 = "0.6.4"
 ssh-key = "0.6.7"
 stacker = "0.1.24"
 static_assertions = "1.1"
