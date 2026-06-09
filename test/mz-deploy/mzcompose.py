@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
@@ -85,7 +86,18 @@ def run_mz_deploy(
     set_default_profile: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     create_profiles(c)
-    binary = MZ_ROOT / "target" / "debug" / "mz-deploy"
+    # Honor CARGO_TARGET_DIR (the CI builder sets it to /mnt/build) so we look
+    # wherever `cargo build` actually wrote the binary; fall back to the
+    # default workspace target dir for local runs. A relative value resolves
+    # against MZ_ROOT, matching the cwd cargo is invoked from.
+    cargo_target = os.environ.get("CARGO_TARGET_DIR")
+    if cargo_target:
+        target_dir = Path(cargo_target)
+        if not target_dir.is_absolute():
+            target_dir = MZ_ROOT / target_dir
+    else:
+        target_dir = MZ_ROOT / "target"
+    binary = target_dir / "debug" / "mz-deploy"
     project_dir = PROJECTS_DIR / project_name
 
     # Seed the per-project default-profile pointer (equivalent of
