@@ -694,6 +694,16 @@ impl FastPathPlan {
 
 impl crate::coord::Coordinator {
     /// Implements a peek plan produced by `create_plan` above.
+    ///
+    /// Ownership of `ctx_extra` (the statement-logging guard): on success its
+    /// contents are taken and end-of-execution logging is handed off — retired
+    /// immediately for a constant peek, or moved into `pending_peeks` for
+    /// `handle_peek_notification` to retire on a streaming peek. On an early error
+    /// return (e.g. a concurrent dependency drop before the peek is registered) the
+    /// contents are left intact, so the caller must take ownership: `retire` it if
+    /// the caller is the sole end-logger, or `defuse` it if something else logs the
+    /// end on error (as the frontend does via `implement_slow_path_peek`). Otherwise
+    /// the guard's `Drop` emits a spurious `Aborted`, double-ending the statement.
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
@@ -1378,16 +1388,29 @@ impl crate::coord::Coordinator {
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
-        self.implement_peek_plan(
-            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
-            planned_peek,
-            finishing,
-            compute_instance,
-            target_replica,
-            max_result_size,
-            max_query_result_size,
-        )
-        .await
+        //
+        // `implement_peek_plan` leaves the guard's contents intact on an error
+        // return (see its doc comment). Defuse on error so the frontend stays the
+        // sole end-logger: letting the guard's `Drop` also emit `Aborted` would
+        // double-end the `Errored` and panic in `end_statement_execution`. Matches
+        // the watch-set invariant noted above.
+        let mut ctx_guard =
+            ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
+        let result = self
+            .implement_peek_plan(
+                &mut ctx_guard,
+                planned_peek,
+                finishing,
+                compute_instance,
+                target_replica,
+                max_result_size,
+                max_query_result_size,
+            )
+            .await;
+        if result.is_err() {
+            let _ = ctx_guard.defuse();
+        }
+        result
     }
 
     /// Implements a `COPY TO` command by installing peek watch sets,
