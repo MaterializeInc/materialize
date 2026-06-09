@@ -32,7 +32,8 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER,
+    ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -470,7 +471,14 @@ async fn handle_mcp_request(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
+    // Per-endpoint feature flag for the `query` tool. Agent and developer have
+    // independent rollouts; collapsing to one bool keeps the downstream
+    // signatures unchanged since each handler invocation is already bound to a
+    // single endpoint.
+    let query_tool_enabled = match endpoint_type {
+        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
+        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
+    };
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
@@ -671,9 +679,10 @@ fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
             "cluster has no replicas and the read cannot make progress until one is added.",
         ).to_string()),
         McpEndpointType::Developer => Some(concat!(
-            "You are connected to the Materialize developer MCP server. ",
-            "You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) ",
-            "for troubleshooting and observability.\n\n",
+            "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n",
+            "Tools:\n",
+            "- query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n",
+            "- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly. The tool may be hidden if the operator has disabled it.\n\n",
             "IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n",
             "- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n",
             "- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n",
@@ -789,7 +798,7 @@ async fn handle_tools_list(
             tools
         }
         McpEndpointType::Developer => {
-            vec![ToolDefinition {
+            let mut tools = vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
                 title: Some("Query System Catalog".to_string()),
                 description: concat!(
@@ -808,7 +817,32 @@ async fn handle_tools_list(
                     "required": ["sql_query"]
                 }),
                 annotations: Some(READ_ONLY_ANNOTATIONS),
-            }]
+            }];
+            if query_tool_enabled {
+                tools.push(ToolDefinition {
+                    name: "query".to_string(),
+                    title: Some("Query".to_string()),
+                    description: format!(
+                        "Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. {size_hint}",
+                    ),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "cluster": {
+                                "type": "string",
+                                "description": "Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."
+                            },
+                            "sql_query": {
+                                "type": "string",
+                                "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."
+                            }
+                        },
+                        "required": ["cluster", "sql_query"]
+                    }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
+                });
+            }
+            tools
         }
     };
 
@@ -853,6 +887,14 @@ async fn handle_tools_call(
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
+        }
+        (McpEndpointType::Developer, ToolsCallParams::Query(_)) if !query_tool_enabled => {
+            Err(McpRequestError::ToolNotFound(
+                "query tool is not available. Use query_system_catalog instead.".to_string(),
+            ))
+        }
+        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
+            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -1771,25 +1813,41 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_developer_unaffected_by_query_flag() {
-        // Developer endpoint should not be affected by the query tool flag
-        for flag in [true, false] {
-            let result = handle_tools_list(McpEndpointType::Developer, flag, 1_000_000)
-                .await
-                .unwrap();
-            let McpResult::ToolsList(list) = result else {
-                panic!("Expected ToolsList result");
-            };
-            let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
-            assert!(
-                tool_names.contains(&"query_system_catalog"),
-                "query_system_catalog should always be present on developer"
-            );
-            assert!(
-                !tool_names.contains(&"query"),
-                "query tool should never appear on developer"
-            );
-        }
+    async fn test_tools_list_developer_query_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Developer, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"query_system_catalog"),
+            "query_system_catalog should always be present on developer"
+        );
+        assert!(
+            !tool_names.contains(&"query"),
+            "query tool should be hidden when disabled"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_developer_query_tool_enabled() {
+        let result = handle_tools_list(McpEndpointType::Developer, true, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"query_system_catalog"),
+            "query_system_catalog should always be present on developer"
+        );
+        assert!(
+            tool_names.contains(&"query"),
+            "query tool should be present on developer when enabled"
+        );
     }
 
     // ── Response size cap tests ────────────────────────────────────────

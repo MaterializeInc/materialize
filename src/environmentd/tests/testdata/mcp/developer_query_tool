@@ -1,0 +1,136 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Tools List - query tool enabled
+# =============================================================================
+
+# tools/list should include both query_system_catalog and query.
+mcp-developer
+{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query","description":"Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# =============================================================================
+# query - valid SELECT/SHOW/EXPLAIN
+# =============================================================================
+
+# Simple SELECT should work.
+mcp-developer
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1 AS val"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"1\"\n  ]\n]"}],"isError":false}}
+
+# SELECT against a system catalog table should work too: the developer query
+# tool is intentionally NOT restricted to mz_*.
+mcp-developer
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+
+# SHOW statement should work.
+mcp-developer
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SHOW DATABASES"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\",\n    \"\"\n  ]\n]"}],"isError":false}}
+
+# EXPLAIN should work — this is the motivating use case for the dev query tool
+# (EXPLAIN ANALYZE needs a cluster and so cannot use query_system_catalog).
+mcp-developer
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: mz_catalog_server\\n\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
+# query - writes and DDL rejected
+# =============================================================================
+
+# CREATE TABLE rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"CREATE TABLE evil (id int)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# DROP TABLE rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"DROP TABLE IF EXISTS evil"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# INSERT rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"INSERT INTO evil VALUES (1)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":22,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# UPDATE rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"UPDATE evil SET id = 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# DELETE rejected.
+mcp-developer
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"DELETE FROM evil"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query - multi-statement rejected
+# =============================================================================
+
+mcp-developer
+{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1; SELECT 2"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Query validation failed: Only one query allowed at a time. Found 2 statements.","data":{"error_type":"ValidationError"}}}
+
+# SELECT followed by DDL: still caught by multi-statement validation.
+mcp-developer
+{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1; DROP TABLE evil"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":31,"error":{"code":-32602,"message":"Query validation failed: Only one query allowed at a time. Found 2 statements.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query - empty / whitespace queries
+# =============================================================================
+
+mcp-developer
+{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":""}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":40,"error":{"code":-32602,"message":"Query validation failed: Empty query","data":{"error_type":"ValidationError"}}}
+
+mcp-developer
+{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"   "}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":41,"error":{"code":-32602,"message":"Query validation failed: Empty query","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog stays available
+# =============================================================================
+
+# Adding the query tool must not break query_system_catalog.
+mcp-developer
+{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":50,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}

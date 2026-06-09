@@ -5135,13 +5135,26 @@ fn test_mcp_agent_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
 }
 
-/// Tests the MCP developer endpoint.
+/// Tests the MCP developer endpoint with the query tool explicitly disabled.
 #[mz_ore::test]
 fn test_mcp_developer() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
-        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_developer_query_tool".to_string(),
+            "false".to_string(),
+        );
     run_mcp_datadriven("tests/testdata/mcp/developer", harness);
+}
+
+/// Tests the MCP developer endpoint with the query tool enabled (default behavior).
+#[mz_ore::test]
+fn test_mcp_developer_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer_query_tool", harness);
 }
 
 /// Tests the MCP developer endpoint when disabled (503).
