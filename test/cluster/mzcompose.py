@@ -4304,10 +4304,10 @@ def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
             cur.execute("SELECT 1")
             assert cur.fetchone() == (1,)
 
-        # All the raced statements must have been ended exactly once; a
-        # duplicate end is dropped at the sink (so environmentd survives either
-        # way), but it means end-of-execution ownership was held by two parties
-        # at once and the handoff protocol regressed.
+        # All the raced statements must have been ended exactly once. A
+        # duplicate end is dropped at the sink, so environmentd survives it,
+        # but it means end-of-execution ownership was held by two parties at
+        # once and the handoff protocol regressed.
         logs = c.invoke("logs", "materialized", capture=True)
         assert (
             "duplicate end_statement_execution" not in logs.stdout
@@ -4424,8 +4424,8 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
 
         # The race must have been single-ended: registration handed
         # end-of-execution ownership to the coordinator, whose teardown logged
-        # the only end. A duplicate end is dropped at the sink (so environmentd
-        # survives either way), but it means the ownership handoff regressed.
+        # the only end. A duplicate end is dropped at the sink, so environmentd
+        # survives it, but it means the ownership handoff regressed.
         logs = c.invoke("logs", "materialized", capture=True)
         assert (
             "duplicate end_statement_execution" not in logs.stdout

@@ -467,7 +467,7 @@ impl Coordinator {
                         .await;
                     // On success the guard's contents moved into the
                     // `Subscribing` response. On error the frontend logs the
-                    // error end, so defuse rather than letting the guard's
+                    // error end, so we defuse rather than let the guard's
                     // `Drop` emit a spurious `Aborted`.
                     if result.is_err() {
                         let _ = ctx_extra.defuse();

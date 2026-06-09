@@ -111,10 +111,10 @@ the end of that statement. Ownership is linear and handoffs are one-way:
 - Handing a statement to the coordinator transfers ownership *only on
   success*, at the dispatch site:
   - Fast-path peek: when `RegisterFrontendPeek` returns `Ok`, the
-    coordinator's `pending_peeks` entry owns the end --- including when the
-    subsequent `client.peek()` fails to issue (`UnregisterFrontendPeek`
-    carries the error reason; the coordinator logs it, unless a concurrent
-    teardown already retired the peek, making it a no-op).
+    coordinator's `pending_peeks` entry owns the end. That holds even when
+    the subsequent `client.peek()` fails to issue: `UnregisterFrontendPeek`
+    carries the error reason, and the coordinator logs it unless a concurrent
+    teardown already retired the peek.
   - Slow-path peek, subscribe: when the command returns `Ok`. On `Err` the
     coordinator defuses its own guard and logs nothing; the frontend still
     owns the end and logs the error.
