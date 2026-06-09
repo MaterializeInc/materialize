@@ -254,6 +254,15 @@ pub(crate) async fn handle_protected_resource_metadata(
     Extension(metrics): Extension<OauthMetadataMetrics>,
     req: Request,
 ) -> Response {
+    // Early-return for listeners that don't advertise OAuth, before we touch
+    // request headers. Keeps the response 404 even when `Host` is malformed,
+    // so probes can't distinguish "Disabled listener" from "non-existent
+    // listener" by the status code.
+    if !config.discovery.is_enabled() {
+        metrics.inc(MetricStatus::Disabled);
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let Some(host) = resolve_host(&req, config.http_host_name.as_deref()) else {
         warn!(
             "oauth-protected-resource: no http_host_name configured and request has no Host header"
@@ -264,13 +273,7 @@ pub(crate) async fn handle_protected_resource_metadata(
     let resource = format!("{PUBLISHED_SCHEME}://{host}/api/mcp");
 
     let issuer = match &config.discovery {
-        McpOAuthDiscovery::Disabled => {
-            // Listener validates no OAuth bearer token (None/Password/Sasl,
-            // or Frontegg without an issuer URL), so there is no
-            // authorization flow to advertise.
-            metrics.inc(MetricStatus::Disabled);
-            return StatusCode::NOT_FOUND.into_response();
-        }
+        McpOAuthDiscovery::Disabled => unreachable!("handled above"),
         McpOAuthDiscovery::Frontegg { issuer } => {
             // Validated once at startup in `for_authenticator`; trusted here.
             issuer.clone()
