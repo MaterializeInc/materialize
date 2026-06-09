@@ -15,6 +15,7 @@ bench = false
 
 [dependencies]
 anyhow.workspace = true
+antithesis_sdk.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 aws-credential-types.workspace = true

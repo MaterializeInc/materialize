@@ -267,6 +267,7 @@ ahash = { version = "0.8.12", default-features = false }
 aho-corasick = "1.1.4"
 allocation-counter = "0"
 anyhow = "1.0.102"
+antithesis_sdk = "0.2.8"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
 arrow = { version = "57", default-features = false }

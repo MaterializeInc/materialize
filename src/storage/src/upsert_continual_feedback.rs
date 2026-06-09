@@ -14,6 +14,7 @@ use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use antithesis_sdk::{assert_always, assert_unreachable};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
 use indexmap::map::Entry;
@@ -23,6 +24,7 @@ use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use serde_json::json;
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
@@ -623,6 +625,11 @@ fn stage_input<T, FromTime>(
     }
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert_always!(
+            diff.is_positive(),
+            "upsert: input diff positive (cf v1)",
+            &json!({"diff": diff.into_inner()})
+        );
         assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
@@ -797,6 +804,10 @@ where
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
             command_state
         } else {
+            assert_unreachable!(
+                "upsert: key missing from commands_state (cf v1)",
+                &json!({"source_id": source_config.id.to_string()})
+            );
             panic!("key missing from commands_state");
         };
 

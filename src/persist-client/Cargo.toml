@@ -28,6 +28,7 @@ name = "benches"
 harness = false
 
 [dependencies]
+antithesis_sdk.workspace = true
 anyhow.workspace = true
 arrayvec.workspace = true
 arrow.workspace = true
