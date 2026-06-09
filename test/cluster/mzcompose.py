@@ -4293,6 +4293,135 @@ def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
             assert cur.fetchone() == (1,)
 
 
+def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
+    """Race registered *slow-path* peeks against DROP/CREATE of their target
+    cluster; environmentd must not panic with a statement-logging begin/end
+    mismatch in `end_statement_execution`.
+
+    Unlike `workflow_test_drop_cluster_during_peeks`, which runs `SELECT 1` (a
+    *constant* fast path that is handled inline and never registered with the
+    coordinator), this reads a real table with no usable index, so the optimizer
+    produces a `standard` slow-path dataflow peek (`ExecuteSlowPathPeek`) that
+    registers a pending peek with the coordinator. When a concurrent
+    `DROP CLUSTER` makes the peek fail, `implement_peek_plan` returns an error
+    before taking ownership of its `ExecuteContextExtra`, so the throwaway
+    `ExecuteContextGuard` auto-emits an `Aborted` end (the coordinator's end of
+    the statement) while the frontend *also* ends it via `log_ended_execution`.
+    That double `end_statement_execution` panics with "matched
+    `begin_statement_execution` and `end_statement_execution` invocations". The
+    fix defuses the guard on error.
+
+    The narrow fast-path variant of this race (a `PeekExisting` peek retired by
+    the teardown in the window between `RegisterFrontendPeek` and `client.peek()`)
+    is too timing-sensitive to hit by brute force; it is covered deterministically
+    by `workflow_test_drop_cluster_during_registered_peeks_fast_path`.
+
+    The race window is narrow, so we hammer several clusters in parallel — each
+    churned by its own thread, to get the DROP rate past the CREATE-CLUSTER
+    provisioning bottleneck — with many peekers each.
+    """
+
+    num_clusters = 4
+    peekers_per_cluster = 8
+    duration_s = 60
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        for i in range(num_clusters):
+            c.sql(f"CREATE CLUSTER victim{i} SIZE 'scale=1,workers=1'")
+
+        stop = [False]
+
+        def make_peek_loop(cluster: str) -> Callable[[], None]:
+            def peek_loop() -> None:
+                while not stop[0]:
+                    try:
+                        with c.sql_cursor() as cur:
+                            cur.execute("SET auto_route_catalog_queries = false")
+                            # `.encode()`: psycopg types `execute`'s query as
+                            # `LiteralString`; an f-string with a runtime value is
+                            # a plain `str`, and passing `bytes` sidesteps that.
+                            cur.execute(f"SET cluster = {cluster}".encode())
+                            while not stop[0]:
+                                # A bare table scan with no usable index: a
+                                # registered `standard` slow-path peek (not an
+                                # inlined constant), dispatched on cluster
+                                # `{cluster}`.
+                                cur.execute("SELECT * FROM t")
+                                cur.fetchall()
+                    except Exception:
+                        # The target cluster vanishing out from under us is the
+                        # whole point; once environmentd is down `c.sql_cursor()`
+                        # raises a `UIError` rather than a `DatabaseError`, so
+                        # catch broadly (these are chaos threads — the real
+                        # signal is whether environmentd survived, asserted below).
+                        time.sleep(0.05)
+
+            return peek_loop
+
+        def make_churn_loop(cluster: str) -> Callable[[], None]:
+            def churn_loop() -> None:
+                while not stop[0]:
+                    try:
+                        with c.sql_cursor() as cur:
+                            cur.execute(
+                                f"DROP CLUSTER IF EXISTS {cluster} CASCADE".encode()
+                            )
+                            cur.execute(
+                                f"CREATE CLUSTER {cluster} SIZE 'scale=1,workers=1'".encode()
+                            )
+                    except Exception:
+                        # The target cluster vanishing out from under us is the
+                        # whole point; once environmentd is down `c.sql_cursor()`
+                        # raises a `UIError` rather than a `DatabaseError`, so
+                        # catch broadly (these are chaos threads — the real
+                        # signal is whether environmentd survived, asserted below).
+                        time.sleep(0.05)
+
+            return churn_loop
+
+        threads = []
+        for i in range(num_clusters):
+            cluster = f"victim{i}"
+            threads.append(
+                PropagatingThread(target=make_churn_loop(cluster), name=f"churn-{i}")
+            )
+            for j in range(peekers_per_cluster):
+                threads.append(
+                    PropagatingThread(
+                        target=make_peek_loop(cluster), name=f"peek-{i}-{j}"
+                    )
+                )
+        for t in threads:
+            t.start()
+
+        try:
+            time.sleep(duration_s)
+        finally:
+            stop[0] = True
+            for t in threads:
+                t.join(timeout=30)
+
+        # The whole point: if the double-end bug is present, the coordinator
+        # thread panics during the race, which aborts the entire environmentd
+        # process (src/ore/src/panic.rs). With no restart policy the container
+        # then stays down, so this fresh connection raises. (An unrelated clusterd
+        # crash propagates to environmentd too, and is also worth failing on.)
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
