@@ -31,6 +31,8 @@ _shtab_scratch_defaults_added=0
 
 _shtab_scratch_claude_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
+  "--instance-type[Override the EC2 instance type. The AMI is derived from its architecture. May be used without a machine config.]:instance_type:"
+  "--size-gb[Override the root volume size in GiB.]:size_gb:"
   "--max-age-days[Maximum age for scratch instance in days. Defaults to 1.5]:max_age_days:"
   ":Machine config name from misc\/scratch (e.g. dev-box).:"
 )
@@ -56,6 +58,8 @@ _shtab_scratch_create_options=(
   "--output-format[]:output_format:(table csv)"
   "--git-rev[Git revision of \`materialize\` codebase to push to scratch instance. Defaults to \`HEAD\`]:git_rev:"
   "--ssh[ssh into the machine after the launch script is run. Only works if a single instance was started]"
+  "--instance-type[Override the EC2 instance type. The AMI is derived from its architecture. May be used without a machine config.]:instance_type:"
+  "--size-gb[Override the root volume size in GiB.]:size_gb:"
   "--max-age-days[Maximum age for scratch instance in days. Defaults to 1.5]:max_age_days:"
   ":Use a config from \{machine\}.json in \`misc\/scratch\`. Hint\: \`dev-box\` is a good starter\!:"
 )
@@ -85,6 +89,8 @@ _shtab_scratch_forward_defaults_added=0
 
 _shtab_scratch_go_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
+  "--instance-type[Override the EC2 instance type. The AMI is derived from its architecture. May be used without a machine config.]:instance_type:"
+  "--size-gb[Override the root volume size in GiB.]:size_gb:"
   "--max-age-days[Maximum age for scratch instance in days. Defaults to 1.5]:max_age_days:"
   ":Machine config name from misc\/scratch (e.g. dev-box). Used only when creating a new instance.:"
 )

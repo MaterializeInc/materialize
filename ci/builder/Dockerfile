@@ -172,7 +172,7 @@ COPY nodesource.asc .
 
 RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
@@ -496,7 +496,7 @@ COPY nodesource.asc .
 
 RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
