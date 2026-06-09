@@ -114,7 +114,7 @@ mod plan_tests {
     /// Overlay content replaces what's on disk: a project whose disk SQL would
     /// fail to parse compiles cleanly when an overlay provides valid SQL for
     /// the same file.
-    #[test]
+    #[mz_ore::test]
     fn plan_sync_uses_overlay_content() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -158,7 +158,7 @@ mod plan_tests {
     /// writes the canonical database name in their SQL and the suffix is
     /// applied during assembly. The compiled statement and its ObjectId both
     /// carry the suffixed database name.
-    #[test]
+    #[mz_ore::test]
     fn plan_sync_with_profile_suffix_compiles_unsuffixed_qualified_name() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("project.toml"), "").unwrap();
@@ -194,7 +194,7 @@ mod plan_tests {
     /// Cross-database references inside a view body that target another
     /// project-owned database get rewritten to the suffixed form alongside the
     /// owning database, so the resulting SQL is internally consistent.
-    #[test]
+    #[mz_ore::test]
     fn plan_sync_with_profile_suffix_rewrites_cross_database_dependencies() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("project.toml"), "").unwrap();

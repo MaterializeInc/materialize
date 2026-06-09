@@ -280,7 +280,7 @@ mod tests {
         TempDir::new().unwrap()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_no_directory() {
         let dir = create_test_dir();
         let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
@@ -290,7 +290,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_basic() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(result[0].comments.len(), 1);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_create_only() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -329,7 +329,7 @@ mod tests {
         assert!(result[0].comments.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_name_mismatch() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -344,7 +344,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_missing_create() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -359,7 +359,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_unsupported_statement() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -379,7 +379,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_alter_target_mismatch() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -399,7 +399,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_grant_target_mismatch() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -419,7 +419,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_comment_target_mismatch() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");
@@ -439,7 +439,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_roles_multiple_files() {
         let dir = create_test_dir();
         let roles_dir = dir.path().join("roles");

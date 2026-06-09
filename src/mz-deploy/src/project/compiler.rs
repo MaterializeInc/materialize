@@ -173,7 +173,7 @@ struct VariantDescriptor {
 ///
 /// Carries the fully validated [`compiled::DatabaseObject`] alongside the
 /// database and schema names needed to slot it into the assembled project.
-/// Produced by both cache hits (via [`CachedTypedObjectArtifact::into_compiled_object`])
+/// Produced by both cache hits (via `CachedTypedObjectArtifact::into_compiled_object`)
 /// and fresh compilation (via [`compile_object_uncached`]).
 #[derive(Debug, Clone)]
 struct CachedTypedObject {

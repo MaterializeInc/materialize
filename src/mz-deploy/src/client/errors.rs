@@ -533,7 +533,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    #[test]
+    #[mz_ore::test]
     fn test_missing_table_dependencies_error_display() {
         let error = DatabaseValidationError::MissingTableDependencies {
             objects_needing_tables: vec![
@@ -584,7 +584,7 @@ mod tests {
         assert!(error_string.contains("mz-deploy apply"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_format_relative_path() {
         let path = PathBuf::from("/home/user/project/database/schema/file.sql");
         assert_eq!(format_relative_path(&path), "database/schema/file.sql");
@@ -593,19 +593,19 @@ mod tests {
         assert_eq!(format_relative_path(&short_path), "file.sql");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_format_relative_path_exactly_three_components() {
         let path = PathBuf::from("database/schema/file.sql");
         assert_eq!(format_relative_path(&path), "database/schema/file.sql");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_format_relative_path_two_components() {
         let path = PathBuf::from("schema/file.sql");
         assert_eq!(format_relative_path(&path), "schema/file.sql");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_missing_databases_error_display() {
         let error =
             DatabaseValidationError::MissingDatabases(vec!["db1".to_string(), "db2".to_string()]);
@@ -615,7 +615,7 @@ mod tests {
         assert!(error_string.contains("db2"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_missing_schemas_error_display() {
         let error = DatabaseValidationError::MissingSchemas(vec![
             SchemaQualifier::new("db1".to_string(), "schema1".to_string()),
@@ -627,7 +627,7 @@ mod tests {
         assert!(error_string.contains("db2.schema2"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_missing_clusters_error_display() {
         let error = DatabaseValidationError::MissingClusters(vec![
             "cluster1".to_string(),
@@ -639,7 +639,7 @@ mod tests {
         assert!(error_string.contains("cluster2"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_conflict_error_display() {
         let error = DatabaseValidationError::ClusterConflict {
             cluster_name: "shared_cluster".to_string(),
@@ -655,7 +655,7 @@ mod tests {
         assert!(error_string.contains("help"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_insufficient_privileges_error_display() {
         let error = DatabaseValidationError::InsufficientPrivileges {
             missing_database_usage: vec!["db1".to_string(), "db2".to_string()],
@@ -669,7 +669,7 @@ mod tests {
         assert!(error_string.contains("GRANT"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_insufficient_privileges_only_database() {
         let error = DatabaseValidationError::InsufficientPrivileges {
             missing_database_usage: vec!["db1".to_string()],
@@ -680,7 +680,7 @@ mod tests {
         assert!(!error_string.contains("CREATECLUSTER ON SYSTEM"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_missing_sources_error_display() {
         let error = DatabaseValidationError::MissingSources(vec![ObjectId::new(
             "materialize".to_string(),
@@ -692,7 +692,7 @@ mod tests {
         assert!(error_string.contains("materialize.public.kafka_source"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_validation_errors_display() {
         let error = DatabaseValidationError::Multiple {
             databases: vec!["missing_db".to_string()],
@@ -709,14 +709,14 @@ mod tests {
         assert!(error_string.contains("missing_cluster"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_connection_error_display() {
         let error = ConnectionError::Message("test error message".to_string());
         let error_string = format!("{}", error);
         assert_eq!(error_string, "test error message");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_connection_error_cluster_not_found() {
         let error = ConnectionError::ClusterNotFound {
             name: "missing_cluster".to_string(),
@@ -726,7 +726,7 @@ mod tests {
         assert!(error_string.contains("not found"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_connection_error_deployment_already_exists() {
         let error = ConnectionError::DeploymentAlreadyExists {
             deploy_id: "staging_123".to_string(),
@@ -736,7 +736,7 @@ mod tests {
         assert!(error_string.contains("already exists"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_connection_error_deployment_not_found() {
         let error = ConnectionError::DeploymentNotFound {
             deploy_id: "nonexistent".to_string(),
@@ -746,7 +746,7 @@ mod tests {
         assert!(error_string.contains("not found"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_connection_error_deployment_already_promoted() {
         let error = ConnectionError::DeploymentAlreadyPromoted {
             deploy_id: "prod_deploy".to_string(),
@@ -756,7 +756,7 @@ mod tests {
         assert!(error_string.contains("already been promoted"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_database_validation_error_is_error_trait() {
         // Verify that DatabaseValidationError implements std::error::Error
         let error: Box<dyn std::error::Error> =

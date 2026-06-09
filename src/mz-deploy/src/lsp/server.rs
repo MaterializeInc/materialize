@@ -34,7 +34,7 @@
 //! diagnostic flows route through [`Backend::publish_merged`], which reads
 //! both maps and emits the union.
 //!
-//! [`rebuild_project()`] runs validation and (on a successful build)
+//! `rebuild_project()` runs validation and (on a successful build)
 //! typechecking inline. Both are merged into the new project-diagnostic map;
 //! every URI that was previously tracked or is newly tracked is republished
 //! through [`Backend::publish_merged`] so stale project diagnostics clear
@@ -243,7 +243,7 @@ impl Backend {
         self.client.publish_diagnostics(uri, merged, None).await;
     }
 
-    /// Snapshot the open-document map into a [`FileSystem`] overlay.
+    /// Snapshot the open-document map into a `FileSystem` overlay.
     ///
     /// Each open document's URI is converted to an absolute filesystem path
     /// and its rope is stringified into the overlay. URIs that don't resolve
@@ -822,7 +822,7 @@ mod tests {
         std::fs::write(root.join("project.toml"), "[project]\nname = \"test\"\n").unwrap();
     }
 
-    #[test]
+    #[mz_ore::test]
     fn try_open_project_cache_returns_none_for_missing_db() {
         let result = try_open_project_cache(
             Path::new("/nonexistent/path"),
@@ -844,7 +844,7 @@ mod tests {
     ///
     /// The multi-thread runtime with 2 workers is required so the two spawned
     /// tasks can actually make progress concurrently.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
     async fn concurrent_publish_diagnostics_do_not_deadlock() {
         let (client, _service) = capture_client_with_root(std::env::temp_dir());
 
@@ -873,7 +873,7 @@ mod tests {
         assert!(result.is_ok(), "concurrent publish_diagnostics timed out");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
     async fn code_action_returns_quickfix_for_unknown_column_diagnostic() {
         use crate::lsp::code_action::QuickFixData;
         use tower_lsp::lsp_types::{
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(edits[0].new_text, "customer_name");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
     async fn did_close_rebuilds_immediately_against_disk_state() {
         let root = tempfile::tempdir().unwrap();
         let models = root.path().join("models/mydb/public");

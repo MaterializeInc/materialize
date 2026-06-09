@@ -34,7 +34,7 @@ pub async fn run(
     skip_secrets: bool,
     dry_run: bool,
 ) -> Result<ApplyPlan, CliError> {
-    let (planned_project, client) = compile_apply_project_and_connect(&settings).await?;
+    let (planned_project, client) = compile_apply_project_and_connect(settings).await?;
 
     let mut plan = ApplyPlan::new();
     let executor = DeploymentExecutor::new_dry_run(&client);

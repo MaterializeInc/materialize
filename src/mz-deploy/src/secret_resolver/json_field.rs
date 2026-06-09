@@ -10,7 +10,7 @@
 //! Shared helper for extracting a top-level string field from a JSON secret.
 //!
 //! Used by providers that support the `name(secret, field)` shape — `aws_secret`
-//! for RDS-style credential blobs, `gcp_secret` for the same pattern in GCP.
+//! for RDS-style credential blobs.
 
 /// Extract a top-level string field from a JSON secret.
 ///
@@ -45,7 +45,7 @@ pub(super) fn extract_json_field(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn extract_json_field_returns_string_value() {
         let secret = r#"{"username":"alice","password":"s3cr3t"}"#;
         assert_eq!(
@@ -58,7 +58,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn extract_json_field_errors_on_missing_key() {
         let secret = r#"{"username":"alice"}"#;
         let err = extract_json_field(secret, "password", "rds-creds").unwrap_err();
@@ -66,7 +66,7 @@ mod tests {
         assert!(err.contains("password"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn extract_json_field_errors_on_non_string_value() {
         let secret = r#"{"port":5432}"#;
         let err = extract_json_field(secret, "port", "rds-creds").unwrap_err();
@@ -75,7 +75,7 @@ mod tests {
         assert!(err.contains("not a string"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn extract_json_field_errors_on_invalid_json() {
         let secret = "not json at all";
         let err = extract_json_field(secret, "password", "rds-creds").unwrap_err();

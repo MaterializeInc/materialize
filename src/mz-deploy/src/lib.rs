@@ -22,9 +22,9 @@
 //! - **[`client`]** — Database client layer: connection management, introspection
 //!   queries, DDL provisioning, and deployment operations against a live
 //!   Materialize region.
-//! - **[`project`]** — Project compiler: loads `.sql` files from disk, validates
+//! - **`project`** — Project compiler: loads `.sql` files from disk, validates
 //!   and type-checks them, resolves dependencies, and produces a deployment graph.
-//! - **[`types`]** — Data-contract system: the `types.lock` file that pins
+//! - **`types`** — Data-contract system: the `types.lock` file that pins
 //!   column schemas for external dependencies and the mirrored internal type
 //!   cache used by downstream consumers.
 //!

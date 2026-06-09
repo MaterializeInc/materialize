@@ -25,7 +25,7 @@
 //!
 //! ## Phase B — Resolve to file location
 //!
-//! [`resolve_reference()`] takes the identifier parts and the [`ProjectCache`]
+//! [`resolve_reference()`] takes the identifier parts and the `ProjectCache`
 //! (SQLite), constructs an `ObjectId` using the same 1/2/3-part resolution as
 //! `ObjectId::from_item_name()`, looks up the object in the cache, and
 //! returns the file path from `CachedObject::file_path`.
@@ -150,11 +150,11 @@ fn find_token_at_offset(
     None
 }
 
-/// Resolve identifier parts to an [`ObjectId`] using the file's path context.
+/// Resolve identifier parts to an `ObjectId` using the file's path context.
 ///
 /// Derives the default database/schema from the file's path relative to the
 /// project root (expects `models/<database>/<schema>/` structure), then
-/// constructs an [`ObjectId`] using 1/2/3-part name resolution.
+/// constructs an `ObjectId` using 1/2/3-part name resolution.
 pub fn resolve_object_id(parts: &[String], file_uri: &Url, root: &Path) -> Option<ObjectId> {
     let (default_db, default_schema) = ObjectId::default_db_schema_from_uri(file_uri, root)?;
 
@@ -174,11 +174,11 @@ pub fn resolve_object_id(parts: &[String], file_uri: &Url, root: &Path) -> Optio
     }
 }
 
-/// Resolve identifier parts to a file location using the [`ProjectCache`].
+/// Resolve identifier parts to a file location using the `ProjectCache`.
 ///
 /// Derives the default database/schema from the file's path relative to the
 /// project root (expects `models/<database>/<schema>/` structure), then
-/// constructs an [`ObjectId`] and looks it up in the project cache.
+/// constructs an `ObjectId` and looks it up in the project cache.
 ///
 /// # Returns
 /// A [`Location`] pointing to the start of the defining file, or `None` if the
@@ -204,7 +204,7 @@ pub fn resolve_reference(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn unqualified_identifier() {
         let text = "SELECT * FROM foo";
         // "foo" starts at byte 14
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(parts, vec!["foo"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn schema_qualified_identifier() {
         let text = "SELECT * FROM myschema.orders";
         // cursor on "orders" (byte 23)
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(parts, vec!["myschema", "orders"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn schema_qualified_cursor_on_schema() {
         let text = "SELECT * FROM myschema.orders";
         // cursor on "myschema" (byte 14)
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(parts, vec!["myschema", "orders"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fully_qualified_identifier() {
         let text = "SELECT * FROM db.schema.t";
         // cursor on "t" (byte 24)
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(parts, vec!["db", "schema", "t"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cursor_on_dot_returns_none() {
         let text = "SELECT * FROM myschema.orders";
         // The dot is at byte 22
@@ -244,7 +244,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cursor_on_string_literal_returns_none() {
         let text = "SELECT 'hello' FROM foo";
         // cursor inside string literal (byte 8)
@@ -252,7 +252,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cursor_on_keyword_returns_none() {
         let text = "SELECT * FROM foo";
         // cursor on "SELECT" (byte 0)
@@ -260,20 +260,20 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cursor_at_end_of_file_returns_none() {
         let text = "SELECT 1";
         let result = find_reference_at_position(text, text.len());
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_file_returns_none() {
         let result = find_reference_at_position("", 0);
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn quoted_identifier() {
         let text = r#"SELECT * FROM "My Table""#;
         // cursor inside quoted ident
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(parts, vec!["My Table"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_one_part_name() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_two_part_name() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_three_part_name() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(location.uri, Url::from_file_path(expected_path).unwrap());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_unknown_name_returns_none() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -334,7 +334,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_cross_schema_reference() {
         let (root, cache) = build_test_project_cross_schema_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/other/baz.sql")).unwrap();

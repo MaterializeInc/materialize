@@ -80,20 +80,20 @@ const ALL_ROLES: &[(MzDeployRole, &str)] = &[
 /// Phases:
 /// 1. Create the `_mz_deploy_server` cluster if missing.
 /// 2. Create the `_mz_deploy` database (`IF NOT EXISTS`).
-/// 3. Run every statement in [`super::setup_schema::SETUP_STATEMENTS`] —
+/// 3. Run every statement in `SETUP_STATEMENTS` —
 ///    each uses `IF NOT EXISTS` so existing objects are left alone. Seed the
 ///    version row with a pre-check (no `INSERT IF NOT EXISTS` form).
 /// 4. **RBAC-enabled clusters only**: create the three `materialize_*` roles
 ///    if missing and re-apply grants.
 ///
 /// When RBAC is disabled — or the profile sets `emulator = true`, which forces
-/// the RBAC-disabled path via [`rbac_active`] — the role/grant phase is skipped
+/// the RBAC-disabled path via `rbac_active` — the role/grant phase is skipped
 /// entirely: no roles are created, no grants are issued, no ownership check is
 /// performed. Without RBAC, `GRANT` statements would have no effect anyway and
 /// downstream commands fall through to the superuser path in
 /// [`validate_connection`].
 ///
-/// When RBAC is enabled, [`require_superuser`] gates phase 4 because the
+/// When RBAC is enabled, `require_superuser` gates phase 4 because the
 /// `GRANT ... ON SYSTEM` statements (CREATEDB, CREATECLUSTER) and `CREATE ROLE`
 /// require it. The superuser also needs:
 /// - Ownership of `_mz_deploy_server` (granted at creation in phase 1) to

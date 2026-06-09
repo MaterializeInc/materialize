@@ -29,7 +29,7 @@
 //! 3. Else (plain view) → recursively stage its dependencies, then create it.
 //!
 //! All `IN CLUSTER` clauses are rewritten to `quickstart` via the
-//! [`ExplainTransformer`](crate::project::resolve::normalize::ExplainTransformer).
+//! `ExplainTransformer`.
 //!
 //! ## Schema Lifecycle
 //!

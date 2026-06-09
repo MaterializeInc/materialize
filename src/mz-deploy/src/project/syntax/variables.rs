@@ -530,7 +530,7 @@ mod tests {
         result.unresolved.iter().map(|v| v.name.as_str()).collect()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn no_variables_returns_borrowed() {
         let sql = "SELECT 1 FROM t WHERE x = 'hello'";
         let result = resolve_variables(sql, &BTreeMap::new());
@@ -539,7 +539,7 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn bare_variable_substitution() {
         let v = vars(&[("cluster", "analytics")]);
         let result = resolve_variables(
@@ -553,7 +553,7 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn single_quoted_variable_with_escaping() {
         let v = vars(&[("pg_host", "it's-a-host")]);
         let result = resolve_variables("CREATE CONNECTION pg TO POSTGRES (HOST :'pg_host')", &v);
@@ -564,7 +564,7 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn double_quoted_variable_with_escaping() {
         let v = vars(&[("col", "my\"col")]);
         let result = resolve_variables("SELECT :\"col\" FROM t", &v);
@@ -572,7 +572,7 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn type_cast_preserved() {
         let result = resolve_variables("SELECT x::int FROM t", &BTreeMap::new());
         assert!(matches!(result.sql, Cow::Borrowed(_)));
@@ -580,7 +580,7 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_inside_string_literal_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("SELECT ':foo' FROM t", &v);
@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "SELECT ':foo' FROM t");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_in_line_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("-- :foo\nSELECT 1", &v);
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "-- :foo\nSELECT 1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_in_block_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("/* :foo */ SELECT 1", &v);
@@ -604,7 +604,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "/* :foo */ SELECT 1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn nested_block_comment_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("/* /* :foo */ */ SELECT 1", &v);
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "/* /* :foo */ */ SELECT 1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multiple_variables() {
         let v = vars(&[("a", "1"), ("b", "2")]);
         let result = resolve_variables("SELECT :a, :b", &v);
@@ -620,60 +620,60 @@ mod tests {
         assert!(result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unresolved_variable_reported() {
         let result = resolve_variables("SELECT :missing", &BTreeMap::new());
         assert_eq!(unresolved_names(&result), vec!["missing"]);
         assert_eq!(result.sql.as_ref(), "SELECT :missing");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multiple_unresolved_lists_all() {
         let result = resolve_variables("SELECT :a, :b, :a", &BTreeMap::new());
         assert_eq!(unresolved_names(&result), vec!["a", "b", "a"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_vars_no_syntax_borrowed() {
         let result = resolve_variables("SELECT 1", &BTreeMap::new());
         assert!(matches!(result.sql, Cow::Borrowed(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_vars_with_syntax_reports_unresolved() {
         let result = resolve_variables("SELECT :foo", &BTreeMap::new());
         assert!(!result.unresolved.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_at_end_of_input() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("SELECT :foo", &v);
         assert_eq!(result.sql.as_ref(), "SELECT bar");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn adjacent_syntax() {
         let v = vars(&[("foo", "1"), ("bar", "2")]);
         let result = resolve_variables("(:foo, :bar)", &v);
         assert_eq!(result.sql.as_ref(), "(1, 2)");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn single_quoted_no_escaping_needed() {
         let v = vars(&[("host", "simple-host")]);
         let result = resolve_variables("HOST :'host'", &v);
         assert_eq!(result.sql.as_ref(), "HOST 'simple-host'");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn double_quoted_no_escaping_needed() {
         let v = vars(&[("col", "simple_col")]);
         let result = resolve_variables("SELECT :\"col\"", &v);
         assert_eq!(result.sql.as_ref(), "SELECT \"simple_col\"");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn double_quoted_identifier_not_resolved() {
         let v = vars(&[("id", "bar")]);
         let result = resolve_variables("SELECT \"user:id\" FROM t", &v);
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "SELECT \"user:id\" FROM t");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn dollar_quoted_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("SELECT $$:foo$$ FROM t", &v);
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "SELECT $$:foo$$ FROM t");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn dollar_tagged_not_resolved() {
         let v = vars(&[("foo", "bar")]);
         let result = resolve_variables("SELECT $tag$:foo$tag$ FROM t", &v);
@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(result.sql.as_ref(), "SELECT $tag$:foo$tag$ FROM t");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn dollar_sign_alone_no_crash() {
         let result = resolve_variables("SELECT $ FROM t", &BTreeMap::new());
         assert!(matches!(result.sql, Cow::Borrowed(_)));
@@ -706,7 +706,7 @@ mod tests {
 
     // --- Pragma tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_line_comment() {
         let result = resolve_variables(
             "-- PRAGMA WARN_ON_MISSING_VARIABLES;\nSELECT :foo",
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(unresolved_names(&result), vec!["foo"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_block_comment() {
         let result = resolve_variables(
             "/* PRAGMA WARN_ON_MISSING_VARIABLES; */\nSELECT :foo",
@@ -726,7 +726,7 @@ mod tests {
         assert_eq!(unresolved_names(&result), vec!["foo"]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_with_leading_whitespace() {
         let result = resolve_variables(
             "  \t\n  -- PRAGMA WARN_ON_MISSING_VARIABLES;\nSELECT :foo",
@@ -735,7 +735,7 @@ mod tests {
         assert!(result.has_warn_pragma);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_not_on_first_comment() {
         let result = resolve_variables(
             "SELECT 1;\n-- PRAGMA WARN_ON_MISSING_VARIABLES;\nSELECT :foo",
@@ -744,13 +744,13 @@ mod tests {
         assert!(!result.has_warn_pragma);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_missing() {
         let result = resolve_variables("SELECT :foo", &BTreeMap::new());
         assert!(!result.has_warn_pragma);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pragma_partial_match() {
         let result = resolve_variables("-- PRAGMA WARN_ON_MISSING\nSELECT :foo", &BTreeMap::new());
         assert!(!result.has_warn_pragma);
@@ -758,7 +758,7 @@ mod tests {
 
     // --- Unresolved variable position tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn unresolved_variable_has_correct_offset() {
         // "SELECT :missing" — `:` is at byte 7
         let result = resolve_variables("SELECT :missing", &BTreeMap::new());
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(result.unresolved[0].byte_len, 8); // `:missing` = 8 bytes
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unresolved_quoted_variable_has_correct_len() {
         // "SELECT :'missing'" — `:` at 7, len = 10 (:'missing')
         let result = resolve_variables("SELECT :'missing'", &BTreeMap::new());
@@ -777,7 +777,7 @@ mod tests {
         assert_eq!(result.unresolved[0].byte_len, 10);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multiple_unresolved_tracks_each_occurrence() {
         let result = resolve_variables("SELECT :a, :b, :a", &BTreeMap::new());
         assert_eq!(result.unresolved.len(), 3);
@@ -791,7 +791,7 @@ mod tests {
 
     // --- find_variable_at_position tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_bare_variable() {
         // "SELECT :foo FROM t" — `:foo` at bytes 7..11
         let sql = "SELECT :foo FROM t";
@@ -804,7 +804,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_single_quoted() {
         // "HOST :'host'" — `:'host'` at bytes 5..13
         let sql = "HOST :'host'";
@@ -816,7 +816,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_double_quoted() {
         // "SELECT :\"col\"" — `:"col"` at bytes 7..13
         let sql = "SELECT :\"col\"";
@@ -824,21 +824,21 @@ mod tests {
         assert_eq!(result, Some(("col".to_string(), 7, 6)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_between_variables_returns_none() {
         // "SELECT :a, :b" — space at byte 10 is between variables
         let sql = "SELECT :a, :b";
         assert_eq!(find_variable_at_position(sql, 10), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_in_string_literal_returns_none() {
         let sql = "SELECT ':foo' FROM t";
         // Byte 8 is inside the string literal
         assert_eq!(find_variable_at_position(sql, 8), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_type_cast_returns_none() {
         let sql = "SELECT x::int FROM t";
         // Byte 9 is the second colon of ::
@@ -846,13 +846,13 @@ mod tests {
         assert_eq!(find_variable_at_position(sql, 8), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_in_comment_returns_none() {
         let sql = "-- :foo\nSELECT 1";
         assert_eq!(find_variable_at_position(sql, 3), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_var_offset_past_end_returns_none() {
         let sql = "SELECT :foo";
         assert_eq!(find_variable_at_position(sql, 11), None);
@@ -860,7 +860,7 @@ mod tests {
 
     // --- Substitution tracking tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_variable_records_substitution() {
         let v = vars(&[("cluster", "analytics")]);
         let result = resolve_variables("IN CLUSTER :cluster AS", &v);
@@ -872,13 +872,13 @@ mod tests {
 
     // --- resolved_to_original tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_to_original_no_substitutions() {
         assert_eq!(resolved_to_original(5, &[]), 5);
         assert_eq!(resolved_to_original(0, &[]), 0);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_to_original_shorter_replacement() {
         // Original: "IN CLUSTER :cluster AS" (22 bytes)
         //                        ^11     ^19
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(resolved_to_original(13, &subs), 19);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_to_original_longer_replacement() {
         // Original: "X :a Y" — `:a` at 2, len 2
         // Resolved: "X longvalue Y" — `longvalue` len 9
@@ -915,7 +915,7 @@ mod tests {
         assert_eq!(resolved_to_original(11, &subs), 4);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_to_original_multiple_substitutions() {
         // Original: "A :x B :y C" — :x at 2 (len 2), :y at 7 (len 2)
         // Resolved: "A val1 B val2 C" — val1 (len 4), val2 (len 4)

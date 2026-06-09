@@ -207,7 +207,7 @@ mod tests {
         developer_url(input).expect("developer_url should accept valid input")
     }
 
-    #[test]
+    #[mz_ore::test]
     fn loopback_hostname_gets_default_http_port() {
         assert_eq!(
             build("localhost"),
@@ -219,7 +219,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn loopback_with_explicit_port_keeps_it() {
         assert_eq!(
             build("localhost:8000"),
@@ -227,7 +227,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn ipv6_loopback_is_bracketed_correctly() {
         // Both bare and bracketed forms must produce a parseable URL.
         assert_eq!(build("::1"), "http://[::1]:6876/api/mcp/developer");
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(build("[::1]:9000"), "http://[::1]:9000/api/mcp/developer");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn non_loopback_defaults_to_https_no_port() {
         assert_eq!(
             build("console.foo.cloud"),
@@ -247,7 +247,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn explicit_scheme_is_preserved() {
         assert_eq!(
             build("http://localhost:8000"),
@@ -259,7 +259,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn explicit_scheme_is_case_insensitive() {
         // url::Url normalizes the scheme to lowercase.
         assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn trailing_slashes_collapse() {
         assert_eq!(
             build("localhost/"),

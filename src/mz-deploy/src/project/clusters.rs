@@ -352,7 +352,7 @@ mod tests {
         TempDir::new().unwrap()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_no_directory() {
         let dir = create_test_dir();
         let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
@@ -362,7 +362,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_basic() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(extract_replication_factor(&result[0].create_stmt), Some(1));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_create_only() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -409,7 +409,7 @@ mod tests {
         assert!(result[0].comments.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_name_mismatch() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_missing_create() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -447,7 +447,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_unsupported_statement() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -467,7 +467,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_grant_target_mismatch() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -487,7 +487,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_comment_target_mismatch() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -507,7 +507,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_multiple_files() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(result[1].name, "quickstart");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_multi_variant_valid() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -559,7 +559,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_multi_variant_fallback_default() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
@@ -586,7 +586,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_load_clusters_invalid_variant_errors() {
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");

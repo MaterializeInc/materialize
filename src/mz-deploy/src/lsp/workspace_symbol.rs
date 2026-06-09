@@ -72,14 +72,14 @@ mod tests {
     use crate::project::compiler::cache::ProjectCache;
     use std::path::Path;
 
-    #[test]
+    #[mz_ore::test]
     fn empty_query_returns_all_objects() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("", &cache, root.path());
         assert_eq!(symbols.len(), 2); // foo and bar
     }
 
-    #[test]
+    #[mz_ore::test]
     fn query_matches_by_substring() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("foo", &cache, root.path());
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(symbols[0].name, "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn query_case_insensitive() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("FOO", &cache, root.path());
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(symbols[0].name, "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn query_matches_schema_in_fqn() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("public", &cache, root.path());
@@ -103,14 +103,14 @@ mod tests {
         assert_eq!(symbols.len(), 2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn no_matches_returns_empty() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("nonexistent", &cache, root.path());
         assert!(symbols.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn symbols_have_container_name() {
         let (root, cache) = build_test_project_cache();
         let symbols = workspace_symbols("foo", &cache, root.path());

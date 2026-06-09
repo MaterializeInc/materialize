@@ -10,9 +10,9 @@
 //! LSP-specific diagnostic emission.
 //!
 //! Each producer in this module first builds a
-//! [`crate::diagnostics::PositionalDiagnostic`] using the shared locator
+//! `PositionalDiagnostic` using the shared locator
 //! helpers, then converts it to a [`tower_lsp::lsp_types::Diagnostic`] via
-//! [`to_lsp`] using a [`Rope`] for byte-offset → line/column conversion.
+//! `to_lsp` using a [`Rope`] for byte-offset → line/column conversion.
 //!
 //! Three tiers of diagnostics:
 //!
@@ -21,17 +21,17 @@
 //!   diagnostics (ERROR or WARNING depending on the warn pragma). The resolved
 //!   SQL is then parsed with [`mz_sql_parser::parser::parse_statements()`] and
 //!   any parse error positions are mapped back to original-text offsets via
-//!   [`resolved_to_original`].
+//!   `resolved_to_original`.
 //!
-//! - **On-save validation errors** ([`validation_diagnostics()`]) — Converts
-//!   project-level [`ValidationError`]s into LSP diagnostics grouped by file.
+//! - **On-save validation errors** (`validation_diagnostics()`) — Converts
+//!   project-level `ValidationError`s into LSP diagnostics grouped by file.
 //!   When an error carries a byte offset (most statement-level errors), the
 //!   diagnostic is positioned at the correct line/column. File-level errors
 //!   (e.g., missing CREATE statement) fall back to `(0, 0)`.
 //!
-//! - **On-save typecheck errors** ([`typecheck_diagnostics()`]) — Inspects
+//! - **On-save typecheck errors** (`typecheck_diagnostics()`) — Inspects
 //!   the structured upstream error to position the diagnostic. See
-//!   [`crate::diagnostics::locate_typecheck`] for the dispatch.
+//!   `locate_typecheck` for the dispatch.
 
 use crate::diagnostics::{PositionalDiagnostic, Severity, Suggestion, locate_typecheck};
 use crate::fs::FileSystem;
@@ -79,7 +79,7 @@ pub fn diagnose(
 
 /// Build [`PositionalDiagnostic`]s for parse errors and unresolved variables
 /// in `text`. All positions are in original-text byte space (post-substitution
-/// parser offsets are mapped back via [`resolved_to_original`]).
+/// parser offsets are mapped back via `resolved_to_original`).
 fn parse_positional(
     text: &str,
     variables: &BTreeMap<String, String>,
@@ -131,7 +131,7 @@ fn parse_positional(
     pds
 }
 
-/// Convert [`ValidationError`]s into LSP diagnostics grouped by file path.
+/// Convert `ValidationError`s into LSP diagnostics grouped by file path.
 ///
 /// When an error carries a `byte_offset`, the file is read and a [`Rope`] is
 /// built so the offset can be converted to a precise line/column position.
@@ -373,14 +373,14 @@ fn utf16_len(text: &str) -> usize {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn valid_sql_produces_no_diagnostics() {
         let text = "CREATE VIEW foo AS SELECT 1;";
         let rope = Rope::from_str(text);
         assert!(diagnose(text, &rope, &BTreeMap::new(), None).is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn syntax_error_produces_diagnostic_at_correct_position() {
         let text = "CREATE VIEW foo AS SELECTT 1;";
         let rope = Rope::from_str(text);
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(diags[0].range.start.line, 0);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn multiline_error_position() {
         let text = "CREATE VIEW foo AS\nSELECT 1;\nCREATE VIEW bar AS SELECTT 2;";
         let rope = Rope::from_str(text);
@@ -401,14 +401,14 @@ mod tests {
         assert_eq!(diags[0].range.start.line, 2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_file_produces_no_diagnostics() {
         let text = "";
         let rope = Rope::from_str(text);
         assert!(diagnose(text, &rope, &BTreeMap::new(), None).is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn offset_to_position_uses_utf16_columns() {
         let text = "SELECT 😀FROM";
         let rope = Rope::from_str(text);
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(offset_to_position(11, &rope), Some(Position::new(0, 9)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn position_to_offset_uses_utf16_columns() {
         let text = "SELECT 😀foo";
         let rope = Rope::from_str(text);
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn whitespace_only_file_produces_no_diagnostics() {
         let text = "   \n  \n  ";
         let rope = Rope::from_str(text);
@@ -444,7 +444,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_variable_no_diagnostics() {
         let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1";
         let rope = Rope::from_str(text);
@@ -452,7 +452,7 @@ mod tests {
         assert!(diags.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolved_variable_produces_clean_parse() {
         let v = vars(&[("cluster", "quickstart")]);
         let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
@@ -461,7 +461,7 @@ mod tests {
         assert!(diags.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unresolved_variable_produces_error() {
         let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
         let rope = Rope::from_str(text);
@@ -477,7 +477,7 @@ mod tests {
         assert!(var_diags[0].message.contains(":cluster"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unresolved_variable_with_pragma_produces_warning() {
         let text = "-- PRAGMA WARN_ON_MISSING_VARIABLES;\nCREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
         let rope = Rope::from_str(text);
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(var_diags[0].severity, Some(DiagnosticSeverity::WARNING));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parse_error_maps_back_to_original_position() {
         // After resolving :x → "ab", the parse error in resolved text
         // should map back to the original text position.
@@ -509,14 +509,14 @@ mod tests {
         assert_eq!(parse_diags[0].range.start.line, 0);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn no_variables_unchanged_behavior() {
         let text = "CREATE VIEW foo AS SELECT 1;";
         let rope = Rope::from_str(text);
         assert!(diagnose(text, &rope, &BTreeMap::new(), None).is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn typecheck_unknown_column_attaches_quickfix_data() {
         use crate::lsp::code_action::{Candidates, QuickFixData};
         use crate::project::compiler::typecheck::{ObjectTypeCheckError, ObjectTypeCheckErrorKind};
@@ -567,7 +567,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn typecheck_unknown_item_attaches_fuzzy_quickfix_data() {
         use crate::lsp::code_action::{Candidates, QuickFixData};
         use crate::project::compiler::typecheck::{ObjectTypeCheckError, ObjectTypeCheckErrorKind};
@@ -611,7 +611,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validation_object_name_mismatch_attaches_quickfix_data() {
         use crate::lsp::code_action::QuickFixData;
         use crate::project::error::validation::ErrorContext;

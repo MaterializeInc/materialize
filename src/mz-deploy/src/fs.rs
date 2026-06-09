@@ -74,7 +74,7 @@ impl Default for FileSystem {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn overlay_intercepts_read() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("a.sql");
@@ -88,7 +88,7 @@ mod tests {
         assert!(fs.is_overlay(&file));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn no_overlay_reads_disk() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("a.sql");
@@ -98,7 +98,7 @@ mod tests {
         assert!(!fs.is_overlay(&file));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn from_overlay_file_round_trips() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("models/x.sql");
@@ -116,7 +116,7 @@ mod tests {
         assert!(fs.is_overlay(&target));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn from_overlay_file_rejects_garbage() {
         let tmp = tempfile::tempdir().unwrap();
         let overlay_json = tmp.path().join("overlay.json");

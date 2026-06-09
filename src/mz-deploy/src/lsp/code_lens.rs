@@ -182,25 +182,25 @@ mod tests {
             .expect("cache DB should exist")
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_find_test_line_basic() {
         let text = "CREATE VIEW foo AS SELECT 1;\n\nEXECUTE UNIT TEST my_test\nAS SELECT 1;\n";
         assert_eq!(find_test_line(text, "my_test"), Some(2));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_find_test_line_case_insensitive() {
         let text = "execute unit test my_test\nAS SELECT 1;\n";
         assert_eq!(find_test_line(text, "my_test"), Some(0));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_find_test_line_not_found() {
         let text = "CREATE VIEW foo AS SELECT 1;\n";
         assert_eq!(find_test_line(text, "nonexistent"), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_single_test() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -228,7 +228,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_tests() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -263,7 +263,7 @@ mod tests {
         assert_ne!(lenses[0].range.start.line, lenses[1].range.start.line);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_no_tests() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -279,7 +279,7 @@ mod tests {
         assert!(lenses.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_file_not_in_project() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");

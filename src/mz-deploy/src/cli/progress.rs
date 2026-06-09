@@ -107,7 +107,7 @@ fn format_duration(seconds: f64) -> String {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_format_duration() {
         assert_eq!(format_duration(0.05), "0.05");
         assert_eq!(format_duration(0.123), "0.12");

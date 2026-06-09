@@ -251,7 +251,7 @@ mod tests {
         (nodes, direct_deps, dependents)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn node_outcome_types_compile() {
         let _: NodeOutcome<i32> = NodeOutcome::Ok(Arc::new(7));
         let _: NodeOutcome<i32> = NodeOutcome::Blocked(id("o"));
@@ -262,7 +262,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_graph_returns_empty() {
         let outcomes = run::<i32, _>(
             Vec::<ObjectId>::new(),
@@ -275,7 +275,7 @@ mod tests {
         assert!(outcomes.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn independent_leaves_run_to_completion() {
         let nodes = vec![id("a"), id("b"), id("c"), id("d")];
         let direct_deps: BTreeMap<ObjectId, Vec<ObjectId>> =
@@ -296,7 +296,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn linear_chain_threads_results() {
         let (nodes, direct_deps, dependents) = dag(&[("a", "b"), ("b", "c")]);
 
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(unwrap_ok(&id("c")), 3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn diamond_dispatches_b_and_c_in_parallel() {
         use std::sync::Barrier;
 
@@ -346,7 +346,7 @@ mod tests {
         ObjectTypeCheckError::internal(id.clone(), std::path::PathBuf::from("test"), msg.into())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn failure_propagates_to_dependents_and_isolates_other_branches() {
         // Failing branch:  a (FAIL) -> b -> c
         // Healthy branch:  x -> y

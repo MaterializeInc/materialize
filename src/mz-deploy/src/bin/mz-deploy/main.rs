@@ -1086,7 +1086,7 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
-    #[test]
+    #[mz_ore::test]
     fn grouped_help_lists_all_subcommands() {
         let cmd = Args::command();
         let mut errors = Vec::new();

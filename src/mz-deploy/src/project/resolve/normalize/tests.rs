@@ -24,7 +24,7 @@ fn test_fqn() -> FullyQualifiedName {
     FullyQualifiedName::try_from(item_name).expect("test FQN is fully qualified")
 }
 
-#[test]
+#[mz_ore::test]
 fn test_cte_references_not_qualified() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -67,7 +67,7 @@ fn test_cte_references_not_qualified() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_multiple_ctes() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -121,7 +121,7 @@ fn test_multiple_ctes() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_scope() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -166,7 +166,7 @@ fn test_nested_cte_scope() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_cte_with_joins() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -214,7 +214,7 @@ fn test_cte_with_joins() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_cte_shadowing_external_table() {
     // Test that a CTE with the same name as an external table shadows it
     let fqn = test_fqn();
@@ -258,7 +258,7 @@ fn test_cte_shadowing_external_table() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_complex_multi_cte_query() {
     // Test the exact query from the user that was failing
     let fqn = test_fqn();
@@ -345,7 +345,7 @@ fn test_complex_multi_cte_query() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_implicit_alias_unqualified_table() {
     // Test that unqualified table names get implicit aliases
     let fqn = test_fqn();
@@ -376,7 +376,7 @@ fn test_implicit_alias_unqualified_table() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_implicit_alias_schema_qualified_table() {
     // Test that schema-qualified table names get implicit aliases
     let fqn = test_fqn();
@@ -407,7 +407,7 @@ fn test_implicit_alias_schema_qualified_table() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_implicit_alias_fully_qualified_table() {
     // Test that fully qualified table names get implicit aliases
     let fqn = test_fqn();
@@ -438,7 +438,7 @@ fn test_implicit_alias_fully_qualified_table() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_no_implicit_alias_when_explicit_alias_exists() {
     // Test that explicit aliases are preserved and no implicit alias is added
     let fqn = test_fqn();
@@ -474,7 +474,7 @@ fn test_no_implicit_alias_when_explicit_alias_exists() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_no_implicit_alias_for_cte() {
     // Test that CTEs don't get implicit aliases
     let fqn = test_fqn();
@@ -512,7 +512,7 @@ fn test_no_implicit_alias_for_cte() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_implicit_alias_in_lateral_join() {
     // Test implicit aliases work correctly in LATERAL joins
     let fqn = test_fqn();
@@ -548,7 +548,7 @@ fn test_implicit_alias_in_lateral_join() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_having_clause_with_subquery() {
     // Test that subqueries in HAVING clauses are normalized
     let fqn = test_fqn();
@@ -580,7 +580,7 @@ fn test_having_clause_with_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_having_clause_with_nested_subquery() {
     // Test deeply nested subqueries in HAVING
     let fqn = test_fqn();
@@ -622,7 +622,7 @@ fn test_having_clause_with_nested_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_having_with_cte_reference() {
     // Test HAVING clause with CTE reference (should not be qualified)
     let fqn = test_fqn();
@@ -662,7 +662,7 @@ fn test_having_with_cte_reference() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_and_operator_with_subqueries() {
     // Test AND operator with subqueries on both sides
     // This tests that Expr::Op is being recursively normalized
@@ -699,7 +699,7 @@ fn test_and_operator_with_subqueries() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_or_operator_with_subqueries() {
     // Test OR operator with subqueries
     let fqn = test_fqn();
@@ -732,7 +732,7 @@ fn test_or_operator_with_subqueries() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_comparison_operator_with_subquery() {
     // Test comparison operators (>, <, =, etc.) with subqueries
     let fqn = test_fqn();
@@ -765,7 +765,7 @@ fn test_comparison_operator_with_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_operators_with_subqueries() {
     // Test deeply nested operators with multiple subqueries
     let fqn = test_fqn();
@@ -799,7 +799,7 @@ fn test_nested_operators_with_subqueries() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_arithmetic_operators_with_subqueries() {
     // Test arithmetic operators containing subqueries
     let fqn = test_fqn();
@@ -834,7 +834,7 @@ fn test_arithmetic_operators_with_subqueries() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_schema_qualified_with_having_subquery() {
     // Integration test: schema-qualified tables with HAVING subquery
     let fqn = test_fqn();
@@ -879,7 +879,7 @@ fn test_schema_qualified_with_having_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_lateral_with_operators_and_implicit_alias() {
     // Integration test: LATERAL join with operators and implicit aliases
     let fqn = test_fqn();
@@ -922,7 +922,7 @@ fn test_lateral_with_operators_and_implicit_alias() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_wmr_with_operators_and_having() {
     // Integration test: WITH MUTUALLY RECURSIVE with operators and HAVING
     let fqn = test_fqn();
@@ -977,7 +977,7 @@ fn test_wmr_with_operators_and_having() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_flattening_unqualified_name() {
     // Test that unqualified names get flattened to "database.schema.object"
     let fqn = test_fqn();
@@ -1006,7 +1006,7 @@ fn test_flattening_unqualified_name() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_flattening_schema_qualified_name() {
     // Test that schema-qualified names get flattened
     let fqn = test_fqn();
@@ -1035,7 +1035,7 @@ fn test_flattening_schema_qualified_name() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_flattening_fully_qualified_name() {
     // Test that fully qualified names get flattened
     let fqn = test_fqn();
@@ -1064,7 +1064,7 @@ fn test_flattening_fully_qualified_name() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_flattening_with_join() {
     // Test flattening with multiple tables in a join
     let fqn = test_fqn();
@@ -1098,7 +1098,7 @@ fn test_flattening_with_join() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_flattening_cte_not_flattened() {
     // Test that CTEs are not flattened (they remain unqualified)
     let fqn = test_fqn();
@@ -1147,7 +1147,7 @@ fn staging_test_fqn() -> FullyQualifiedName {
     FullyQualifiedName::try_from(item_name).expect("test FQN is fully qualified")
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_unqualified_name() {
     // Test that unqualified names get staging suffix on schema
     let fqn = staging_test_fqn();
@@ -1184,7 +1184,7 @@ fn test_staging_unqualified_name() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_schema_qualified_name() {
     // Test that schema-qualified names get staging suffix
     let fqn = staging_test_fqn();
@@ -1221,7 +1221,7 @@ fn test_staging_schema_qualified_name() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_external_dependency_not_transformed() {
     // Test that external dependencies are NOT transformed
     let fqn = staging_test_fqn();
@@ -1270,7 +1270,7 @@ fn test_staging_external_dependency_not_transformed() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_mixed_internal_and_external() {
     // Test query with both internal (should be transformed) and external (should not) dependencies
     let fqn = staging_test_fqn();
@@ -1321,7 +1321,7 @@ fn test_staging_mixed_internal_and_external() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_objects_to_deploy_filter() {
     // Test that objects not in objects_to_deploy are treated as external
     let fqn = staging_test_fqn();
@@ -1374,7 +1374,7 @@ fn test_staging_objects_to_deploy_filter() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_cross_schema_objects_to_deploy_filter() {
     // Test that references to specific replacement objects are NOT suffixed,
     // even when those objects are in objects_to_deploy.
@@ -1451,7 +1451,7 @@ fn test_staging_cross_schema_objects_to_deploy_filter() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_replacement_schema_full_deploy() {
     // When replacement_objects is empty (first deployment / full blue-green swap),
     // ALL references — even to objects in "stable" schemas — must be suffixed
@@ -1517,7 +1517,7 @@ fn test_staging_replacement_schema_full_deploy() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_replacement_schema_incremental_deploy() {
     // When replacement_objects contains the MV ID (incremental update),
     // references to that specific MV are NOT suffixed — it already exists
@@ -1588,7 +1588,7 @@ fn test_staging_replacement_schema_incremental_deploy() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_staging_cte_not_transformed() {
     // Test that CTEs are not transformed (they're local to the query)
     let fqn = staging_test_fqn();
@@ -1634,7 +1634,7 @@ fn test_staging_cte_not_transformed() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_in_derived_table() {
     // Test CTE defined inside a derived table (subquery in FROM)
     let fqn = test_fqn();
@@ -1685,7 +1685,7 @@ fn test_nested_cte_in_derived_table() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_in_scalar_subquery() {
     // Test CTE defined inside a scalar subquery (in SELECT list)
     let fqn = test_fqn();
@@ -1735,7 +1735,7 @@ fn test_nested_cte_in_scalar_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_in_where_subquery() {
     // Test CTE defined inside a subquery in WHERE clause
     let fqn = test_fqn();
@@ -1787,7 +1787,7 @@ fn test_nested_cte_in_where_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_triple_nested_ctes() {
     // Test three levels of nested CTEs
     let fqn = test_fqn();
@@ -1846,7 +1846,7 @@ fn test_triple_nested_ctes() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_cte_name_shadowing_in_nested_scope() {
     // Test that a CTE in inner scope shadows a CTE with same name in outer scope
     let fqn = test_fqn();
@@ -1900,7 +1900,7 @@ fn test_cte_name_shadowing_in_nested_scope() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_in_lateral_join() {
     // Test CTE defined inside a LATERAL join subquery
     let fqn = test_fqn();
@@ -1953,7 +1953,7 @@ fn test_nested_cte_in_lateral_join() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parallel_nested_ctes_in_union() {
     // Test multiple independent CTEs in different branches of a UNION
     let fqn = test_fqn();
@@ -2007,7 +2007,7 @@ fn test_parallel_nested_ctes_in_union() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_outer_cte_visible_in_nested_subquery() {
     // Test that outer CTE is visible in nested subqueries (without redefining)
     let fqn = test_fqn();
@@ -2050,7 +2050,7 @@ fn test_outer_cte_visible_in_nested_subquery() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_with_join_to_outer_cte() {
     // Test nested CTE that joins with outer CTE
     let fqn = test_fqn();
@@ -2106,7 +2106,7 @@ fn test_nested_cte_with_join_to_outer_cte() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_cte_in_exists_subquery() {
     // Test CTE defined inside an EXISTS subquery
     let fqn = test_fqn();
@@ -2162,7 +2162,7 @@ fn test_nested_cte_in_exists_subquery() {
 // (COALESCE, NOT, AND/OR, NULLIF, GREATEST/LEAST, parenthesized expressions)
 // are properly normalized. A previous `_ => {}` catch-all silently skipped them.
 
-#[test]
+#[mz_ore::test]
 fn test_coalesce_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2192,7 +2192,7 @@ fn test_coalesce_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nested_expr_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2219,7 +2219,7 @@ fn test_nested_expr_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_not_expr_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2246,7 +2246,7 @@ fn test_not_expr_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_and_or_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2279,7 +2279,7 @@ fn test_and_or_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_nullif_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2306,7 +2306,7 @@ fn test_nullif_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_greatest_least_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2333,7 +2333,7 @@ fn test_greatest_least_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_in_list_with_subquery_normalized() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
@@ -2365,7 +2365,7 @@ fn test_in_list_with_subquery_normalized() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_system_schema_2part_not_qualified() {
     let fqn = test_fqn();
     let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);

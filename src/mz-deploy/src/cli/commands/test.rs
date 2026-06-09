@@ -295,7 +295,7 @@ impl TestResults {
 
 /// Run unit tests against the database.
 ///
-/// Delegates test execution to [`run_tests`], then owns all presentation:
+/// Delegates test execution to `run_tests`, then owns all presentation:
 /// printing per-test outcomes, printing the summary line, and optionally
 /// writing a JUnit XML report.
 ///

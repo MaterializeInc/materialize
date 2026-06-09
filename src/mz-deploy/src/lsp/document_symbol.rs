@@ -144,7 +144,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    #[test]
+    #[mz_ore::test]
     fn simple_view_single_root_symbol() {
         let (root, cache) = build_test_cache("CREATE VIEW foo AS SELECT 1 AS id;");
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
@@ -156,7 +156,7 @@ mod tests {
         assert!(symbols[0].children.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn view_with_index_and_comment() {
         let (root, cache) = build_test_cache(
             "CREATE VIEW foo AS SELECT 1 AS id;\n\
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(children[1].kind, SymbolKind::STRING);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unknown_file_returns_empty() {
         let (root, cache) = build_test_cache("CREATE VIEW foo AS SELECT 1 AS id;");
         let file_uri =

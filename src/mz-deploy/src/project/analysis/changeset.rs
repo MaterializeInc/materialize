@@ -170,7 +170,7 @@ mod tests {
     use datalog::compute_dirty_datalog;
     use std::collections::{BTreeMap, BTreeSet};
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_object_file_path() {
         let path = "materialize/public/users.sql";
         let parts: Vec<&str> = path.split('/').collect();
@@ -185,7 +185,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_schema_mod_file_path() {
         let path = "materialize/public.sql";
         let parts: Vec<&str> = path.split('/').collect();
@@ -199,7 +199,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_database_mod_file_path() {
         let path = "materialize.sql";
         let parts: Vec<&str> = path.split('/').collect();
@@ -212,7 +212,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_schema_propagation_all_objects_in_dirty_schema_are_dirty() {
         // Test that when one object in a schema becomes dirty,
         // ALL objects in that schema become dirty (schema-level atomicity)
@@ -267,7 +267,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_index_cluster_does_not_dirty_parent_object_cluster() {
         // Critical test: If an index uses a dirty cluster, the index should be redeployed,
         // but the parent object and its cluster should NOT be marked dirty.
@@ -338,7 +338,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_index_cluster_does_not_dirty_schema() {
         // Scenario:
         // - table1 and table2 in the same schema
@@ -400,7 +400,7 @@ mod tests {
         assert!(!dirty_stmts.contains(&table2), "table2 should NOT be dirty");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_schema_propagation_does_not_dirty_index_clusters() {
         // Scenario from real deployment:
         // - flip_activities and flippers in materialize.public schema
@@ -496,7 +496,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dependency_propagation_with_index_cluster_conflict() {
         // Real-world bug scenario:
         // - winning_bids changes (has index on quickstart)
@@ -607,7 +607,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_index_cluster_does_not_cause_unnecessary_redeployment() {
         // Real-world scenario from auction_house project
 
@@ -719,7 +719,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_replacement_mv_does_not_dirty_its_schema() {
         // A changed replacement MV should NOT make its schema dirty.
 
@@ -781,7 +781,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_replacement_mv_does_dirty_its_cluster() {
         // Unlike sinks, replacement MVs DO make their clusters dirty.
 
@@ -811,7 +811,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_replacement_mv_not_pulled_in_by_dirty_schema() {
         // When a non-replacement object makes a schema dirty,
         // replacement MVs in that schema should NOT be pulled in (Rule 6 exclusion).
@@ -881,7 +881,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_replacement_mv_dirty_via_dependency() {
         // Replacement MVs should still become dirty if they depend on
         // another dirty object (Rule 4: DependsOn propagation).
@@ -938,7 +938,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_replacement_mv_dirty_via_cluster() {
         // When a cluster becomes dirty, replacement MVs on that cluster
         // should become dirty (Rule 3: StmtUsesCluster propagation).
@@ -1003,7 +1003,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mixed_replacement_and_regular_in_shared_cluster() {
         // Real-world scenario: one cluster runs both a replacement schema (MVs)
         // and a regular schema (views + indexes).
@@ -1159,7 +1159,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_schema_transition_objects_to_replacement_routes_to_new_replacement() {
         // When a schema transitions from Objects kind to Replacement kind,
         // existing objects should go through blue/green swap (new_replacement_objects),
@@ -1214,7 +1214,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_steady_state_replacement_routes_to_changed_replacement() {
         // When a schema was already Replacement kind and stays Replacement,
         // existing objects should use CREATE REPLACEMENT (changed_replacement_objects).

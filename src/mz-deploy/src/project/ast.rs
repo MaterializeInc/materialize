@@ -230,13 +230,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_creation() {
         let cluster = Cluster::new("quickstart".to_string());
         assert_eq!(cluster.name, "quickstart");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_equality() {
         let c1 = Cluster::new("quickstart".to_string());
         let c2 = Cluster::new("quickstart".to_string());
@@ -247,7 +247,7 @@ mod tests {
         assert_ne!(c2, c3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_clone() {
         let c1 = Cluster::new("quickstart".to_string());
         let c2 = c1.clone();
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(c1.name, c2.name);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_hash_consistency() {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(hash1, hash2, "Equal clusters should have equal hashes");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_in_hashset() {
         let mut clusters = BTreeSet::new();
 
@@ -289,7 +289,7 @@ mod tests {
         assert!(!clusters.contains(&Cluster::new("staging".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_database_ident_matches() {
         // Object name only
         let ident1 = DatabaseIdent {

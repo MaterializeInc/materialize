@@ -14,7 +14,7 @@
 //! topological sort that produces a deployment-safe ordering where every
 //! dependency precedes its dependents. External dependencies are excluded
 //! from traversal. A cycle produces
-//! [`DependencyError::CircularDependency`](crate::project::error::DependencyError::CircularDependency).
+//! [`DependencyError::CircularDependency`].
 //!
 //! Accessor methods (`iter_objects`, `find_object`, `get_tables`) flatten the
 //! `database > schema > object` hierarchy into simple iterators.

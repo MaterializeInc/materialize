@@ -46,19 +46,11 @@ pub fn default_docker_image() -> String {
 pub struct SecurityConfig {
     /// AWS profile name for loading secrets from AWS Secrets Manager.
     aws_profile: Option<String>,
-    /// GCP project ID used as the default for bare-name `gcp_secret(...)` calls.
-    /// Optional: calls that pass a full `projects/.../secrets/...` resource path
-    /// work without this set.
-    gcp_project: Option<String>,
 }
 
 impl SecurityConfig {
     pub fn aws_profile(&self) -> Option<&str> {
         self.aws_profile.as_deref()
-    }
-
-    pub fn gcp_project(&self) -> Option<&str> {
-        self.gcp_project.as_deref()
     }
 }
 
@@ -738,7 +730,7 @@ impl Settings {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_deserializes_profile_suffix() {
         let toml = r#"
 
@@ -750,7 +742,7 @@ mod tests {
         assert_eq!(config.profile_suffix.as_deref(), Some("_staging"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_deserializes_emulator() {
         let toml = r#"
 
@@ -762,7 +754,7 @@ mod tests {
         assert!(config.emulator);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_emulator_defaults_false() {
         let toml = r#"
 
@@ -774,14 +766,14 @@ mod tests {
         assert!(!config.emulator);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_builtin_emulator_config_defaults_emulator_true() {
         let settings: ProjectSettings = toml::from_str("").unwrap();
         let config = settings.config_for_profile(EMULATOR_PROFILE_NAME);
         assert!(config.emulator);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_user_defined_emulator_config_overrides_builtin() {
         let toml = r#"
 
@@ -795,7 +787,7 @@ mod tests {
         assert_eq!(config.profile_suffix.as_deref(), Some("_local"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_profile_suffix_optional() {
         let toml = r#"
 
@@ -808,34 +800,7 @@ mod tests {
         assert_eq!(config.security.aws_profile(), Some("prod-aws"));
     }
 
-    #[test]
-    fn test_security_config_deserializes_gcp_project() {
-        let toml = r#"
-
-            [prod.security]
-            gcp_project = "my-gcp-project"
-        "#;
-        let settings: ProjectSettings = toml::from_str(toml).unwrap();
-        let config = settings.config_for_profile("prod");
-        assert_eq!(config.security.gcp_project(), Some("my-gcp-project"));
-        assert_eq!(config.security.aws_profile(), None);
-    }
-
-    #[test]
-    fn test_security_config_both_aws_and_gcp() {
-        let toml = r#"
-
-            [prod.security]
-            aws_profile = "prod-aws"
-            gcp_project = "my-gcp-project"
-        "#;
-        let settings: ProjectSettings = toml::from_str(toml).unwrap();
-        let config = settings.config_for_profile("prod");
-        assert_eq!(config.security.aws_profile(), Some("prod-aws"));
-        assert_eq!(config.security.gcp_project(), Some("my-gcp-project"));
-    }
-
-    #[test]
+    #[mz_ore::test]
     fn test_suffix_for_profile_returns_suffix() {
         let toml = r#"
 
@@ -846,7 +811,7 @@ mod tests {
         assert_eq!(settings.suffix_for_profile("staging"), Some("_staging"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_suffix_for_profile_missing_profile() {
         let toml = r#"
 
@@ -857,7 +822,7 @@ mod tests {
         assert_eq!(settings.suffix_for_profile("nonexistent"), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_suffix_for_profile_no_profiles_section() {
         let toml = r#"
         "#;
@@ -865,7 +830,7 @@ mod tests {
         assert_eq!(settings.suffix_for_profile("staging"), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_config_for_profile_without_security_section() {
         let toml = r#"
 
@@ -878,7 +843,7 @@ mod tests {
         assert_eq!(config.security.aws_profile(), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_deserializes_variables() {
         let toml = r#"
 
@@ -898,7 +863,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_variables_default_empty() {
         let toml = r#"
 
@@ -910,7 +875,7 @@ mod tests {
         assert!(config.variables.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_config_variables_missing_profile() {
         let toml = r#"
         "#;
@@ -919,7 +884,7 @@ mod tests {
         assert!(config.variables.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dependencies_parses_valid_entries() {
         let toml = r#"
 
@@ -935,7 +900,7 @@ mod tests {
         assert!(deps.iter().any(|d| d.object() == "orders"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dependencies_defaults_to_empty() {
         let toml = r#"
         "#;
@@ -943,7 +908,7 @@ mod tests {
         assert!(settings.validate_dependencies().unwrap().is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dependencies_rejects_two_part_name() {
         let toml = r#"
             dependencies = ["public.orders"]
@@ -953,7 +918,7 @@ mod tests {
         assert!(matches!(err, ConfigError::InvalidDependency { .. }));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_dependencies_rejects_duplicates() {
         let toml = r#"
             dependencies = [
@@ -966,7 +931,7 @@ mod tests {
         assert!(matches!(err, ConfigError::DuplicateDependency { .. }));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_deserializes_options() {
         let toml = r#"
             [staging]
@@ -989,7 +954,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profile_options_default_empty() {
         let toml = r#"
             [prod]
@@ -1000,7 +965,7 @@ mod tests {
         assert!(data.get("prod").unwrap().options.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_is_valid_option_key_accepts_identifiers() {
         assert!(is_valid_option_key("cluster"));
         assert!(is_valid_option_key("search_path"));
@@ -1009,7 +974,7 @@ mod tests {
         assert!(is_valid_option_key("A"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_is_valid_option_key_rejects_invalid() {
         assert!(!is_valid_option_key(""));
         assert!(!is_valid_option_key("search path"));
@@ -1020,7 +985,7 @@ mod tests {
         assert!(!is_valid_option_key("café"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_profiles_config_rejects_invalid_option_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("profiles.toml");
@@ -1046,7 +1011,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_builtin_emulator_profile_present_in_loaded_config() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1066,7 +1031,7 @@ mod tests {
         assert_eq!(profile.username, "materialize");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_builtin_emulator_profile_resolves_without_profiles_file() {
         let dir = tempfile::tempdir().unwrap();
         // No profiles.toml written.
@@ -1077,7 +1042,7 @@ mod tests {
         assert_eq!(profile.username, "materialize");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_user_defined_emulator_profile_overrides_builtin() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1095,13 +1060,13 @@ mod tests {
         assert_eq!(profile.username, "alice");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn mzprofile_absent_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(read_mzprofile(dir.path()).unwrap(), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn mzprofile_reads_single_line() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(MZPROFILE_FILENAME), "staging\n").unwrap();
@@ -1111,7 +1076,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn mzprofile_skips_comments_and_blanks() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -1122,14 +1087,14 @@ mod tests {
         assert_eq!(read_mzprofile(dir.path()).unwrap().as_deref(), Some("dev"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn mzprofile_write_then_read_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         write_mzprofile(dir.path(), "prod").unwrap();
         assert_eq!(read_mzprofile(dir.path()).unwrap().as_deref(), Some("prod"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn project_toml_rejects_string_under_profile_key() {
         let err = toml::from_str::<ProjectSettings>(r#"profile = "default""#).unwrap_err();
         assert!(
@@ -1138,7 +1103,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_dependencies_accepts_user_three_part() {
         let settings: ProjectSettings =
             toml::from_str(r#"dependencies = ["materialize.public.foo"]"#).unwrap();
@@ -1150,7 +1115,7 @@ mod tests {
         assert_eq!(dep.object(), "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_dependencies_accepts_system_two_part() {
         let settings: ProjectSettings =
             toml::from_str(r#"dependencies = ["mz_catalog.mz_objects", "pg_catalog.pg_class"]"#)
@@ -1162,21 +1127,21 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_dependencies_rejects_non_system_two_part() {
         let settings: ProjectSettings = toml::from_str(r#"dependencies = ["public.foo"]"#).unwrap();
         let err = settings.validate_dependencies().unwrap_err();
         assert!(matches!(err, ConfigError::InvalidDependency { .. }));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_dependencies_rejects_one_part() {
         let settings: ProjectSettings = toml::from_str(r#"dependencies = ["foo"]"#).unwrap();
         let err = settings.validate_dependencies().unwrap_err();
         assert!(matches!(err, ConfigError::InvalidDependency { .. }));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn validate_dependencies_rejects_duplicates() {
         let settings: ProjectSettings =
             toml::from_str(r#"dependencies = ["mz_catalog.mz_objects", "mz_catalog.mz_objects"]"#)

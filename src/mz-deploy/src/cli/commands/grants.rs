@@ -409,7 +409,7 @@ mod tests {
         revocations.iter().map(|r| r.to_string()).collect()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_single_privilege_single_role() {
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader");
         let result = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -417,7 +417,7 @@ mod tests {
         assert!(result.contains(&("reader".to_string(), "USAGE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_multiple_privileges() {
         let grant = parse_grant("GRANT USAGE, CREATE ON CLUSTER my_cluster TO writer");
         let result = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -426,7 +426,7 @@ mod tests {
         assert!(result.contains(&("writer".to_string(), "CREATE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_all_expands_to_object_type_privileges() {
         let grant = parse_grant("GRANT ALL ON CLUSTER my_cluster TO admin");
         // For clusters, ALL = USAGE + CREATE
@@ -436,7 +436,7 @@ mod tests {
         assert!(result.contains(&("admin".to_string(), "CREATE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_all_with_single_privilege_object_type() {
         let grant = parse_grant("GRANT ALL ON SECRET \"db\".\"public\".\"my_secret\" TO reader");
         // For secrets, ALL = USAGE only
@@ -445,7 +445,7 @@ mod tests {
         assert!(result.contains(&("reader".to_string(), "USAGE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_multiple_roles() {
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader, writer");
         let result = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -454,7 +454,7 @@ mod tests {
         assert!(result.contains(&("writer".to_string(), "USAGE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_multiple_grant_statements() {
         let g1 = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader");
         let g2 = parse_grant("GRANT CREATE ON CLUSTER my_cluster TO writer");
@@ -464,7 +464,7 @@ mod tests {
         assert!(result.contains(&("writer".to_string(), "CREATE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_deduplicates() {
         // Two grant statements granting the same privilege to the same role
         let g1 = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader");
@@ -473,20 +473,20 @@ mod tests {
         assert_eq!(result.len(), 1);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_empty_input() {
         let result = desired_grants(&[], &["USAGE", "CREATE"]);
         assert!(result.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_role_name_lowercased() {
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO \"MyRole\"");
         let result = desired_grants(&[grant], &["USAGE"]);
         assert!(result.contains(&("myrole".to_string(), "USAGE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_desired_grants_table_all_privileges() {
         let grant = parse_grant("GRANT ALL ON TABLE \"db\".\"public\".\"my_table\" TO admin");
         // For tables, ALL = SELECT + INSERT + UPDATE + DELETE
@@ -498,7 +498,7 @@ mod tests {
         assert!(result.contains(&("admin".to_string(), "DELETE".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_no_stale() {
         let current = vec![make_object_grant("reader", "USAGE")];
         let mut desired = BTreeSet::new();
@@ -509,7 +509,7 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_has_stale() {
         let current = vec![
             make_object_grant("reader", "USAGE"),
@@ -528,7 +528,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_empty_desired() {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(strings[0], "REVOKE USAGE ON TABLE db.public.t FROM reader");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_empty_current() {
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
@@ -550,14 +550,14 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_both_empty() {
         let target = secret_target("db", "public", "s");
         let revocations = stale_grant_revocations(&[], &BTreeSet::new(), &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_case_insensitive_match() {
         // Current has mixed case, desired has lowercase — should still match
         let current = vec![make_object_grant("Reader", "usage")];
@@ -569,7 +569,7 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_multiple_stale() {
         let current = vec![
             make_object_grant("reader", "USAGE"),
@@ -583,7 +583,7 @@ mod tests {
         assert_eq!(revocations.len(), 3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_network_policy_keyword() {
         let current = vec![make_object_grant("reader", "USAGE")];
         let desired = BTreeSet::new();
@@ -598,7 +598,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_connection_keyword() {
         let current = vec![make_object_grant("app", "USAGE")];
         let desired = BTreeSet::new();
@@ -613,7 +613,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_secret_keyword() {
         let current = vec![make_object_grant("app", "USAGE")];
         let desired = BTreeSet::new();
@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_source_keyword() {
         let current = vec![make_object_grant("reader", "SELECT")];
         let desired = BTreeSet::new();
@@ -643,7 +643,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_stale_grant_revocations_protected_grants_not_revoked() {
         // Current has grants for reader (from default privileges) and writer (explicit).
         // Neither is in desired, but reader's grant is protected.
@@ -663,7 +663,7 @@ mod tests {
         assert!(!strings[0].contains("reader"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_no_revocations_when_grants_match() {
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader");
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -674,7 +674,7 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_revoke_removed_grant() {
         // Project only declares USAGE for reader, but cluster also has CREATE for writer
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO reader");
@@ -692,7 +692,7 @@ mod tests {
         assert!(strings[0].contains("CREATE"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_revoke_all_when_grants_removed() {
         // No grants declared in project, but cluster has grants
         let desired = desired_grants(&[], &["USAGE", "CREATE"]);
@@ -706,7 +706,7 @@ mod tests {
         assert_eq!(revocations.len(), 2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_grant_all_covers_all_current() {
         let grant = parse_grant("GRANT ALL ON CLUSTER my_cluster TO admin");
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -721,7 +721,7 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_grant_all_still_revokes_other_roles() {
         let grant = parse_grant("GRANT ALL ON CLUSTER my_cluster TO admin");
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
@@ -739,7 +739,7 @@ mod tests {
         assert!(strings[0].contains("reader"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_end_to_end_multiple_roles_multiple_privileges() {
         let g1 = parse_grant("GRANT USAGE ON CLUSTER c TO reader");
         let g2 = parse_grant("GRANT USAGE, CREATE ON CLUSTER c TO writer");

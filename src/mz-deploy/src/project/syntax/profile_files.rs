@@ -133,12 +133,12 @@ mod tests {
 
     // --- parse_file_stem tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_no_delimiter() {
         assert_eq!(parse_file_stem("pg_conn"), ("pg_conn", None));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_with_profile() {
         assert_eq!(
             parse_file_stem("pg_conn#staging"),
@@ -146,7 +146,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_object_name_with_underscores() {
         // Underscores in the object name are preserved; only the `#`
         // separates the profile.
@@ -156,31 +156,31 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_empty_profile() {
         // "pg_conn#" → empty profile part, treated as plain name
         assert_eq!(parse_file_stem("pg_conn#"), ("pg_conn#", None));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_empty_object_name() {
         // "#staging" → empty object name, treated as plain name
         assert_eq!(parse_file_stem("#staging"), ("#staging", None));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_no_underscores() {
         assert_eq!(parse_file_stem("simple"), ("simple", None));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_single_underscore() {
         assert_eq!(parse_file_stem("my_table"), ("my_table", None));
     }
 
     // --- collect_all_sql_files tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_collect_all_sql_files_basic() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("conn.sql"), "SELECT 1;").unwrap();
@@ -202,7 +202,7 @@ mod tests {
         assert!(table.overrides.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_collect_all_sql_files_override_only() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("secret#staging.sql"), "SELECT 1;").unwrap();
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(result[0].overrides.len(), 1);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_collect_all_sql_files_duplicate_override_errors() {
         // The filesystem guarantees unique filenames within a directory, so
         // the `DuplicateProfileObject` branch inside `collect_all_sql_files`
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(result.len(), 1);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_collect_all_sql_files_ignores_non_sql() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("conn.sql"), "SELECT 1;").unwrap();

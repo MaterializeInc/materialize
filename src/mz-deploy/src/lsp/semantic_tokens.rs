@@ -20,7 +20,7 @@
 //! sequence.
 //!
 //! Legend indices must match the order declared in the server's
-//! [`SemanticTokensLegend`] (see [`legend_token_types`]).
+//! `SemanticTokensLegend` (see [`legend_token_types`]).
 
 use mz_sql_lexer::lexer::{self, PosToken, Token};
 use tower_lsp::lsp_types::{SemanticToken, SemanticTokenType};
@@ -423,12 +423,12 @@ mod tests {
         out
     }
 
-    #[test]
+    #[mz_ore::test]
     fn empty_input() {
         assert!(compute_semantic_tokens("").is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn basic_select() {
         let sql = "SELECT 1 FROM t";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -443,7 +443,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn create_mv() {
         let sql = "CREATE MATERIALIZED VIEW foo AS SELECT 1";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -461,7 +461,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn line_comment_mid_statement() {
         let sql = "SELECT -- hi\n1";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -475,7 +475,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn block_comment_single_line() {
         let sql = "SELECT /* x */ 1";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -489,7 +489,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn block_comment_multiline() {
         let sql = "/*\na\nb\n*/";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -504,7 +504,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn string_literal() {
         let sql = "SELECT 'hello'";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -517,7 +517,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn comment_markers_inside_string_not_detected() {
         let sql = "SELECT '--not a comment' FROM t";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -532,7 +532,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn quoted_identifier() {
         let sql = r#"SELECT "My Col" FROM t"#;
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -547,7 +547,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn operators() {
         let sql = "SELECT 1 + 2 * 3";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -564,7 +564,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parameter() {
         let sql = "SELECT $1 + $42";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -579,7 +579,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn punctuation_is_skipped() {
         let sql = "SELECT (a, b.c);";
         let decoded = decode(&compute_semantic_tokens(sql));
@@ -595,7 +595,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn non_ascii_identifier() {
         // Japanese katakana "テーブル" (meaning "table"). Each char is one UTF-16 unit.
         let sql = "SELECT テーブル";
@@ -609,7 +609,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn lex_error_does_not_panic() {
         // `@@@` is not a valid SQL start — lex() errors. We should still
         // return some comment data or an empty list without panicking.
@@ -625,7 +625,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn legend_order_matches_constants() {
         let legend = legend_token_types();
         assert_eq!(

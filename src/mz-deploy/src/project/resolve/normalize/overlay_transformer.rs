@@ -161,7 +161,7 @@ mod tests {
     }
 
     // External reference: database not in in_project_databases → verbatim.
-    #[test]
+    #[mz_ore::test]
     fn external_reference_unchanged() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -177,7 +177,7 @@ mod tests {
     }
 
     // In-project DB, clean schema → unchanged 3-part name.
-    #[test]
+    #[mz_ore::test]
     fn in_project_clean_schema_routes_to_prod() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -193,7 +193,7 @@ mod tests {
     }
 
     // In-project DB, schema IS dirty → db becomes db__profile.
-    #[test]
+    #[mz_ore::test]
     fn in_project_dirty_schema_routes_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -213,7 +213,7 @@ mod tests {
 
     // Sparse overlay: in-project DB that has SOME schema dirty, but this
     // reference targets a non-dirty schema → routes to prod (not overlay).
-    #[test]
+    #[mz_ore::test]
     fn in_project_dirty_db_with_non_dirty_schema() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -235,7 +235,7 @@ mod tests {
 
     // Unqualified (1-part) name: fqn database + schema used, then
     // routed to overlay if schema is dirty.
-    #[test]
+    #[mz_ore::test]
     fn unqualified_name_resolved_via_fqn_then_routed_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -255,7 +255,7 @@ mod tests {
     }
 
     // Cluster rewrite: any input cluster name → target_cluster.
-    #[test]
+    #[mz_ore::test]
     fn transform_cluster_rewrites_to_target() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
@@ -273,7 +273,7 @@ mod tests {
 
     // Schema-qualified (2-part) name: fqn database prepended, then
     // routed to overlay if the explicit schema is dirty.
-    #[test]
+    #[mz_ore::test]
     fn schema_qualified_name_resolved_via_fqn_then_routed_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);

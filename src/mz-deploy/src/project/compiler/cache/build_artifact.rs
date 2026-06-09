@@ -1309,7 +1309,7 @@ mod tests {
         BuildArtifact::open(root, "default", None, &BTreeMap::new()).unwrap()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn load_file_contents_treats_null_contents_as_miss() {
         let temp = tempdir().unwrap();
         let file = temp.path().join("model.sql");
@@ -1344,7 +1344,7 @@ mod tests {
         assert_eq!(repaired.as_deref(), Some("CREATE VIEW v AS SELECT 1;"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prune_rows_removes_stale_object_and_typecheck_entries() {
         let temp = tempdir().unwrap();
         let mut db = open_db(temp.path());
@@ -1443,7 +1443,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn write_project_persists_aliases() {
         let temp = tempdir().unwrap();
         let mut db = open_db(temp.path());
@@ -1474,7 +1474,7 @@ mod tests {
         assert_eq!(orders_row.2, "mydb.public.orders");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn write_project_no_aliases_for_table_stmt() {
         let temp = tempdir().unwrap();
         let mut db = open_db(temp.path());

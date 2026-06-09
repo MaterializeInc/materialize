@@ -111,13 +111,13 @@ impl CteScope {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_empty_scope() {
         let scope = CteScope::new();
         assert!(!scope.is_cte("anything"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_single_scope() {
         let mut scope = CteScope::new();
         scope.push(BTreeSet::from(["cte_a".to_string(), "cte_b".to_string()]));
@@ -130,7 +130,7 @@ mod tests {
         assert!(!scope.is_cte("cte_a"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_nested_scopes() {
         let mut scope = CteScope::new();
 
@@ -153,7 +153,7 @@ mod tests {
         assert!(!scope.is_cte("outer_cte"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_empty_push() {
         let mut scope = CteScope::new();
         scope.push(BTreeSet::new());

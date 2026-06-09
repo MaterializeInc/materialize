@@ -189,7 +189,7 @@ mod tests {
 
     // --- Database name rewriting ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_comment_on_database() {
         let result = rewrite_db(
             "COMMENT ON DATABASE app IS 'app description'",
@@ -206,7 +206,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_grant_on_database() {
         let result = rewrite_db("GRANT ALL ON DATABASE app TO role1", "app", "_dev");
         assert!(
@@ -215,7 +215,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_alter_default_privileges_database() {
         let result = rewrite_db(
             "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN DATABASE app GRANT SELECT ON TABLES TO role1",
@@ -228,7 +228,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_database_no_match_passthrough() {
         let original = "COMMENT ON DATABASE other IS 'untouched'";
         let result = rewrite_db(original, "app", "_dev");
@@ -240,7 +240,7 @@ mod tests {
 
     // --- Schema name rewriting ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_comment_on_schema_qualified() {
         let result = rewrite_schema(
             "COMMENT ON SCHEMA app.public IS 'schema description'",
@@ -257,7 +257,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_grant_on_schema() {
         let result = rewrite_schema(
             "GRANT USAGE ON SCHEMA app.public TO role1",
@@ -270,7 +270,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_alter_default_privileges_schema() {
         let result = rewrite_schema(
             "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA app.public GRANT SELECT ON TABLES TO role1",
@@ -283,7 +283,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_schema_no_match_passthrough() {
         let original = "COMMENT ON SCHEMA app.other IS 'untouched'";
         let result = rewrite_schema(original, "public", "_staging");

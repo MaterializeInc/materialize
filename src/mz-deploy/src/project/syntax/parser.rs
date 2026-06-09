@@ -185,12 +185,12 @@ pub(crate) fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
 mod test {
     use crate::project::syntax::parser::parse_statements;
 
-    #[test]
+    #[mz_ore::test]
     fn validate() {
         let _ = parse_statements(vec!["CREATE CLUSTER c (INTROSPECTION INTERVAL = 0)"]).unwrap();
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mv_in_cluster() {
         let result = parse_statements(vec![
             "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1",

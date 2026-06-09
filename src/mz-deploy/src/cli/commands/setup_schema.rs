@@ -247,7 +247,7 @@ mod tests {
     /// catches exactly the set of objects `setup` installs. If this fails,
     /// you added a CREATE without a matching EXPECTED_OBJECTS row (or the
     /// other way around).
-    #[test]
+    #[mz_ore::test]
     fn expected_objects_match_setup_statements() {
         let parsed: BTreeSet<(String, String, &'static str)> = SETUP_STATEMENTS
             .iter()

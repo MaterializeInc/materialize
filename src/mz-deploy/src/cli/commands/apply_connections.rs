@@ -322,7 +322,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_no_changes() {
         let opts = vec![
             make_option(ConnectionOptionName::Host, "localhost"),
@@ -333,7 +333,7 @@ mod tests {
         assert!(to_drop.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_option_changed() {
         let project = vec![make_option(
             ConnectionOptionName::Host,
@@ -349,7 +349,7 @@ mod tests {
         assert!(to_drop.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_option_added() {
         let project = vec![
             make_option(ConnectionOptionName::Host, "localhost"),
@@ -362,7 +362,7 @@ mod tests {
         assert!(to_drop.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_option_dropped() {
         let project = vec![make_option(ConnectionOptionName::Host, "localhost")];
         let live = vec![
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(to_drop[0], ConnectionOptionName::Database);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_multiple_changes() {
         let project = vec![
             make_option(ConnectionOptionName::Host, "new-host"),
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(to_drop[0], ConnectionOptionName::Database);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_diff_secret_option_compared_structurally() {
         use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 

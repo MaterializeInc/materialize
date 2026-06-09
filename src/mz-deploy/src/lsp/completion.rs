@@ -641,7 +641,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_no_prefix() {
         let text = "SELECT ";
         let ctx = prefix_context(text, Position::new(0, 7));
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(ctx.text, "");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_bare_ident() {
         let text = "SELECT foo";
         let ctx = prefix_context(text, Position::new(0, 10));
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(ctx.text, "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_one_dot() {
         let text = "SELECT schema.foo";
         let ctx = prefix_context(text, Position::new(0, 17));
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(ctx.text, "schema.foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_two_dots() {
         let text = "SELECT db.schema.foo";
         let ctx = prefix_context(text, Position::new(0, 20));
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(ctx.text, "db.schema.foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_mid_line() {
         let text = "SELECT * FROM schema.f";
         let ctx = prefix_context(text, Position::new(0, 22));
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(ctx.text, "schema.f");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_text_stored() {
         let text = "SELECT public.f";
         let ctx = prefix_context(text, Position::new(0, 15));
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(ctx.text, "public.f");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn same_schema_bare_name() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -714,7 +714,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cross_schema_qualified() {
         let root = tempfile::tempdir().unwrap();
         let public = root.path().join("models/mydb/public");
@@ -748,7 +748,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn cross_database_fully_qualified() {
         let root = tempfile::tempdir().unwrap();
         let db1 = root.path().join("models/mydb/public");
@@ -772,7 +772,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn external_deps_included() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(ext_items[0].label, "ext.src");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn kind_mapping() {
         let root = tempfile::tempdir().unwrap();
         // Storage and computation objects must be in separate schemas.
@@ -839,7 +839,7 @@ mod tests {
         assert_eq!(view_item.kind, Some(CompletionItemKind::STRUCT));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn file_outside_models_returns_empty() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -853,7 +853,7 @@ mod tests {
         assert!(items.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn schema_prefix_strips_label_to_bare_name() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -883,7 +883,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn db_prefix_disambiguates_to_schema_dot_object() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -908,7 +908,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn full_qualification_strips_to_bare_name() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("models/mydb/public");
@@ -931,7 +931,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_filters_non_matching_objects() {
         let root = tempfile::tempdir().unwrap();
         let public = root.path().join("models/mydb/public");
@@ -983,7 +983,7 @@ mod tests {
         std::fs::write(root.join("types.lock"), toml).unwrap();
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_deps_at_zero_dots() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1018,7 +1018,7 @@ mod tests {
         assert!(labels.contains(&"bar"), "expected 'bar', got: {:?}", labels);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_deps_filtered_by_prefix() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1058,7 +1058,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_deps_no_types_cache() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1079,7 +1079,7 @@ mod tests {
         assert!(items.is_empty(), "expected empty without types cache");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_deps_multiple_dependencies() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1112,7 +1112,7 @@ mod tests {
         assert!(labels.contains(&"b"), "expected 'b', got: {:?}", labels);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_bare_object() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1156,7 +1156,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_schema_object() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1199,7 +1199,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_fully_qualified() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1237,7 +1237,7 @@ mod tests {
         assert!(labels.contains(&"id"), "expected 'id', got: {:?}", labels);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_non_dependency_excluded() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1289,7 +1289,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_object_not_in_cache() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1319,7 +1319,7 @@ mod tests {
         assert!(items.is_empty(), "expected empty when object not in cache");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_qualified_filter_case_insensitive() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1367,7 +1367,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_kind_and_detail() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1406,7 +1406,7 @@ mod tests {
         assert_eq!(name_item.detail.as_deref(), Some("text (nullable)"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_sort_before_objects() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1457,7 +1457,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_explicit() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1501,7 +1501,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_bare_table_name() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1540,7 +1540,7 @@ mod tests {
         assert!(labels.contains(&"id"), "expected 'id', got: {:?}", labels);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_non_dependency_empty() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1593,7 +1593,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_multiple_joins() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1647,7 +1647,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_case_insensitive() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1690,7 +1690,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn column_alias_non_query_stmt_empty_map() {
         let root = tempfile::tempdir().unwrap();
         let storage = root.path().join("models/mydb/storage");
@@ -1720,7 +1720,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn prefix_context_uses_utf16_cursor_positions() {
         let text = "SELECT 😀foo";
         let ctx = prefix_context(text, Position::new(0, 12));
@@ -1728,7 +1728,7 @@ mod tests {
         assert_eq!(ctx.text, "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_same_schema_bare_label() {
         let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
         let prefix = no_prefix();
@@ -1736,7 +1736,7 @@ mod tests {
         assert_eq!(result, Some(("foo".to_string(), "1_foo".to_string())));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_cross_schema_qualified() {
         let id = ObjectId::new("mydb".to_string(), "other".to_string(), "bar".to_string());
         let prefix = no_prefix();
@@ -1747,7 +1747,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_cross_database_fully_qualified() {
         let id = ObjectId::new("otherdb".to_string(), "s".to_string(), "x".to_string());
         let prefix = no_prefix();
@@ -1758,7 +1758,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_dotted_prefix_matches_schema_qualified() {
         let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
         let prefix = PrefixContext {
@@ -1772,7 +1772,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_dotted_prefix_no_match() {
         let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
         let prefix = PrefixContext {
@@ -1783,7 +1783,7 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn qualify_case_insensitive() {
         let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
         let prefix = PrefixContext {
@@ -1797,7 +1797,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_qualified_object_alias_hit() {
         let mut aliases = BTreeMap::new();
         aliases.insert("o".to_string(), "mydb.storage.orders".to_string());
@@ -1812,7 +1812,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_qualified_object_bare_fallback() {
         let aliases = BTreeMap::new();
         let result = resolve_qualified_object("foo", &aliases, "mydb", "public");
@@ -1826,7 +1826,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_qualified_object_two_parts() {
         let aliases = BTreeMap::new();
         let result = resolve_qualified_object("storage.orders", &aliases, "mydb", "public");
@@ -1840,7 +1840,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_qualified_object_three_parts() {
         let aliases = BTreeMap::new();
         let result = resolve_qualified_object("otherdb.s.x", &aliases, "mydb", "public");
@@ -1854,7 +1854,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn resolve_qualified_object_four_parts_none() {
         let aliases = BTreeMap::new();
         let result = resolve_qualified_object("a.b.c.d", &aliases, "mydb", "public");

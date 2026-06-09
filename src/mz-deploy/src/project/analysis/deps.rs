@@ -21,7 +21,7 @@
 //!
 //! CTE references must be excluded from the dependency set because they
 //! are query-local names, not database objects. The visitor uses
-//! [`CteScope`](CteScope) to track CTE names
+//! [`CteScope`] to track CTE names
 //! across nested queries. All CTE names in a `WITH` block are pushed at
 //! once — this is correct for both simple and mutually recursive CTEs
 //! because self-references in simple CTEs are SQL errors that Materialize
@@ -554,7 +554,7 @@ mod dependency_validation_tests {
         ObjectId::new(db.to_string(), schema.to_string(), obj.to_string())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_all_externals_declared() {
         let declared = BTreeSet::from([
             oid("ontology", "public", "customers"),
@@ -569,7 +569,7 @@ mod dependency_validation_tests {
         assert!(result.unused.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_undeclared_external_detected() {
         let declared = BTreeSet::from([oid("ontology", "public", "customers")]);
         let discovered = BTreeSet::from([
@@ -586,7 +586,7 @@ mod dependency_validation_tests {
         assert!(result.unused.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_unused_declared_detected() {
         let declared = BTreeSet::from([
             oid("ontology", "public", "customers"),
@@ -603,7 +603,7 @@ mod dependency_validation_tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_both_empty() {
         let declared = BTreeSet::new();
         let discovered = BTreeSet::new();
@@ -612,7 +612,7 @@ mod dependency_validation_tests {
         assert!(result.unused.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_both_undeclared_and_unused() {
         let declared = BTreeSet::from([oid("a", "b", "unused")]);
         let discovered = BTreeSet::from([oid("x", "y", "undeclared")]);

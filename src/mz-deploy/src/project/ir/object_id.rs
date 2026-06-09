@@ -298,7 +298,7 @@ impl<'de> Deserialize<'de> for ObjectId {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn parse_user_object_three_parts() {
         let id: ObjectId = "materialize.public.foo".parse().unwrap();
         assert_eq!(id.database(), Some("materialize"));
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(id.object(), "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parse_system_schema_two_parts() {
         for input in [
             "mz_catalog.mz_objects",
@@ -320,18 +320,18 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parse_user_two_parts_rejected() {
         let err = "public.foo".parse::<ObjectId>().unwrap_err();
         assert!(err.contains("invalid object id"), "got: {}", err);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parse_one_part_rejected() {
         assert!("foo".parse::<ObjectId>().is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn display_round_trip() {
         for input in [
             "materialize.public.foo",
@@ -343,7 +343,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn from_item_name_two_part_system_strips_default_db() {
         let name = UnresolvedItemName(vec![
             Ident::new("mz_catalog").unwrap(),
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(id.object(), "mz_objects");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn from_item_name_two_part_user_uses_default_db() {
         let name = UnresolvedItemName(vec![
             Ident::new("public").unwrap(),
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(id.object(), "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn from_item_name_three_part_used_as_is() {
         let name = UnresolvedItemName(vec![
             Ident::new("other_db").unwrap(),

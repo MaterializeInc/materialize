@@ -33,10 +33,10 @@
 //!
 //! 1. Identifier parts are resolved to an `ObjectId` using the same
 //!    1/2/3-part convention as [`goto_definition::resolve_reference()`].
-//! 2. The object is looked up in the [`ProjectCache`] (SQLite) to confirm
+//! 2. The object is looked up in the `ProjectCache` (SQLite) to confirm
 //!    existence and determine its kind (view, materialized view, table, etc.).
-//! 3. Column schemas are retrieved via two-tier lookup: [`ProjectCache`]
-//!    (SQLite) first, then [`Types`] (types.lock) as fallback.
+//! 3. Column schemas are retrieved via two-tier lookup: `ProjectCache`
+//!    (SQLite) first, then `Types` (types.lock) as fallback.
 //!
 //! ### Output
 //!
@@ -87,10 +87,10 @@ pub fn resolve_variable_hover(
 ///
 /// Takes the dot-qualified identifier `parts` (from
 /// [`goto_definition::find_reference_at_position()`]), resolves it against the
-/// [`ProjectCache`] (SQLite), and formats the output schema as Markdown.
+/// `ProjectCache` (SQLite), and formats the output schema as Markdown.
 ///
-/// Column schemas are retrieved via two-tier lookup: [`ProjectCache`] first
-/// (typecheck columns), then [`Types`] (types.lock) as fallback.
+/// Column schemas are retrieved via two-tier lookup: `ProjectCache` first
+/// (typecheck columns), then `Types` (types.lock) as fallback.
 ///
 /// # Returns
 /// `Some(Hover)` with Markdown content if the identifier resolves to a known
@@ -237,7 +237,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_hover_resolved() {
         let variables = vars(&[("cluster", "ontology")]);
         let sql = "IN CLUSTER :cluster AS";
@@ -246,19 +246,19 @@ mod tests {
         assert_eq!(text, "ontology");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_hover_unresolved_returns_none() {
         let sql = "IN CLUSTER :cluster AS";
         assert!(resolve_variable_hover(sql, 11, &BTreeMap::new()).is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn variable_hover_not_on_variable() {
         let sql = "SELECT 1 FROM t";
         assert!(resolve_variable_hover(sql, 5, &BTreeMap::new()).is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_with_cached_columns() {
         let (root, cache, types_lock) = build_test_project_with_types_lock();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -278,7 +278,7 @@ mod tests {
         assert!(text.contains("| name | text |"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_without_cache_shows_kind_and_path() {
         let (root, cache) = build_test_project_cache();
         let empty_types = Types::default();
@@ -300,7 +300,7 @@ mod tests {
         assert!(!text.contains("| Column |"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_unknown_identifier_returns_none() {
         let (root, cache) = build_test_project_cache();
         let empty_types = Types::default();
@@ -316,7 +316,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_cross_schema_reference() {
         let (root, cache, types_lock) = build_test_project_cross_schema_with_types_lock();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/other/baz.sql")).unwrap();
@@ -335,7 +335,7 @@ mod tests {
         assert!(text.contains("| id | integer |"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_with_description_and_column_comments() {
         let (root, cache, types_lock) = build_test_project_with_comments_and_types_lock(
             "CREATE VIEW foo AS SELECT 1 AS id, 'x' AS name;\n\
@@ -362,7 +362,7 @@ mod tests {
         assert!(text.contains("| name | text |  |"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_with_description_only() {
         let (root, cache, types_lock) = build_test_project_with_comments_and_types_lock(
             "CREATE VIEW foo AS SELECT 1 AS id, 'x' AS name;\n\
@@ -386,7 +386,7 @@ mod tests {
         assert!(text.contains("| Column | Type |"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_no_comments_unchanged() {
         let (root, cache, types_lock) = build_test_project_with_types_lock();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -410,7 +410,7 @@ mod tests {
         assert!(!text.contains("Description"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hover_types_lock_comments_on_external_dep() {
         let (root, cache) = build_test_project_cache();
         let mut types_lock = Types::default();

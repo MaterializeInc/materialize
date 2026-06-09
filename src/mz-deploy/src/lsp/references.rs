@@ -16,7 +16,7 @@
 //!
 //! ## Algorithm
 //!
-//! 1. Resolve identifier parts to an [`ObjectId`] (reuses
+//! 1. Resolve identifier parts to an `ObjectId` (reuses
 //!    [`goto_definition::resolve_object_id`]).
 //! 2. Query [`ProjectCache::get_dependents`] to find all objects that depend on
 //!    the target.
@@ -91,7 +91,7 @@ mod tests {
     use crate::project::compiler::cache::ProjectCache;
     use std::path::Path;
 
-    #[test]
+    #[mz_ore::test]
     fn object_with_dependents() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(locations[0].uri, expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn object_with_dependents_include_declaration() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(locations[0].uri, def_uri);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn object_with_no_dependents() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
@@ -127,7 +127,7 @@ mod tests {
         assert!(locations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn unknown_identifier_returns_empty() {
         let (root, cache) = build_test_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/bar.sql")).unwrap();
@@ -142,7 +142,7 @@ mod tests {
         assert!(locations.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn transitive_dependents() {
         let (root, cache) = build_chain_project_cache();
         let file_uri = Url::from_file_path(root.path().join("models/mydb/public/c.sql")).unwrap();

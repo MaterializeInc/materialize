@@ -286,13 +286,13 @@ mod tests {
         WorkDoneProgressParams,
     };
 
-    #[test]
+    #[mz_ore::test]
     fn suggestions_to_data_empty_returns_none() {
         let rope = Rope::from_str("SELECT 1");
         assert!(suggestions_to_data(&[], &rope).is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn suggestions_to_data_maps_byte_range_to_line_col() {
         let source = "SELECT custoser_name FROM users";
         let rope = Rope::from_str(source);
@@ -340,7 +340,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn builder_emits_one_action_per_alternative() {
         let uri = Url::parse("file:///tmp/v.sql").unwrap();
         let qf = QuickFixData {
@@ -377,7 +377,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn builder_marks_single_alternative_preferred() {
         let uri = Url::parse("file:///tmp/v.sql").unwrap();
         let qf = QuickFixData {
@@ -399,7 +399,7 @@ mod tests {
         assert!(ca.title.contains("customer_name"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn builder_skips_diagnostics_without_quickfix_data() {
         let uri = Url::parse("file:///tmp/v.sql").unwrap();
         let diag = Diagnostic {
@@ -414,14 +414,14 @@ mod tests {
         assert!(build_code_actions(&params).is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn did_you_mean_returns_empty_for_no_close_match() {
         let candidates = ["customer_name", "customer_id", "shipping_address"];
         let out = did_you_mean("xyz", candidates.iter().map(|s| s.to_string()));
         assert!(out.is_empty(), "expected no matches, got {:?}", out);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn did_you_mean_returns_exact_match_first() {
         let candidates = ["customer_name", "customer_id"];
         let out = did_you_mean("customer_name", candidates.iter().map(|s| s.to_string()));
@@ -433,7 +433,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn did_you_mean_handles_transposition() {
         // Damerau-Levenshtein treats one transposition as distance 1.
         let candidates = ["customer_name"];
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(out, vec!["customer_name".to_string()]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn did_you_mean_respects_max_three_limit() {
         // Provide many candidates that are all close enough to hit the limit.
         // "custoser_name" (distance 1 to): customer_name, custumer_name, cust_name, etc.
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(out[0], "customer_name");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn did_you_mean_skips_empty_candidates() {
         let candidates: Vec<String> = Vec::new();
         let out = did_you_mean("anything", candidates);
@@ -480,7 +480,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fuzzy_suggestions_for_unknown_item_uses_items_pool() {
         let source = "SELECT * FROM cusotmers";
         let primary = 14..23; // "cusotmers"
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(out[0].alternatives[0].byte_range, 14..23);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fuzzy_suggestions_for_unknown_schema_uses_schemas_pool() {
         let source = "SELECT * FROM publik.t";
         let primary = 14..20; // "publik"
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(out[0].alternatives[0].replacement, "public");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fuzzy_suggestions_for_unknown_cluster_uses_clusters_pool() {
         let source = "CREATE VIEW v IN CLUSTER quikstart AS SELECT 1";
         let primary = 25..34; // "quikstart"
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(out[0].alternatives[0].replacement, "quickstart");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fuzzy_suggestions_for_kind_without_matches_returns_empty() {
         let source = "SELECT 1";
         let primary = 0..0;
@@ -530,7 +530,7 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fuzzy_suggestions_for_unhandled_kind_returns_empty() {
         let source = "SELECT 1";
         let primary = 0..0;
@@ -545,7 +545,7 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn harvest_candidates_none_returns_default() {
         let c = harvest_candidates(None);
         assert!(c.items.is_empty());

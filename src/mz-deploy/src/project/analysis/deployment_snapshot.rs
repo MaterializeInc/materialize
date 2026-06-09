@@ -335,7 +335,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    #[test]
+    #[mz_ore::test]
     fn test_empty_snapshot() {
         let snapshot = DeploymentSnapshot::default();
         assert!(snapshot.objects.is_empty());
@@ -402,7 +402,7 @@ mod tests {
         graph::Project::from(typed_project)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_apply_managed_objects_excluded_from_snapshot() {
         let view_obj = make_typed_object("CREATE VIEW my_view AS SELECT 1");
         let mv_obj = make_typed_object("CREATE MATERIALIZED VIEW my_mv IN CLUSTER c AS SELECT 1");

@@ -15,7 +15,6 @@ async-stream = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-gcloud-sdk = { workspace = true }
 itertools = { workspace = true }
 rayon = { workspace = true }
 junit-report = { workspace = true }
@@ -38,7 +37,11 @@ time = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 clap_complete = { workspace = true }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true }
+# Default features are off in the workspace declaration. mz-deploy only uses
+# crossterm for terminal/cursor styling, not input reading, so it skips the
+# default `events` feature — `events` pulls signal-hook-mio, which enables
+# mio's default `log` feature (a banned crate).
+crossterm = { workspace = true, features = ["windows"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_json-1"] }
@@ -58,6 +61,7 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 rusqlite = { workspace = true }
 
 [dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
 tempfile = { workspace = true }
 
 [features]

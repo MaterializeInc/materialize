@@ -258,14 +258,14 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn render_includes_message_and_origin() {
         let out = render(&pd("SELECT bogus", 7..12, "unknown column"));
         assert!(out.contains("unknown column"));
         assert!(out.contains("test.sql"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn render_message_only_when_source_empty() {
         let out = render(&pd("", 0..0, "missing CREATE statement"));
         assert!(out.contains("missing CREATE statement"));
@@ -273,7 +273,7 @@ mod tests {
         assert!(!out.contains("test.sql"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn render_with_footer() {
         let mut diag = pd("SELECT 1", 7..8, "type mismatch");
         diag.footers.push("convert with CAST".to_string());
@@ -282,19 +282,19 @@ mod tests {
         assert!(out.contains("convert with CAST"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn clamped_range_caps_at_source_len() {
         let diag = pd("abc", 100..200, "out of range");
         assert_eq!(clamped_range(&diag), 3..3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn clamped_range_preserves_in_bounds() {
         let diag = pd("abcdef", 1..4, "ok");
         assert_eq!(clamped_range(&diag), 1..4);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn origin_string_strips_curdir() {
         assert_eq!(
             origin_string(std::path::Path::new("././models/app/foo.sql")),
@@ -302,7 +302,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn origin_string_preserves_absolute() {
         assert_eq!(
             origin_string(std::path::Path::new("/abs/models/foo.sql")),
@@ -310,7 +310,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn origin_string_preserves_bare_curdir() {
         assert_eq!(origin_string(std::path::Path::new(".")), ".");
     }

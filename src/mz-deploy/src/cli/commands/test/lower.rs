@@ -618,7 +618,7 @@ fn types_match_with_bare_containers(a: &str, b: &str) -> bool {
 /// Normalize a SQL type for comparison.
 ///
 /// Handles Materialize type aliases so that equivalent types compare equal.
-/// See: https://materialize.com/docs/sql/types/
+/// See: <https://materialize.com/docs/sql/types/>
 fn normalize_type(t: &str) -> String {
     let normalized = t.trim().to_lowercase();
 
@@ -851,7 +851,7 @@ mod tests {
     use crate::types::ColumnType;
     use std::collections::BTreeMap;
 
-    #[test]
+    #[mz_ore::test]
     fn test_flatten_fqn() {
         assert_eq!(
             flatten_fqn("materialize.public.flippers"),
@@ -861,7 +861,7 @@ mod tests {
         assert_eq!(flatten_fqn("single"), "\"single\"");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_create_mock_view_sql() {
         let mock = MockView {
             fqn: "materialize.public.users".to_string(),
@@ -880,7 +880,7 @@ mod tests {
         assert!(sql.contains("SELECT * FROM data"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_create_expected_view_sql() {
         let expected = ExpectedResult {
             columns: vec![
@@ -898,7 +898,7 @@ mod tests {
         assert!(sql.contains("SELECT * FROM data"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_create_test_query_sql() {
         let sql = create_test_query_sql("materialize_public_my_view", None);
 
@@ -911,7 +911,7 @@ mod tests {
         assert!(!sql.contains("AS OF"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_create_test_query_sql_with_at_time() {
         let sql =
             create_test_query_sql("materialize_public_my_view", Some("'2024-01-15 10:00:00'"));
@@ -1055,7 +1055,7 @@ mod tests {
         deps
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_passes_with_correct_mocks() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1104,7 +1104,7 @@ mod tests {
         assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_unmocked_dependency() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1153,7 +1153,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_missing_mock_column() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1211,7 +1211,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_extra_mock_column() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1270,7 +1270,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_type_mismatch() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1331,7 +1331,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_expected_schema_mismatch() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1392,7 +1392,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_unit_test_fails_with_expected_type_mismatch() {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
@@ -1452,7 +1452,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_fqn_unqualified() {
         let target_id = ObjectId::new(
             "mydb".to_string(),
@@ -1464,7 +1464,7 @@ mod tests {
         assert_eq!(normalized.to_string(), "mydb.myschema.users");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_fqn_schema_qualified() {
         let target_id = ObjectId::new(
             "mydb".to_string(),
@@ -1476,7 +1476,7 @@ mod tests {
         assert_eq!(normalized.to_string(), "mydb.other_schema.users");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_fqn_fully_qualified() {
         let target_id = ObjectId::new(
             "mydb".to_string(),
@@ -1488,7 +1488,7 @@ mod tests {
         assert_eq!(normalized.to_string(), "other_db.other_schema.users");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_integer_aliases() {
         assert_eq!(normalize_type("INT"), "integer");
         assert_eq!(normalize_type("int4"), "integer");
@@ -1496,21 +1496,21 @@ mod tests {
         assert_eq!(normalize_type("INTEGER"), "integer");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_bigint_aliases() {
         assert_eq!(normalize_type("INT8"), "bigint");
         assert_eq!(normalize_type("bigint"), "bigint");
         assert_eq!(normalize_type("BIGINT"), "bigint");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_smallint_aliases() {
         assert_eq!(normalize_type("INT2"), "smallint");
         assert_eq!(normalize_type("smallint"), "smallint");
         assert_eq!(normalize_type("SMALLINT"), "smallint");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_real_aliases() {
         assert_eq!(normalize_type("float4"), "real");
         assert_eq!(normalize_type("FLOAT4"), "real");
@@ -1518,7 +1518,7 @@ mod tests {
         assert_eq!(normalize_type("REAL"), "real");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_double_precision_aliases() {
         assert_eq!(normalize_type("float"), "double precision");
         assert_eq!(normalize_type("FLOAT"), "double precision");
@@ -1530,7 +1530,7 @@ mod tests {
         assert_eq!(normalize_type("DOUBLE PRECISION"), "double precision");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_boolean_aliases() {
         assert_eq!(normalize_type("bool"), "boolean");
         assert_eq!(normalize_type("boolean"), "boolean");
@@ -1538,7 +1538,7 @@ mod tests {
         assert_eq!(normalize_type("BOOLEAN"), "boolean");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_text_aliases() {
         assert_eq!(normalize_type("text"), "text");
         assert_eq!(normalize_type("TEXT"), "text");
@@ -1551,7 +1551,7 @@ mod tests {
         assert_eq!(normalize_type("character varying(100)"), "text");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_numeric_aliases() {
         assert_eq!(normalize_type("numeric"), "numeric");
         assert_eq!(normalize_type("NUMERIC"), "numeric");
@@ -1561,7 +1561,7 @@ mod tests {
         assert_eq!(normalize_type("decimal(18,4)"), "numeric");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_jsonb_aliases() {
         assert_eq!(normalize_type("json"), "jsonb");
         assert_eq!(normalize_type("JSON"), "jsonb");
@@ -1569,7 +1569,7 @@ mod tests {
         assert_eq!(normalize_type("JSONB"), "jsonb");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_timestamptz_aliases() {
         assert_eq!(normalize_type("timestamptz"), "timestamp with time zone");
         assert_eq!(normalize_type("TIMESTAMPTZ"), "timestamp with time zone");
@@ -1583,7 +1583,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_preserves_other_types() {
         assert_eq!(normalize_type("timestamp"), "timestamp without time zone");
         assert_eq!(normalize_type("TIMESTAMP"), "timestamp without time zone");
@@ -1598,14 +1598,14 @@ mod tests {
         assert_eq!(normalize_type("uint8"), "uint8");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_handles_whitespace() {
         assert_eq!(normalize_type("  INT  "), "integer");
         assert_eq!(normalize_type("\ttext\n"), "text");
         assert_eq!(normalize_type("  double precision  "), "double precision");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_case_insensitive() {
         assert_eq!(normalize_type("integer"), normalize_type("INTEGER"));
         assert_eq!(normalize_type("integer"), normalize_type("Integer"));
@@ -1652,7 +1652,7 @@ mod tests {
         assert_eq!(normalize_type("json"), normalize_type("JSON"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_exact_match() {
         let test_columns = vec![
             ("id".to_string(), "bigint".to_string()),
@@ -1685,7 +1685,7 @@ mod tests {
         assert!(type_mismatches.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_with_type_aliases() {
         let test_columns = vec![
             ("id".to_string(), "INT".to_string()),
@@ -1718,7 +1718,7 @@ mod tests {
         assert!(type_mismatches.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_detects_extra() {
         let test_columns = vec![
             ("id".to_string(), "bigint".to_string()),
@@ -1741,7 +1741,7 @@ mod tests {
         assert!(missing.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_detects_missing() {
         let test_columns = vec![("id".to_string(), "bigint".to_string())];
 
@@ -1770,7 +1770,7 @@ mod tests {
         assert_eq!(missing, vec![("name".to_string(), "text".to_string())]);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_detects_type_mismatch() {
         let test_columns = vec![("id".to_string(), "text".to_string())];
 
@@ -1792,7 +1792,7 @@ mod tests {
         assert_eq!(type_mismatches[0].2, "bigint");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_with_unqualified_mock_name() {
         let test = UnitTest {
             name: "test_partial_fqn".to_string(),
@@ -1841,7 +1841,7 @@ mod tests {
         assert!(result.is_ok(), "Expected validation to pass: {:?}", result);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_passes_with_no_dependencies() {
         let test = UnitTest {
             name: "test_no_deps".to_string(),
@@ -1871,7 +1871,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_skips_unknown_mock() {
         let test = UnitTest {
             name: "test_unknown_mock".to_string(),
@@ -1911,7 +1911,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_list() {
         assert_eq!(normalize_type("int8 list"), "bigint list");
         assert_eq!(normalize_type("INT LIST"), "integer list");
@@ -1919,26 +1919,26 @@ mod tests {
         assert_eq!(normalize_type("INT8 LIST"), "bigint list");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_array() {
         assert_eq!(normalize_type("int8[]"), "bigint[]");
         assert_eq!(normalize_type("INT[]"), "integer[]");
         assert_eq!(normalize_type("text[]"), "text[]");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_map() {
         assert_eq!(normalize_type("map[text=>int8]"), "map[text=>bigint]");
         assert_eq!(normalize_type("map[STRING=>BOOL]"), "map[text=>boolean]");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_type_bare_list() {
         assert_eq!(normalize_type("list"), "list");
         assert_eq!(normalize_type("LIST"), "list");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_list_matches_bare() {
         let test_columns = vec![("ids".to_string(), "int8 list".to_string())];
 
@@ -1963,7 +1963,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_compare_columns_map_matches_bare() {
         let test_columns = vec![("data".to_string(), "map[text=>int8]".to_string())];
 

@@ -22,13 +22,9 @@
 //! - `env_var::EnvVarProvider` — reads from environment variables
 //! - `aws_secret::AwsSecretProvider` — reads from AWS Secrets Manager
 //! - `aws_secret::UnconfiguredAwsProvider` — placeholder when `aws_profile` is not set
-//! - `gcp_secret::GcpSecretProvider` — reads from Google Cloud Secret Manager;
-//!   `gcp_project` is optional (full `projects/.../secrets/...` paths work
-//!   without it)
 
 mod aws_secret;
 mod env_var;
-mod gcp_secret;
 mod json_field;
 
 use crate::cli::CliError;
@@ -37,7 +33,6 @@ use crate::project::ast::Statement;
 use async_trait::async_trait;
 use aws_secret::{AwsSecretProvider, UnconfiguredAwsProvider};
 use env_var::EnvVarProvider;
-use gcp_secret::GcpSecretProvider;
 use mz_sql_parser::ast::{CreateSecretStatement, Expr, FunctionArgs, Raw, RawItemName, Value};
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -97,12 +92,9 @@ pub(crate) struct SecretResolver {
 impl SecretResolver {
     /// Creates a new resolver with providers configured from the given security config.
     ///
-    /// Always registers `env_var` and `gcp_secret`. For AWS, registers the
-    /// real Secrets Manager provider when `aws_profile` is set, or a
-    /// placeholder that errors clearly when it isn't. GCP doesn't need a
-    /// placeholder — full-path calls work without `gcp_project`, and the
-    /// real provider surfaces a helpful error for bare-name calls when the
-    /// project is unconfigured. All credentials are loaded lazily.
+    /// Always registers `env_var`. For AWS, registers the real Secrets
+    /// Manager provider when `aws_profile` is set, or a placeholder that
+    /// errors clearly when it isn't. All credentials are loaded lazily.
     pub(crate) fn new(config: &SecurityConfig) -> Self {
         let mut resolver = Self {
             providers: BTreeMap::new(),
@@ -114,8 +106,6 @@ impl SecretResolver {
         } else {
             resolver.register(Box::new(UnconfiguredAwsProvider));
         }
-
-        resolver.register(Box::new(GcpSecretProvider::new(config.gcp_project())));
 
         resolver
     }
@@ -264,7 +254,7 @@ mod tests {
         })
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_string_literal_passthrough() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = Expr::Value(Value::String("hello".to_string()));
@@ -273,7 +263,7 @@ mod tests {
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_env_var_success() {
         // SAFETY: test-only; no other thread reads this variable.
         unsafe { std::env::set_var("MZ_TEST_SECRET_123", "my_secret_value") };
@@ -286,7 +276,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_env_var_not_set() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_env_var_expr("MZ_DEFINITELY_NOT_SET_XYZ_999");
@@ -294,7 +284,7 @@ mod tests {
         assert!(matches!(err, SecretResolveError::ResolutionFailed { .. }));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_unknown_function_passthrough() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr("vault", vec![Expr::Value(Value::String("foo".to_string()))]);
@@ -303,7 +293,7 @@ mod tests {
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_arbitrary_expr_passthrough() {
         let resolver = SecretResolver::new(&Default::default());
 
@@ -319,7 +309,7 @@ mod tests {
         assert_eq!(format!("{}", resolved), original);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_wrong_arg_count_zero() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr("env_var", vec![]);
@@ -338,7 +328,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_wrong_arg_count_two() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr(
@@ -363,7 +353,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_aws_secret_wrong_arg_count() {
         // aws_secret accepts 1 or 2 args; zero and three should both error
         // with a message that reflects the range.
@@ -405,7 +395,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_non_literal_arg() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr(
@@ -416,7 +406,7 @@ mod tests {
         assert!(matches!(err, SecretResolveError::NonLiteralArg { .. }));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_star_args() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = Expr::Function(Function {
@@ -433,7 +423,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_create_secret_with_env_var() {
         // SAFETY: test-only; no other thread reads this variable.
         unsafe { std::env::set_var("MZ_TEST_SECRET_456", "resolved_value") };
@@ -451,7 +441,7 @@ mod tests {
         assert_eq!(resolved.name.0[0].as_str(), stmt.name.0[0].as_str());
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_resolve_create_secret_plain_string() {
         let resolver = SecretResolver::new(&Default::default());
         let stmt = CreateSecretStatement::<Raw> {
@@ -466,7 +456,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_unconfigured_aws_provider_error() {
         let resolver = SecretResolver::new(&Default::default());
         let expr = make_function_expr("aws_secret", vec![Expr::Value(Value::String("foo".into()))]);
@@ -484,75 +474,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_resolve_gcp_secret_wrong_arg_count() {
-        let resolver = SecretResolver::new(&Default::default());
-
-        let expr = make_function_expr("gcp_secret", vec![]);
-        match resolver.resolve_expr(expr).await.unwrap_err() {
-            SecretResolveError::WrongArgCount {
-                name,
-                expected,
-                got,
-            } => {
-                assert_eq!(name, "gcp_secret");
-                assert_eq!(expected, "1 or 2");
-                assert_eq!(got, 0);
-            }
-            other => panic!("expected WrongArgCount, got: {:?}", other),
-        }
-
-        let expr = make_function_expr(
-            "gcp_secret",
-            vec![
-                Expr::Value(Value::String("a".into())),
-                Expr::Value(Value::String("b".into())),
-                Expr::Value(Value::String("c".into())),
-            ],
-        );
-        match resolver.resolve_expr(expr).await.unwrap_err() {
-            SecretResolveError::WrongArgCount {
-                name,
-                expected,
-                got,
-            } => {
-                assert_eq!(name, "gcp_secret");
-                assert_eq!(expected, "1 or 2");
-                assert_eq!(got, 3);
-            }
-            other => panic!("expected WrongArgCount, got: {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_gcp_secret_unconfigured_bare_name_error() {
-        // With no `gcp_project` configured, a bare-name call should fail
-        // before any network access with a message pointing the user at
-        // both the config option and the full-path alternative.
-        let resolver = SecretResolver::new(&Default::default());
-        let expr = make_function_expr(
-            "gcp_secret",
-            vec![Expr::Value(Value::String("my-secret".into()))],
-        );
-        match resolver.resolve_expr(expr).await.unwrap_err() {
-            SecretResolveError::ResolutionFailed { name, reason } => {
-                assert_eq!(name, "gcp_secret");
-                assert!(
-                    reason.contains("gcp_project"),
-                    "error should mention gcp_project, got: {}",
-                    reason
-                );
-                assert!(
-                    reason.contains("projects/"),
-                    "error should mention full-path alternative, got: {}",
-                    reason
-                );
-            }
-            other => panic!("expected ResolutionFailed, got: {:?}", other),
-        }
-    }
-
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_aws_secret_passthrough_when_unconfigured() {
         // env_var still works even when AWS is unconfigured
         unsafe { std::env::set_var("MZ_TEST_AWS_PASSTHROUGH", "works") };

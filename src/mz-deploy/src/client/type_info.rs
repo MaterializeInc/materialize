@@ -12,7 +12,7 @@
 //! Methods on [`TypeInfoClient`] query the Materialize system catalog for
 //! external dependencies and `CREATE TABLE FROM SOURCE` tables, returning their
 //! column names, types, nullability, object kinds, and comments as a
-//! [`Types`](crate::types::Types) snapshot.
+//! `Types` snapshot.
 //!
 //! Plain `CREATE TABLE` objects are excluded — their schemas are derived from
 //! the SQL AST during type checking and do not need server queries.

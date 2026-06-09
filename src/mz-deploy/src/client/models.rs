@@ -415,13 +415,13 @@ pub struct PendingStatement {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_deployment_kind_display() {
         assert_eq!(DeploymentKind::Tables.to_string(), "tables");
         assert_eq!(DeploymentKind::Objects.to_string(), "objects");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_deployment_kind_from_str_valid() {
         assert_eq!(
             "tables".parse::<DeploymentKind>().unwrap(),
@@ -433,14 +433,14 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_deployment_kind_from_str_invalid() {
         let result = "invalid".parse::<DeploymentKind>();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid deployment kind: invalid");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_deployment_kind_roundtrip() {
         // Verify that Display and FromStr are consistent
         for kind in [
@@ -455,7 +455,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_options_from_cluster_success() {
         let cluster = Cluster {
             id: "u1".to_string(),
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(options.replication_factor, 2);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_options_from_cluster_default_replication() {
         let cluster = Cluster {
             id: "u1".to_string(),
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(options.replication_factor, 1);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_options_from_cluster_no_size() {
         let cluster = Cluster {
             id: "u1".to_string(),
@@ -499,7 +499,7 @@ mod tests {
         assert!(err_msg.contains("has no size"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_options_from_cluster_negative_replication() {
         let cluster = Cluster {
             id: "u1".to_string(),
@@ -513,7 +513,7 @@ mod tests {
         assert!(result.unwrap_err().contains("Invalid replication_factor"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_equality() {
         let cluster1 = Cluster {
             id: "u1".to_string(),
@@ -540,7 +540,7 @@ mod tests {
         assert_ne!(cluster1, cluster3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_options_equality() {
         let opts1 = ClusterOptions {
             size: "25cc".to_string(),
@@ -561,7 +561,7 @@ mod tests {
         assert_ne!(opts1, opts3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_replica_equality() {
         let r1 = ClusterReplica {
             name: "r1".to_string(),
@@ -585,7 +585,7 @@ mod tests {
         assert_ne!(r1, r3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_grant_equality() {
         let g1 = ObjectGrant {
             grantee: "reader".to_string(),
@@ -606,7 +606,7 @@ mod tests {
         assert_ne!(g1, g3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_config_managed() {
         let config = ClusterConfig::Managed {
             options: ClusterOptions {
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(config.grants()[0].grantee, "reader");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_config_unmanaged() {
         let config = ClusterConfig::Unmanaged {
             replicas: vec![
@@ -651,7 +651,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_cluster_config_unmanaged_empty_replicas() {
         // Unmanaged clusters with 0 replicas are valid
         let config = ClusterConfig::Unmanaged {

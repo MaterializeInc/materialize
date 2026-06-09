@@ -33,7 +33,7 @@
 //! This module owns:
 //!
 //! - the `types.lock` contract format
-//! - shared type/schema utilities such as [`type_hash`]
+//! - shared type/schema utilities such as `type_hash`
 //!
 //! ## Key Types
 //!
@@ -495,7 +495,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    #[test]
+    #[mz_ore::test]
     fn test_write_and_read_types_lock_round_trip() {
         let mut tables = BTreeMap::new();
 
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(types, loaded);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_round_trip_with_kind() {
         let mut tables = BTreeMap::new();
         let mut cols = BTreeMap::new();
@@ -624,7 +624,7 @@ mod tests {
         assert_eq!(types, loaded);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_round_trip_with_comments() {
         let mut tables = BTreeMap::new();
         let mut cols = BTreeMap::new();
@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(types, loaded);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_backward_compat_no_comments() {
         // A types.lock file without comment fields should parse successfully
         let toml = r#"

@@ -20,7 +20,7 @@
 //! ## CTE Scoping
 //!
 //! Common Table Expressions (CTEs) introduce names that shadow real database
-//! objects. The visitor uses [`CteScope`](crate::project::resolve::cte_scope::CteScope)
+//! objects. The visitor uses [`CteScope`]
 //! to track which names are currently in scope:
 //!
 //! - When entering a `WITH` clause, all CTE names from that clause are pushed
@@ -484,7 +484,7 @@ mod tests {
     use mz_sql_parser::ast::Ident;
     use std::collections::BTreeSet;
 
-    #[test]
+    #[mz_ore::test]
     fn overlay_factory_produces_working_visitor() {
         let fqn: FullyQualifiedName = ObjectId::new(
             "app".to_string(),

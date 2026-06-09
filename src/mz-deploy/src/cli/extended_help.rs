@@ -151,7 +151,7 @@ fn resolve_alias(name: &str) -> &str {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn help_for_canonical_name() {
         assert!(help_for("compile").is_some());
         assert!(help_for("stage").is_some());
@@ -159,7 +159,7 @@ mod tests {
         assert!(help_for("promote").is_some());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn help_for_alias() {
         assert_eq!(help_for("build"), help_for("compile"));
         assert_eq!(help_for("show"), help_for("describe"));
@@ -173,12 +173,12 @@ mod tests {
         assert_eq!(help_for("deploy"), help_for("promote"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn help_for_unknown() {
         assert!(help_for("nonexistent").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn all_help_contains_all_commands() {
         let all = all_help();
         for (name, _) in COMMANDS {

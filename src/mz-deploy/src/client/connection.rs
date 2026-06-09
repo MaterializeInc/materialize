@@ -104,7 +104,7 @@ impl Client {
     ///
     /// Every connection is pinned to `_mz_deploy_server` via libpq options;
     /// any user-supplied `cluster` in profile.options is silently overridden.
-    /// The unit-test runtime uses [`connect_with_profile_no_pin`] instead —
+    /// The unit-test runtime uses `connect_with_profile_no_pin` instead —
     /// its ephemeral Docker container has no `_mz_deploy_server` cluster.
     pub async fn connect_with_profile(profile: Profile) -> Result<Self, ConnectionError> {
         Self::connect_with_profile_inner(profile, /* pin_server_cluster */ true).await
@@ -663,34 +663,34 @@ pub(crate) fn build_options_string(options: &BTreeMap<String, String>) -> Option
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_options_value_plain() {
         assert_eq!(escape_options_value("prod"), "prod");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_options_value_space() {
         assert_eq!(escape_options_value("prod cluster"), r"prod\ cluster");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_options_value_backslash() {
         assert_eq!(escape_options_value(r"a\b"), r"a\\b");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_options_value_mixed() {
         // Space then backslash
         assert_eq!(escape_options_value(r"a \b"), r"a\ \\b");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_options_string_empty() {
         let options: BTreeMap<String, String> = BTreeMap::new();
         assert_eq!(build_options_string(&options), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_options_string_single() {
         let mut options = BTreeMap::new();
         options.insert("cluster".to_string(), "prod".to_string());
@@ -700,7 +700,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_options_string_multiple_sorted() {
         let mut options = BTreeMap::new();
         // Insert in reverse order to verify BTreeMap iteration sorts keys.
@@ -712,7 +712,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_options_string_escapes_value_space() {
         let mut options = BTreeMap::new();
         options.insert("cluster".to_string(), "prod cluster".to_string());
@@ -722,7 +722,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_options_string_escapes_value_backslash() {
         let mut options = BTreeMap::new();
         options.insert("cluster".to_string(), r"a\b".to_string());
@@ -734,13 +734,13 @@ mod tests {
 
     use std::path::Path;
 
-    #[test]
+    #[mz_ore::test]
     fn plan_disable_produces_notls() {
         let spec = plan_connector(SslMode::Disable, None, "example.com", &[], |_| false).unwrap();
         assert!(matches!(spec, ConnectorSpec::NoTls));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_prefer_and_require_have_verify_none_and_no_ca() {
         for mode in [SslMode::Prefer, SslMode::Require] {
             let spec = plan_connector(mode, None, "example.com", &[], |_| true).unwrap();
@@ -759,7 +759,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_verify_ca_has_peer_verify_no_host_check() {
         let spec = plan_connector(
             SslMode::VerifyCa,
@@ -785,7 +785,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_verify_full_dns_host_check() {
         let spec = plan_connector(
             SslMode::VerifyFull,
@@ -804,7 +804,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_verify_full_ip_host_check() {
         let spec = plan_connector(
             SslMode::VerifyFull,
@@ -823,7 +823,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_explicit_sslrootcert_wins_over_hunt() {
         let explicit = std::path::PathBuf::from("/my/ca.pem");
         let spec = plan_connector(
@@ -843,7 +843,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_explicit_sslrootcert_missing_is_ca_not_found() {
         let explicit = std::path::PathBuf::from("/no/such/file.pem");
         let err = plan_connector(
@@ -857,7 +857,7 @@ mod tests {
         assert!(matches!(err, ConnectionError::TlsCaNotFound));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn plan_no_ca_sources_at_all_falls_back_to_default_verify_paths() {
         let spec = plan_connector(
             SslMode::VerifyFull,
@@ -876,13 +876,13 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn build_disable_returns_notls() {
         let connector = build_connector(ConnectorSpec::NoTls).unwrap();
         assert!(matches!(connector, Connector::NoTls));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn build_prefer_returns_tls_no_ca_work() {
         let connector = build_connector(ConnectorSpec::Tls {
             verify: openssl::ssl::SslVerifyMode::NONE,
@@ -893,7 +893,7 @@ mod tests {
         assert!(matches!(connector, Connector::Tls(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn build_explicit_missing_ca_returns_ca_not_found() {
         let err = build_connector(ConnectorSpec::Tls {
             verify: openssl::ssl::SslVerifyMode::PEER,
@@ -904,28 +904,28 @@ mod tests {
         assert!(matches!(err, ConnectionError::TlsCaNotFound));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn matches_tls_refused_tls_was_required() {
         assert!(matches_tls_refused_message(
             "some prefix: TLS was required but not provided"
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn matches_tls_refused_does_not_support_tls() {
         assert!(matches_tls_refused_message(
             "error: server does not support TLS"
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn matches_tls_refused_does_not_support_ssl() {
         assert!(matches_tls_refused_message(
             "error: server does not support SSL"
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn matches_tls_refused_unrelated_message() {
         assert!(!matches_tls_refused_message("connection refused"));
         assert!(!matches_tls_refused_message("database does not exist"));

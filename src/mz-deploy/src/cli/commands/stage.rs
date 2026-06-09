@@ -1358,7 +1358,7 @@ mod tests {
         Project::from(typed_project)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_full_deploy_view_not_indexed_mixed_types() {
         let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
         let table_obj = make_typed_object(&["CREATE TABLE my_table (id INT)"]);
@@ -1428,7 +1428,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_full_deploy_view_indexed_different_cluster() {
         let view_obj = make_typed_object(&[
             "CREATE VIEW my_view AS SELECT 1",
@@ -1498,7 +1498,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_incremental_deploy_view_updated_not_indexed() {
         // Build planned project with all object types
         let view_obj = make_typed_object(&["CREATE VIEW my_view AS SELECT 1"]);
@@ -1582,7 +1582,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_incremental_deploy_view_updated_indexed_different_cluster() {
         // Build planned project with indexed view and other object types
         let view_obj = make_typed_object(&[
@@ -1690,14 +1690,14 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_no_new_replacement_objects_first_deploy() {
         let cs = make_empty_change_set();
         let snapshot = DeploymentSnapshot::default();
         assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_new_replacement_objects_in_brand_new_schema() {
         let mut cs = make_empty_change_set();
         cs.new_replacement_objects.insert(ObjectId::new(
@@ -1716,7 +1716,7 @@ mod tests {
         assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_new_replacement_objects_in_existing_production_schema() {
         let mut cs = make_empty_change_set();
         cs.new_replacement_objects.insert(ObjectId::new(
@@ -1748,7 +1748,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_changed_replacement_objects_only() {
         let mut cs = make_empty_change_set();
         // Only changed objects, no new ones
@@ -1767,7 +1767,7 @@ mod tests {
         assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_mixed_new_in_new_schema_changed_in_existing() {
         let mut cs = make_empty_change_set();
         // New object in a brand-new schema
@@ -1794,7 +1794,7 @@ mod tests {
         assert!(validate_no_new_objects_in_existing_stable_schemas(&cs, &snapshot).is_ok());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_validate_transitioning_objects_in_existing_schema_allowed() {
         let mut cs = make_empty_change_set();
         // Object transitioning from Objects→Replacement lands in new_replacement_objects
@@ -1854,7 +1854,7 @@ mod tests {
         Project::from(typed_project)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_snapshot_replacement_schema_kind() {
         let mv_obj =
             make_typed_object(&["CREATE MATERIALIZED VIEW my_mv IN CLUSTER compute AS SELECT 1"]);
@@ -1892,7 +1892,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_snapshot_no_replacement_schemas_all_objects() {
         let mv_obj =
             make_typed_object(&["CREATE MATERIALIZED VIEW my_mv IN CLUSTER compute AS SELECT 1"]);
@@ -1920,7 +1920,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_record_stage_metadata_transition_override() {
         // During an Objects→Replacement transition, MVs go through the regular
         // objects path (not replacement_mvs), but the metadata must still record
@@ -2007,7 +2007,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_record_stage_metadata_override_only_applies_to_existing_schemas() {
         // The override should NOT create new schema entries — it only applies to
         // schemas that already have objects in the staging snapshot.

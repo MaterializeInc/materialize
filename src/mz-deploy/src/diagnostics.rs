@@ -398,7 +398,7 @@ mod tests {
     use mz_repr::ColumnName;
     use std::sync::Arc;
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_skips_substrings() {
         let source = "SELECT customer_id, id FROM t";
         let r = find_identifier(source, "id").unwrap();
@@ -406,41 +406,41 @@ mod tests {
         assert_eq!(r.start, 20);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_empty_needle() {
         assert!(find_identifier("anything", "").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_absent() {
         assert!(find_identifier("SELECT 1", "missing").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_at_start() {
         let r = find_identifier("foo bar", "foo").unwrap();
         assert_eq!(r, 0..3);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_at_end() {
         let r = find_identifier("foo bar", "bar").unwrap();
         assert_eq!(r, 4..7);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_needle_longer_than_haystack() {
         assert!(find_identifier("ab", "abcd").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn last_component_strips_qualifier() {
         assert_eq!(last_component("foo"), "foo");
         assert_eq!(last_component("schema.table"), "table");
         assert_eq!(last_component("db.schema.table"), "table");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_plan_unknown_column() {
         let source = "CREATE VIEW v AS SELECT bogus FROM t";
         let e = PlanError::UnknownColumn {
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(r, 24..29);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_plan_unknown_function() {
         let source = "SELECT bogus_fn(1) FROM t";
         let e = PlanError::UnknownFunction {
@@ -464,13 +464,13 @@ mod tests {
         assert_eq!(&source[r], "bogus_fn");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_plan_unhandled_variant_returns_none() {
         let e = PlanError::Unstructured("anything".into());
         assert!(locate_plan(&e, "SELECT 1").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_catalog_unknown_item_strips_qualifier() {
         let source = "SELECT * FROM bogus_table";
         let e = CatalogError::UnknownItem("schema.bogus_table".to_string());
@@ -478,13 +478,13 @@ mod tests {
         assert_eq!(&source[r], "bogus_table");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_typecheck_internal_returns_none() {
         let kind = ObjectTypeCheckErrorKind::Internal("boom".into());
         assert!(locate_typecheck(&kind, "anything").is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_typecheck_dispatches_to_plan() {
         let source = "CREATE VIEW v AS SELECT bogus FROM t";
         let kind = ObjectTypeCheckErrorKind::Plan(Arc::new(PlanError::UnknownColumn {
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(&source[r], "bogus");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_typecheck_dispatches_to_catalog() {
         let source = "SELECT * FROM bogus_table";
         let kind =
@@ -505,19 +505,19 @@ mod tests {
         assert_eq!(&source[r], "bogus_table");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_replacement_prefers_primary_range_when_matches() {
         let r = locate_replacement("SELECT emails FROM t", &(7..13), "emails");
         assert_eq!(r, 7..13);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_replacement_falls_back_to_search() {
         let r = locate_replacement("SELECT emails FROM t", &(0..0), "emails");
         assert_eq!(r, 7..13);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn find_identifier_after_skips_earlier_occurrence() {
         let source = "CREATE TABLE foo (...);\nCREATE VIEW v AS SELECT * FROM foo;";
         let r = find_identifier_after(source, "foo", 24).unwrap();
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(&source[r.clone()], "foo");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn locate_validation_object_name_mismatch_finds_declared_token() {
         use crate::project::error::ValidationErrorKind;
         let source = "CREATE TABLE customers (id INT);";
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(&source[r], "customers");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn format_validation_kind_object_name_mismatch_yields_rename_suggestion() {
         use crate::project::error::ValidationErrorKind;
         let source = "CREATE TABLE customers (id INT);";
@@ -567,7 +567,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn format_validation_kind_unhandled_returns_no_suggestions() {
         use crate::project::error::ValidationErrorKind;
         let kind = ValidationErrorKind::NoMainStatement {
