@@ -6459,33 +6459,69 @@ def workflow_test_slow_seqno_hold(c: Composition):
     try:
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
 
-        def get_reader_seqno():
+        def get_leased_readers():
             [(state_json,)] = c.sql_query(
                 f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
             )
-            leased_readers = state_json["leased_readers"]
-            if not leased_readers:
-                return None, None
-            assert len(leased_readers) == 1
-            id, value = leased_readers.popitem()
-            return id, value["seqno"]
+            return state_json["leased_readers"]
 
-        # Show that the seqno is making progress - grab an initial value and then one higher value.
-        reader_id = None
-        initial_seqno = None
-        while initial_seqno is None:
-            reader_id, initial_seqno = get_reader_seqno()
+        # Poll `get_leased_readers` on a deadline, returning the first non-None
+        # value `predicate` produces. We use a bounded deadline (well below the
+        # CI step timeout) so that a regression fails this test quickly with a
+        # useful diagnostic, instead of silently hanging the whole `cluster
+        # --slow-only` step until the global timeout fires (which previously
+        # burned ~30 minutes per occurrence, e.g. nightly build 16706).
+        def poll_until(predicate, timeout, description):
+            deadline = time.time() + timeout
+            last = None
+            while time.time() < deadline:
+                last = get_leased_readers()
+                result = predicate(last)
+                if result is not None:
+                    return result
+                time.sleep(1)
+            raise AssertionError(
+                f"timed out after {timeout}s waiting for {description}; "
+                f"last observed leased_readers={last}"
+            )
+
+        # The blocked SELECT installs a reader on the source's shard that can't
+        # make progress. Wait for that single stalled reader to show up and grab
+        # its id + initial seqno. (The source restarts periodically while its
+        # upstream is down, which can briefly expose a second, transient reader;
+        # only latch on once exactly one reader is present.)
+        def single_reader(leased_readers):
+            if len(leased_readers) != 1:
+                return None
+            ((reader_id, value),) = leased_readers.items()
+            return reader_id, value["seqno"]
+
+        reader_id, initial_seqno = poll_until(
+            single_reader,
+            timeout=120,
+            description="a single leased reader to appear on the stalled shard",
+        )
 
         print(
             f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
         )
-        while True:
-            id, seqno = get_reader_seqno()
-            assert id == reader_id
-            assert seqno is not None
-            if seqno > initial_seqno:
-                break
-            time.sleep(1)
+
+        # Show that the seqno is making progress: even though the upstream
+        # frontier is stuck, the reader should periodically downgrade its seqno
+        # hold, advancing it past the initial value.
+        def seqno_advanced(leased_readers):
+            value = leased_readers.get(reader_id)
+            if value is None:
+                # The reader momentarily vanished (e.g. a source restart). Keep
+                # polling; a permanent disappearance surfaces at the deadline.
+                return None
+            return True if value["seqno"] > initial_seqno else None
+
+        poll_until(
+            seqno_advanced,
+            timeout=300,
+            description=f"reader {reader_id} to advance its seqno past {initial_seqno}",
+        )
 
     # Cleanup: unblock the select and wait for it to complete.
     finally:
