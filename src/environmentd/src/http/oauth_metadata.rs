@@ -123,9 +123,35 @@ pub(crate) struct ProtectedResourceMetadata {
     pub scopes_supported: Vec<String>,
 }
 
-/// Prometheus counter for the discovery endpoint, labeled by a stable
-/// `status` string (`ok`, `disabled`, `no_issuer`, `invalid_issuer`,
-/// `no_host`, `adapter_unavailable`) so dashboards key off names rather
+/// Closed set of outcomes recorded by [`OauthMetadataMetrics`]. Keeping
+/// these as an enum (rather than free-form strings at the call sites) pins
+/// the metric's label cardinality and stops typos from silently creating
+/// new label values.
+#[derive(Debug, Clone, Copy)]
+enum MetricStatus {
+    Ok,
+    Disabled,
+    NoIssuer,
+    InvalidIssuer,
+    NoHost,
+    AdapterUnavailable,
+}
+
+impl MetricStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Disabled => "disabled",
+            Self::NoIssuer => "no_issuer",
+            Self::InvalidIssuer => "invalid_issuer",
+            Self::NoHost => "no_host",
+            Self::AdapterUnavailable => "adapter_unavailable",
+        }
+    }
+}
+
+/// Prometheus counter for the discovery endpoint, labeled by the
+/// [`MetricStatus`] of each request so dashboards key off names rather
 /// than HTTP status codes.
 #[derive(Debug, Clone)]
 pub struct OauthMetadataMetrics {
@@ -143,8 +169,8 @@ impl OauthMetadataMetrics {
         }
     }
 
-    fn inc(&self, status: &'static str) {
-        self.requests.with_label_values(&[status]).inc();
+    fn inc(&self, status: MetricStatus) {
+        self.requests.with_label_values(&[status.as_str()]).inc();
     }
 }
 
@@ -218,7 +244,7 @@ pub(crate) async fn handle_protected_resource_metadata(
     if !config.discovery.is_enabled() {
         // Listener validates no OAuth bearer token (None/Password/Sasl), so
         // there is no authorization flow to advertise.
-        metrics.inc("disabled");
+        metrics.inc(MetricStatus::Disabled);
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -226,7 +252,7 @@ pub(crate) async fn handle_protected_resource_metadata(
         warn!(
             "oauth-protected-resource: no http_host_name configured and request has no Host header"
         );
-        metrics.inc("no_host");
+        metrics.inc(MetricStatus::NoHost);
         return (StatusCode::BAD_REQUEST, "no host available").into_response();
     };
     let resource = format!("{PUBLISHED_SCHEME}://{host}/api/mcp");
@@ -235,7 +261,7 @@ pub(crate) async fn handle_protected_resource_metadata(
         match tokio::time::timeout(ADAPTER_WAIT_TIMEOUT, adapter_client_rx.clone()).await {
             Ok(Ok(client)) => client,
             Ok(Err(_)) | Err(_) => {
-                metrics.inc("adapter_unavailable");
+                metrics.inc(MetricStatus::AdapterUnavailable);
                 return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready").into_response();
             }
         };
@@ -246,7 +272,7 @@ pub(crate) async fn handle_protected_resource_metadata(
         // `authorization_servers`, so the honest response is 404 rather
         // than an empty document that misleads the client.
         warn!("oauth-protected-resource: oidc_issuer is unset; cannot publish");
-        metrics.inc("no_issuer");
+        metrics.inc(MetricStatus::NoIssuer);
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(err) = validate_issuer_url(&issuer) {
@@ -254,7 +280,7 @@ pub(crate) async fn handle_protected_resource_metadata(
         // would turn this log line into a credential dump. The error
         // reason is specific enough.
         warn!(error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
-        metrics.inc("invalid_issuer");
+        metrics.inc(MetricStatus::InvalidIssuer);
         return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
     }
 
@@ -285,7 +311,7 @@ pub(crate) async fn handle_protected_resource_metadata(
         http::header::CACHE_CONTROL,
         HeaderValue::from_static(METADATA_CACHE_CONTROL),
     );
-    metrics.inc("ok");
+    metrics.inc(MetricStatus::Ok);
     response
 }
 
@@ -470,12 +496,8 @@ mod tests {
         assert_eq!(resolve_host(&req, None), None);
     }
 
-    /// Defense in depth against header-smuggling: a Host value with
-    /// characters outside the URI host grammar must be rejected so it
-    /// cannot break out of the quoted `resource_metadata="..."`
-    /// parameter or smuggle a host into the published `resource` URL.
-    /// The payloads here are bytes that `HeaderValue::from_str`
-    /// already accepts (control bytes are blocked upstream).
+    /// Defense in depth against Host-header smuggling: per-payload
+    /// comments below describe the specific failure each one would cause.
     #[mz_ore::test]
     fn test_resolve_host_rejects_smuggled_characters() {
         for malicious in [
@@ -572,12 +594,12 @@ mod tests {
         let registry = MetricsRegistry::new();
         let metrics = OauthMetadataMetrics::register_into(&registry);
         for status in [
-            "ok",
-            "disabled",
-            "no_issuer",
-            "invalid_issuer",
-            "no_host",
-            "adapter_unavailable",
+            MetricStatus::Ok,
+            MetricStatus::Disabled,
+            MetricStatus::NoIssuer,
+            MetricStatus::InvalidIssuer,
+            MetricStatus::NoHost,
+            MetricStatus::AdapterUnavailable,
         ] {
             metrics.inc(status);
         }
