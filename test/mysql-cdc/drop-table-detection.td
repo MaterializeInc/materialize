@@ -522,3 +522,53 @@ contains:table was dropped
 
 > DROP SOURCE sticky_source CASCADE;
 > DROP CLUSTER sticky_cluster CASCADE;
+
+# 12. `ANSI_QUOTES` sql_mode: `"` quotes identifiers, not strings.
+#
+# By default MySQL quotes identifiers with backticks and treats `"..."` as a
+# string literal -- every other section in this file relies on that. But a
+# session whose sql_mode includes ANSI_QUOTES uses `"` as the identifier quote
+# character instead, and MySQL regenerates the DROP into the binlog using the
+# session's quote char. So a drop issued under ANSI_QUOTES reaches us as
+# `DROP TABLE "tbl"` rather than `DROP TABLE `tbl``.
+#
+# The detector must still resolve the table name and error the output. We use a
+# name with a space so the identifier genuinely requires quoting (an unquoted
+# `ansi quoted` would be a syntax error), forcing the double-quote quoting to
+# round-trip through the binlog.
+
+$ mysql-execute name=mysql
+USE public;
+SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',ANSI_QUOTES');
+CREATE TABLE "ansi quoted" (f1 INTEGER);
+CREATE TABLE ansi_simple (f1 INTEGER);
+INSERT INTO "ansi quoted" VALUES (1);
+INSERT INTO ansi_simple VALUES (1);
+
+> BEGIN
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE ansi_quoted FROM SOURCE mz_source (REFERENCE public."ansi quoted");
+> CREATE TABLE ansi_simple FROM SOURCE mz_source (REFERENCE public.ansi_simple);
+> COMMIT
+
+> SELECT * FROM ansi_quoted;
+1
+> SELECT * FROM ansi_simple;
+1
+
+# Both drops are issued with ANSI_QUOTES in effect, so the binlog carries
+# double-quoted identifiers.
+$ mysql-execute name=mysql
+DROP TABLE "ansi quoted";
+DROP TABLE "ansi_simple";
+
+! SELECT * FROM ansi_quoted;
+contains:table was dropped
+! SELECT * FROM ansi_simple;
+contains:table was dropped
+
+# Restore the default sql_mode so the connection is left as other tests expect.
+$ mysql-execute name=mysql
+SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, ',ANSI_QUOTES', '');
+
+> DROP SOURCE mz_source CASCADE;
