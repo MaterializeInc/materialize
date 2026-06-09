@@ -61,10 +61,10 @@ pub(crate) fn pageout_swap(chunks: &mut [Vec<u64>]) -> Handle {
 
 /// Proactively reclaims (swaps out) the resident pages of `bytes` via
 /// `MADV_PAGEOUT`, holding RSS at the caller's budget right now rather than
-/// waiting for kernel LRU to reclaim under pressure the way [`pageout_swap`]'s
+/// waiting for kernel LRU to reclaim under pressure the way `pageout_swap`'s
 /// `MADV_COLD` hint does.
 ///
-/// Unlike [`pageout_swap`], this takes a borrow and does **not** transfer
+/// Unlike `pageout_swap`, this takes a borrow and does **not** transfer
 /// ownership: the allocation stays addressable in the caller's address space,
 /// so a later read simply re-faults the swapped-out pages back in. That suits a
 /// buffer the caller must keep reachable — e.g. the column pager's
@@ -302,10 +302,11 @@ mod tests {
         // `MADV_PAGEOUT` is a reclaim hint: the bytes must remain addressable
         // and unchanged afterwards (a read re-faults the pages back in). Use a
         // multi-page buffer so the page-aligned interior is non-empty.
-        let bytes: Vec<u8> = (0..(64 * 1024)).map(|i| (i % 251) as u8).collect();
+        let pattern = |i: usize| u8::try_from(i % 251).expect("0..251 fits in u8");
+        let bytes: Vec<u8> = (0..64 * 1024).map(pattern).collect();
         advise_pageout(&bytes);
         // Re-read after the advice; contents are preserved.
-        assert!(bytes.iter().enumerate().all(|(i, &b)| b == (i % 251) as u8));
+        assert!(bytes.iter().enumerate().all(|(i, &b)| b == pattern(i)));
     }
 
     #[mz_ore::test]
