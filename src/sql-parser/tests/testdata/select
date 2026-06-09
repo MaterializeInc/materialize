@@ -1488,6 +1488,11 @@ SELECT * FROM data AS OF AT LEAST 5
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(AtLeast(Value(Number("5")))) })
 
+parse-statement roundtrip
+SELECT * FROM data AS OF AT LEAST FRONTIER OF foo, bar.baz
+----
+SELECT * FROM data AS OF AT LEAST FRONTIER OF foo, bar.baz
+
 # Query hints
 parse-statement
 SELECT * FROM foo OPTIONS (bar = 7)
