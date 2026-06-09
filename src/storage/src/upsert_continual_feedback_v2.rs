@@ -67,6 +67,7 @@
 //! with `p < ts` is ineligible (persist hasn't caught up), and one with
 //! `ts < p` is already persisted and dropped.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -319,6 +320,18 @@ where
         // Scratch buffer for accumulating source events before flushing to
         // the batcher. Drained on each iteration via the chunker.
         let mut push_buffer: Vec<(UpsertKey, T, UpsertDiff<FromTime>)> = Vec::new();
+        // Record/byte count of data currently held in the batcher, tracked
+        // exactly via stash_key_ts_map.  stash_records counts unique (key, ts)
+        // pairs (matching the batcher's consolidated view); stash_bytes is the
+        // sum of raw bytes for the winning value per pair.
+        let mut stash_records: u64 = 0;
+        let mut stash_bytes: u64 = 0;
+        // Tracks (raw_push_count, raw_byte_sum) per unique (key, ts) pair
+        // currently in the batcher.  Used at drain time to correct for
+        // consolidation: the batcher collapses N raw pushes with the same
+        // (key, ts) into one entry, so we must subtract the full raw count
+        // (not just 1) when that entry permanently leaves the stash.
+        let mut stash_key_ts_map: BTreeMap<(UpsertKey, T), (u64, u64)> = BTreeMap::new();
         // Capability held at the minimum time of any buffered data. When
         // Some, the operator may still produce output; when None, the
         // batcher is empty.
@@ -364,8 +377,14 @@ where
                             {
                                 continue;
                             }
-                            push_buffer.push((key, ts, UpsertDiff { from_time, value }));
+                            let vbytes = value_byte_len(&value);
+                            stash_bytes += vbytes;
+                            push_buffer.push((key, ts.clone(), UpsertDiff { from_time, value }));
+                            stash_records += 1;
                             pushed_any = true;
+                            let e = stash_key_ts_map.entry((key, ts)).or_insert((0, 0));
+                            e.0 += 1;
+                            e.1 += vbytes;
                         }
                         // Track the minimum capability across all buffered data
                         // so we can emit output at the correct times.
@@ -508,6 +527,48 @@ where
                 upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
                 upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
 
+                // Correct stash_records/stash_bytes for consolidation.
+                //
+                // The batcher may have collapsed N raw pushes with the same
+                // (key, ts) into one entry before the seal, so we cannot
+                // simply subtract `eligible + dropped` (that only removes 1
+                // per consolidated entry and leaves N-1 phantom records).
+                // Instead we consult stash_key_ts_map which tracks the raw
+                // push count per unique (key, ts) pair.
+                //
+                // Build a lookup of ineligible entries so we can distinguish
+                // "permanently removed" from "re-stashed as 1 consolidated
+                // entry".
+                let ineligible_bytes: BTreeMap<(UpsertKey, T), u64> = ineligible
+                    .iter()
+                    .map(|(key, ts, diff)| ((*key, ts.clone()), value_byte_len(&diff.value)))
+                    .collect();
+
+                // Collect keys to process: those sealed in this cycle (ts <
+                // input_upper).  Collect upfront so we can mutate the map.
+                let sealed_keys: Vec<(UpsertKey, T)> = stash_key_ts_map
+                    .keys()
+                    .filter(|(_, ts)| !input_upper.less_equal(ts))
+                    .cloned()
+                    .collect();
+
+                for k in sealed_keys {
+                    let (raw_count, raw_bytes) = stash_key_ts_map.remove(&k).unwrap();
+                    if let Some(&cons_bytes) = ineligible_bytes.get(&k) {
+                        // Entry is being re-stashed as 1 consolidated record.
+                        // Correct for the over-count from the raw pushes.
+                        stash_records =
+                            stash_records.saturating_sub(raw_count.saturating_sub(1));
+                        stash_bytes =
+                            stash_bytes.saturating_sub(raw_bytes.saturating_sub(cons_bytes));
+                        stash_key_ts_map.insert(k, (1, cons_bytes));
+                    } else {
+                        // Entry was permanently removed (eligible or dropped).
+                        stash_records = stash_records.saturating_sub(raw_count);
+                        stash_bytes = stash_bytes.saturating_sub(raw_bytes);
+                    }
+                }
+
                 if hydrating {
                     rehydration_total += drain_stats.inserts;
                     rehydration_updates += drain_stats.eligible;
@@ -551,6 +612,9 @@ where
                 }
             }
 
+            upsert_metrics.stashed_records.set(stash_records);
+            upsert_metrics.stashed_bytes.set(stash_bytes);
+
             if input_upper.is_empty() {
                 break;
             }
@@ -584,6 +648,19 @@ struct DrainStats {
     deletes: u64,
     /// Total output records emitted (retractions + insertions).
     output_count: u64,
+}
+
+/// Returns the byte size of the `Row` payload inside an [`UpsertValue`], used
+/// to approximate the heap cost of a stashed record. Errors are rare and their
+/// size is omitted for simplicity.
+fn value_byte_len(v: &Option<UpsertValue>) -> u64 {
+    match v {
+        None | Some(Err(_)) => 0,
+        Some(Ok(row)) => row
+            .byte_len()
+            .try_into()
+            .expect("usize should always fit into u64"),
+    }
 }
 
 /// Process sealed chunks from the batcher, classifying each entry by its
@@ -1234,5 +1311,207 @@ mod test {
             .collect();
         differential_dataflow::consolidation::consolidate_updates(&mut emitted);
         (frontier, emitted)
+    }
+
+    /// Verifies that `stashed_records` and `stashed_bytes` rise when source data
+    /// is pushed into the batcher and return to zero once the batcher drains.
+    ///
+    /// Phase 1: send two distinct-key rows at ts=0, advance the source input to
+    /// ts=2 (leaving headroom for the seal), then step the worker. The persist
+    /// frontier is still at minimum, so the seal condition cannot fire and both
+    /// records remain in the batcher.  Both gauges must be positive.
+    ///
+    /// Phase 2: advance persist to ts=1 (strictly below the source input_upper=2)
+    /// and step the worker several times. The seal condition now holds, the
+    /// batcher is sealed and all records at ts=0 are below persist_upper=1 and
+    /// therefore dropped. Both gauges must return to zero.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn stash_metrics_rise_and_fall() {
+        let source_id = GlobalId::User(0);
+        let reg = MetricsRegistry::new();
+        let upsert_defs = UpsertMetricDefs::register_with(&reg);
+
+        // Obtain gauge handles that share the same underlying atomics as the
+        // ones UpsertMetrics::new creates (matching label values: source_id, "0").
+        let stash_rec = upsert_defs
+            .stashed_records
+            .get_delete_on_drop_metric(vec![source_id.to_string(), "0".to_string()]);
+        let stash_bytes = upsert_defs
+            .stashed_bytes
+            .get_delete_on_drop_metric(vec![source_id.to_string(), "0".to_string()]);
+
+        timely::execute_directly(move |worker| {
+            let (mut input, mut persist) = worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                scope.scoped::<Ts, _, _>("upsert", |scope| {
+                    let (input_handle, input) = scope.new_input();
+                    let (persist_handle, persist_input) = scope.new_input();
+
+                    let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+
+                    let reg2 = MetricsRegistry::new();
+                    let storage_metrics = StorageMetrics::register_with(&reg2);
+                    let reg3 = MetricsRegistry::new();
+                    let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                    let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                        source_arity: 2,
+                        style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                        key_indices: vec![0],
+                    });
+                    let source_statistics = SourceStatistics::new(
+                        source_id,
+                        0,
+                        &stats_defs,
+                        source_id,
+                        &ShardId::new(),
+                        envelope,
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
+                    let source_config = SourceExportCreationConfig {
+                        id: source_id,
+                        worker_id: 0,
+                        metrics: storage_metrics,
+                        source_statistics,
+                    };
+
+                    let (_, _, _, button) = upsert_inner(
+                        input.as_collection(),
+                        vec![0],
+                        Antichain::from_elem(Timestamp::minimum()),
+                        persist_input.as_collection(),
+                        None,
+                        upsert_metrics,
+                        source_config,
+                    );
+                    std::mem::forget(button);
+                    (input_handle, persist_handle)
+                })
+            });
+
+            // ── Phase 1: records land in the batcher ────────────────────────
+            // Two distinct keys with non-trivial Row payloads so byte_len > 0.
+            input.send(((key(1), Some(Ok(row(1, 10))), 1u64), new_ts(0), Diff::ONE));
+            input.send(((key(2), Some(Ok(row(2, 20))), 2u64), new_ts(0), Diff::ONE));
+            // Advance input to ts=2 so there is room for the seal to fire later.
+            input.advance_to(new_ts(2));
+            worker.step();
+
+            // Persist is still at minimum, so persist_upper.less_than(cap.time())
+            // is true and the seal condition fails — records stay stashed.
+            let rec_after_push = stash_rec.get();
+            let bytes_after_push = stash_bytes.get();
+            assert!(
+                rec_after_push >= 2,
+                "expected >= 2 stashed records after push, got {rec_after_push}"
+            );
+            assert!(
+                bytes_after_push > 0,
+                "expected nonzero stashed bytes after push, got {bytes_after_push}"
+            );
+
+            // ── Phase 2: batcher drains ─────────────────────────────────────
+            // Advance persist to ts=1 (strictly between ts=0 and input_upper=2).
+            // The seal condition becomes satisfiable: the batcher is sealed and
+            // all records at ts=0 are below persist_upper and dropped.
+            persist.advance_to(new_ts(1));
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            assert_eq!(
+                stash_rec.get(),
+                0,
+                "stash_records should be zero after batcher drains"
+            );
+            assert_eq!(
+                stash_bytes.get(),
+                0,
+                "stash_bytes should be zero after batcher drains"
+            );
+        });
+    }
+
+    /// Regression test for the stash-metric drift bug (PR #36889, SS-171):
+    /// pushing several records for the same `(key, ts)` consolidates them in the
+    /// batcher, but the gauges are incremented per raw record and decremented
+    /// per consolidated entry, so the drift is never subtracted back out.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn stash_metrics_no_drift_under_consolidation() {
+        let source_id = GlobalId::User(0);
+        let reg = MetricsRegistry::new();
+        let upsert_defs = UpsertMetricDefs::register_with(&reg);
+
+        let stash_rec = upsert_defs
+            .stashed_records
+            .get_delete_on_drop_metric(vec![source_id.to_string(), "0".to_string()]);
+        let stash_bytes = upsert_defs
+            .stashed_bytes
+            .get_delete_on_drop_metric(vec![source_id.to_string(), "0".to_string()]);
+
+        timely::execute_directly(move |worker| {
+            let (mut input, mut persist) = worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                scope.scoped::<Ts, _, _>("upsert", |scope| {
+                    let (input_handle, input) = scope.new_input();
+                    let (persist_handle, persist_input) = scope.new_input();
+
+                    let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+
+                    let reg2 = MetricsRegistry::new();
+                    let storage_metrics = StorageMetrics::register_with(&reg2);
+                    let reg3 = MetricsRegistry::new();
+                    let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                    let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                        source_arity: 2,
+                        style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                        key_indices: vec![0],
+                    });
+                    let source_statistics = SourceStatistics::new(
+                        source_id,
+                        0,
+                        &stats_defs,
+                        source_id,
+                        &ShardId::new(),
+                        envelope,
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
+                    let source_config = SourceExportCreationConfig {
+                        id: source_id,
+                        worker_id: 0,
+                        metrics: storage_metrics,
+                        source_statistics,
+                    };
+
+                    let (_, _, _, button) = upsert_inner(
+                        input.as_collection(),
+                        vec![0],
+                        Antichain::from_elem(Timestamp::minimum()),
+                        persist_input.as_collection(),
+                        None,
+                        upsert_metrics,
+                        source_config,
+                    );
+                    std::mem::forget(button);
+                    (input_handle, persist_handle)
+                })
+            });
+
+            input.send(((key(1), Some(Ok(row(1, 10))), 1u64), new_ts(0), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 20))), 2u64), new_ts(0), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 30))), 3u64), new_ts(0), Diff::ONE));
+            input.advance_to(new_ts(2));
+            worker.step();
+
+            assert!(stash_rec.get() >= 3, "got {}", stash_rec.get());
+            assert!(stash_bytes.get() > 0, "got {}", stash_bytes.get());
+
+            persist.advance_to(new_ts(1));
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            assert_eq!(stash_rec.get(), 0, "stash_records drifted past empty stash");
+            assert_eq!(stash_bytes.get(), 0, "stash_bytes drifted past empty stash");
+        });
     }
 }
