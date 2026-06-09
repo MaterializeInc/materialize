@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/relation/join_input_mapper.rs
-revision: 261d61df83
+revision: fc2aaf02e7
 ---
 
 # mz-expr::relation::join_input_mapper
