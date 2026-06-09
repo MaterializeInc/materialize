@@ -144,6 +144,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
+| `operator.args.webhookCertReloadInterval` | How often orchestratord reloads its webhook TLS certificate from disk and, when the CA changes, refreshes the conversion webhook's CA bundle. Must be shorter than the certificate's lifetime. Accepts a humantime duration (e.g. "1h", "30m"). Leave null to use the binary default. | ``nil`` |
+| `operator.certificate.caDuration` | Lifetime of the root CA that signs the webhook serving certificate, when `source` is "cert-manager". The serving certificate is signed by this CA, so the CA outlives individual serving-certificate rotations. | ``"87600h"`` |
+| `operator.certificate.caRenewBefore` | How long before the root CA expires to renew it. Must be less than `caDuration`. | ``"8760h"`` |
 | `operator.certificate.secretName` | Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret". | ``nil`` |
 | `operator.certificate.source` | Where to obtain the certificate for orchestratord. Valid values are 'cert-manager' and 'secret'. | ``"cert-manager"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |

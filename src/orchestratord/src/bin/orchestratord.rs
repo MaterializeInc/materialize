@@ -78,6 +78,13 @@ pub struct Args {
     tls_cert: String,
     #[clap(long, default_value = "/etc/tls/tls.key")]
     tls_key: String,
+    /// How often to reload the webhook TLS serving certificate from disk and,
+    /// when the CA changes, refresh the conversion webhook's CA bundle. The
+    /// certificate is rotated out-of-band (e.g. by cert-manager), so this must
+    /// be short enough that rotations are picked up before the old certificate
+    /// expires.
+    #[clap(long, default_value = "1h", value_parser = humantime::parse_duration)]
+    webhook_cert_reload_interval: Duration,
 
     #[clap(long)]
     cloud_provider: CloudProvider,
@@ -283,9 +290,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
-    {
-        let tls_cert = args.tls_cert;
-        let tls_key = args.tls_key;
+    let tls_cert = args.tls_cert;
+    let tls_key = args.tls_key;
+    let tls_ca = args.tls_ca;
+    let reload_config = {
         let config = OpenSSLConfig::from_pem_file(&tls_cert, &tls_key).unwrap();
         let reload_config = config.clone();
         let webhook_listen_address = args.webhook_listen_address;
@@ -299,27 +307,88 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             }
         });
 
+        reload_config
+    };
+
+    let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
+    let additional_crd_columns = args.additional_crd_columns.unwrap_or_default();
+    let webhook_service_name = args.webhook_service_name;
+    let webhook_service_namespace = args.webhook_service_namespace;
+    let webhook_service_port = args.webhook_service_port;
+    register_crds(
+        client.clone(),
+        additional_crd_columns.clone(),
+        webhook_service_name.clone(),
+        webhook_service_namespace.clone(),
+        webhook_service_port,
+        tls_ca.clone(),
+    )
+    .await?;
+
+    // Periodically reload the webhook serving certificate from disk, and
+    // refresh the conversion webhook's CA bundle whenever the CA changes.
+    //
+    // The certificate is rotated out-of-band (e.g. by cert-manager). The
+    // serving certificate is signed by a stable root CA, so routine rotations
+    // reuse the same CA and the CA bundle registered into the CRD at startup
+    // keeps working. But if the CA itself rotates (e.g. on root CA renewal),
+    // that startup CA bundle would not trust the served certificate, and the
+    // Kubernetes API server would reject every conversion request. Refreshing
+    // the CA bundle when the CA changes keeps the webhook working across CA
+    // rotations.
+    {
+        let reload_interval = args.webhook_cert_reload_interval;
+        let client = client.clone();
         mz_ore::task::spawn(|| "webhook certificate reload", async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+            let mut last_ca = tokio::fs::read(&tls_ca).await.ok();
+            let mut interval = tokio::time::interval(reload_interval);
+            // The first tick completes immediately; skip it so we don't
+            // re-register the CRDs we just registered above.
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 if let Err(err) = reload_config.reload_from_pem_file(&tls_cert, &tls_key) {
                     tracing::error!("failed to reload webhook TLS certificate: {err}");
+                    continue;
+                }
+                let current_ca = match tokio::fs::read(&tls_ca).await {
+                    Ok(ca) => ca,
+                    Err(err) => {
+                        tracing::error!("failed to read webhook CA certificate: {err}");
+                        continue;
+                    }
+                };
+                if last_ca.as_deref() == Some(current_ca.as_slice()) {
+                    continue;
+                }
+                // The CA changed, meaning the certificate was rotated. Re-register
+                // the CRDs so the conversion webhook's caBundle matches the
+                // newly-served certificate.
+                match register_crds(
+                    client.clone(),
+                    additional_crd_columns.clone(),
+                    webhook_service_name.clone(),
+                    webhook_service_namespace.clone(),
+                    webhook_service_port,
+                    tls_ca.clone(),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        tracing::info!(
+                            "refreshed conversion webhook CA bundle after certificate rotation"
+                        );
+                        last_ca = Some(current_ca);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "failed to refresh conversion webhook CA bundle after rotation: {err}"
+                        );
+                    }
                 }
             }
         });
     }
-
-    let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
-    register_crds(
-        client.clone(),
-        args.additional_crd_columns.unwrap_or_default(),
-        args.webhook_service_name,
-        args.webhook_service_namespace,
-        args.webhook_service_port,
-        args.tls_ca,
-    )
-    .await?;
 
     let crd_api: Api<CustomResourceDefinition> = Api::all(client.clone());
     let crds = crd_api.list(&ListParams::default()).await?;
