@@ -1,0 +1,8 @@
+{
+  "tiny":      {"cpu_limit": 1, "memory_limit": "1GiB",     "disk_limit": "1GiB",     "scale": 1, "workers": 1, "credits_per_hour": "1", "is_cc": true, "swap_enabled": false, "cpu_exclusive": false},
+  "baseline":  {"cpu_limit": 8, "memory_limit": "128GiB",   "disk_limit": "64GiB",    "scale": 1, "workers": 8, "credits_per_hour": "1", "is_cc": true, "swap_enabled": true,  "cpu_exclusive": false},
+  "swap_1-2":  {"cpu_limit": 8, "memory_limit": "11GiB",    "disk_limit": "21GiB",    "scale": 1, "workers": 8, "credits_per_hour": "1", "is_cc": true, "swap_enabled": true,  "cpu_exclusive": false},
+  "swap_1-5":  {"cpu_limit": 8, "memory_limit": "5GiB",     "disk_limit": "27GiB",    "scale": 1, "workers": 8, "credits_per_hour": "1", "is_cc": true, "swap_enabled": true,  "cpu_exclusive": false},
+  "swap_1-12": {"cpu_limit": 8, "memory_limit": "2560MiB",  "disk_limit": "29440MiB", "scale": 1, "workers": 8, "credits_per_hour": "1", "is_cc": true, "swap_enabled": true,  "cpu_exclusive": false},
+  "swap_1-30": {"cpu_limit": 8, "memory_limit": "1GiB",     "disk_limit": "31GiB",    "scale": 1, "workers": 8, "credits_per_hour": "1", "is_cc": true, "swap_enabled": true,  "cpu_exclusive": false}
+}
