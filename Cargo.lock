@@ -7833,6 +7833,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-sql-anonymize"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-sql-parser",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
