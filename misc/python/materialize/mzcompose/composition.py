@@ -201,17 +201,32 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            def _register(python_service: Any) -> None:
+            def _register_companion(python_service: Any) -> None:
+                # Companions never override an explicit declaration (or an
+                # already-registered companion). A customized service listed
+                # in SERVICES therefore wins over the default companion of the
+                # same name, and identical companions of sibling services
+                # (e.g. the metadata store of both Materialized and Testdrive)
+                # collapse to a single registration.
+                if python_service.name in self.compose["services"]:
+                    return
+                self.compose["services"][python_service.name] = python_service.config
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
+
+            services = list(getattr(module, "SERVICES", []))
+            # First register all explicit services, keeping the guard against
+            # the same name being spelled out twice. Companions are registered
+            # afterwards so that explicit declarations always take precedence.
+            for python_service in services:
                 if python_service.name in self.compose["services"]:
                     raise UIError(
                         f"service {python_service.name!r} specified more than once"
                     )
                 self.compose["services"][python_service.name] = python_service.config
+            for python_service in services:
                 for companion in getattr(python_service, "companions", []):
-                    _register(companion)
-
-            for python_service in getattr(module, "SERVICES", []):
-                _register(python_service)
+                    _register_companion(companion)
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:

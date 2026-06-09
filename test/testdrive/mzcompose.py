@@ -24,7 +24,6 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import metadata_store_services
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
@@ -61,7 +60,6 @@ SERVICES = [
         sanity_restart=False,
     ),
     Testdrive(external_blob_store=True),
-    *metadata_store_services(),
 ]
 
 
