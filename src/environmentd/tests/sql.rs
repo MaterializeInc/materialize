@@ -4043,3 +4043,64 @@ async fn test_serialized_ddl_cancel() {
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't
     // pass very high durations to mz_sleep so that we aren't waiting for long.
 }
+
+// Regression test for SQL-232: `GRANT ALL ON TABLE <view>` must not emit the
+// non-applicable-privilege-types notice. The shorthand expands to the full
+// table privilege set for PostgreSQL compatibility, but the user did not
+// explicitly request a non-applicable privilege, so warning is noisy. The
+// notice still fires when the user explicitly names a non-applicable
+// privilege like `GRANT INSERT, UPDATE ON TABLE <view>`.
+#[test] // allow(test-attribute)
+#[allow(clippy::disallowed_methods)]
+fn test_grant_all_on_view_suppresses_non_applicable_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
+    client.batch_execute("CREATE ROLE joe").unwrap();
+
+    // Drain any notices accumulated during setup.
+    while rx.try_recv().is_ok() {}
+
+    let non_applicable = |msg: &str| msg.contains("non-applicable privilege types");
+
+    // Explicit non-applicable privileges: the notice MUST fire.
+    client
+        .batch_execute("GRANT INSERT, UPDATE ON TABLE v TO joe")
+        .unwrap();
+    let saw_notice = Retry::default()
+        .max_duration(Duration::from_secs(5))
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) if non_applicable(msg.message()) => Ok(()),
+            Ok(_) => Err("other notice, keep looking"),
+            Err(_) => Err("no notice yet"),
+        });
+    assert!(
+        saw_notice.is_ok(),
+        "expected non-applicable privilege types notice for explicit GRANT INSERT, UPDATE",
+    );
+
+    // `ALL` shorthand: the notice MUST NOT fire.
+    client.batch_execute("GRANT ALL ON TABLE v TO joe").unwrap();
+    client
+        .batch_execute("REVOKE ALL ON TABLE v FROM joe")
+        .unwrap();
+    client
+        .batch_execute("GRANT ALL PRIVILEGES ON TABLE v TO joe")
+        .unwrap();
+    while let Ok(msg) = rx.try_recv() {
+        assert!(
+            !non_applicable(msg.message()),
+            "unexpected non-applicable privilege types notice for `ALL` shorthand: {}",
+            msg.message(),
+        );
+    }
+}
