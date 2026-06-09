@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -73,7 +73,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, IsolationLevel, MAX_CONCURRENT_OCC_WRITES, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -2619,6 +2619,28 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        // Failsafe: when frontend OCC read-then-write is enabled, every
+        // DELETE / UPDATE / INSERT must be sequenced through that path —
+        // not here. The two paths take different locks (OCC takes none;
+        // this path takes write locks) and therefore do not synchronize
+        // against each other, so running them concurrently against the
+        // same table double-retracts rows that both paths' reads
+        // observed. If we reach this function while the flag is on,
+        // frontend sequencing was bypassed for this statement (e.g. by
+        // SQL `EXECUTE` of a prepared DML being re-dispatched via
+        // `Command::Execute` from `sequencer.rs`'s `Plan::Execute`
+        // handler). That's a routing bug; surface it loudly rather than
+        // silently corrupting data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "sequence_read_then_write reached the coordinator while \
+                 frontend OCC read-then-write is enabled; frontend \
+                 sequencing was bypassed for this statement"
+                    .into(),
+            )));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
@@ -4040,6 +4062,7 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+        Self::reject_if_startup_only(&name)?;
         // We want to ensure that the network policy we're switching too actually exists.
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
             self.validate_alter_system_network_policy(session, &value)?;
@@ -4070,6 +4093,7 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+        Self::reject_if_startup_only(&name)?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -4093,6 +4117,41 @@ impl Coordinator {
             var_name: None,
         });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
+    }
+
+    /// Rejects `ALTER SYSTEM SET` / `RESET` for system parameters whose value
+    /// is sampled once at `environmentd` startup and cannot be changed
+    /// dynamically.
+    ///
+    /// Mutating these at runtime would update the catalog without affecting
+    /// the running process, leaving operators (and us, in tests like
+    /// `parallel-workload`) with the false impression that the change took
+    /// effect. For switches that gate fundamentally different code paths —
+    /// e.g. `enable_adapter_frontend_occ_read_then_write`, where the
+    /// lock-based and OCC paths cannot safely run concurrently within one
+    /// process — that confusion is dangerous, so we refuse the operation
+    /// outright. `max_concurrent_occ_writes` is startup-only for the same
+    /// reason (it sizes the OCC semaphore at boot); there the risk is only a
+    /// silent no-op rather than data corruption, but we reject it too for
+    /// consistency.
+    ///
+    /// NOTE: this only guards the SQL `ALTER SYSTEM` path. LaunchDarkly /
+    /// `system_parameter_default` sync writes the catalog value directly (via
+    /// `Command::SetSystemVars`) and is expected to be paired with an
+    /// `environmentd` restart for the new value to take effect.
+    fn reject_if_startup_only(name: &str) -> Result<(), AdapterError> {
+        let startup_only: &[&str] = &[
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+        ];
+        if startup_only.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            return Err(AdapterError::Unstructured(anyhow!(
+                "{name} is read once at environmentd startup and cannot be \
+                 changed at runtime; set it via system_parameter_default and \
+                 restart environmentd to change it"
+            )));
+        }
+        Ok(())
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.

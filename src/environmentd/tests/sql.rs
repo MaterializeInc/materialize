@@ -1692,8 +1692,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2
@@ -1706,7 +1710,27 @@ fn test_subscribe_outlive_cluster() {
 
 #[mz_ore::test]
 fn test_read_then_write_serializability() {
-    let server = test_util::TestHarness::default().start_blocking();
+    test_read_then_write_serializability_inner(false);
+}
+
+// Same as `test_read_then_write_serializability`, but exercising the frontend
+// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
+// still double the row count exactly, i.e. OCC retries must prevent lost
+// updates.
+#[mz_ore::test]
+fn test_read_then_write_serializability_frontend_occ() {
+    test_read_then_write_serializability_inner(true);
+}
+
+fn test_read_then_write_serializability_inner(frontend_occ: bool) {
+    let mut harness = test_util::TestHarness::default();
+    if frontend_occ {
+        harness = harness.with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        );
+    }
+    let server = harness.start_blocking();
 
     // Create table with initial value
     {
