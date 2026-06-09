@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use sqlparser::ast::{ObjectType, Statement};
+use sqlparser::ast::{ObjectName, ObjectNamePart, ObjectType, Statement};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::BTreeMap;
@@ -37,7 +37,16 @@ const DIALECT: MySqlDialect = MySqlDialect {};
 fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
     let stripped = name.replace('`', "");
     let mut name_iter = stripped.split('.');
-    match (name_iter.next(), name_iter.next()) {
+    mysql_table_name(name_iter.next(), name_iter.next(), current_schema, name)
+}
+
+fn mysql_table_name(
+    first_component: Option<&str>,
+    second_component: Option<&str>,
+    current_schema: &str,
+    name: &str,
+) -> Result<MySqlTableName, TransientError> {
+    match (first_component, second_component) {
         (Some(t_name), None) => Ok(MySqlTableName::new(current_schema, t_name)),
         (Some(schema_name), Some(t_name)) => Ok(MySqlTableName::new(schema_name, t_name)),
         _ => Err(TransientError::Generic(anyhow::anyhow!(
@@ -45,6 +54,33 @@ fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, Trans
             name
         ))),
     }
+}
+
+fn table_ident_from_object_name(
+    name: ObjectName,
+    current_schema: &str,
+) -> Result<MySqlTableName, TransientError> {
+    let processed_name_parts: Vec<String> = name.0.iter().map(|part| match part {
+        ObjectNamePart::Identifier(ident) => Ok(ident.value.clone()),
+        // Functions for table name identifiers are a snowflake-specific concept, unexpected for mysql so we should fail hard.
+        ObjectNamePart::Function(_) => return Err(TransientError::Generic(anyhow::anyhow!(
+            "Invalid table name from QueryEvent, function identifiers not supported in mysql: {}", name
+        ))),
+    }).collect::<Result<_, _>>()?;
+    if !(processed_name_parts.len() > 0 && processed_name_parts.len() <= 2) {
+        return Err(TransientError::Generic(anyhow::anyhow!(
+            "Invalid table name from QueryEvent: {}",
+            name
+        )));
+    }
+
+    let mut name_parts_iter = processed_name_parts.iter();
+    mysql_table_name(
+        name_parts_iter.next().map(|x| x.as_str()),
+        name_parts_iter.next().map(|x| x.as_str()),
+        current_schema,
+        &format!("{name}"),
+    )
 }
 
 /// Handles QueryEvents from the MySQL replication stream. Since we only use
@@ -241,7 +277,7 @@ fn drop_table_identifiers(
         return Err(invalid());
     }
     let stmt = parse_result.get(0).unwrap();
-    let table_identifiers: Vec<String> = match stmt {
+    let table_identifiers: Vec<MySqlTableName> = match stmt {
         Statement::Drop {
             object_type,
             temporary,
@@ -252,18 +288,16 @@ fn drop_table_identifiers(
                 if *temporary {
                     return Err(invalid());
                 }
-                names.iter().map(|name| format!("{name}")).collect()
+                names
+                    .iter()
+                    .map(|name| table_ident_from_object_name(name.clone(), current_schema))
+                    .collect::<Result<Vec<_>, _>>()?
             }
             _ => return Err(invalid()),
         },
         _ => return Err(invalid()),
     };
-
-    let mut result: Vec<MySqlTableName> = Vec::with_capacity(table_identifiers.len());
-    for id in table_identifiers {
-        result.push(table_ident(&id, current_schema)?);
-    }
-    Ok(result)
+    Ok(table_identifiers)
 }
 
 /// Handles RowsEvents from the MySQL replication stream. These events contain
@@ -438,15 +472,30 @@ mod tests {
         MySqlTableName::new(schema, name)
     }
 
-    /// Parse the table list of a `DROP TABLE` statement exactly as
-    /// [`handle_query_event`] does: the leading `DROP TABLE` keywords are
-    /// consumed first, then the remaining tokens are handed to
-    /// [`drop_table_identifiers`].
+    /// Resolve which tables a binlog statement drops, mirroring
+    /// [`handle_query_event`] end to end. Dispatch keys off the first two
+    /// whitespace tokens, and only a leading `DROP TABLE` is handed to
+    /// [`drop_table_identifiers`] (which re-parses the full statement with
+    /// sqlparser). Anything the dispatch does not recognize as `DROP TABLE`
+    /// yields no dropped tables, exactly as the production `_ => {}` arm does.
+    ///
+    /// Testing through this gate matters: a statement can parse fine on its own
+    /// yet never reach the parser because the dispatch tokens don't line up
+    /// (e.g. a comment sits between `DROP` and `TABLE`).
     fn parse_drop(
         query: &str,
         current_schema: &str,
     ) -> Result<Vec<MySqlTableName>, TransientError> {
-        drop_table_identifiers(current_schema, query)
+        let mut tokens = query.split_ascii_whitespace();
+        let first = tokens.next();
+        let second = tokens.next();
+        match (
+            first.map(str::to_ascii_lowercase).as_deref(),
+            second.map(str::to_ascii_lowercase).as_deref(),
+        ) {
+            (Some("drop"), Some("table")) => drop_table_identifiers(current_schema, query),
+            _ => Ok(Vec::new()),
+        }
     }
 
     #[mz_ore::test]
@@ -544,6 +593,191 @@ mod tests {
         assert_eq!(
             parse_drop("DROP TABLE `shop`.`orders`,`shop`.`customers`", "shop").unwrap(),
             vec![table("shop", "orders"), table("shop", "customers")],
+        );
+    }
+
+    // --- Comments in the statement -----------------------------------------
+    //
+    // sqlparser's MySqlDialect lexer strips comments, so a comment anywhere the
+    // dispatch still recognizes as `DROP TABLE ...` is ignored and the table is
+    // parsed normally.
+
+    #[mz_ore::test]
+    fn drop_ignores_block_comment_before_name() {
+        assert_eq!(
+            parse_drop("DROP TABLE /* a comment */ orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_ignores_trailing_block_comment() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders /* trailing */", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_ignores_double_dash_line_comment() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders -- line comment", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_ignores_hash_line_comment() {
+        // `#` is a MySQL-specific line comment; the MySqlDialect lexer handles it.
+        assert_eq!(
+            parse_drop("DROP TABLE orders # mysql line comment", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_treats_executable_comment_body_as_sql() {
+        // MySQL executable comments `/*!NNNNN ... */` are conditionally executed
+        // SQL, not inert text. sqlparser parses their contents, so the table
+        // inside is recognized.
+        assert_eq!(
+            parse_drop("DROP TABLE /*!40000 orders */", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_with_comment_between_keywords_is_not_detected() {
+        // A comment between `DROP` and `TABLE` shifts the dispatch's second
+        // token off `table`, so the statement never reaches the parser and the
+        // drop is silently missed. This is a gap in the whitespace-based
+        // dispatch in `handle_query_event`, not in `drop_table_identifiers`.
+        assert_eq!(
+            parse_drop("DROP /* mid */ TABLE orders", "shop").unwrap(),
+            Vec::<MySqlTableName>::new(),
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_wrapped_entirely_in_executable_comment_is_not_detected() {
+        // `/*!40000 DROP TABLE orders */` is a drop to MySQL, but the dispatch's
+        // first token is the comment, so it is never recognized. Same dispatch
+        // gap as above.
+        assert_eq!(
+            parse_drop("/*!40000 DROP TABLE orders */", "shop").unwrap(),
+            Vec::<MySqlTableName>::new(),
+        );
+    }
+
+    // --- Comment-shaped text inside identifiers ----------------------------
+
+    #[mz_ore::test]
+    fn drop_does_not_treat_comment_shaped_text_in_identifier_as_comment() {
+        // Comment delimiters inside a backtick-quoted identifier are part of the
+        // name, not a comment, and must be preserved verbatim.
+        assert_eq!(
+            parse_drop("DROP TABLE `tbl /* not a comment */`", "shop").unwrap(),
+            vec![table("shop", "tbl /* not a comment */")],
+        );
+    }
+
+    // --- Optional DROP clauses ---------------------------------------------
+
+    #[mz_ore::test]
+    fn drop_parses_table_with_restrict() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders RESTRICT", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_multiple_tables_with_cascade() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders, customers CASCADE", "shop").unwrap(),
+            vec![table("shop", "orders"), table("shop", "customers")],
+        );
+    }
+
+    // --- Statement / delimiter shape ---------------------------------------
+    //
+    // A `Query_event` carries exactly one statement (MySQL logs one statement
+    // per event; `DROP TABLE a, b` is a single multi-name statement, not two),
+    // so the realistic shapes here are "one statement, maybe with a trailing
+    // delimiter". The multi-statement case is exercised only as defensive
+    // documentation -- it should not arise from a real binlog.
+    //
+    // Note on the error path: when `drop_table_identifiers` returns `Err`, it
+    // propagates as a `TransientError` out of `handle_query_event`, which
+    // restarts replication from the last committed GTID -- re-reading the same
+    // event and failing again, stalling the source. The genuinely reachable way
+    // to hit that is sqlparser rejecting an unusual-but-valid *single* DROP
+    // (a dialect gap), not the contrived multi-statement input below.
+
+    #[mz_ore::test]
+    fn drop_ignores_trailing_semicolon() {
+        // A trailing statement delimiter must not look like a second (empty)
+        // statement: sqlparser skips empty statements, so this stays a single
+        // `DROP` and parses normally.
+        assert_eq!(
+            parse_drop("DROP TABLE orders;", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_of_multiple_statements_errors() {
+        // Defensive only: a real `Query_event` never packs two top-level
+        // statements together. If it somehow did, the `len() != 1` check rejects
+        // it (which, per the note above, would stall rather than crash).
+        assert!(parse_drop("DROP TABLE orders; DROP TABLE customers", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_temporary_table_is_not_detected() {
+        // `DROP TEMPORARY TABLE` has `TEMPORARY` as its second token, so the
+        // dispatch never enters the `DROP TABLE` arm: the explicit `temporary`
+        // rejection inside `drop_table_identifiers` is unreachable via the
+        // production path, and the statement is simply ignored (temporary tables
+        // are never tracked anyway).
+        assert_eq!(
+            parse_drop("DROP TEMPORARY TABLE orders", "shop").unwrap(),
+            Vec::<MySqlTableName>::new(),
+        );
+    }
+
+    // --- Quoted-identifier edge cases --------------------------------------
+    //
+    // Because table names are taken from sqlparser's structured `Ident` values
+    // rather than re-rendered SQL, characters that are only special at the SQL
+    // level -- the `.` separator and backtick quoting -- are handled correctly
+    // inside a quoted identifier.
+
+    #[mz_ore::test]
+    fn drop_quoted_identifier_with_dot_is_a_single_table() {
+        // `` `weird.name` `` is one table named "weird.name" in the current
+        // schema; the dot is part of the name, not a schema/table separator.
+        assert_eq!(
+            parse_drop("DROP TABLE `weird.name`", "shop").unwrap(),
+            vec![table("shop", "weird.name")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_escaped_backtick_identifier_is_preserved() {
+        // ``` `a``b` ``` is one table named "a`b" (a doubled backtick escapes a
+        // literal backtick); the escape is decoded and the backtick kept.
+        assert_eq!(
+            parse_drop("DROP TABLE `a``b`", "shop").unwrap(),
+            vec![table("shop", "a`b")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_with_catalog_drops_catalog() {
+        assert_eq!(
+            parse_drop("DROP TABLE alpha.def.shop.customer", "shop").unwrap(),
+            vec![table("shop", "customer")],
         );
     }
 }
