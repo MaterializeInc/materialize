@@ -30,7 +30,7 @@ NO_AUTH_LISTENERS = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.jso
 class MetricTrigger:
     case: str  # test-case suffix + unique object-name seed
     view_body: str  # the view's non-value columns become the metric's labels
-    metric_ident: str  # becomes the Prometheus metric name verbatim
+    metric_ident: str  # exposed as the Prometheus metric name, with an `mz_custom_` prefix
     help_text: str  # the `HELP '...'` literal
     why: str
 
