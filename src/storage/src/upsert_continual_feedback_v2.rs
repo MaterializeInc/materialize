@@ -155,7 +155,6 @@ where
     }
 }
 
-// ── Source stash diff type ───────────────────────────────────────────────────
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
 // highest `FromTime` (latest source offset) per group. The diff is `Columnar`
@@ -239,7 +238,6 @@ fn flush_to_batcher<T, O>(
     }
 }
 
-// ── MergeBatcher type aliases ─────────────────────────────────────────────────
 // The source stash uses the paged columnar merge batcher. Data is pushed in
 // unsorted; the batcher maintains geometrically-sized sorted chains and
 // consolidates via the UpsertDiff Semigroup automatically. Unlike DD's
@@ -361,7 +359,7 @@ where
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
     FromTime: UpsertSourceTime,
 {
-    // ── Arrange persist feedback ────────────────────────────────────────
+    // Arrange persist feedback.
     // Extract (UpsertKey, UpsertValue) from the persist feedback collection
     // and arrange it. DD manages the spine, batching, and compaction.
     let persist_keyed = persist_input.flat_map(move |result| {
@@ -433,7 +431,7 @@ where
     use timely::dataflow::operators::Probe;
     let (persist_probe, _persist_probe_stream) = persist_arranged.stream.probe();
 
-    // ── Build the async processing operator ─────────────────────────────
+    // Build the async processing operator.
     let mut builder = AsyncOperatorBuilder::new("Upsert V2".to_string(), input.scope());
 
     let (output_handle, output) = builder
@@ -499,13 +497,11 @@ where
         let mut rehydration_total: u64 = 0;
         let mut rehydration_updates: u64 = 0;
 
-        // ──────────────────────────────────────────────────────────────────
         // Main operator loop. Each iteration performs four steps:
         //   Step 1: Ingest source data into the batcher.
         //   Step 2: Read the persist frontier and update rehydration state.
         //   Step 3: Seal the batcher, drain eligible entries, push back the rest.
         //   Step 4: Manage the output capability.
-        // ──────────────────────────────────────────────────────────────────
         loop {
             // Block until woken by source input or a persist frontier advance.
             tokio::select! {
@@ -515,7 +511,7 @@ where
                 }
             }
 
-            // ── Step 1: Ingest source data ────────────────────────────────
+            // Step 1: Ingest source data.
             // Read all available source events, wrap each value in an
             // UpsertDiff (carrying FromTime for dedup), and buffer them.
             // Events before the resume_upper are dropped (already persisted).
@@ -559,7 +555,7 @@ where
             // entries for the same (key, time) via the UpsertDiff Semigroup.
             flush_to_batcher(&mut push_buffer, &mut chunker, &mut batcher);
 
-            // ── Step 2: Read persist frontier ─────────────────────────────
+            // Step 2: Read persist frontier.
             // The persist probe tells us which output times have been
             // committed back through the feedback loop. This determines:
             //   - Whether rehydration is complete (persist >= resume_upper).
@@ -597,7 +593,7 @@ where
                 prev_persist_upper = persist_upper.clone();
             }
 
-            // ── Step 3: Seal & drain ──────────────────────────────────────
+            // Step 3: Seal & drain.
             // Seal the batcher at input_upper to extract all source-finalized
             // entries as sorted, consolidated chunks. The seal merges all
             // internal chains (O(N) linear merge of sorted data) and splits
@@ -676,7 +672,7 @@ where
                     rehydration_updates += drain_stats.eligible;
                 }
 
-                // ── Step 4: Capability management ─────────────────────────
+                // Step 4: Capability management.
                 // Downgrade the output capability to the minimum time of any
                 // remaining data: either entries still in the batcher (above
                 // input_upper) or ineligible entries being pushed back.
