@@ -108,11 +108,13 @@ AS (TYPE 'gauge',
 
 When querying the HTTP endpoint at `/metrics/custom/mydatabase/myschema/myprometheus`, they would then get a response like:
 ```
-# HELP leads Count of leads and whether they have been converted
-# TYPE leads gauge
-leads{converted="TRUE"} 22
-leads{converted="FALSE"} 67
+# HELP mz_custom_leads Count of leads and whether they have been converted
+# TYPE mz_custom_leads gauge
+mz_custom_leads{converted="TRUE"} 22
+mz_custom_leads{converted="FALSE"} 67
 ```
+
+All exposed metric names are prefixed with `mz_custom_` to namespace user-defined metrics and avoid collisions with Materialize's built-in metrics. The prefix is injected at exposition time; the user-supplied metric name (e.g. `leads`) is what appears in `CREATE METRIC` and the `mz_metrics` catalog.
 
 ## Minimal Viable Prototype
 
