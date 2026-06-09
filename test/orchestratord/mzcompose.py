@@ -2641,6 +2641,230 @@ def workflow_v1alpha2_opt_in(
     print("v1alpha2 opt-in test PASSED")
 
 
+OPERATOR_CERT_SECRET = "operator-materialize-operator-cert"
+OPERATOR_CA_SECRET = "operator-materialize-operator-ca"
+MATERIALIZE_CRD = "materializes.materialize.cloud"
+
+
+def conversion_webhook_works() -> bool:
+    """Returns whether the conversion webhook is currently functional.
+
+    Reading the Materialize resource at v1alpha2 forces the Kubernetes API
+    server to call the conversion webhook to convert the stored v1alpha1
+    object. If the webhook's serving certificate isn't trusted by the
+    caBundle registered in the CRD, the API server rejects the call and this
+    returns False.
+    """
+    result = subprocess.run(
+        [
+            "kubectl",
+            "get",
+            "materializes.v1alpha2.materialize.cloud",
+            "-n",
+            "materialize-environment",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"conversion webhook probe failed: {result.stderr.decode(errors='replace')}"
+        )
+        return False
+    items = json.loads(result.stdout).get("items", [])
+    return len(items) > 0
+
+
+def get_crd_ca_bundle() -> str:
+    """The caBundle the API server uses to trust the conversion webhook."""
+    return spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "crd",
+            MATERIALIZE_CRD,
+            "-o",
+            "jsonpath={.spec.conversion.webhook.clientConfig.caBundle}",
+        ]
+    ).strip()
+
+
+def get_secret_field(secret: str, field: str) -> str:
+    """A base64-encoded field from a secret in the materialize namespace."""
+    return spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "secret",
+            secret,
+            "-n",
+            "materialize",
+            "-o",
+            rf"jsonpath={{.data.{field}}}",
+        ]
+    ).strip()
+
+
+def get_serving_cert_ca() -> str:
+    """The ca.crt in the mounted serving-certificate secret (the root CA)."""
+    return get_secret_field(OPERATOR_CERT_SECRET, r"ca\.crt")
+
+
+def get_serving_cert_leaf() -> str:
+    """The tls.crt (leaf) in the mounted serving-certificate secret."""
+    return get_secret_field(OPERATOR_CERT_SECRET, r"tls\.crt")
+
+
+def workflow_webhook_cert_rotation(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that the conversion webhook keeps working as its TLS certificate is
+    rotated, i.e. once the original certificate would have expired.
+
+    The webhook is served by orchestratord using a certificate that
+    cert-manager rotates out-of-band, and orchestratord reloads the serving
+    certificate from disk periodically. The serving certificate is signed by a
+    stable root CA, so there are two distinct rotation cases, both tested here
+    without restarting orchestratord:
+
+      1. Serving-certificate rotation (the common case): the leaf rotates but
+         the CA -- and therefore the caBundle registered on the CRD -- stays the
+         same. The webhook must keep working with no caBundle change.
+
+      2. Root CA rotation (rare): ca.crt changes, so orchestratord must
+         re-register the CRD's caBundle to match the newly-served certificate,
+         otherwise the API server would reject every conversion request.
+
+    Rather than wait out real certificate lifetimes, this test deploys with a
+    very short reload interval and forces cert-manager to reissue certificates
+    by deleting their secrets.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+
+    # Use cert-manager (the default) so we exercise the real rotation path,
+    # and reload the certificate aggressively so a rotation is picked up in
+    # seconds rather than the default hour.
+    assert definition["operator"]["operator"]["certificate"]["source"] == "cert-manager"
+    definition["operator"]["operator"]["args"]["webhookCertReloadInterval"] = "5s"
+
+    # Deploy a v1alpha2 resource. The initial apply already goes through the
+    # conversion webhook (v1alpha2 -> stored v1alpha1), so this confirms the
+    # webhook works before any rotation.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    init(definition)
+    apply_materialize(definition)
+
+    def webhook_works() -> None:
+        assert conversion_webhook_works(), "conversion webhook is not working"
+
+    retry(webhook_works, 120)
+    print("Conversion webhook works before rotation")
+
+    initial_ca_bundle = get_crd_ca_bundle()
+    assert initial_ca_bundle, "expected a caBundle to be registered on the CRD"
+
+    # --- Case 1: serving-certificate rotation, CA unchanged ------------------
+    #
+    # Deleting the serving-certificate secret makes cert-manager reissue the
+    # leaf (new key + new tls.crt) signed by the same stable root CA, so ca.crt
+    # is unchanged. The webhook must keep working and the caBundle must NOT
+    # change.
+    leaf_before = get_serving_cert_leaf()
+    ca_before = get_serving_cert_ca()
+    print("Rotating the serving certificate (deleting the serving cert secret)...")
+    spawn.runv(
+        ["kubectl", "delete", "secret", OPERATOR_CERT_SECRET, "-n", "materialize"]
+    )
+
+    def leaf_rotated() -> None:
+        leaf = get_serving_cert_leaf()
+        assert (
+            leaf and leaf != leaf_before
+        ), "cert-manager has not reissued the leaf yet"
+
+    retry(leaf_rotated, 120)
+    assert (
+        get_serving_cert_ca() == ca_before
+    ), "root CA changed during a serving-certificate rotation; expected it to be stable"
+    print("Serving certificate rotated; root CA is unchanged")
+
+    # Give orchestratord time to reload the new leaf (interval is 5s), then
+    # confirm the webhook still works and the caBundle was left untouched.
+    retry(webhook_works, 120)
+    assert (
+        get_crd_ca_bundle() == initial_ca_bundle
+    ), "caBundle changed even though the CA did not"
+    apply_materialize(definition)
+    print("Conversion webhook still works after serving-certificate rotation")
+
+    # --- Case 2: root CA rotation --------------------------------------------
+    #
+    # Rotate the root CA, then reissue the leaf so its ca.crt reflects the new
+    # CA. orchestratord must notice ca.crt changed and re-register the CRD's
+    # caBundle, otherwise the API server would reject conversions.
+    print("Rotating the root CA (deleting the CA secret)...")
+    spawn.runv(["kubectl", "delete", "secret", OPERATOR_CA_SECRET, "-n", "materialize"])
+
+    def ca_secret_rotated() -> None:
+        ca = get_secret_field(OPERATOR_CA_SECRET, r"tls\.crt")
+        assert ca, "cert-manager has not reissued the root CA yet"
+
+    retry(ca_secret_rotated, 120)
+
+    # Force the leaf to be re-signed by the new CA so the mounted ca.crt updates.
+    spawn.runv(
+        ["kubectl", "delete", "secret", OPERATOR_CERT_SECRET, "-n", "materialize"]
+    )
+
+    def serving_ca_changed() -> None:
+        assert (
+            get_serving_cert_ca() != ca_before
+        ), "serving cert's ca.crt has not picked up the new root CA yet"
+
+    retry(serving_ca_changed, 180)
+    print("Root CA rotated and serving certificate re-signed by the new CA")
+
+    # orchestratord must refresh the CRD's caBundle to match the new CA. Waiting
+    # for the caBundle to change proves the re-registration happened.
+    def ca_bundle_refreshed() -> None:
+        current = get_crd_ca_bundle()
+        assert (
+            current and current != initial_ca_bundle
+        ), "orchestratord has not refreshed the conversion webhook caBundle yet"
+
+    retry(ca_bundle_refreshed, 300)
+    print("orchestratord refreshed the conversion webhook caBundle after CA rotation")
+
+    # Decisive check: the old CA is gone, so the webhook can only work if the
+    # newly-served certificate is trusted via the refreshed caBundle. We never
+    # restarted orchestratord, so this exercises the in-process reload +
+    # re-registration path that runs in production.
+    retry(webhook_works, 120)
+    apply_materialize(definition)
+    print("Conversion webhook still works after root CA rotation")
+    print("webhook cert rotation test PASSED")
+
+
 def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,

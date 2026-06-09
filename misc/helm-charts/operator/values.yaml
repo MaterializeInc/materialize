@@ -24,6 +24,12 @@ operator:
     enableInternalStatementLogging: true
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
+    # -- (string) How often orchestratord reloads its webhook TLS certificate
+    # from disk and, when the CA changes, refreshes the conversion webhook's CA
+    # bundle. Must be shorter than the certificate's lifetime. Accepts a
+    # humantime duration (e.g. "1h", "30m"). Leave null to use the binary
+    # default.
+    webhookCertReloadInterval: null
 
   # -- Additional columns to display when printing the Materialize CRD in table format.
   additionalMaterializeCRDColumns: {}
@@ -39,6 +45,14 @@ operator:
     source: cert-manager
     # -- (string) Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret".
     secretName: null
+    # -- (string) Lifetime of the root CA that signs the webhook serving
+    # certificate, when `source` is "cert-manager". The serving certificate is
+    # signed by this CA, so the CA outlives individual serving-certificate
+    # rotations.
+    caDuration: 87600h
+    # -- (string) How long before the root CA expires to renew it. Must be less
+    # than `caDuration`.
+    caRenewBefore: 8760h
 
 
   # Cloud provider configuration
