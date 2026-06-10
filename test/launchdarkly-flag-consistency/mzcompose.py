@@ -164,19 +164,6 @@ CI_TEST_TAG = "ci-test"
 IGNORED_MZ_PARAMETERS: set[str] = set()
 
 
-class Flag:
-    """A LaunchDarkly flag, reduced to what this check needs."""
-
-    def __init__(self, tags: list[str], defaults: dict[str, Any | None]) -> None:
-        self.tags = tags
-        # The value LaunchDarkly serves to an unmatched context (targeting off
-        # -> off variation, otherwise the fallthrough variation), per checked
-        # environment. A value is `None` when it could not be determined
-        # unambiguously (e.g. a percentage rollout) or the environment is
-        # unknown to the flag.
-        self.defaults = defaults
-
-
 def synced_parameters(c: Composition) -> dict[str, str]:
     """Return the synchronized system parameters of the running `materialized`
     service as a mapping from name to its (default) value, derived from
@@ -238,40 +225,52 @@ def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
     return variations[index].get("value")
 
 
-def launchdarkly_flags() -> dict[str, Flag]:
-    """Return all feature flags in the configured LaunchDarkly project."""
-    configuration = launchdarkly_api.Configuration(
-        api_key=dict(ApiKey=LAUNCHDARKLY_API_TOKEN)
-    )
-    flags: dict[str, Flag] = {}
-    with launchdarkly_api.ApiClient(configuration) as api_client:
-        api = feature_flags_api.FeatureFlagsApi(api_client)
-        limit = 100
-        offset = 0
-        while True:
-            # `summary=False` so that per-environment targeting (needed to
-            # determine the served default) is included. No `env` filter so all
-            # checked environments are returned.
-            page = api.get_feature_flags(
-                LAUNCHDARKLY_PROJECT,
-                summary=False,
-                limit=limit,
-                offset=offset,
-            ).to_dict()
-            items = page.get("items") or []
-            for flag in items:
-                flags[flag["key"]] = Flag(
-                    tags=list(flag.get("tags") or []),
-                    defaults={
-                        env: ld_served_default(flag, env)
-                        for env in LAUNCHDARKLY_ENVIRONMENTS
-                    },
-                )
-            total = page.get("total_count")
-            offset += len(items)
-            if not items or (total is not None and offset >= total):
-                break
+def launchdarkly_flag_tags(api: Any) -> dict[str, list[str]]:
+    """Return every flag in the configured LaunchDarkly project as a mapping
+    from flag key to its tags. Uses the (summary) list endpoint, which is cheap
+    but does not include per-environment targeting."""
+    flags: dict[str, list[str]] = {}
+    limit = 100
+    offset = 0
+    while True:
+        page = api.get_feature_flags(
+            LAUNCHDARKLY_PROJECT,
+            summary=True,
+            limit=limit,
+            offset=offset,
+        ).to_dict()
+        items = page.get("items") or []
+        for flag in items:
+            flags[flag["key"]] = list(flag.get("tags") or [])
+        total = page.get("total_count")
+        offset += len(items)
+        if not items or (total is not None and offset >= total):
+            break
     return flags
+
+
+def launchdarkly_served_defaults(
+    api: Any, keys: Iterable[str]
+) -> tuple[dict[str, dict[str, Any | None]], set[str]]:
+    """Return, for each requested flag key, the value LaunchDarkly serves by
+    default per checked environment. Fetches each flag individually because the
+    list endpoint only returns summaries, not the per-environment targeting
+    needed to determine the served default. Also returns the set of environment
+    keys actually seen, so a misconfigured environment name can be detected."""
+    defaults: dict[str, dict[str, Any | None]] = {}
+    env_keys_seen: set[str] = set()
+    for key in sorted(keys):
+        try:
+            flag = api.get_feature_flag(LAUNCHDARKLY_PROJECT, key).to_dict()
+        except launchdarkly_api.ApiException as e:
+            print(f"WARNING: could not fetch LaunchDarkly flag {key!r}: {e}")
+            continue
+        env_keys_seen.update((flag.get("environments") or {}).keys())
+        defaults[key] = {
+            environment: ld_served_default(flag, environment)
+            for environment in LAUNCHDARKLY_ENVIRONMENTS
+        }
+    return defaults, env_keys_seen
 
 
 def values_diverge(mz_value: str, ld_value: Any) -> bool | None:
@@ -326,12 +325,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # 2. Synchronized parameters of the last published release. Best-effort:
     #    used only to avoid warning about flags that a deployed older version
-    #    still relies on.
+    #    still relies on. `MzVersion`'s string already carries the `v` prefix.
     try:
         previous_version = get_latest_published_version()
-        previous_image = f"materialize/materialized:v{previous_version}"
+        previous_image = f"materialize/materialized:{previous_version}"
         previous = collect_synced_parameters(
-            c, image=previous_image, label=f"release v{previous_version}"
+            c, image=previous_image, label=f"release {previous_version}"
         )
     except Exception as e:
         print(f"WARNING: could not determine the last published release: {e}")
@@ -341,42 +340,62 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if previous is not None:
         known |= set(previous)
 
-    # 3. All flags currently defined in LaunchDarkly.
+    # 3. Flags in LaunchDarkly: keys+tags from the list endpoint, and served
+    #    defaults (per environment) fetched individually for the flags present
+    #    in both -- the list endpoint only returns summaries.
     try:
-        ld = launchdarkly_flags()
+        with launchdarkly_api.ApiClient(
+            launchdarkly_api.Configuration(api_key=dict(ApiKey=LAUNCHDARKLY_API_TOKEN))
+        ) as api_client:
+            api = feature_flags_api.FeatureFlagsApi(api_client)
+            ld_tags = launchdarkly_flag_tags(api)
+            ld_keys = set(ld_tags)
+            in_both = sorted(
+                name
+                for name in current
+                if name in ld_tags and CI_TEST_TAG not in ld_tags[name]
+            )
+            served_defaults, env_keys_seen = launchdarkly_served_defaults(api, in_both)
     except launchdarkly_api.ApiException as e:
         raise UIError(
             f"Error calling the LaunchDarkly API (status={e.status}, reason={e.reason})"
         )
     print(
-        f"Found {len(ld)} flags in LaunchDarkly project '{LAUNCHDARKLY_PROJECT}' "
-        f"(default-divergence checked against environments: "
-        f"{', '.join(LAUNCHDARKLY_ENVIRONMENTS)})"
+        f"Found {len(ld_keys)} flags in LaunchDarkly project "
+        f"'{LAUNCHDARKLY_PROJECT}'; {len(in_both)} present in both Materialize "
+        f"and LaunchDarkly"
     )
 
-    ld_keys = set(ld)
+    # Surface a misconfigured environment name: if none of the environments we
+    # check exist on the fetched flags, the default-divergence result is
+    # meaningless.
+    missing_envs = [e for e in LAUNCHDARKLY_ENVIRONMENTS if e not in env_keys_seen]
+    if env_keys_seen and missing_envs:
+        print(
+            f"WARNING: environment(s) {', '.join(missing_envs)} not found in "
+            f"LaunchDarkly; available environments: "
+            f"{', '.join(sorted(env_keys_seen))}. Set LAUNCHDARKLY_ENVIRONMENTS "
+            f"to the correct keys for the default-divergence check."
+        )
 
     # ERROR: parameters in Materialize that are missing in LaunchDarkly.
     missing_in_ld = set(current) - ld_keys
 
     # WARN: flags in LaunchDarkly that are not known to either the current build
     # or the last release (ignoring throwaway CI test flags).
-    stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld[key].tags}
+    stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld_tags[key]}
 
     # WARN: flags present in both whose served default diverges from the
     # Materialize default, in any checked environment. We also count how many
     # flags could actually be compared, so an empty result is distinguishable
     # from "nothing was comparable".
-    in_both = sorted(
-        name for name in current if name in ld and CI_TEST_TAG not in ld[name].tags
-    )
     diverging_defaults: dict[str, list[tuple[str, str, Any]]] = {}
     indeterminate: set[str] = set()
     for name in in_both:
         mz_value = current[name]
         comparable = False
         for environment in LAUNCHDARKLY_ENVIRONMENTS:
-            ld_value = ld[name].defaults.get(environment)
+            ld_value = served_defaults.get(name, {}).get(environment)
             diverges = values_diverge(mz_value, ld_value)
             if diverges is None:
                 continue
