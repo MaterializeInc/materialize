@@ -348,18 +348,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld[key].tags}
 
     # WARN: flags present in both whose served default diverges from the
-    # Materialize default, in any checked environment.
+    # Materialize default, in any checked environment. We also count how many
+    # flags could actually be compared, so an empty result is distinguishable
+    # from "nothing was comparable".
+    in_both = sorted(
+        name for name in current if name in ld and CI_TEST_TAG not in ld[name].tags
+    )
     diverging_defaults: dict[str, list[tuple[str, str, Any]]] = {}
-    for name, mz_value in current.items():
-        flag = ld.get(name)
-        if flag is None or CI_TEST_TAG in flag.tags:
-            continue
+    indeterminate: set[str] = set()
+    for name in in_both:
+        mz_value = current[name]
+        comparable = False
         for environment in LAUNCHDARKLY_ENVIRONMENTS:
-            ld_value = flag.defaults.get(environment)
-            if values_diverge(mz_value, ld_value):
+            ld_value = ld[name].defaults.get(environment)
+            diverges = values_diverge(mz_value, ld_value)
+            if diverges is None:
+                continue
+            comparable = True
+            if diverges:
                 diverging_defaults.setdefault(name, []).append(
                     (environment, mz_value, ld_value)
                 )
+        if not comparable:
+            indeterminate.add(name)
+    print(
+        f"Default divergence: {len(in_both)} flag(s) present in both Materialize "
+        f"and LaunchDarkly; {len(diverging_defaults)} diverged, "
+        f"{len(indeterminate)} not comparable (no determinable LaunchDarkly "
+        f"default or a representation mismatch such as '1GB' vs 1073741824)."
+    )
 
     if stale_in_ld:
         report(
