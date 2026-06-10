@@ -262,6 +262,7 @@ before relying** — they drift.
 | — | **Operational rollout** (not a PR): enable the gates at runtime via LaunchDarkly; bake in prod | turn it on | runtime flip — legacy stays as fallback | none |
 | **7** | Flip dyncfg defaults to true + remove legacy paths (only after prod bake) | the cleanup | defaults → on | drop `pending` |
 | **8** | Showcase follow-ups: `retired` drop reason, rollback stamp + audit event + view `state`, burst arming on object existence | polish from live testing | dark behind master gate | none (unshipped v86 amended in place) |
+| **9** | Restore the on-refresh `scheduling_policies` audit detail on creates | audit fidelity | dark behind master gate | none |
 
 Splitting/merging notes: PR 3 is the largest and may split into **3a** (strategy + hydration
 input + record handling, controller side) and **3b** (`ALTER` SQL reshape + wait-shim + audit
@@ -731,6 +732,8 @@ to attribute and today maps the empty set to `manual` — misleading next to cre
 - Creates keep per-strategy attribution; **on-refresh creates are restored to `schedule`**
   (the strategy name is already in the create's attribution list — a one-line mapping change).
   The legacy `scheduling_policies` detail blob stays gone; only the reason word returns.
+  *(Superseded for creates by PR 9: the blob returns on on-refresh creates. Drops keep no
+  blob — that side of this decision stands.)*
 - User-issued `DROP CLUSTER REPLICA` (unmanaged clusters) keeps `manual` — that path is
   untouched.
 - Update the `reason_from_strategies` doc comment (the on-refresh caveat dissolves) and the
@@ -821,9 +824,139 @@ shows `state = 'rolled-back'`, no burst on the freshly-created empty cluster).
 
 ---
 
+## PR 9 — Restore the on-refresh `scheduling_policies` audit detail on creates
+
+**Status:** 👀 In review — spec'd and workshopped 2026-06-10; implemented the same day on the
+user's go-ahead. Independent of 8b/8c (it touches the audit mapping and kernel decision types
+8a settled, not the rollback or burst surfaces). Folded with 8a into per-mainline-PR `fixup!`
+commits (see the Progress Log): PR 8/9 are not standalone PRs but amendments to the mainline
+stack.
+
+PR 8a restored the `schedule` reason *word* on on-refresh creates but recorded the
+per-decision `scheduling_policies` detail blob as gone. Revisited with the user: the blob is
+the audit log's only answer to "why did this cluster turn on" — which REFRESH MVs were behind
+(`objects_needing_refresh`), which were still inside their post-refresh Persist-compaction
+window (`objects_needing_compaction`), and the `hydration_time_estimate` the window was
+widened by — and it turns out to be cheap to restore with full fidelity: every signal it
+needs is already in the tick's `RefreshWindowInputs`, and the audit format still carries the
+optional field. Settled decisions:
+
+- **Creates only.** Drops stay uniformly `retired` with no blob — 8a's no-attribution design
+  stands. A drop happens exactly when no strategy desires the replica, so there is no
+  decision to record; the legacy "off" blob (`decision: off` + empty lists) does not come
+  back. Structurally enforced: only `Decision::CreateReplica` carries the payload, the
+  payload has no on/off field, and the adapter conversion hardcodes `decision: "on"`.
+- **No audit-format change.** `CreateClusterReplicaV4.scheduling_policies` is already
+  `Option<SchedulingDecisionsWithReasonsV2>` (serde-skipped when `None`); this PR stops
+  passing `None` on the controller path. No audit version bump, no catalog migration; dark
+  behind the master gate like PR 5/8.
+- **The kernel stays audit-agnostic.** `mz-cluster-controller` grows no `mz-audit-log`
+  dependency: the strategy emits a plain decision struct (`GlobalId`s + `Duration`s) and the
+  adapter owns the conversion to the audit type — the same split the legacy path uses, whose
+  `RefreshDecision` → V2-blob conversion also lives adapter-side.
+
+Design, in data-flow order:
+
+- **MV identity into the inputs.** `RefreshMvInfo` (ctx.rs) gains `id: GlobalId` — the MV's
+  writes-GlobalId, the identity the legacy blob recorded. The coord pull
+  (`refresh_window_inputs`) already has `mv.global_id_writes()` in hand and currently drops
+  it.
+- **The strategy computes lists, not booleans.** `OnRefreshStrategy::cluster_on` becomes a
+  window-decision function returning
+
+  ```rust
+  pub struct RefreshWindowDecision {
+      pub objects_needing_refresh: Vec<GlobalId>,
+      pub objects_needing_compaction: Vec<GlobalId>,
+      pub hydration_time_estimate: Duration,
+  }
+  ```
+
+  by turning the two `.any()`s into `filter`s — the same computation the legacy
+  `check_refresh_policy` does. The window is open iff either list is non-empty, so the legacy
+  soft-assert ("`on` should have an explanation") holds by construction. Type lives next to
+  `OnRefreshStrategy` (naming/placement is the implementer's call within the ctx idiom).
+- **Payload through the kernel.** `DesiredReplica` gains
+  `audit_detail: Option<RefreshWindowDecision>`; only the on-refresh strategy sets `Some`.
+  The union merge in `reconcile_replicas` combines per-shape details with `Option::or` (at
+  most one strategy produces `Some` today; the rule is documented, not load-bearing) and
+  `Decision::CreateReplica` carries the merged field. Multiple creates of one shape in a tick
+  share the same decision, as legacy events did. Drops gain nothing.
+- **Adapter mapping.** `ReplicaCreateDropReason::OnRefresh` gains the payload
+  (`OnRefresh(Option<RefreshWindowDecision>)`); `reason_from_strategies` keeps the
+  graceful > burst > on-refresh precedence and attaches the create's detail only when
+  on-refresh wins — so the blob appears **iff** the audited reason is `schedule`, the same
+  invariant legacy events had (a shape desired by both graceful and on-refresh audits
+  `reconfiguration`, no blob — consistent, since the blob explains a `schedule` decision).
+  `into_audit_log` converts ids to strings and the estimate to an interval string
+  (`Interval::from_duration` + `strconv::format_interval`, as the legacy conversion does),
+  with `decision` hardcoded `On`. The legacy `ClusterScheduling` variant and its conversion
+  are untouched (they die with PR 7).
+- **Fidelity.** The blob is computed from the same tick's `RefreshWindowInputs` the create
+  decision keys on — the same fidelity as the legacy path, where the deciding task carried
+  its decision into the `ALTER`. A mid-window re-create (e.g. replacing a lost replica)
+  carries the lists as of its own tick, which is the honest reading.
+
+Comment trail to update (the places that currently say the detail is gone): the `OnRefresh`
+variant rustdoc and `into_audit_log` notes (catalog/transact.rs), the
+`reason_from_strategies` rustdoc (coord/cluster_controller.rs), the
+`test_replica_create_drop_reason_into_audit_log` comment, the slt comments in
+`cluster_controller.slt` / `materialized_views.slt`, the design doc's attribution sentence
+(§"strategies are purely additive…", which describes creates as carrying only strategy
+names), and 8a's settled-decision bullet (amended in place, pointing here).
+
+Checklist:
+- [x] `RefreshMvInfo.id`; `RefreshWindowDecision` + strategy refactor; kernel unit tests
+      (refresh-due, compaction-window, both-empty ⇒ window closed; lists match
+      expectations). (`RefreshWindowDecision` lives in `ctx.rs` next to
+      `RefreshWindowInputs` — `Decision::CreateReplica` carries it, and placing it
+      strategy-side would invert the ctx ← strategy module layering.)
+- [x] `DesiredReplica.audit_detail` + merge rule + `Decision::CreateReplica` plumbing;
+      kernel unit tests (on-refresh create carries the detail; burst/`extra` creates carry
+      `None`; shared-shape merge keeps the detail).
+- [x] `OnRefresh(Option<RefreshWindowDecision>)` + conversion in `into_audit_log`; adapter
+      unit test updated (`Some` ⇒ blob with stringified ids + formatted interval, `None` ⇒
+      no blob; `Retired` unchanged).
+- [x] slt (authored for CI): `cluster_controller.slt`'s scheduled-cluster create asserts the
+      blob (decision `on`, estimate, non-empty `objects_needing_refresh`); drop stays
+      `retired` + no blob. `materialized_views.slt` restores the pre-branch blob-content
+      assertions on creates (the `uXXX` normalization), including the compaction-driven
+      `c_schedule_6` case; drops stay `retired`/null. (`materialized-view-refresh-options.td`
+      asserts only reason words — unchanged.)
+- [x] Comment trail above; `cargo fmt`/`check` clean; tracker + progress log.
+
+---
+
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-10_ — **PR 9 implemented; PR 8a + PR 9 dissolved into mainline `fixup!` commits.**
+  The on-refresh `scheduling_policies` detail is restored on creates with full fidelity:
+  `RefreshMvInfo.id` (the coord pull already had `global_id_writes()` in hand),
+  `RefreshWindowDecision` computed by the strategy (the two `.any()`s became `filter`s, so an
+  open window names the MVs that explain it), `DesiredReplica.audit_detail` →
+  `Decision::CreateReplica.audit_detail` through the kernel union (first-`Some`-wins merge per
+  shape), and `ReplicaCreateDropReason::OnRefresh(Option<RefreshWindowDecision>)` converted
+  adapter-side in `into_audit_log` (ids stringified, estimate as interval string, decision
+  hardcoded `on`). Drops stay uniformly `retired`, no blob. Kernel/adapter unit tests +
+  `cluster_controller.slt`/`materialized_views.slt` blob assertions authored for CI; `cargo
+  fmt`/`check`/unit tests clean locally. Since PR 8/9 amend behavior the mainline PRs
+  introduce, the 8a commit and this work were then split into `fixup!` commits against their
+  mainline targets (`retired` drops → PR 2 scaffold commit; on-refresh `schedule` reason +
+  blob → PR 5 on-refresh commit; migrated-legacy-test expectations → the CI-enablement
+  commit) for `git rebase --autosquash`, per the fixup-commit convention.
+- _2026-06-10_ — **PR 9 planned** (spec only; implementation paused for a user go-ahead).
+  Revisited 8a's "detail blob stays gone" call: the create-side `scheduling_policies` blob is
+  the only audit record of *why* a scheduled cluster turned on, and it is cheap to restore
+  with full fidelity — every signal is already in the tick's `RefreshWindowInputs`, and
+  `CreateClusterReplicaV4` still carries the optional field, so there is no format change.
+  Settled with the user: restore the blob **on creates only**; drops stay uniformly
+  `retired` with no off-blob, preserving 8a's no-attribution design. Plumbing: MV ids into
+  `RefreshMvInfo`, the strategy's `.any()`s become list-building `filter`s emitting a
+  kernel-side `RefreshWindowDecision`, the payload rides `DesiredReplica` →
+  `Decision::CreateReplica` → `ReplicaCreateDropReason::OnRefresh`, and the adapter converts
+  to the audit type (kernel stays free of `mz-audit-log`).
 
 - _2026-06-10_ — **PR 8a landed** (implement → adversarial review → revise, run as separate
   agents). Drops are audited `retired` via a single uniform mapping at the apply site (no
