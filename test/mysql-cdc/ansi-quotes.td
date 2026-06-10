@@ -30,13 +30,19 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 # Enable ANSI_QUOTES globally before Materialize connects. SET GLOBAL only
 # affects connections opened afterwards, so Materialize's connections (made at
 # CREATE SOURCE time, below) pick it up.
+# This mysql-execute connection was opened before the SET GLOBAL above, so its
+# own session is still in the default sql_mode -- it quotes the space-containing
+# name `ansi spaced` with backticks. Materialize, which connects later, sees
+# ANSI_QUOTES and references the same table with double quotes.
 $ mysql-execute name=mysql
 SET GLOBAL sql_mode = CONCAT(@@global.sql_mode, ',ANSI_QUOTES');
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 CREATE TABLE ansi_global (f1 INTEGER);
+CREATE TABLE `ansi spaced` (f1 INTEGER);
 INSERT INTO ansi_global VALUES (1);
+INSERT INTO `ansi spaced` VALUES (1);
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -49,23 +55,33 @@ INSERT INTO ansi_global VALUES (1);
 > BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE ansi_global FROM SOURCE mz_source (REFERENCE public.ansi_global);
+> CREATE TABLE ansi_spaced FROM SOURCE mz_source (REFERENCE public."ansi spaced");
 > COMMIT
 
 > SELECT * FROM ansi_global;
+1
+> SELECT * FROM ansi_spaced;
 1
 
 # Replication-time DDL detection must also work against this server.
 $ mysql-execute name=mysql
 INSERT INTO ansi_global VALUES (2);
+INSERT INTO `ansi spaced` VALUES (2);
 
 > SELECT * FROM ansi_global;
+1
+2
+> SELECT * FROM ansi_spaced;
 1
 2
 
 $ mysql-execute name=mysql
 DROP TABLE ansi_global;
+DROP TABLE `ansi spaced`;
 
 ! SELECT * FROM ansi_global;
+contains:table was dropped
+! SELECT * FROM ansi_spaced;
 contains:table was dropped
 
 > DROP SOURCE mz_source CASCADE;
