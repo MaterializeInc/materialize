@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/canonicalization/topk_elision.rs
-revision: 261d61df83
+revision: fc2aaf02e7
 ---
 
 # mz-transform::canonicalization::topk_elision

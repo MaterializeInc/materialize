@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/peek_client.rs
-revision: d109855c3d
+revision: 87e6694432
 ---
 
 # adapter::peek_client

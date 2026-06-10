@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/encoding.rs
-revision: 931f79a1d8
+revision: 9c9b2926db
 ---
 
 # storage-types::sources::encoding

@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/canonicalization/flat_map_elimination.rs
-revision: 261d61df83
+revision: fc2aaf02e7
 ---
 
 # mz-transform::canonicalization::flat_map_elimination
