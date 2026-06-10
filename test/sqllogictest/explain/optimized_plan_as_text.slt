@@ -325,17 +325,16 @@ Explained Query:
         Project (#0{a})
           ReadIndex on=t t_a_idx=[*** full scan ***]
   Return
-    Project (#2)
-      Map (abs((#0{min_a} - #1{max_a})))
-        Union
+    Union
+      Project (#2)
+        Map (abs((#0{min_a} - #1{max_a})))
           Get l0
-          Map (null, null)
-            Union
-              Negate
-                Project ()
-                  Get l0
-              Constant
-                - ()
+      Negate
+        Project (#2)
+          Map (null)
+            Get l0
+      Constant
+        - (null)
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -445,6 +444,9 @@ Explained Query:
             ArrangeBy keys=[[#1{b}]]
               Filter (#1{b}) IS NOT NULL
                 ReadStorage materialize.public.mv
+    cte l5 =
+      Map (null)
+        Get l1
   Return
     Project (#2{a}, #4{a})
       Join on=(#0{b} = #1{b} = #3{b}) type=delta
@@ -453,21 +455,19 @@ Explained Query:
         ArrangeBy keys=[[#0{b}]]
           Union
             Get l3
-            Map (null)
-              Union
-                Negate
-                  Project (#0{b})
-                    Get l3
-                Get l1
+            Negate
+              Project (#0{b}, #2)
+                Map (null)
+                  Get l3
+            Get l5
         ArrangeBy keys=[[#0{b}]]
           Union
             Get l4
-            Map (null)
-              Union
-                Negate
-                  Project (#0{b})
-                    Get l4
-                Get l1
+            Negate
+              Project (#0{b}, #2)
+                Map (null)
+                  Get l4
+            Get l5
 
 Source materialize.public.mv
   filter=((#1{b}) IS NOT NULL)
@@ -508,18 +508,18 @@ Explained Query:
           Get l2
   Return
     Union
-      Map (null, null)
-        Union
-          Negate
-            Project ()
-              Join on=(#0{b} = #1{b}) type=differential
-                Get l2
-                ArrangeBy keys=[[#0{b}]]
-                  Distinct project=[#0{b}]
-                    Project (#1{b})
-                      Get l3
-          Project ()
-            ReadIndex on=t t_a_idx=[*** full scan ***]
+      Negate
+        Project (#2, #3)
+          Map (null, null)
+            Join on=(#0{b} = #1{b}) type=differential
+              Get l2
+              ArrangeBy keys=[[#0{b}]]
+                Distinct project=[#0{b}]
+                  Project (#1{b})
+                    Get l3
+      Project (#2, #3)
+        Map (null, null)
+          ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0{a}, #2{a})
         Get l3
 
@@ -1665,13 +1665,12 @@ Explained Query:
   Return
     Union
       Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l0
+      Constant
+        - (0)
 
 Source materialize.public.t5
 
@@ -1699,13 +1698,12 @@ Explained Query:
   Return
     Union
       Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l0
+      Constant
+        - (0)
 
 Source materialize.public.t5
 
@@ -1728,13 +1726,12 @@ Explained Query:
   Return
     Union
       Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l0
+      Constant
+        - (0)
 
 Source materialize.public.t5
 
@@ -1792,14 +1789,13 @@ Explained Query:
           ArrangeBy keys=[[]]
             Union
               Get l1
-              Map (null)
-                Union
-                  Negate
-                    Distinct project=[]
-                      Project ()
-                        Get l1
-                  Constant
-                    - ()
+              Negate
+                Map (null)
+                  Distinct project=[]
+                    Project ()
+                      Get l1
+              Constant
+                - (null)
 
 Source materialize.public.t4
 

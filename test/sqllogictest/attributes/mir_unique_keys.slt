@@ -33,13 +33,12 @@ Explained Query:
   Return // { keys: "([])" }
     Union // { keys: "([])" }
       Get l0 // { keys: "([])" }
-      Map (null) // { keys: "()" }
-        Union // { keys: "()" }
-          Negate // { keys: "()" }
-            Project () // { keys: "([])" }
-              Get l0 // { keys: "([])" }
-          Constant // { keys: "([])" }
-            - ()
+      Negate // { keys: "()" }
+        Project (#1) // { keys: "([])" }
+          Map (null) // { keys: "([])" }
+            Get l0 // { keys: "([])" }
+      Constant // { keys: "([])" }
+        - (null)
 
 Source materialize.public.t
 
@@ -170,18 +169,17 @@ Explained Query:
               Project () // { keys: "()" }
                 Get l0 // { keys: "()" }
   Return // { keys: "()" }
-    Project (#1) // { keys: "()" }
-      Map ((#0 = 1)) // { keys: "()" }
-        Union // { keys: "()" }
+    Union // { keys: "()" }
+      Project (#1) // { keys: "()" }
+        Map ((#0 = 1)) // { keys: "()" }
           Get l1 // { keys: "()" }
-          Map (null) // { keys: "()" }
-            Union // { keys: "()" }
-              Negate // { keys: "()" }
-                Distinct project=[] // { keys: "([])" }
-                  Project () // { keys: "()" }
-                    Get l1 // { keys: "()" }
-              Constant // { keys: "([])" }
-                - ()
+      Negate // { keys: "()" }
+        Map (null) // { keys: "([])" }
+          Distinct project=[] // { keys: "([])" }
+            Project () // { keys: "()" }
+              Get l1 // { keys: "()" }
+      Constant // { keys: "([])" }
+        - (null)
 
 Target cluster: quickstart
 

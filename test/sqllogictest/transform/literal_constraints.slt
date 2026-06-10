@@ -131,13 +131,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (0) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (0) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (0)
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -184,25 +183,22 @@ Explained Query:
               - (2, "l2")
               - (3, "l3")
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0)
-        map=(0)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#1)
+          map=(0)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (0)
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -1270,13 +1266,12 @@ Explained Query:
   Return // { arity: 1, types: "(r_int64?)", keys: "([])" }
     Union // { arity: 1, types: "(r_int64?)", keys: "([])" }
       Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(r_int64?)", keys: "()" }
-        Union // { arity: 0, types: "()", keys: "()" }
-          Negate // { arity: 0, types: "()", keys: "()" }
-            Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
-          Constant // { arity: 0, types: "()", keys: "([])" }
-            - ()
+      Negate // { arity: 1, types: "(r_int64?)", keys: "()" }
+        Project (#1) // { arity: 1, types: "(r_int64?)", keys: "([])" }
+          Map (null) // { arity: 2, types: "(r_int64?, r_int64?)", keys: "([])" }
+            Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Constant // { arity: 1, types: "(r_int64?)", keys: "([])" }
+        - (null)
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c (lookup)

@@ -81,12 +81,12 @@ Explained Query:
               ReadStorage materialize.public.bar
   Return
     Union
+      Negate
+        Project (#0{a}..=#2{u}, #4, #5)
+          Map (null, null)
+            Get l0
       Map (null, null)
-        Union
-          Negate
-            Project (#0{a}..=#2{u})
-              Get l0
-          ReadStorage materialize.public.foo_raw
+        ReadStorage materialize.public.foo_raw
       Project (#0{a}..=#2{u}, #0{a}, #3{v})
         Get l0
 
@@ -116,17 +116,17 @@ Explained Query:
         ReadStorage materialize.public.bar
   Return
     Union
+      Negate
+        Project (#4, #5, #0{a}..=#2{u})
+          Map (null, null)
+            Join on=(#0{a} = #3{a}) type=differential
+              Get l0
+              ArrangeBy keys=[[#0{a}]]
+                Project (#0{a})
+                  Get l1
       Project (#3, #4, #0{a}..=#2{u})
         Map (null, null)
-          Union
-            Negate
-              Project (#0{a}..=#2{u})
-                Join on=(#0{a} = #3{a}) type=differential
-                  Get l0
-                  ArrangeBy keys=[[#0{a}]]
-                    Project (#0{a})
-                      Get l1
-            ReadStorage materialize.public.foo_raw
+          ReadStorage materialize.public.foo_raw
       Project (#0{a}, #1{v}, #0{a}, #3{b}, #4{u})
         Join on=(#0{a} = #2{a}) type=differential
           ArrangeBy keys=[[#0{a}]]
@@ -275,13 +275,12 @@ Explained Query:
   Return
     Union
       Get l2
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l2
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l2
+      Constant
+        - (0)
 
 Source materialize.public.foo
 Source materialize.public.bar
@@ -603,12 +602,12 @@ Explained Query:
     cte l1 =
       TopK group_by=[#0{a}] limit=1 // { keys: "([0])" }
         Union // { keys: "()" }
+          Negate // { keys: "()" }
+            Project (#0{a}..=#2{u}, #4, #5) // { keys: "()" }
+              Map (null, null) // { keys: "()" }
+                Get l0 // { keys: "()" }
           Map (null, null) // { keys: "()" }
-            Union // { keys: "()" }
-              Negate // { keys: "()" }
-                Project (#0{a}..=#2{u}) // { keys: "()" }
-                  Get l0 // { keys: "()" }
-              ReadStorage materialize.public.foo_raw // { keys: "()" }
+            ReadStorage materialize.public.foo_raw // { keys: "()" }
           Project (#0{a}..=#2{u}, #0{a}, #3) // { keys: "()" }
             Get l0 // { keys: "()" }
           Project (#0{a}..=#2{u}, #0{a}, #2{u}) // { keys: "()" }
@@ -653,13 +652,13 @@ Explained Query:
     cte l1 =
       Distinct project=[#0{a}..=#4{v}]
         Union
-          Map (null, null)
-            Union
-              Negate
-                Project (#0..=#2)
-                  Get l0
-              Project (#0{a}..=#2{u})
-                Get l1
+          Negate
+            Project (#0..=#2, #4, #5)
+              Map (null, null)
+                Get l0
+          Project (#0..=#2, #5, #6)
+            Map (null, null)
+              Get l1
           Project (#0..=#2, #0, #3{v})
             Get l0
           Project (#0{a}..=#2{u}, #0{a}, #2{u})
@@ -706,12 +705,12 @@ Explained Query:
       cte l1 =
         Distinct project=[#0{a}..=#4{v}]
           Union
+            Negate
+              Project (#0{a}..=#2{u}, #4, #5)
+                Map (null, null)
+                  Get l0
             Map (null, null)
-              Union
-                Negate
-                  Project (#0{a}..=#2{u})
-                    Get l0
-                ReadStorage materialize.public.foo_raw
+              ReadStorage materialize.public.foo_raw
             Project (#0{a}..=#2{u}, #0{a}, #3{v})
               Get l0
             Get l1
