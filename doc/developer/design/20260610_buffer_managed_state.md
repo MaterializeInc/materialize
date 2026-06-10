@@ -127,7 +127,7 @@ flowchart TB
     IO["spill threads: write-behind, prefetch"]
   end
   subgraph L1["Layer 1: extent store"]
-    Extents["preallocated scratch files, extent allocator"]
+    Extents["extent allocator: file extents or swap-backed anonymous"]
   end
   Batcher["merge batcher chains"] --> L2
   L3 --> L2
@@ -135,6 +135,11 @@ flowchart TB
 ```
 
 ### Layer 1: extent store
+
+The extent store is an interface — allocate, write, read, free, in chunk-class-sized extents — not a single mechanism.
+It needs two implementations, because production nodes today provision the entire disk as swap and mount no scratch filesystem: file extents have nowhere to live until volume topology changes, and the design must not wait for that.
+
+#### File extents
 
 Replace per-chunk scratch files with a few large preallocated files per worker (or `O_TMPFILE` inodes) and a userspace extent allocator.
 
@@ -146,7 +151,18 @@ Replace per-chunk scratch files with a few large preallocated files per worker (
   Aligned buffers are natural for the paged format.
 * The DuckDB temp-file model is precedent: slotted, recycled temp files in native block format rather than create-unlink per object.
 
-This layer is shippable behind the existing `Handle` API as a drop-in replacement for the file backend's storage, before any of Layer 2 exists.
+This implementation is shippable behind the existing `Handle` API as a drop-in replacement for the file backend's storage, before any of Layer 2 exists.
+
+#### Swap-backed extents
+
+Where no filesystem exists, the extent store is anonymous memory the engine deliberately hands to kernel swap.
+An extent is an extent-sized anonymous allocation: "write" compresses the evicted chunk into it and issues `MADV_PAGEOUT`, pushing the pages to the swap device; "read" issues `MADV_WILLNEED` ahead of need — asynchronous swap-in, the backend's readahead mechanism — then decompresses back into the chunk's stable address; "free" is a plain deallocation, with any swapped copy discarded for free.
+
+This is the lz4 + `MADV_PAGEOUT` strategy of [#36948](https://github.com/MaterializeInc/materialize/pull/36948) generalized from a spill-path special case into the pool's backing layer: the same measured costs, the same ~5.6× reduction in swap traffic from compression, now with the pool's write elision and lifecycle policy above it and the Layer 3 format readable through it.
+The I/O executor choice applies unchanged — compress-plus-madvise runs on the evicting worker or on spill threads.
+
+The backend has no metadata costs at all; its weakness is the read path, where the kernel owns fault servicing and the old reclaim ceilings apply at low thread counts — mitigated by compression (5.6× fewer bytes to fault) and `MADV_WILLNEED` prefetch, but not eliminated.
+Where both backends are available, the choice is a config knob over the same interface; milestone 2 benches them head to head.
 
 ### Layer 2: buffer manager
 
@@ -405,6 +421,9 @@ Per 2 MiB chunk, on the pager doc's two reference boxes (single encrypted NVMe a
 No dedicated lgalloc benchmarks exist in our record; its column is inferred from sharing the kernel fault path with swap, with the added caveat of file-backed dirty writeback.
 Treat it as qualitatively-swap rather than independently measured.
 
+The "this design" column assumes file extents.
+On the swap-backed extent store (see Layer 1), write costs match the measured lz4+`MADV_PAGEOUT` line (compress plus synchronous reclaim of the compressed range), and the read path replaces the `O_DIRECT` `pread` with `MADV_WILLNEED`-prefetched swap-in over 5.6× fewer bytes — kernel-serviced, so the low-thread reclaim ceilings soften the merge-throughput rows toward the swap column while the RSS, stall-bounding, metadata, and elision rows hold.
+
 ### What the estimates assume, and where they could be wrong
 
 * **Write elision rate.**
@@ -427,8 +446,10 @@ Treat it as qualitatively-swap rather than independently measured.
 1. **Extent store under the existing file backend.**
    Same `Handle` API; per-chunk files replaced by pooled extents.
    Validates: inode-churn elimination (re-run the workload that measured 35.6 s of unlink), `O_DIRECT` alignment plumbing, allocator fragmentation under merge churn.
+   Exercisable in CI and on dev boxes regardless of production volume topology; production nodes today mount no filesystem (the whole disk is swap), so this backend deploys per cluster class as scratch volumes appear, and milestone 2's initial production backend is the swap-backed store.
 2. **Buffer pool under the batcher.**
    Size-class regions, state words, write-behind, lifecycle eviction; integrated behind `ColumnPager` so the merge batcher is unchanged above the seam.
+   Initial production backend is the swap-backed extent store, generalizing the measured lz4+`MADV_PAGEOUT` path; the file backend benches head to head wherever hardware allows.
    Validates: RSS bounded by budget under the pager design doc's merge benches; dead-chunk write elision rate; worker threads never in reclaim (`pgscan_direct` flat); throughput at least matching the better of today's two backends at 1, 16, and 64 threads.
    Also decides the I/O execution model: run the same benches under the on-worker and off-worker executors, measuring operator-step time inflation from on-worker stalls and cold-merge throughput with and without read overlap.
    At this milestone the pager's swap and file backends are deletable — its only two consumers route through this seam.
@@ -469,6 +490,14 @@ It is a hardening option, not a requirement; budget headroom plus pre-fault `MAD
 
 Swap also keeps a role this design is glad to have: defense in depth.
 A misconfigured budget degrades into kernel paging rather than an OOM kill, and operators retain the existing knob while confidence in the pool's accounting builds.
+
+### No filesystem yet: deployment starts swap-backed
+
+Production nodes currently provision the entire disk as swap, so the file extent store has nowhere to live on day one, and the deployment order inverts the layer order: Layers 2 and 3 ship first on the swap-backed extent store, and file extents light up per cluster class as scratch volumes appear.
+This is less of a detour than it looks.
+The swap-backed store is a refactor and generalization of the already-measured lz4+`MADV_PAGEOUT` strategy, not new I/O infrastructure, and everything above the extent interface — the pool, the state machine, the policy, the Layer 3 format — is backend-agnostic by construction.
+Switching a cluster from swap-backed to file extents is a configuration change, not a migration; the bytes are recreatable, so the switch does not even need to preserve them.
+It also reframes the volume-topology question for operators: provisioning a scratch filesystem becomes a per-cluster-class performance decision (buying the explicit read path and `O_DIRECT` writes) rather than a prerequisite for the architecture.
 
 ### What shrinks, and when
 
