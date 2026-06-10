@@ -180,7 +180,7 @@ pub(super) async fn handle_query_event(
                 .collect();
             is_complete_event = true;
             for (table_name, outputs) in sources_to_drop {
-                tracing::info!(%id, "timely-{worker_id} DDL change drop table {table_name} dropped outputs: {outputs:?}");
+                tracing::info!(%id, "timely-{worker_id} DDL change dropped outputs: {outputs:?}");
                 for output in outputs {
                     let err = DefiniteError::TableDropped(table_name.to_string());
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
