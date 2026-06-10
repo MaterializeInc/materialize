@@ -35,6 +35,7 @@ from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
+    metadata_store_companions,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 
@@ -410,6 +411,12 @@ class Materialized(Service):
             )
 
         super().__init__(name=name, config=config)
+
+        # Pull the external metadata store container(s) into the composition
+        # automatically, so compositions don't have to spell them out.
+        self.companions = metadata_store_companions(
+            metadata_store, external_metadata_store
+        )
 
 
 class DeploymentStatus(Enum):

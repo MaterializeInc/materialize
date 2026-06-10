@@ -44,7 +44,6 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -74,7 +73,6 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
-    CockroachOrPostgresMetadata(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),

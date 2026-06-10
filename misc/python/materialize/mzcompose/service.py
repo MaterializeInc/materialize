@@ -198,8 +198,13 @@ class Service:
     Attributes:
         name: The name of the service.
         config: The definition of the service.
+        companions: Sibling services that should be registered in the
+            composition alongside this one. Lets a service pull in dependent
+            sidecar containers without each composition having to spell them
+            out.
     """
 
     def __init__(self, name: str, config: ServiceConfig) -> None:
         self.name = name
         self.config = config
+        self.companions: list["Service"] = []

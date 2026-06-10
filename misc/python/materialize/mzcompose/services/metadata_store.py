@@ -126,20 +126,35 @@ EXTERNAL_METADATA_STORE_ADDRESS: str | bool = external_metadata_store()
 """ The external_metadata_store value to use for Materialized/Testdrive. """
 
 
-def metadata_store_services(*args, **kwargs) -> list[Service]:
+def metadata_store_companions(
+    metadata_store: str = METADATA_STORE,
+    external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
+    *args,
+    **kwargs,
+) -> list[Service]:
     """
-    Returns a list containing the metadata store service instance if an external metadata store is used,
-    otherwise returns an empty list. Useful to construct a `SERVICES` list in a composition.
-    :param args: Passed through to the metadata store service constructor.
-    :param kwargs: Passed through to the metadata store service constructor.
+    Returns the sibling services that back the given external metadata store,
+    suitable for use as `Service.companions`. A service declaring these
+    companions pulls the store container(s) into the composition automatically,
+    so compositions no longer have to spell out the metadata store themselves.
+
+    Returns an empty list when the store is internal or disabled.
 
     For FoundationDB, returns multiple services (server nodes + cluster service).
+    :param metadata_store: The metadata store backend name.
+    :param external_metadata_store: The resolved `external_metadata_store` value;
+        a falsy value means an internal store and yields no companions.
+    :param args: Passed through to the metadata store service constructor.
+    :param kwargs: Passed through to the metadata store service constructor.
     """
-    if not METADATA_STORE_SERVICE:
+    if not external_metadata_store:
         return []
-    if METADATA_STORE == "foundationdb":
+    service = metadata_store_service(metadata_store)
+    if service is None:
+        return []
+    if metadata_store == "foundationdb":
         return foundationdb_services(num_nodes=FDB_NUM_NODES, **kwargs)
-    return [METADATA_STORE_SERVICE(*args, **kwargs)]
+    return [service(*args, **kwargs)]
 
 
 # Legacy switch to select between CockroachDB and Postgres for metadata storage.
