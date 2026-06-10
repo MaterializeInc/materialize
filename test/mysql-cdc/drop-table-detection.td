@@ -387,12 +387,14 @@ CREATE TABLE `tbl /* not a comment */` (f1 INTEGER);
 CREATE TABLE `dash--in--name` (f1 INTEGER);
 CREATE TABLE `hash#in#name` (f1 INTEGER);
 CREATE TABLE `semi;colon` (f1 INTEGER);
+CREATE TABLE `"ansi_quotes"` (f1 INTEGER);
 INSERT INTO `a``b` VALUES (42);
 INSERT INTO `weird.name` VALUES (7);
 INSERT INTO `tbl /* not a comment */` VALUES (1);
 INSERT INTO `dash--in--name` VALUES (1);
 INSERT INTO `hash#in#name` VALUES (1);
 INSERT INTO `semi;colon` VALUES (1);
+INSERT INTO `"ansi_quotes"` VALUES (1);
 
 # On the Materialize side these upstream names are referenced with standard
 # double-quoted identifiers; the inner backtick / dot / comment text / `;` are
@@ -405,6 +407,7 @@ INSERT INTO `semi;colon` VALUES (1);
 > CREATE TABLE dash_name FROM SOURCE mz_source (REFERENCE public."dash--in--name");
 > CREATE TABLE hash_name FROM SOURCE mz_source (REFERENCE public."hash#in#name");
 > CREATE TABLE semi_name FROM SOURCE mz_source (REFERENCE public."semi;colon");
+> CREATE TABLE ansi_quotes FROM SOURCE mz_source (REFERENCE public."""ansi_quotes""");
 > COMMIT
 
 # The escaped-backtick table really is named a`b and snapshots its data,
@@ -421,6 +424,8 @@ INSERT INTO `semi;colon` VALUES (1);
 1
 > SELECT * FROM semi_name;
 1
+> SELECT * FROM ansi_quotes;
+1
 
 $ mysql-execute name=mysql
 DROP TABLE `a``b`;
@@ -429,6 +434,7 @@ DROP TABLE `tbl /* not a comment */`;
 DROP TABLE `dash--in--name`;
 DROP TABLE `hash#in#name`;
 DROP TABLE `semi;colon`;
+DROP TABLE `"ansi_quotes"`;
 
 ! SELECT * FROM escaped_backtick;
 contains:table was dropped
@@ -441,6 +447,8 @@ contains:table was dropped
 ! SELECT * FROM hash_name;
 contains:table was dropped
 ! SELECT * FROM semi_name;
+contains:table was dropped
+! SELECT * FROM ansi_quotes;
 contains:table was dropped
 
 > DROP SOURCE mz_source CASCADE;
@@ -544,29 +552,35 @@ USE public;
 SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',ANSI_QUOTES');
 CREATE TABLE "ansi quoted" (f1 INTEGER);
 CREATE TABLE ansi_simple (f1 INTEGER);
+CREATE TABLE "`ansi_quoted_backticks`" (f1 INTEGER);
 INSERT INTO "ansi quoted" VALUES (1);
 INSERT INTO ansi_simple VALUES (1);
+INSERT INTO "`ansi_quoted_backticks`" VALUES (1);
 
 > BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE ansi_quoted FROM SOURCE mz_source (REFERENCE public."ansi quoted");
 > CREATE TABLE ansi_simple FROM SOURCE mz_source (REFERENCE public.ansi_simple);
+> CREATE TABLE ansi_quoted_backticks FROM SOURCE mz_source (REFERENCE public."`ansi_quoted_backticks`");
 > COMMIT
 
 > SELECT * FROM ansi_quoted;
 1
 > SELECT * FROM ansi_simple;
 1
+> SELECT * FROM ansi_quoted_backticks;
+1
 
-# Both drops are issued with ANSI_QUOTES in effect (double-quoted identifiers on
-# the client), but MySQL normalizes them back to backticks in the binlog.
 $ mysql-execute name=mysql
 DROP TABLE "ansi quoted";
 DROP TABLE "ansi_simple";
+DROP TABLE "`ansi_quoted_backticks`";
 
 ! SELECT * FROM ansi_quoted;
 contains:table was dropped
 ! SELECT * FROM ansi_simple;
+contains:table was dropped
+! SELECT * FROM ansi_quoted_backticks;
 contains:table was dropped
 
 # Restore the default sql_mode so the connection is left as other tests expect.
