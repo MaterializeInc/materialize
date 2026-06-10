@@ -339,3 +339,24 @@ query II
 SELECT id, (SELECT x FROM unnest(arr) AS x) FROM (VALUES (9, ARRAY[7])) AS v(id, arr)
 ----
 9  7
+
+################################################################################
+# HOUSED-BODY OPTIMIZATION: the relation housed in an eval_relation is itself
+# optimized (HousedRelationOptimization), so a housed count(*) over
+# generate_series(1, n) collapses to a repeat_row_non_negative and evaluates in
+# constant time per row. With a billion-element series per row, this query
+# completes only because of that collapse; a per-element interpretation would
+# (effectively) never finish.
+
+statement ok
+CREATE TABLE series_n (id int, n bigint)
+
+statement ok
+INSERT INTO series_n VALUES (1, 1000000000), (2, 5), (3, NULL)
+
+query II rowsort
+SELECT id, (SELECT count(*) FROM generate_series(1, n)) FROM series_n
+----
+1  1000000000
+2  5
+3  0
