@@ -2028,6 +2028,19 @@ impl Coordinator {
     /// new values. The `cluster`-scoped layer is resolved at plan time (a
     /// follow-up).
     pub(crate) fn reconcile_scoped_system_parameters(&mut self, scoped: ScopedParameters) {
+        // Nothing changed: skip the redundant builtin-table write and config
+        // re-push. This is the common case on most sync ticks.
+        if self.scoped_system_parameters == scoped {
+            return;
+        }
+
+        // Emit introspection diffs into `mz_cluster_system_parameters` /
+        // `mz_replica_system_parameters`: retract the previous working copy and
+        // insert the new one.
+        let mut builtin_updates =
+            self.pack_scoped_param_updates(&self.scoped_system_parameters, Diff::MINUS_ONE);
+        builtin_updates.extend(self.pack_scoped_param_updates(&scoped, Diff::ONE));
+
         self.scoped_system_parameters = scoped;
 
         // Resolve the replica-local overrides into typed per-replica config
@@ -2073,6 +2086,37 @@ impl Coordinator {
         // replicas pick up their (possibly changed) overrides.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+
+        // Flush the introspection diffs on the next group commit.
+        let _ = self.builtin_table_update().background(builtin_updates);
+    }
+
+    /// Packs `mz_cluster_system_parameters` / `mz_replica_system_parameters`
+    /// introspection rows for every entry in `params`, with the given `diff`.
+    fn pack_scoped_param_updates(
+        &self,
+        params: &ScopedParameters,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let state = self.catalog().state();
+        let mut updates = Vec::new();
+        for (cluster_id, values) in &params.cluster {
+            let cluster_id = cluster_id.to_string();
+            for (name, value) in values {
+                updates.push(state.resolve_builtin_table_update(
+                    state.pack_cluster_system_parameter_update(&cluster_id, name, value, diff),
+                ));
+            }
+        }
+        for (replica_id, values) in &params.replica {
+            let replica_id = replica_id.to_string();
+            for (name, value) in values {
+                updates.push(state.resolve_builtin_table_update(
+                    state.pack_replica_system_parameter_update(&replica_id, name, value, diff),
+                ));
+            }
+        }
+        updates
     }
 
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
