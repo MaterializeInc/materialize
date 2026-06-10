@@ -382,12 +382,18 @@ def _as_bool(value: Any) -> bool | None:
 
 
 def values_equivalent(a: Any, b: Any) -> bool | None:
-    """Whether two values represent the same setting, comparing durations by
+    """Whether two values represent the same setting. Durations are compared by
     value so representation differences ("1 min" vs "60s", "10 s" vs the
     raw-milliseconds "10000") are not treated as differences. `a` and `b` may be
-    Materialize's `SHOW` strings or LaunchDarkly's typed values. Returns `None`
-    when the two cannot be compared confidently (e.g. one side is missing, or a
-    byte size like "1GB" vs the raw number 1073741824)."""
+    Materialize's `SHOW` strings or LaunchDarkly's typed values.
+
+    Returns `None` when the two cannot be compared confidently: when one side is
+    missing, or one side is a bool/duration the other cannot be parsed as.
+
+    Byte sizes are *not* normalized: a unit-bearing value like "1GB" is compared
+    textually against the equivalent raw byte count (1073741824) and so is
+    reported as differing even though the two are equal. Suppress such flags via
+    INTENTIONAL_LD_OVERRIDES if the noise is undesirable."""
     if a is None or b is None:
         return None
     if isinstance(a, bool) or isinstance(b, bool):
