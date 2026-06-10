@@ -35,7 +35,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, DataflowError};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -68,6 +68,12 @@ pub enum AdapterError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// A structured error produced while executing a dataflow (e.g. evaluating
+    /// an expression over a collection). Distinct from [`AdapterError::Eval`]
+    /// so that the existing dataflow error message (e.g. the `Evaluation
+    /// error:` prefix) is preserved, while `code` still derives a precise
+    /// SQLSTATE from the inner error.
+    Dataflow(Box<DataflowError>),
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The ID allocator exhausted all valid IDs.
@@ -442,6 +448,20 @@ fn eval_error_code(err: &EvalError) -> SqlState {
     }
 }
 
+/// Maps a [`DataflowError`] produced during dataflow execution to a SQLSTATE.
+///
+/// Evaluation errors are routed through [`eval_error_code`] so they get the
+/// same precise codes as constant folding; the remaining variants are genuine
+/// internal/source errors that stay `INTERNAL_ERROR`.
+fn dataflow_error_code(err: &DataflowError) -> SqlState {
+    match err {
+        DataflowError::EvalError(e) => eval_error_code(e),
+        DataflowError::DecodeError(_)
+        | DataflowError::SourceError(_)
+        | DataflowError::EnvelopeError(_) => SqlState::INTERNAL_ERROR,
+    }
+}
+
 impl AdapterError {
     pub fn into_response(self, severity: Severity) -> ErrorResponse {
         ErrorResponse {
@@ -469,6 +489,10 @@ impl AdapterError {
             }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.detail(),
+                _ => None,
+            },
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
                 "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
                 relations
@@ -656,6 +680,10 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.hint(),
+                _ => None,
+            },
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -756,6 +784,7 @@ impl AdapterError {
             // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
             // to errors that are really the user's fault. See SQL-326.
             AdapterError::Eval(e) => eval_error_code(e),
+            AdapterError::Dataflow(e) => dataflow_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
@@ -1058,6 +1087,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::Dataflow(e) => e.fmt(f),
             AdapterError::Explain(e) => e.fmt(f),
             AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
@@ -1355,15 +1385,11 @@ impl From<EvalError> for AdapterError {
 impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
     fn from(e: mz_compute_client::protocol::response::PeekError) -> AdapterError {
         use mz_compute_client::protocol::response::PeekError;
-        use mz_storage_types::errors::DataflowError;
         match e {
-            // Preserve evaluation errors structurally, so they receive the same
-            // precise SQLSTATE that constant folding produces (and shed the
-            // `Evaluation error:` prefix that `DataflowError`'s `Display` adds).
-            PeekError::Dataflow(e) => match *e {
-                DataflowError::EvalError(e) => AdapterError::Eval(*e),
-                e => AdapterError::Unstructured(anyhow::anyhow!(e)),
-            },
+            // Preserve the structured dataflow error so that evaluation errors
+            // receive the same precise SQLSTATE that constant folding produces
+            // (see `code`), while keeping the existing error message.
+            PeekError::Dataflow(e) => AdapterError::Dataflow(e),
             PeekError::Internal(e) => AdapterError::Unstructured(anyhow::Error::msg(e)),
         }
     }
