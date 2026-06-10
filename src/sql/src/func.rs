@@ -5365,6 +5365,33 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
             params!(Any, String) => VariadicFunc::from(variadic::ErrorIfNull)
                 => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
         },
+        "generate_series_unoptimized" => Table {
+            // An int64 `generate_series` the optimizer promises to leave as an
+            // enumeration (see `TableFunc::GenerateSeriesUnoptimized`). For
+            // tests that rely on the enumeration work actually happening; not
+            // a supported surface.
+            params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::GenerateSeriesUnoptimized,
+                        exprs: vec![
+                            start, stop,
+                            HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64),
+                        ],
+                    },
+                    column_names: vec!["generate_series_unoptimized".into()],
+                })
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GENERATE_SERIES_UNOPTIMIZED_OID;
+            params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::GenerateSeriesUnoptimized,
+                        exprs,
+                    },
+                    column_names: vec!["generate_series_unoptimized".into()],
+                })
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GENERATE_SERIES_UNOPTIMIZED_STEP_OID;
+        },
         "mz_sleep" => Scalar {
             params!(Float64) => UnaryFunc::Sleep(func::Sleep)
                 => TimestampTz, oid::FUNC_MZ_SLEEP_OID;

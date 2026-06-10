@@ -3548,6 +3548,18 @@ pub enum TableFunc {
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
+    /// An int64 `generate_series` that the optimizer promises to leave as an
+    /// enumeration: no transform may match on this variant to replace its
+    /// evaluation with a cardinality shortcut (compare the collapse of an
+    /// unused `GenerateSeriesInt64` into `RepeatRowNonNegative`). Its
+    /// *argument* expressions are still simplified like any other scalar.
+    ///
+    /// Exposed as `mz_unsafe.generate_series_unoptimized` for tests that rely
+    /// on the work of enumeration actually happening (e.g. stress tests whose
+    /// load would otherwise be optimized away). As with everything in
+    /// `mz_unsafe`, it is not a supported surface: bug reports must not
+    /// depend on it.
+    GenerateSeriesUnoptimized,
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
     /// Supplied with an input count,
@@ -3654,6 +3666,7 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesUnoptimized
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GuardSubquerySize { .. }
@@ -3711,7 +3724,7 @@ impl TableFunc {
                 )?;
                 Ok(Box::new(res))
             }
-            TableFunc::GenerateSeriesInt64 => {
+            TableFunc::GenerateSeriesInt64 | TableFunc::GenerateSeriesUnoptimized => {
                 let res = generate_series(
                     datums[0].unwrap_int64(),
                     datums[1].unwrap_int64(),
@@ -3855,7 +3868,7 @@ impl TableFunc {
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
-            TableFunc::GenerateSeriesInt64 => {
+            TableFunc::GenerateSeriesInt64 | TableFunc::GenerateSeriesUnoptimized => {
                 let column_types = vec![SqlScalarType::Int64.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
@@ -3959,6 +3972,7 @@ impl TableFunc {
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
+            TableFunc::GenerateSeriesUnoptimized => 1,
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
@@ -3986,6 +4000,7 @@ impl TableFunc {
             | TableFunc::JsonbArrayElementsStringify
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesUnoptimized
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GenerateSubscriptsArray
@@ -4020,6 +4035,7 @@ impl TableFunc {
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::GenerateSeriesUnoptimized => true,
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
@@ -4051,6 +4067,7 @@ impl fmt::Display for TableFunc {
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesUnoptimized => f.write_str("generate_series_unoptimized"),
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),

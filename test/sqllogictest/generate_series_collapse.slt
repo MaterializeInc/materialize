@@ -36,6 +36,10 @@
 #   N5. non-integer series (timestamps) with column bounds. (All-literal
 #       timestamp series disappear anyway: constant folding evaluates them.)
 #   N6. WITH ORDINALITY
+#   N7. mz_unsafe.generate_series_unoptimized — BY CONTRACT. The optimizer
+#       promises to never replace its evaluation with a cardinality shortcut,
+#       so tests can rely on the enumeration work actually happening. Not a
+#       supported surface; bug reports must not depend on it.
 
 mode cockroach
 
@@ -539,3 +543,58 @@ query I
 SELECT count(*) FROM series_bounds, generate_series(x, y) WITH ORDINALITY
 ----
 6
+
+# N7: mz_unsafe.generate_series_unoptimized never collapses, by contract —
+# under exactly the count(*) shape that collapses the regular function (C1).
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT count(*) FROM series_bounds8, mz_unsafe.generate_series_unoptimized(x, y)
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          FlatMap generate_series_unoptimized(#0{x}, #1{y}, 1)
+            Project (#1, #2)
+              ReadStorage materialize.public.series_bounds8
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Source materialize.public.series_bounds8
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT count(*) FROM series_bounds8, mz_unsafe.generate_series_unoptimized(x, y)
+----
+6
+
+# Its results agree with the regular function, including the explicit-step
+# form and NULL bounds.
+
+query I
+SELECT count(*) FROM series_bounds8, mz_unsafe.generate_series_unoptimized(x, y, 2)
+----
+4
+
+query I
+SELECT count(*) FROM mz_unsafe.generate_series_unoptimized(1, NULL::bigint)
+----
+0
+
+query I
+SELECT sum(g) FROM series_bounds8, mz_unsafe.generate_series_unoptimized(x, y) g
+----
+39
