@@ -778,4 +778,12 @@ mod tests {
     fn identifier_with_multiple_dots_errors() {
         assert!(parse_drop("DROP TABLE def.shop.customer", "shop").is_err());
     }
+
+    #[mz_ore::test]
+    fn ansi_quotes_parsed_properly() {
+        assert_eq!(
+            parse_drop("DROP TABLE \"customer\"", "shop").unwrap(),
+            vec![table("shop", "customer")],
+        );
+    }
 }
