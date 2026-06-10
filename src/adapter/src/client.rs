@@ -24,10 +24,7 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
-use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_controller_types::ClusterId;
-use mz_dyncfg::ConfigUpdates;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
@@ -59,6 +56,7 @@ use crate::command::{
     CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
+use crate::config::ScopedParameters;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::{self, Metrics};
@@ -566,15 +564,12 @@ Issue a SQL query to get started. Need help?
         catalog
     }
 
-    /// Replaces the replica-local scoped feature-flag overrides, keyed by
-    /// cluster and replica. Used by the system-parameter sync loop to reconcile
-    /// the per-replica dyncfg layer from continuous LaunchDarkly evaluation.
-    pub async fn update_replica_scoped_config(
-        &self,
-        overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
-    ) {
+    /// Replaces the scoped feature-flag overrides (the complete desired state).
+    /// Used by the system-parameter sync loop to reconcile the coordinator's
+    /// scoped-parameter working copy from continuous LaunchDarkly evaluation.
+    pub async fn update_scoped_system_parameters(&self, overrides: ScopedParameters) {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::UpdateReplicaScopedConfig { overrides, tx });
+        self.send(Command::UpdateScopedSystemParameters { overrides, tx });
         let _ = rx.await;
     }
 
@@ -1343,7 +1338,7 @@ impl SessionClient {
                 | Command::PrivilegedCancelRequest { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
-                | Command::UpdateReplicaScopedConfig { .. }
+                | Command::UpdateScopedSystemParameters { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }

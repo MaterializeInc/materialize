@@ -271,16 +271,10 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
-                Command::UpdateReplicaScopedConfig { overrides, tx } => {
-                    // Reconcile the compute controller's per-replica dyncfg
-                    // override layer, then re-push the (environment-wide) compute
-                    // configuration so existing replicas observe the new values.
-                    self.controller
-                        .compute
-                        .update_replica_dyncfg_overrides(overrides);
-                    let compute_config =
-                        crate::flags::compute_config(self.catalog().system_config());
-                    self.controller.compute.update_configuration(compute_config);
+                Command::UpdateScopedSystemParameters { overrides, tx } => {
+                    // Store the new working copy and reconcile it into the
+                    // per-scope resolution boundaries.
+                    self.reconcile_scoped_system_parameters(overrides);
                     let _ = tx.send(());
                 }
 
