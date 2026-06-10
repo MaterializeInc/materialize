@@ -1438,17 +1438,11 @@ impl CatalogState {
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::DefaultPrivilege(default_privilege) => {
-                vec![self.pack_default_privileges_update(
-                    &default_privilege.object,
-                    &default_privilege.acl_item.grantee,
-                    &default_privilege.acl_item.acl_mode,
-                    diff,
-                )]
-            }
-            StateUpdateKind::SystemPrivilege(system_privilege) => {
-                vec![self.pack_system_privileges_update(system_privilege, diff)]
-            }
+            // mz_default_privileges and mz_system_privileges are MaterializedViews
+            // backed by mz_internal.mz_catalog_raw, so privilege rows do not
+            // produce builtin table updates here.
+            StateUpdateKind::DefaultPrivilege(_) => Vec::new(),
+            StateUpdateKind::SystemPrivilege(_) => Vec::new(),
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
             // mz_clusters and mz_cluster_schedules are MaterializedViews backed
             // by mz_internal.mz_catalog_raw, so cluster rows do not produce

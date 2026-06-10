@@ -4158,6 +4158,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_default_privileges";
+----
+mz_catalog.mz_default_privileges:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#7)
+  filter=(("DefaultPrivileges" = (#0{data} ->> "kind")))
+  map=((#0{data} -> "key"), parse_catalog_id((#1 -> "role_id")), case when (json_null != (#1 -> "database_id")) then parse_catalog_id(((#0{data} -> "key") -> "database_id")) else null end, case when (json_null != (#1 -> "schema_id")) then parse_catalog_id(((#0{data} -> "key") -> "schema_id")) else null end, case when ("1" = (#1 ->> "object_type")) then "table" else case when ("2" = ((#0{data} -> "key") ->> "object_type")) then "view" else case when ("3" = ((#0{data} -> "key") ->> "object_type")) then "materialized view" else case when ("4" = ((#0{data} -> "key") ->> "object_type")) then "source" else case when ("5" = ((#0{data} -> "key") ->> "object_type")) then "sink" else case when ("6" = ((#0{data} -> "key") ->> "object_type")) then "index" else case when ("7" = ((#0{data} -> "key") ->> "object_type")) then "type" else case when ("8" = ((#0{data} -> "key") ->> "object_type")) then "role" else case when ("9" = ((#0{data} -> "key") ->> "object_type")) then "cluster" else case when ("10" = ((#0{data} -> "key") ->> "object_type")) then "cluster replica" else case when ("11" = ((#0{data} -> "key") ->> "object_type")) then "secret" else case when ("12" = ((#0{data} -> "key") ->> "object_type")) then "connection" else case when ("13" = ((#0{data} -> "key") ->> "object_type")) then "database" else case when ("14" = ((#0{data} -> "key") ->> "object_type")) then "schema" else case when ("15" = ((#0{data} -> "key") ->> "object_type")) then "function" else case when ("17" = ((#0{data} -> "key") ->> "object_type")) then "network policy" else null end end end end end end end end end end end end end end end end, parse_catalog_id((#1 -> "grantee")), parse_catalog_acl_mode(((#0{data} -> "value") -> "privileges")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_indexes";
 ----
 mz_catalog.mz_indexes:
@@ -4303,7 +4318,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (18 rows)
+        →Constant (20 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4571,6 +4586,20 @@ Source mz_internal.mz_catalog_raw
 
 Used Indexes:
   - mz_catalog.mz_schemas_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_system_privileges";
+----
+mz_catalog.mz_system_privileges:
+  →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
+    →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
 
 Target cluster: mz_catalog_server
 
@@ -6884,7 +6913,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (18 rows)
+  →Constant (20 rows)
 
 Target cluster: mz_catalog_server
 
