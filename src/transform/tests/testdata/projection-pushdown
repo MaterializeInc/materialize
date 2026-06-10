@@ -221,6 +221,51 @@ Project (#1)
   FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((#2 - #0) / 1) + 1) else 0 end)
     Get z
 
+# Unused generate_series with all-literal arguments folds to an exact count:
+# (11 - 2) / 3 + 1 = 4.
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [2 11 3]) [#1])
+----
+FlatMap repeat_row_non_negative(4)
+  Project (#1)
+    Get z
+
+# All-literal empty series folds to a count of zero.
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [11 2 3]) [#1])
+----
+FlatMap repeat_row_non_negative(0)
+  Project (#1)
+    Get z
+
+# All-literal descending series folds to an exact count: (2 - 11) / -3 + 1 = 4.
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [11 2 -3]) [#1])
+----
+FlatMap repeat_row_non_negative(4)
+  Project (#1)
+    Get z
+
+# A literal span too wide for i64 still folds exactly when the count fits:
+# 10^19 / 10^18 + 1 = 11. (The synthesized i64 arithmetic of the non-literal
+# path would error on this span.)
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [-5000000000000000000 5000000000000000000 1000000000000000000]) [#1])
+----
+FlatMap repeat_row_non_negative(11)
+  Project (#1)
+    Get z
+
+# A literal count beyond i64 declines to collapse: the original enumerates
+# without error, so the rewrite must not introduce one.
+build apply=ProjectionPushdown
+(project (flat_map (get z) generate_series_int64 [-5000000000000000000 5000000000000000000 1]) [#1])
+----
+Project (#0)
+  FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1)
+    Project (#1)
+      Get z
+
 # Project around a union
 
 build apply=ProjectionPushdown

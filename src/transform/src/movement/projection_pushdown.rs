@@ -536,6 +536,19 @@ impl ProjectionPushdown {
 /// emptiness guard guarantees. The guard also collapses the empty series to a
 /// count of zero, so the result is always non-negative.
 ///
+/// When `start` and `stop` are also literals, the cardinality is computed here,
+/// exactly, in `i128` (where no `i64` inputs can overflow). If it does not fit
+/// in an `i64` we decline to rewrite: the original `FlatMap` enumerates such a
+/// series without error (its iteration only ever visits in-range values), so
+/// its replacement must not error either.
+///
+/// When the bounds are not literals, the synthesized `i64` arithmetic can error
+/// where the original would not: `stop - start` overflows when the span is at
+/// least `2^63`, which under the emptiness guard requires both bounds extreme
+/// with opposite signs — and for the original plan to have been *feasible*
+/// rather than effectively non-terminating, also a step of around `10^10` or
+/// more. We accept this corner.
+///
 /// Null inputs are handled by `RepeatRowNonNegative` itself: like
 /// `generate_series`, it is `empty_on_null_input`, so a null count yields no
 /// rows.
@@ -547,17 +560,45 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
     ) {
         return;
     }
-    // Pull the literal step as an `i64`, accepting any integer width (the step's
-    // datum type does not necessarily match the series width). Bail unless it is
-    // a non-null, non-zero literal.
-    let step = match exprs[2].as_literal() {
-        Some(Ok(Datum::Int16(v))) => i64::from(v),
-        Some(Ok(Datum::Int32(v))) => i64::from(v),
-        Some(Ok(Datum::Int64(v))) => v,
-        _ => return,
+    // Extracts a non-null integer literal as an `i64`, accepting any integer
+    // width (an argument's datum type does not necessarily match the series
+    // width).
+    let literal_i64 = |e: &MirScalarExpr| match e.as_literal() {
+        Some(Ok(Datum::Int16(v))) => Some(i64::from(v)),
+        Some(Ok(Datum::Int32(v))) => Some(i64::from(v)),
+        Some(Ok(Datum::Int64(v))) => Some(v),
+        _ => None,
+    };
+    // Bail unless the step is a non-null, non-zero literal.
+    let step = match literal_i64(&exprs[2]) {
+        Some(step) => step,
+        None => return,
     };
     if step == 0 {
         // `generate_series` errors on a zero step; leave it to do so.
+        return;
+    }
+
+    // Literal bounds: compute the exact cardinality now, in `i128`, where no
+    // `i64` inputs can overflow.
+    if let (Some(start), Some(stop)) = (literal_i64(&exprs[0]), literal_i64(&exprs[1])) {
+        let empty = if step > 0 { stop < start } else { stop > start };
+        let count: i128 = if empty {
+            0
+        } else {
+            // Same-sign dividend and divisor, so truncating division is floor
+            // division.
+            (i128::from(stop) - i128::from(start)) / i128::from(step) + 1
+        };
+        if let Ok(count) = i64::try_from(count) {
+            *func = TableFunc::RepeatRowNonNegative;
+            *exprs = vec![MirScalarExpr::literal_ok(
+                Datum::Int64(count),
+                ReprScalarType::Int64,
+            )];
+        }
+        // A count beyond `i64` is left alone rather than collapsed: the
+        // original enumerates it without error, so the rewrite must too.
         return;
     }
 
