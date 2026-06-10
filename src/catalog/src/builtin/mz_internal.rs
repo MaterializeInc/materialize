@@ -698,14 +698,13 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
                 .nullable(false),
             )
             // Whether a `reconfiguration` record is present (a background `ALTER` is
-            // converging or has timed out and parked).
+            // converging; a timed-out rollback clears the record, so a record never
+            // outlives its reconfiguration).
             .with_column(
                 "reconfiguration_in_flight",
                 SqlScalarType::Bool.nullable(false),
             )
-            // The active reconfiguration deadline, when a record is in flight. A
-            // deadline in the past with `reconfiguration_in_flight` still true is a
-            // timed-out reconfiguration parked as a tombstone.
+            // The active reconfiguration deadline, when a record is in flight.
             .with_column(
                 "reconfiguration_deadline",
                 SqlScalarType::MzTimestamp.nullable(true),
@@ -746,7 +745,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
             ),
             (
                 "reconfiguration_in_flight",
-                "Whether a background reconfiguration is in progress (or has timed out and parked, in which case `reconfiguration_deadline` is in the past).",
+                "Whether a background reconfiguration is in progress. A reconfiguration that times out under `ON TIMEOUT ROLLBACK` disappears from this view; its trace is the `timed-out` audit event.",
             ),
             (
                 "reconfiguration_deadline",
@@ -760,8 +759,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
         // One row per managed cluster, read straight from the durable catalog.
         // `config` is the managed variant's realized shape; `reconfiguration`
         // (and `target`) is the in-flight record, present only while the
-        // (gated, default-off) controller is converging or has parked a
-        // timeout. An absent `Option` serializes to a JSON `null`, so presence
+        // (gated, default-off) controller is converging. An absent `Option` serializes to a JSON `null`, so presence
         // is `!= 'null'`, not `IS NOT NULL`. The `target_*` columns coalesce
         // onto the realized config when no record is in flight, so for an
         // ordinary cluster the two shapes coincide and the in-flight flag is
@@ -5011,10 +5009,9 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
         // `NULL` for unmanaged clusters.
         .with_column("current_size", SqlScalarType::String.nullable(true))
         .with_column("target_size", SqlScalarType::String.nullable(true))
-        // Whether a background reconfiguration is in flight (converging, or
-        // timed out and parked). The active deadline distinguishing the two is in
-        // `mz_internal.mz_cluster_reconfigurations`; this view is indexed, so it
-        // stays non-temporal and does not compare the deadline to `mz_now()`.
+        // Whether a background reconfiguration is in flight (converging). A
+        // timed-out rollback clears the record, so this never reads true for a
+        // settled cluster.
         .with_column("reconfiguration_in_flight", SqlScalarType::Bool.nullable(true))
         // The size of the in-flight hydration-burst replica, if any. `NULL` when
         // no burst is running (or for unmanaged clusters); the size while one is.

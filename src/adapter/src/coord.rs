@@ -102,7 +102,8 @@ use mz_catalog::durable::{AuditLogIterator, OpenableDurableCatalogState};
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
+    DataSourceDesc, ReconfigurationTarget, StateDiff, StateUpdate, StateUpdateKind, Table,
+    TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -827,8 +828,9 @@ pub enum ClusterStage {
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
     /// The foreground wait-shim over a controller-driven background
-    /// reconfiguration: poll the durable `reconfiguration` record until it clears
-    /// (success) or its deadline passes (timeout).
+    /// reconfiguration: poll the durable `reconfiguration` record until it
+    /// clears, then report success or timeout depending on whether the realized
+    /// config reached the target.
     AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
@@ -860,6 +862,10 @@ pub struct AlterClusterFinalize {
 pub struct AlterClusterAwaitReconfiguration {
     validity: PlanValidity,
     cluster_id: ClusterId,
+    /// The target shape the awaited `ALTER` wrote. When the record clears, the
+    /// realized config matching this is what distinguishes a cut-over (success)
+    /// from a rollback clear (timeout); see `await_reconfiguration_stage`.
+    target: ReconfigurationTarget,
     /// Whether the shim has already granted the one post-deadline grace
     /// re-poll; see `await_reconfiguration_stage`.
     past_deadline_grace_used: bool,

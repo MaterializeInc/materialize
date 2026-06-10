@@ -428,8 +428,8 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     # The background ALTER returns immediately; the target replica cannot
     # hydrate the slow view within the timeout, so the controller rolls back at
-    # the deadline: it drops the target set, leaves the realized config
-    # untouched, and parks the record as a tombstone.
+    # the deadline: it drops the target set and clears the record, leaving the
+    # realized config untouched.
     mz.environmentd.sql("""
         ALTER CLUSTER slow_hydration SET (SIZE='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
         """)
@@ -444,8 +444,24 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         WHERE c.name = 'slow_hydration';
         """)
     assert reconfiguration == (
-        ["scale=1,workers=1", "scale=1,workers=4", True],
-    ), f"Expected a rolled-back reconfiguration tombstone, found {reconfiguration}"
+        ["scale=1,workers=1", "scale=1,workers=1", False],
+    ), f"Expected the rolled-back reconfiguration to settle at the realized config, found {reconfiguration}"
+
+    # The timeout's papertrail is the audit log: a started and a timed-out
+    # transition, the latter carrying the abandoned target.
+    transitions = mz.environmentd.sql_query("""
+        SELECT details->>'transition', details->>'target_size'
+        FROM mz_catalog.mz_audit_events
+        WHERE event_type = 'alter'
+          AND object_type = 'cluster'
+          AND details->>'cluster_name' = 'slow_hydration'
+          AND details->>'transition' IS NOT NULL
+        ORDER BY id;
+        """)
+    assert transitions == (
+        ["started", "scale=1,workers=4"],
+        ["timed-out", "scale=1,workers=4"],
+    ), f"Expected a started and a timed-out transition, found {transitions}"
 
     # Test fails to alter with source
     mz.environmentd.sql("""

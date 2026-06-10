@@ -356,20 +356,20 @@ pub enum ReconfigurationLifecycleV1 {
     /// A reconfiguration record was written or re-targeted: the cluster is now
     /// converging onto a new target shape.
     Started,
-    /// The realized config cut over to the target and the record was cleared by
-    /// a hydrated success: either under `ON TIMEOUT ROLLBACK` (the conservative
-    /// default), where the only way to clear the record is a successful cut-over
-    /// — including one that hydrated after the deadline, since success takes
-    /// precedence over the deadline — or under `ON TIMEOUT COMMIT` before the
-    /// deadline.
+    /// The realized config cut over to the target and the record was cleared:
+    /// a hydrated success under either `ON TIMEOUT` action — including one that
+    /// hydrated after the deadline, since success takes precedence — or a
+    /// forced `ON TIMEOUT COMMIT` cut-over of a not-yet-hydrated target past
+    /// the deadline. The event carries the record's deadline; comparing it to
+    /// the event's occurrence time tells an in-time cut-over from a late or
+    /// forced one.
     Finalized,
-    /// The realized config cut over to the target and the record was cleared
-    /// under an `ON TIMEOUT COMMIT` policy. This is the cut-over of a possibly
-    /// not-yet-hydrated target after the deadline. n.b. under `COMMIT` the
-    /// deadline alone cannot distinguish a target that hydrated late from one
-    /// the timeout committed un-hydrated: both clear the record past the
-    /// deadline, and the apply site sees no hydration signal, so a hydrated-late
-    /// success under `COMMIT` also surfaces here.
+    /// The deadline fired with the target not hydrated under `ON TIMEOUT
+    /// ROLLBACK`: the record was cleared with the realized config untouched and
+    /// the target replicas dropped, reverting to the pre-reconfiguration set.
+    /// Emitted exactly once per timeout — the clear is durable, so the
+    /// transition cannot re-fire. This event is the timeout's papertrail; the
+    /// record (and with it the abandoned target) is gone from the catalog.
     TimedOut,
     /// An in-flight reconfiguration was cancelled by re-targeting the record
     /// back to the cluster's still-realized shape (the ALTER-back cancel path);
@@ -380,11 +380,12 @@ pub enum ReconfigurationLifecycleV1 {
 /// A cluster-level transition in a background reconfiguration's lifecycle.
 ///
 /// `deadline` is the reconfiguration's active deadline as a millisecond
-/// `mz_timestamp`, recorded whenever a record is present so an operator can
-/// correlate the transition with the originating `ALTER`: on `started` and
-/// `cancelled` (a record was written/re-targeted) and on `timed-out` (the record
-/// being cleared still carried its deadline). It is `None` on `finalized`, where
-/// the record (and its deadline) has just been cleared.
+/// `mz_timestamp`, recorded on every transition so an operator can correlate
+/// the transition with the originating `ALTER`: on `started` and `cancelled`
+/// the written/re-targeted record's deadline, on `timed-out` and `finalized`
+/// the just-cleared record's — on `finalized`, comparing it to the event's
+/// occurrence time distinguishes an in-time cut-over from a late or forced
+/// (`ON TIMEOUT COMMIT`) one.
 #[derive(
     Clone,
     Debug,

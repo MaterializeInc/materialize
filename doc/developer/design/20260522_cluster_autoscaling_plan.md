@@ -261,7 +261,7 @@ before relying** — they drift.
 | **6** | Hydration burst: `AUTO SCALING STRATEGY` SQL + burst strategy + break-glass (last **feature** PR) | add burst (last) | adds `enable_auto_scaling_strategy` / `enable_hydration_burst` (off) | none |
 | — | **Operational rollout** (not a PR): enable the gates at runtime via LaunchDarkly; bake in prod | turn it on | runtime flip — legacy stays as fallback | none |
 | **7** | Flip dyncfg defaults to true + remove legacy paths (only after prod bake) | the cleanup | defaults → on | drop `pending` |
-| **8** | Showcase follow-ups: `retired` drop reason, rollback stamp + audit event + view `state`, burst arming on object existence | polish from live testing | dark behind master gate | none (unshipped v86 amended in place) |
+| **8** | Showcase follow-ups: `retired` drop reason, rollback-at-deadline record clear + `timed-out` audit event, burst arming on object existence | polish from live testing | dark behind master gate | none |
 | **9** | Restore the on-refresh `scheduling_policies` audit detail on creates | audit fidelity | dark behind master gate | none |
 
 Splitting/merging notes: PR 3 is the largest and may split into **3a** (strategy + hydration
@@ -477,8 +477,9 @@ the lifecycle.
   observability scope. The rollback is already observable: the tombstoned record (past deadline,
   `reconfiguration_in_flight = true`) surfaces in `mz_cluster_reconfigurations` and `SHOW CLUSTERS`,
   and the target-set drops carry the none-desired reason. Lands with the burst lifecycle (PR 6) or
-  a focused follow-up once the seam shape for it is settled. **→ Closed by PR 8b** via the durable
-  tombstone-stamp option (`rolled_back_at` on the record).
+  a focused follow-up once the seam shape for it is settled. **→ Closed by PR 8b**, which makes the
+  rollback a durable config write after all: the strategy clears the record at the deadline (no
+  tombstone retained), and the clear-without-cut-over classifies `timed-out`.
 - **Live `mz_now()`-based timed-out indicator in `SHOW CLUSTERS`.** The `mz_show_clusters` view is
   indexed in `mz_catalog_server`, and an index cannot be built over a relation that uses `mz_now()`,
   so the view exposes only a boolean `reconfiguration_in_flight`. The deadline needed to split
@@ -705,8 +706,10 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 ## PR 8 — Showcase follow-ups: drop attribution, rollback observability, burst arming
 
-**Status:** 🚧 In progress — 8a landed (implement/review/revise cycle complete; reviewer ran
-`cluster_controller.slt` end-to-end against a live server, 105/105); 8b/8c not started.
+**Status:** 🚧 In progress — 8a and 8b landed (implement/review/revise cycles complete; each
+verified with an end-to-end `cluster_controller.slt` run against a live server — 105/105
+after 8a; 8b's run is recorded in its progress entry, the file was reshaped by the re-cut);
+8c not started.
 
 Three independent fixes that fell out of live end-to-end testing for the PM showcase
 (`pm-showcase-cluster-controller.md`, "Known rough edges"). Each is small, lands as its own
@@ -753,40 +756,58 @@ Checklist:
       unmanaged cluster — correctly untouched.)
 - [x] `cargo fmt`/`check` clean; tracker + progress log.
 
-### 8b — Rollback-at-deadline: durable stamp + audit event + view state
+### 8b — Rollback-at-deadline: clear the record, audit `timed-out`
 
-Closes PR 4's deferred **`ROLLBACK`-timeout audit event** via the durable-stamp option named
-there. Today a rollback past the deadline performs no durable write — the strategy just stops
-desiring the target replicas — so there is no transition to classify and the audit trail ends
-at `started`.
+Closes PR 4's deferred **`ROLLBACK`-timeout audit event**. Today a rollback past the deadline
+performs no durable write — the strategy just stops desiring the target replicas and the
+record lingers as a tombstone — so there is no transition to classify and the audit trail
+ends at `started`.
 
-- Add `rolled_back_at: Option<u64>` to durable `ReconfigurationState` (mirrors `BurstState`'s
-  existing `steady_hydrated_at` stamp pattern). Amend `objects.rs` + unshipped `objects_v86.rs`
-  in place; regenerate hashes/snapshot (PR 4 recipe).
-- Strategy: on the first tick with `now > deadline`, target un-hydrated, and
-  `on_timeout == Rollback`, `update_state` stamps `rolled_back_at = now` (success precedence
-  unchanged: the hydrated check comes first). `desired_replicas` keys the tombstone off
-  `rolled_back_at.is_some()` instead of re-deriving `now > deadline` each tick.
+Decision: the rollback becomes a durable config write, but the *cheap* one — the strategy
+**clears the record** at the deadline (realized config untouched), the same finalizing move
+every other settled outcome already makes. The audit event is the timeout's papertrail; no
+tombstone is retained and no schema change is needed (the durable-stamp option named in PR 4
+was implemented first and then rejected as over-engineered: a stamped tombstone in durable
+state duplicated what the audit history already records, and dragged a `state` column plus
+re-open semantics behind it).
+
+- Strategy: on a tick with `now > deadline`, target un-hydrated, and `on_timeout == Rollback`,
+  `update_state` returns a record-clear write (success precedence unchanged: the hydrated
+  check comes first). `desired_replicas` keeps the `now > deadline` predicate so the target
+  set is retired even on a tick whose clear could not land (witness rejection).
 - **Event vocabulary re-carve** (all unreleased): `finalized` = the realized config cut over
   (hydrated success under either action, *or* a forced `COMMIT` past the deadline);
-  `timed-out` = the deadline fired and the reconfiguration parked (the rollback stamp
-  transition, emitted exactly once because the stamp is durable). `finalized` now always
-  carries the record's deadline so a reader can tell a late/forced cut-over from an in-time
-  one — this dissolves PR 4's documented `COMMIT`-late-success imprecision.
-- Introspection: `mz_internal.mz_cluster_reconfigurations` gains a text `state` column —
-  `settled` (no record) / `converging` (record, no stamp) / `rolled-back` (stamped). The stamp
-  makes the parked state expressible without `mz_now()`, which the indexed view cannot use —
-  partially recovering PR 4's deferred live timed-out indicator. `SHOW CLUSTERS` columns
-  unchanged.
+  `timed-out` = the rollback clear (emitted exactly once because the clear is durable). The
+  classifier tells the two clears apart by whether the same write advanced the realized shape
+  to the cleared record's target. `finalized` now always carries the record's deadline so a
+  reader can tell a late/forced cut-over from an in-time one — this dissolves PR 4's
+  documented `COMMIT`-late-success imprecision.
+- Introspection: none. A rolled-back cluster reads settled in
+  `mz_cluster_reconfigurations`/`SHOW CLUSTERS` (record gone, target back to mirroring the
+  realized shape); the abandoned target survives only in the `timed-out` event. PR 4's
+  "tombstone visible in the view" framing is superseded.
+- Wait-shim: a cleared record is no longer conclusively success, so the shim carries the
+  `ALTER`'s target and, on clear, reports success iff the realized config reached it —
+  `AlterClusterTimeout` otherwise. This replaces the deadline+grace heuristic as the shim's
+  settled-outcome signal (the grace re-poll stays, but only to bound the wait when the record
+  cannot move, e.g. the controller is disabled).
 
 Checklist:
-- [ ] Durable `rolled_back_at` (+ v86 in-place amendment, snapshots/hashes regenerated).
-- [ ] Strategy stamp + tombstone predicate off the stamp; kernel unit tests (stamp once,
-      restart-idempotent, success precedence).
-- [ ] Classifier re-carve + unit tests; `ReconfigurationLifecycleV1` docstrings updated.
-- [ ] `state` column on the view; `mz_catalog_server_index_accounting.slt` & autogenerated
-      snapshots updated; `cluster_controller.slt` timeout-rollback flow asserts event + state.
-- [ ] `cargo fmt`/`check` clean; tick the PR 4 deferred item; tracker + progress log.
+- [x] Strategy clear-on-timeout; kernel unit tests (clear without cut-over, no target desired
+      past the deadline, seam test asserts the clear + revert + second-tick no-op).
+- [x] Classifier re-carve + unit tests; `ReconfigurationLifecycleV1` docstrings updated.
+      (`(Some, None)` classifies by realized-vs-target: advanced → `finalized`, short →
+      `timed-out`, both carrying the cleared record's deadline. The cancel-converge clear
+      reads `finalized` (its target equals the realized shape). Accepted marginal mislabel:
+      a rollback whose target equals the realized shape would read `finalized`, but such a
+      target cuts over as trivially satisfied unless the realized set itself sits un-hydrated
+      past the whole deadline. The classifier's unused `now` parameter is gone.)
+- [x] Wait-shim success-vs-rollback off the realized config; stale stamp-era comments gone.
+- [x] `cluster_controller.slt` timeout-rollback flow asserts the settled view + the ordered
+      audit history (`TIMEOUT '0s'` rolls back before any replica can hydrate; in-flight
+      asserted by freezing the controller via the master gate); cloudtest slow-hydration
+      rollback asserts settled view + `timed-out` event.
+- [x] `cargo fmt`/`check` clean; tick the PR 4 deferred item; tracker + progress log.
 
 ### 8c — Burst arming: existential object semantics
 
@@ -931,6 +952,18 @@ Checklist:
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-10_ — **PR 8b landed, then simplified.** First implemented as a durable
+  `rolled_back_at` stamp (tombstone retained, view `state` column, v86 amended); on review we
+  judged that over-engineered — the audit event is papertrail enough — and re-cut it: the
+  strategy now **clears the record** at the deadline under `ROLLBACK` (realized config
+  untouched), the classifier tells the two clears apart by whether the realized shape advanced
+  to the cleared record's target (`finalized` vs `timed-out`, both carrying the deadline), and
+  the wait-shim carries the `ALTER`'s target to tell success from rollback when the record
+  clears. No schema change, no tombstone, no `state` column; a rolled-back cluster reads
+  settled everywhere except the audit history. Closes PR 4's deferred ROLLBACK-timeout item
+  and still dissolves the documented COMMIT-late-success imprecision. `cargo fmt`/`check`,
+  kernel and classifier unit tests clean; the reworked timeout-rollback slt flow verified
+  live on the full PR 8 stack (131/131).
 - _2026-06-10_ — **PR 9 implemented; PR 8a + PR 9 dissolved into mainline `fixup!` commits.**
   The on-refresh `scheduling_policies` detail is restored on creates with full fidelity:
   `RefreshMvInfo.id` (the coord pull already had `global_id_writes()` in hand),

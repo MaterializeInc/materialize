@@ -182,7 +182,7 @@ they coincide.
 | `target_size`                  | [`text`]         | The size the cluster is reconfiguring to; equals `current_size` when no reconfiguration is in flight. |
 | `target_replication_factor`    | [`uint4`]        | The replication factor the cluster is reconfiguring to; equals `current_replication_factor` when no reconfiguration is in flight. |
 | `target_availability_zones`    | [`text list`]    | The availability-zone pool the cluster is reconfiguring to; equals `current_availability_zones` when no reconfiguration is in flight. An unpinned pool is an empty list (not `NULL`). |
-| `reconfiguration_in_flight`    | [`boolean`]      | Whether a background reconfiguration is in progress (or has timed out and parked, in which case `reconfiguration_deadline` is in the past). |
+| `reconfiguration_in_flight`    | [`boolean`]      | Whether a background reconfiguration is in progress. A reconfiguration that times out under `ON TIMEOUT ROLLBACK` disappears from this view; its trace is the `timed-out` audit event. |
 | `reconfiguration_deadline`     | [`mz_timestamp`] | The deadline of the in-flight reconfiguration, after which the configured `ON TIMEOUT` action applies. `NULL` when no reconfiguration is in flight. |
 | `burst_size`                   | [`text`]         | **Unstable** The size of the in-flight hydration-burst replica, if any. `NULL` when no burst is in flight. |
 

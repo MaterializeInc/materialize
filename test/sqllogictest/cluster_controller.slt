@@ -300,8 +300,9 @@ FROM (SHOW CLUSTERS) WHERE name = 'cc_obs'
 cc_obs  scale=1,workers=2  scale=1,workers=2  false
 
 # The audit log captured the reconfiguration lifecycle: a `started` event when the
-# record was written, and a `finalized` (or `timed-out`) event at cut-over. The
-# started event records the active deadline.
+# record was written, and a `finalized` event at cut-over. Every transition records
+# the active deadline; on `finalized` a reader compares it to the event's
+# occurred_at to tell an in-time cut-over from a late or forced one.
 query TB
 SELECT
     details->>'transition',
@@ -314,7 +315,7 @@ WHERE event_type = 'alter'
 ORDER BY id
 ----
 started  true
-finalized  false
+finalized  true
 
 statement ok
 DROP CLUSTER cc_obs
@@ -361,6 +362,146 @@ finalized
 
 statement ok
 DROP CLUSTER cc_cancel
+
+# ----- Rollback at the deadline (PR 8b): record cleared + timed-out event -----
+#
+# A reconfiguration whose deadline passes before the target hydrates under
+# ON TIMEOUT ROLLBACK is abandoned: the controller drops the target set and
+# clears the record without touching the realized config, and the audit log
+# records a `timed-out` transition — the timeout's only papertrail. A TIMEOUT
+# of '0s' puts the deadline in the past for any realistic controller tick, so
+# the rollback happens promptly — though a transient target replica is possible
+# (the deadline comparison is strict, so a tick landing in the very same
+# millisecond as the deadline still desires the target for one tick). The
+# assertions below tolerate that: the audit query filters on `transition IS NOT
+# NULL`, and the replica check runs seconds after the rollback has settled.
+
+statement ok
+CREATE CLUSTER cc_rollback (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+statement ok
+ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'ROLLBACK'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+# Rolled back: the realized config is untouched and nothing is in flight — the
+# record is gone, so the view reads exactly like a settled cluster.
+query TTB
+SELECT recon.current_size, recon.target_size, recon.reconfiguration_in_flight
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_rollback'
+----
+scale=1,workers=1  scale=1,workers=1  false
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'cc_rollback'
+----
+scale=1,workers=1
+
+# The replica set stayed at the realized shape: no target replica survives a
+# rollback (any transient one has been retired by the time we check, seconds
+# after the rollback).
+query TT rowsort
+SELECT replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_rollback'
+----
+r1  scale=1,workers=1
+
+# The timeout firing is in the history exactly once — the record clear is
+# durable, so the transition cannot re-fire no matter how many ticks pass. The
+# event carries the deadline and the abandoned target, which survive nowhere
+# else.
+query TTB
+SELECT details->>'transition', details->>'target_size', details->>'deadline' IS NOT NULL
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_rollback'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started  scale=1,workers=2  true
+timed-out  scale=1,workers=2  true
+
+# A forced cut-over: TIMEOUT '0s' with ON TIMEOUT COMMIT advances the realized
+# config to the (necessarily un-hydrated) target on the controller's first tick.
+# The clear classifies `finalized` — the realized config did cut over — with the
+# deadline carried so the history shows it was a past-deadline (forced) cut-over.
+statement ok
+ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query TB
+SELECT recon.current_size, recon.reconfiguration_in_flight
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_rollback'
+----
+scale=1,workers=2  false
+
+# A reconfiguration that has not yet converged is in flight. To observe the
+# transient state deterministically, freeze the controller by flipping the
+# master gate off right after the record is written (both are re-read each
+# tick): the record then cannot move. The flip lands within milliseconds of the
+# ALTER returning, while a cut-over first needs a target replica process to boot
+# and report hydration.
+statement ok
+ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'ROLLBACK'))
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_controller = false
+----
+COMPLETE 0
+
+query BTT
+SELECT recon.reconfiguration_in_flight, recon.current_size, recon.target_size
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_rollback'
+----
+true  scale=1,workers=2  scale=1,workers=4
+
+# Unfreeze: the controller converges the in-flight record and settles.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_controller = true
+----
+COMPLETE 0
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query TB
+SELECT recon.current_size, recon.reconfiguration_in_flight
+FROM mz_internal.mz_cluster_reconfigurations recon
+JOIN mz_clusters ON mz_clusters.id = recon.cluster_id
+WHERE mz_clusters.name = 'cc_rollback'
+----
+scale=1,workers=4  false
+
+# The full lifecycle history for this cluster, in order: the rolled-back
+# attempt, the forced COMMIT cut-over, and the frozen-then-converged success.
+# Every transition carries the deadline.
+query TB
+SELECT details->>'transition', details->>'deadline' IS NOT NULL
+FROM mz_catalog.mz_audit_events
+WHERE event_type = 'alter'
+  AND object_type = 'cluster'
+  AND details->>'cluster_name' = 'cc_rollback'
+  AND details->>'transition' IS NOT NULL
+ORDER BY id
+----
+started  true
+timed-out  true
+started  true
+finalized  true
+started  true
+finalized  true
+
+statement ok
+DROP CLUSTER cc_rollback
 
 # ON REFRESH scheduling driven by the controller (PR 5). With the gate on, the
 # on-refresh strategy — not the legacy cluster_scheduling.rs tick — owns a

@@ -113,9 +113,10 @@ impl Strategy for BaselineStrategy {
 /// `update_state` cuts over: the realized config advances to the target, the
 /// record clears, and the old replicas fall out of the union and are dropped.
 /// Success takes precedence over the deadline. On a timeout, `Commit` cuts
-/// over to the un-hydrated target anyway while `Rollback` (the default) stops
-/// desiring the target replicas, reverting to the pre-reconfiguration set, and
-/// retains the record as a tombstone.
+/// over to the un-hydrated target anyway while `Rollback` (the default) clears
+/// the record without touching the realized config and stops desiring the
+/// target replicas, reverting to the pre-reconfiguration set; the timeout's
+/// papertrail is the audit event the clear induces.
 ///
 /// Both functions are pure over the observed [`ClusterState`]; hydration is read
 /// from [`ClusterState::hydrated_replicas`], which the controller populates by
@@ -166,25 +167,36 @@ impl Strategy for GracefulReconfigurationStrategy {
         //      takes precedence over the deadline regardless of `on_timeout`), or
         //   2. the deadline has passed un-hydrated and `on_timeout` is `Commit`
         //      (cut over to the not-yet-hydrated target anyway).
-        // Otherwise leave durable state untouched: before the deadline we keep
-        // waiting, and past it under `Rollback` we leave the record as a tombstone
-        // (`desired_replicas` ceases to contribute the target set, so the
-        // controller drops it).
         let hydrated = self.target_hydrated(state, record);
         let commit_on_timeout =
             now > record.deadline && matches!(record.on_timeout, OnTimeout::Commit);
         if hydrated || commit_on_timeout {
-            StateWrite {
+            return StateWrite {
                 new_size: Some(record.target.size.clone()),
                 new_replication_factor: Some(record.target.replication_factor),
                 new_availability_zones: Some(record.target.availability_zones.clone()),
                 new_logging: Some(record.target.logging.clone()),
                 reconfiguration: Some(None),
                 ..Default::default()
-            }
-        } else {
-            StateWrite::default()
+            };
         }
+
+        // Past the deadline un-hydrated under `Rollback`: abandon the
+        // reconfiguration by clearing the record while leaving the realized
+        // config untouched. The clear is the durable transition the audit
+        // `timed-out` event classifies (a clear that does not advance the
+        // realized config can only be this), so the timeout is in the history
+        // exactly once. With the record gone the strategy disengages and the
+        // baseline alone shapes the cluster, dropping the in-flight target set.
+        if now > record.deadline && matches!(record.on_timeout, OnTimeout::Rollback) {
+            return StateWrite {
+                reconfiguration: Some(None),
+                ..Default::default()
+            };
+        }
+
+        // Before the deadline: keep waiting.
+        StateWrite::default()
     }
 
     fn desired_replicas(&self, state: &ClusterState, now: Timestamp) -> Vec<DesiredReplica> {
@@ -192,13 +204,15 @@ impl Strategy for GracefulReconfigurationStrategy {
             return Vec::new();
         };
 
-        // Keep desiring the target replicas while the reconfiguration is live —
-        // before the deadline, or after it once the target set has hydrated (the
-        // success path, awaiting a cut-over a prior tick could not yet apply).
-        // Once past the deadline with the target not hydrated the action decides:
-        // `Rollback` stops contributing them (the controller drops the in-flight
-        // target set), while `Commit` keeps desiring them (they become the realized
-        // set at the cut-over `update_state` performs this tick).
+        // Past the deadline with the target not hydrated under `Rollback`: stop
+        // contributing the target replicas. `update_state` clears the record in
+        // this same tick's first phase, so this usually never fires against a
+        // re-read state — it matters when that clear could not land (e.g. the
+        // compare-and-append witness was stale), keeping the rollback's replica
+        // drops prompt rather than waiting for the clear to retry. Everything
+        // else — before the deadline, awaiting a success cut-over past it, or a
+        // `Commit` cut-over `update_state` performs this tick — keeps desiring
+        // the target set.
         let timed_out = now > record.deadline && !self.target_hydrated(state, record);
         if timed_out && matches!(record.on_timeout, OnTimeout::Rollback) {
             return Vec::new();

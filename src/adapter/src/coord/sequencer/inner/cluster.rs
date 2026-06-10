@@ -112,6 +112,7 @@ impl Staged for ClusterStage {
             Self::AwaitReconfiguration(stage) => coord.await_reconfiguration_stage(
                 stage.validity,
                 stage.cluster_id,
+                stage.target,
                 stage.past_deadline_grace_used,
             ),
         }
@@ -574,7 +575,7 @@ impl Coordinator {
         };
         let deadline = self.now() + u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let record = ReconfigurationState {
-            target,
+            target: target.clone(),
             deadline: deadline.into(),
             on_timeout,
         };
@@ -618,6 +619,7 @@ impl Coordinator {
             ClusterStage::AwaitReconfiguration(AlterClusterAwaitReconfiguration {
                 validity,
                 cluster_id,
+                target,
                 past_deadline_grace_used: false,
             }),
         )))
@@ -627,15 +629,18 @@ impl Coordinator {
     /// record and either complete, error on timeout, or re-poll after the
     /// configured interval.
     ///
-    /// Completion is the absence of the record (the controller cleared it at
-    /// cut-over). A record whose deadline has passed is a candidate timeout,
-    /// not a conclusive one, so we grant one post-deadline grace re-poll
-    /// before erroring. The reconfiguration itself is durable and continues
-    /// (or has already settled) independently of this session.
+    /// The record clearing ends the wait, but is not by itself success: the
+    /// controller also clears the record on a `ROLLBACK` timeout, leaving the
+    /// realized config untouched. The realized config having reached `target`
+    /// is what distinguishes the two. A record whose deadline has passed is a
+    /// candidate timeout, not a conclusive one, so we grant one post-deadline
+    /// grace re-poll before erroring. The reconfiguration itself is durable and
+    /// continues (or has already settled) independently of this session.
     fn await_reconfiguration_stage(
         &self,
         validity: PlanValidity,
         cluster_id: ClusterId,
+        target: ReconfigurationTarget,
         past_deadline_grace_used: bool,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
@@ -651,17 +656,39 @@ impl Coordinator {
         };
 
         match record {
-            // Cleared: the controller cut over. Done.
-            None => Ok(StageResult::Response(ExecuteResponse::AlteredObject(
-                ObjectType::Cluster,
-            ))),
+            None => {
+                // Cleared. A cut-over advanced the realized config to the
+                // target: success. A clear that left the realized config short
+                // of the target is a `ROLLBACK` timeout — or our record was
+                // overwritten by a concurrent `ALTER` and settled elsewhere, in
+                // which case this session's requested shape equally did not
+                // take effect.
+                let realized_matches_target = match &cluster.config.variant {
+                    ClusterVariant::Managed(managed) => {
+                        managed.size == target.size
+                            && managed.replication_factor == target.replication_factor
+                            && managed.availability_zones == target.availability_zones
+                            && managed.logging == target.logging
+                    }
+                    ClusterVariant::Unmanaged => false,
+                };
+                if realized_matches_target {
+                    Ok(StageResult::Response(ExecuteResponse::AlteredObject(
+                        ObjectType::Cluster,
+                    )))
+                } else {
+                    Err(AdapterError::AlterClusterTimeout)
+                }
+            }
             Some(record) => {
                 let past_deadline = mz_repr::Timestamp::from(self.now()) > record.deadline;
                 if past_deadline && past_deadline_grace_used {
-                    // The record is still present after the grace re-poll: the
-                    // controller could not cut over in time and has tombstoned the
-                    // record. Surface a timeout to the session; the durable
-                    // tombstone records the abandoned target.
+                    // The record is still present after the grace re-poll: stop
+                    // waiting and surface a timeout. This only bounds the wait
+                    // to one poll interval past the deadline; it says nothing
+                    // about how the reconfiguration settles (a `COMMIT` record
+                    // stays present until the imminent cut-over clears it, a
+                    // `ROLLBACK` clear may simply not have landed yet).
                     return Err(AdapterError::AlterClusterTimeout);
                 }
                 // Past the deadline for the first time, re-poll once more so the
@@ -681,6 +708,7 @@ impl Coordinator {
                             AlterClusterAwaitReconfiguration {
                                 validity,
                                 cluster_id,
+                                target,
                                 past_deadline_grace_used,
                             },
                         )))

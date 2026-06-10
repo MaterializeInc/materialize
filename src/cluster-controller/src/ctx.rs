@@ -91,7 +91,7 @@ pub enum OnTimeout {
     /// Cut over to the (not-yet-hydrated) target anyway and clear the record.
     Commit,
     /// Drop the target replica set, reverting to the pre-reconfiguration shape,
-    /// and retain the record as a tombstone.
+    /// and clear the record without advancing the realized config.
     Rollback,
 }
 

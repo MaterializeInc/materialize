@@ -967,9 +967,10 @@ fn graceful_timeout_vs_hydrated_precedence() {
 }
 
 #[mz_ore::test]
-fn graceful_timeout_parks_and_drops_target() {
-    // Past the deadline and NOT hydrated: park. No cut-over, and the strategy
-    // ceases to contribute the target replicas, so the controller drops them.
+fn graceful_timeout_clears_record_and_drops_target() {
+    // Past the deadline and NOT hydrated: abandon. `update_state` clears the
+    // record without touching the realized config, and the strategy ceases to
+    // contribute the target replicas, so the controller drops them.
     let c = cluster(1);
     let state = reconfiguring_state(
         c,
@@ -985,13 +986,22 @@ fn graceful_timeout_parks_and_drops_target() {
     let now = Timestamp::from(9999u64);
 
     let g = GracefulReconfigurationStrategy;
+    let write = g.update_state(&state, now);
+    assert!(write.new_size.is_none(), "no cut-over on timeout");
     assert!(
-        g.update_state(&state, now).is_empty(),
-        "no cut-over on timeout"
+        write.new_replication_factor.is_none()
+            && write.new_availability_zones.is_none()
+            && write.new_logging.is_none(),
+        "the realized config is untouched"
     );
+    assert_eq!(write.reconfiguration, Some(None), "the record is cleared");
+
+    // Even before the clear lands (e.g. the compare-and-append witness was
+    // stale), the target replicas are no longer desired past the deadline, so
+    // the rollback's replica drops stay prompt.
     assert!(
         g.desired_replicas(&state, now).is_empty(),
-        "parked: target replicas no longer desired"
+        "timed out: target replicas no longer desired"
     );
 }
 
@@ -1224,7 +1234,7 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
     // `Rollback` action. The realized 100cc replica and the in-flight 200cc target
     // replica both exist (an earlier overlap tick created the target). The tick
     // must drop the in-flight target via `apply`, revert to the pre-reconfiguration
-    // set, and retain the record as a tombstone (no cut-over).
+    // set, and clear the record without a cut-over.
     let c = cluster(1);
     let state = reconfiguring_state(
         c,
@@ -1244,13 +1254,30 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
 
     controller.reconcile(&mut ctx).await;
 
-    // No phase-1 write: `Rollback`-at-timeout does not cut over.
+    // The only phase-1 write is the record clear: no cut-over (the realized
+    // config fields are untouched).
+    let state_writes: Vec<_> = ctx
+        .applied
+        .iter()
+        .flatten()
+        .filter_map(|d| match d {
+            Decision::UpdateClusterState { write, .. } => Some(write),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        state_writes.len(),
+        1,
+        "exactly one phase-1 write: the record clear"
+    );
     assert!(
-        !ctx.applied
-            .iter()
-            .flatten()
-            .any(|d| matches!(d, Decision::UpdateClusterState { .. })),
-        "rollback-at-timeout must not write durable state"
+        state_writes[0].new_size.is_none(),
+        "rollback-at-timeout must not cut over"
+    );
+    assert_eq!(
+        state_writes[0].reconfiguration,
+        Some(None),
+        "the record is cleared"
     );
     // Phase 2 drops the un-desired in-flight target replica.
     assert!(ctx.creates().is_empty());
@@ -1265,22 +1292,25 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
     } else {
         panic!("expected a DropReplica decision");
     }
-    // Reverted to the pre-reconfiguration set; the record is retained as a
-    // tombstone (its past deadline keeps the strategy parked).
+    // Reverted to the pre-reconfiguration set; the record is gone, so the
+    // strategy is disengaged and the baseline alone shapes the cluster.
     assert_eq!(ctx.states[&c].size, "100cc", "realized config unchanged");
     assert_eq!(ctx.states[&c].replicas.len(), 1);
     assert_eq!(ctx.states[&c].replicas[0].shape.size, "100cc");
     assert!(
-        ctx.states[&c].reconfiguration.is_some(),
-        "the record is retained as a tombstone under rollback"
+        ctx.states[&c].reconfiguration.is_none(),
+        "the record is cleared under rollback"
     );
 
-    // A second tick is a no-op: the parked record desires nothing past its
-    // deadline, the realized set already matches, and there is nothing left to
-    // drop.
+    // A second tick is a no-op: no record means no strategy engagement, the
+    // realized set already matches, and there is nothing left to drop.
     let before = ctx.applied.len();
     controller.reconcile(&mut ctx).await;
-    assert_eq!(ctx.applied.len(), before, "parked: converged to a no-op");
+    assert_eq!(
+        ctx.applied.len(),
+        before,
+        "rolled back: converged to a no-op"
+    );
 }
 
 #[mz_ore::test(tokio::test)]

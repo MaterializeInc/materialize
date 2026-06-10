@@ -365,8 +365,10 @@ pub struct ClusterVariantManaged {
 /// moving to plus the deadline by which it must complete.
 ///
 /// `ALTER` writes this record and returns; the realized config (`cluster.size`,
-/// ...) is advanced by the controller only at cut-over. A past `deadline` with
-/// the record still present is a timeout tombstone.
+/// ...) is advanced by the controller only at cut-over. The controller clears
+/// the record either way once it settles: at cut-over, or — under `Rollback`
+/// past the deadline — without touching the realized config. The timeout
+/// leaves its trace in the audit log, not here.
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ReconfigurationState {
     pub target: ReconfigurationTarget,
