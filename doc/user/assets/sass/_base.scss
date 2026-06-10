@@ -51,6 +51,8 @@ $rem-scale: 0.585;
     --nav-light: #fff;
     --nav-dark: #111111d9;
 
+    --bg-black: #000;
+
     --black: #111111;
     --black-mid: #141414;
     --black-light: #181818;
@@ -68,7 +70,7 @@ $rem-scale: 0.585;
 }
 
 body.dark {
-    --bg: #100b21;
+    --bg: var(--bg-black);
     --bg-nav: var(--nav-dark);
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
@@ -187,7 +189,7 @@ body.light {
 }
 
 body {
-    font-family: "Inter", sans-serif;
+    font-family: "Geist", sans-serif;
     color: var(--important);
     color-scheme: var(--color-scheme);
     background: var(--bg);
