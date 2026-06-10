@@ -184,6 +184,18 @@ def setup_base(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("postgres", "materialized")
 
+    # On PRs, mkpipeline drops this job's dependency on the image build so it
+    # starts immediately while the build runs concurrently, signalled by
+    # CI_WAITING_FOR_BUILD (see remove_dependencies_on_prs). `c.run` issues a
+    # plain pull with no retry, so the first mz-deploy invocation would fail if
+    # the image hasn't been pushed yet. Pull it up front, polling the build the
+    # same way `c.up` does for the other services. Only needed in that CI
+    # window; locally the image is loaded directly and never pulled.
+    if build := os.getenv("CI_WAITING_FOR_BUILD"):
+        c.invoke(
+            "pull", "mz-deploy", max_tries=300, build=build, stdin=subprocess.DEVNULL
+        )
+
     # Ensure profiles exist before first run_mz_deploy call
     create_profiles()
 
