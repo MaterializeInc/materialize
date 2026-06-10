@@ -33,7 +33,11 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
-def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
+def create_mysql(
+    mysql_version: str,
+    binlog_full_metadata: bool = True,
+    extra_args: list[str] | None = None,
+) -> MySql:
     additional_args = []
     if binlog_full_metadata:
         additional_args.extend(
@@ -43,6 +47,8 @@ def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql
                 "--enforce_gtid_consistency=ON",
             ]
         )
+    if extra_args:
+        additional_args.extend(extra_args)
     return MySql(version=mysql_version, additional_args=additional_args)
 
 
@@ -174,6 +180,25 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
             f"--var=reset-binlog={reset_binlog_stmt(mysql_version)}",
             "override/10-replica-connection.td",
+        )
+
+
+def workflow_cdc_ansi_quotes(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Boot the MySQL server with ANSI_QUOTES baked into its sql_mode, rather than
+    # toggling it at runtime (which ansi-quotes.td covers). Every connection --
+    # including the ones Materialize opens -- is under ANSI_QUOTES from the start.
+    # `--sql-mode` replaces the whole value, so we restate MySQL's strict defaults
+    # and append ANSI_QUOTES.
+    mysql_version = get_targeted_mysql_version(parser)
+    sql_mode = (
+        "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
+        "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,ANSI_QUOTES"
+    )
+    with c.override(create_mysql(mysql_version, extra_args=[f"--sql-mode={sql_mode}"])):
+        c.up("materialized", "mysql")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "override/20-ansi-quotes.td",
         )
 
 

@@ -523,19 +523,21 @@ contains:table was dropped
 > DROP SOURCE sticky_source CASCADE;
 > DROP CLUSTER sticky_cluster CASCADE;
 
-# 12. `ANSI_QUOTES` sql_mode: `"` quotes identifiers, not strings.
+# 12. `ANSI_QUOTES` sql_mode: identifiers are still binlogged with backticks.
 #
 # By default MySQL quotes identifiers with backticks and treats `"..."` as a
-# string literal -- every other section in this file relies on that. But a
-# session whose sql_mode includes ANSI_QUOTES uses `"` as the identifier quote
-# character instead, and MySQL regenerates the DROP into the binlog using the
-# session's quote char. So a drop issued under ANSI_QUOTES reaches us as
-# `DROP TABLE "tbl"` rather than `DROP TABLE `tbl``.
+# string literal. A session whose sql_mode includes ANSI_QUOTES flips this --
+# `"` becomes the identifier quote -- so the client below writes the DDL with
+# double quotes. The detector parses the binlog with a backtick-only dialect, so
+# this would break it IF the double quotes reached the binlog. They do not:
+# MySQL re-quotes the identifiers with backticks when it regenerates the
+# DROP TABLE into the binlog, regardless of the session's sql_mode (the same
+# binlog normalization that strips comments in section 9). This test pins that
+# behavior -- it would fail loudly if a future MySQL preserved the ANSI_QUOTES
+# `"` quoting in the binlog.
 #
-# The detector must still resolve the table name and error the output. We use a
-# name with a space so the identifier genuinely requires quoting (an unquoted
-# `ansi quoted` would be a syntax error), forcing the double-quote quoting to
-# round-trip through the binlog.
+# A name with a space is used so the identifier genuinely requires quoting (an
+# unquoted `ansi quoted` would be a syntax error).
 
 $ mysql-execute name=mysql
 USE public;
@@ -556,8 +558,8 @@ INSERT INTO ansi_simple VALUES (1);
 > SELECT * FROM ansi_simple;
 1
 
-# Both drops are issued with ANSI_QUOTES in effect, so the binlog carries
-# double-quoted identifiers.
+# Both drops are issued with ANSI_QUOTES in effect (double-quoted identifiers on
+# the client), but MySQL normalizes them back to backticks in the binlog.
 $ mysql-execute name=mysql
 DROP TABLE "ansi quoted";
 DROP TABLE "ansi_simple";
