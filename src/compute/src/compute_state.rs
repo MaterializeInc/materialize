@@ -1593,7 +1593,9 @@ impl IndexPeek {
                 // Preserve the structured dataflow error so the adapter can
                 // assign a precise SQLSTATE instead of a generic internal error.
                 let error = cursor.key(&storage).deserialize();
-                return PeekStatus::Ready(PeekResponse::Error(PeekError::Dataflow(Box::new(error))));
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::Dataflow(Box::new(
+                    error,
+                ))));
             }
             cursor.step_key(&storage);
         }

@@ -2407,6 +2407,7 @@ fn test_parse_error_codes() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_dataflow_error_codes() {
     // Evaluation errors that occur while reading a collection (rather than
     // during constant folding) must report the same data-exception (class 22)
@@ -2417,9 +2418,12 @@ fn test_dataflow_error_codes() {
 
     // Referencing a table column keeps the optimizer from constant-folding the
     // failing expression, so the error is produced during dataflow execution.
+    // Run the DDL and DML separately: a multi-statement batch forms an implicit
+    // transaction block, and `CREATE TABLE` cannot run inside one.
     client
-        .batch_execute("CREATE TABLE t (a int4, b int4); INSERT INTO t VALUES (1, 0);")
+        .batch_execute("CREATE TABLE t (a int4, b int4)")
         .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
 
     let cases: &[(&str, &SqlState)] = &[
         // Division by zero over a collection -> division_by_zero (22012).
