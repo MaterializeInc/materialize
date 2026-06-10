@@ -324,39 +324,57 @@ impl ComputeState {
         // available, swap otherwise.
         {
             use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
+            use mz_timely_util::column_pager::{Codec, apply_pool_config, apply_tiered_config};
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
+            let use_pool = COLUMN_PAGED_BATCHER_USE_POOL.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
             let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
             // Budget derivation: fraction × announced memory limit, with a
             // 128 MiB floor so the no-pressure case doesn't page per chunk.
             // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
+            // (e.g. dev environments). The pool and tiered paths share the
+            // derivation: the budget bounds resident bytes either way.
             const MIB: usize = 1024 * 1024;
             const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
             let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
             let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
 
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
+            if use_pool && apply_pool_config(enabled, total) {
+                debug!(
+                    enabled,
+                    fraction,
+                    mem_limit,
+                    budget_bytes = total,
+                    "column-paged batcher: applying pool config",
+                );
             } else {
-                Backend::Swap
-            };
+                if use_pool {
+                    warn!(
+                        "column-paged batcher: buffer pool unavailable; \
+                         falling back to tiered config",
+                    );
+                }
+                let backend = if self.context.scratch_directory.is_some() {
+                    Backend::File
+                } else {
+                    Backend::Swap
+                };
 
-            debug!(
-                enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
+                debug!(
+                    enabled,
+                    ?backend,
+                    ?codec,
+                    swap_pageout,
+                    fraction,
+                    mem_limit,
+                    budget_bytes = total,
+                    "column-paged batcher: applying tiered config",
+                );
+                apply_tiered_config(enabled, total, backend, codec, swap_pageout);
+            }
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

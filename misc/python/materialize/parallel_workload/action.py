@@ -1672,6 +1672,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["column_paged_batcher_use_pool"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB
