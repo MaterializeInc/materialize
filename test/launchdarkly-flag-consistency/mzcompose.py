@@ -17,31 +17,29 @@ LaunchDarkly at runtime by the `SystemParameterFrontend`, keyed by the
 parameter name (see `src/adapter/src/config/frontend.rs`). If a parameter has
 no corresponding LaunchDarkly flag, `client.variation` silently falls back to
 the compiled-in default, which means the flag can never be controlled in
-production. This check reports four conditions:
+production. This check fails on four kinds of discrepancy, each gated by a
+curated known-exceptions allowlist so that only a *new* discrepancy turns the
+build red:
 
-  * ERROR  -- a synchronized parameter exists in Materialize but has no flag in
-              LaunchDarkly. This fails the build (unless `--no-fail`).
-  * WARN   -- a flag exists in LaunchDarkly but is no longer a synchronized
-              parameter in Materialize. We only warn (and never fail) because
-              the flag might still be required by a deployed older version. To
-              avoid false positives we consider both the current build and the
-              last published release.
-  * WARN   -- a flag exists in both, but the value LaunchDarkly serves by
-              default in the production environment differs from Materialize's
-              compiled-in default. Self-managed deployments have no LaunchDarkly
-              and run on the compiled-in default, so this means cloud and
-              self-managed behave differently (e.g. a feature enabled in cloud
-              but still off by default in self-managed). Parameters that
-              deliberately tune cloud-only infrastructure are listed in
-              `INTENTIONAL_LD_OVERRIDES` and excluded.
-  * WARN   -- a flag's served default differs *between* LaunchDarkly
-              environments (e.g. production vs staging), which usually only
-              happens during a staged rollout.
+  * a synchronized parameter exists in Materialize but has no flag in
+    LaunchDarkly -- unless it is in `KNOWN_MISSING_FROM_LD`.
+  * a flag exists in LaunchDarkly but is no longer a synchronized parameter in
+    the current build or the last published release -- unless it is in
+    `KNOWN_STALE_LD_FLAGS`. (The last release is considered so a flag a deployed
+    older version still needs is not flagged.)
+  * a flag's production LaunchDarkly default differs from Materialize's
+    compiled-in default. Self-managed deployments have no LaunchDarkly and run
+    on the compiled-in default, so this means cloud and self-managed behave
+    differently (e.g. a feature enabled in cloud but off by default in
+    self-managed) -- unless it is deliberate cloud-only tuning listed in
+    `INTENTIONAL_LD_OVERRIDES`.
+  * a flag's served default differs between LaunchDarkly environments (e.g.
+    production vs staging), which usually only happens during a staged rollout
+    -- unless it is in `KNOWN_CROSS_ENV_DIVERGENCES`.
 
-Note: not every synchronized parameter has (or needs) a LaunchDarkly flag --
-many just ride their compiled-in default. The check therefore runs with
-`--no-fail` in CI for now, so the missing-flag condition only warns; flip to a
-hard failure once the existing backlog has been triaged.
+The allowlists capture the accepted baseline and are expected to shrink over
+time; the check prints any entry that is no longer a discrepancy so it can be
+pruned. `--no-fail` downgrades failures to warnings for local runs.
 
 The set of synchronized parameters (and their defaults) is obtained by booting
 Materialize -- with an empty `system_parameter_defaults` and no LaunchDarkly SDK
@@ -98,9 +96,6 @@ LAUNCHDARKLY_ENVIRONMENTS = [
 PRODUCTION_ENVIRONMENT = (
     LAUNCHDARKLY_ENVIRONMENTS[0] if LAUNCHDARKLY_ENVIRONMENTS else ""
 )
-
-# The internal SQL port, on which we can connect as `mz_system`.
-MZ_SYSTEM_PORT = 6877
 
 SERVICES = [
     # Booted in unsafe mode so that internal and unsafe parameters are also
@@ -177,13 +172,303 @@ CI_TEST_TAG = "ci-test"
 # if a parameter is deliberately not managed via LaunchDarkly.
 IGNORED_MZ_PARAMETERS: set[str] = set()
 
+# --- Known-exceptions allowlists ---------------------------------------------
+#
+# The check fails on every discrepancy that is NOT in one of these allowlists,
+# so the lists capture the accepted baseline and the build only goes red on a
+# *new* discrepancy. They are expected to shrink over time as flags are created
+# in LaunchDarkly or removed. Regenerate from a nightly run when they drift; the
+# check prints any allowlist entry that is no longer a discrepancy so it can be
+# pruned.
+
+# Parameters that exist in Materialize but have no LaunchDarkly flag (and are
+# knowingly left unsynchronized). A newly added parameter that is missing from
+# LaunchDarkly fails the build unless it is added here.
+KNOWN_MISSING_FROM_LD: set[str] = set(
+    """
+    0dt_deployment_hydration_check_interval
+    arrangement_exert_proportionality
+    arrangement_size_history_retention_period
+    cluster_alter_check_ready_interval
+    cluster_check_scheduling_policies_interval
+    cluster_enable_topology_spread
+    cluster_multi_process_replica_az_affinity_weight
+    cluster_soften_az_affinity
+    cluster_soften_az_affinity_weight
+    cluster_soften_replication_anti_affinity
+    cluster_soften_replication_anti_affinity_weight
+    cluster_topology_spread_ignore_non_singular_scale
+    cluster_topology_spread_max_skew
+    cluster_topology_spread_soft
+    compute_correction_v2_chain_proportionality
+    compute_correction_v2_chunk_size
+    compute_flat_map_fuel
+    compute_logical_backpressure_max_retained_capabilities
+    compute_mv_sink_advance_persist_frontiers
+    compute_peek_response_stash_batch_max_runs
+    compute_peek_response_stash_read_batch_size_bytes
+    compute_peek_response_stash_read_memory_budget_bytes
+    compute_temporal_bucketing_summary
+    console_oidc_client_id
+    console_oidc_scopes
+    controller_past_generation_replica_cleanup_retry_interval
+    coord_slow_message_warn_threshold
+    copy_to_s3_arrow_builder_buffer_ratio
+    copy_to_s3_multipart_part_size_bytes
+    copy_to_s3_parquet_row_group_file_ratio
+    crdb_connect_timeout
+    crdb_keepalives_idle
+    crdb_keepalives_interval
+    crdb_keepalives_retries
+    crdb_tcp_user_timeout
+    default_timestamp_interval
+    disallow_unmaterializable_functions_as_of
+    enable_0dt_caught_up_replica_status_check
+    enable_0dt_deployment_panic_after_timeout
+    enable_alter_table_add_column
+    enable_arrangement_dictionary_compression_alpha
+    enable_binary_date_bin
+    enable_coalesce_case_transform
+    enable_compute_half_join2
+    enable_compute_render_fueled_as_specific_collection
+    enable_date_bin_hopping
+    enable_default_connection_validation
+    enable_dequadratic_eqprop_map
+    enable_envelope_materialize
+    enable_eq_classes_withholding_errors
+    enable_frontend_subscribes
+    enable_glue_schema_registry
+    enable_introspection_subscribes
+    enable_kafka_broker_matching_rules
+    enable_less_reduce_in_eqprop
+    enable_list_length_max
+    enable_list_n_layers
+    enable_list_remove
+    enable_load_generator_clock
+    enable_load_generator_counter
+    enable_load_generator_datums
+    enable_managed_cluster_availability_zones
+    enable_notices_for_equals_null
+    enable_notices_for_index_already_exists
+    enable_notices_for_index_empty_key
+    enable_off_thread_optimization
+    enable_password_auth
+    enable_paused_cluster_readhold_downgrade
+    enable_persist_streaming_compaction
+    enable_persist_streaming_snapshot_and_fetch
+    enable_primary_key_not_enforced
+    enable_projection_pushdown_after_relation_cse
+    enable_public_metrics_endpoint
+    enable_raise_statement
+    enable_rbac_checks
+    enable_redacted_test_option
+    enable_repeat_row
+    enable_repeat_row_non_negative
+    enable_replica_targeted_materialized_views
+    enable_s3_tables_region_check
+    enable_session_timelines
+    enable_simplify_quantified_comparisons
+    enable_time_at_time_zone
+    enable_unlimited_retain_history
+    enable_will_distinct_propagation
+    enable_with_ordinality_legacy_fallback
+    grpc_client_connect_timeout
+    kafka_buffered_event_resize_threshold_elements
+    kafka_default_aws_privatelink_endpoint_identification_algorithm
+    kafka_poll_max_wait
+    kafka_reconnect_backoff
+    kafka_reconnect_backoff_max
+    kafka_retry_backoff
+    kafka_retry_backoff_max
+    kafka_sink_batch_num_messages
+    kafka_socket_keepalive
+    keep_n_privatelink_status_history_entries
+    keep_n_sink_status_history_entries
+    keep_n_source_status_history_entries
+    log_filter_defaults
+    max_copy_from_row_size
+    max_network_policies
+    max_rules_per_network_policy
+    max_sql_server_connections
+    max_timestamp_interval
+    mcp_max_response_size
+    memory_limiter_usage_bias
+    mysql_replication_heartbeat_interval
+    mysql_source_connect_timeout
+    mysql_source_snapshot_lock_wait_timeout
+    mysql_source_snapshot_max_execution_time
+    mysql_source_tcp_keepalive
+    network_policy
+    oidc_audience
+    oidc_authentication_claim
+    oidc_group_claim
+    oidc_group_role_sync_strict
+    oidc_issuer
+    opentelemetry_filter_defaults
+    optimizer_e2e_latency_warning_threshold
+    persist_blob_cache_scale_factor_bytes
+    persist_blob_cache_scale_with_threads
+    persist_blob_connect_timeout
+    persist_blob_operation_attempt_timeout
+    persist_blob_operation_timeout
+    persist_blob_read_timeout
+    persist_catalog_force_compaction_wait
+    persist_claim_compaction_percent
+    persist_compaction_check_process_flag
+    persist_compaction_heuristic_min_inputs
+    persist_compaction_heuristic_min_parts
+    persist_compaction_heuristic_min_updates
+    persist_consensus_connection_pool_max_wait
+    persist_consensus_connection_pool_ttl
+    persist_consensus_connection_pool_ttl_stagger
+    persist_expression_cache_force_compaction_fuel
+    persist_expression_cache_force_compaction_wait
+    persist_fast_path_order
+    persist_fetch_semaphore_cost_adjustment
+    persist_fetch_semaphore_permit_adjustment
+    persist_gc_fallback_threshold_ms
+    persist_gc_min_versions
+    persist_pubsub_client_receiver_channel_size
+    persist_pubsub_client_sender_channel_size
+    persist_pubsub_connect_attempt_timeout
+    persist_pubsub_connect_max_backoff
+    persist_pubsub_reconnect_backoff
+    persist_pubsub_request_timeout
+    persist_pubsub_same_process_delegate_enabled
+    persist_pubsub_server_connection_channel_size
+    persist_pubsub_state_cache_shard_ref_channel_size
+    persist_rollup_fallback_threshold_ms
+    persist_state_update_lease_timeout
+    persist_state_versions_recent_live_diffs_limit
+    persist_stats_audit_panic
+    persist_stats_budget_bytes
+    persist_stats_untrimmable_columns_equals
+    persist_stats_untrimmable_columns_prefix
+    persist_txns_data_shard_retryer_clamp
+    persist_txns_data_shard_retryer_multiplier
+    persist_usage_state_fetch_concurrency_limit
+    persist_use_critical_since_txn
+    persist_use_postgres_tuned_queries
+    persist_write_combine_inline_writes
+    pg_source_connect_timeout
+    pg_source_snapshot_statement_timeout
+    pg_source_tcp_configure_server
+    pg_source_tcp_keepalives_idle
+    pg_source_tcp_keepalives_interval
+    pg_source_tcp_keepalives_retries
+    pg_source_validate_timeline
+    pg_source_wal_sender_timeout
+    pg_timestamp_oracle_connection_pool_max_size
+    pg_timestamp_oracle_connection_pool_max_wait
+    pg_timestamp_oracle_connection_pool_ttl
+    pg_timestamp_oracle_connection_pool_ttl_stagger
+    plan_insights_notice_fast_path_clusters_optimize_duration
+    postgres_fetch_slot_resume_lsn_interval
+    privatelink_status_update_quota_per_minute
+    replica_metrics_history_retention_interval
+    replica_status_history_retention_window
+    scram_iterations
+    sentry_filters
+    sql_server_cdc_cleanup_change_table
+    sql_server_cdc_cleanup_change_table_max_deletes
+    sql_server_max_lsn_wait
+    sql_server_snapshot_progress_report_interval
+    sql_server_source_validate_restore_history
+    ssh_check_interval
+    ssh_connect_timeout
+    ssh_keepalives_idle
+    statement_logging_use_reproducible_rng
+    storage_cluster_shutdown_grace_period
+    storage_downgrade_since_during_finalization
+    storage_record_source_sink_namespaced_errors
+    storage_rocksdb_cleanup_tries
+    storage_server_maintenance_interval
+    storage_sink_ensure_topic_config
+    storage_sink_progress_search
+    storage_statistics_retention_duration
+    storage_suspend_and_restart_delay
+    storage_upsert_max_snapshot_batch_buffering
+    storage_upsert_prevent_snapshot_buffering
+    superuser_reserved_connections
+    txn_wal_apply_ensure_schema_match
+    unsafe_enable_table_check_constraint
+    unsafe_enable_table_foreign_key
+    unsafe_enable_table_keys
+    unsafe_enable_unorchestrated_cluster_replicas
+    unsafe_enable_unsafe_functions
+    unsafe_enable_unstable_dependencies
+    unsafe_mock_audit_event_timestamp
+    upsert_rocksdb_compaction_style
+    upsert_rocksdb_compression_type
+    upsert_rocksdb_level_compaction_dynamic_level_bytes
+    upsert_rocksdb_point_lookup_block_cache_size_mb
+    upsert_rocksdb_retry_duration
+    upsert_rocksdb_stats_log_interval_seconds
+    upsert_rocksdb_stats_persist_interval_seconds
+    upsert_rocksdb_universal_compaction_ratio
+    upsert_rocksdb_write_buffer_manager_allow_stall
+    upsert_rocksdb_write_buffer_manager_cluster_memory_fraction
+    upsert_rocksdb_write_buffer_manager_memory_bytes
+    user_id_pool_batch_size
+    wallclock_global_lag_histogram_retention_interval
+    wallclock_lag_histogram_period_interval
+    wallclock_lag_history_retention_interval
+    webhooks_secrets_caching_ttl_secs
+    with_0dt_caught_up_check_allowed_lag
+    with_0dt_caught_up_check_cutoff
+    with_0dt_deployment_ddl_check_interval
+    """.split()
+)
+
+# LaunchDarkly flags that are no longer synchronized parameters (in the current
+# build or last release) but are knowingly kept (e.g. awaiting archival). A new
+# stale flag fails the build unless it is added here.
+KNOWN_STALE_LD_FLAGS: set[str] = set(
+    """
+    allowed_cloud_regions
+    balancerd_inject_proxy_protocol_header_http
+    balancerd_log_filter
+    cluster_always_use_disk
+    clusterd_malloc_conf
+    constraint_based_timestamp_selection
+    enable_0dt_deployment
+    enable_aws_msk_iam_auth
+    enable_consolidate_after_union_negate
+    enable_continual_task_builtins
+    enable_continual_task_transform
+    enable_copy_from_remote
+    enable_copy_to_expr
+    enable_explain_broken
+    enable_iceberg_sink
+    enable_kafka_sink_partition_by
+    enable_mcp_agents
+    enable_mcp_agents_query_tool
+    enable_mcp_observatory
+    enable_multi_replica_sources
+    enable_reduce_reduction
+    enable_repr_typecheck
+    enable_unified_cluster_arrangment
+    enable_yugabyte_connection
+    kafka_default_metadata_fetch_interval
+    mysql_offset_known_interval
+    persist_enable_arrow_lgalloc_noncc_sizes
+    persist_enable_s3_lgalloc_cc_sizes
+    persist_enable_s3_lgalloc_noncc_sizes
+    persist_incremental_compaction_disabled
+    persist_sink_minimum_batch_updates
+    pg_offset_known_interval
+    storage_reclock_to_latest
+    use_global_txn_cache_source
+    wait_catalog_consolidation_on_startup
+    """.split()
+)
+
 # Parameters whose production LaunchDarkly value is *deliberately* different from
 # the compiled-in default, because they tune cloud-specific infrastructure that
-# does not apply to self-managed deployments. These are excluded from the
-# "cloud vs self-managed" divergence warning (but still participate in the
-# cross-environment prod-vs-staging check). Curate this list; everything else
-# that diverges is surfaced so a feature accidentally left off in self-managed
-# is noticed.
+# does not apply to self-managed deployments. Excluded from the "cloud vs
+# self-managed" divergence failure (but still subject to the cross-environment
+# check). Everything else that diverges fails, so a feature accidentally left
+# off in self-managed is caught.
 INTENTIONAL_LD_OVERRIDES: set[str] = {
     # Cloud replica expiration (confirmed cloud-only behavior).
     "compute_replica_expiration_offset",
@@ -199,12 +484,18 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_tables",
 }
 
+# Flags whose served default knowingly differs between LaunchDarkly environments
+# (e.g. a long-running staged rollout). A new cross-environment difference fails
+# the build unless it is added here.
+KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set()
+
 
 def synced_parameters(c: Composition) -> dict[str, str]:
     """Return the synchronized system parameters of the running `materialized`
     service as a mapping from name to its (default) value, derived from
     `SHOW ALL` as `mz_system`."""
-    rows = c.sql_query("SHOW ALL", user="mz_system", port=MZ_SYSTEM_PORT)
+    # 6877 is the internal SQL port, on which we can connect as `mz_system`.
+    rows = c.sql_query("SHOW ALL", user="mz_system", port=6877)
     return {
         name: value
         for name, value, *_ in rows
@@ -469,7 +760,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--no-fail",
         action="store_true",
-        help="Only warn (never fail) when a parameter is missing in LaunchDarkly.",
+        help="Report discrepancies but do not fail (warnings only). For local "
+        "runs; CI relies on the failure to catch regressions.",
     )
     args = parser.parse_args()
 
@@ -537,19 +829,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"to the correct keys for the default-divergence check."
         )
 
-    # ERROR: parameters in Materialize that are missing in LaunchDarkly.
+    # --- Compare, then fail on anything outside the known-exceptions lists ---
+
+    # Parameters in Materialize that are missing in LaunchDarkly.
     missing_in_ld = set(current) - ld_keys
+    unexpected_missing = missing_in_ld - KNOWN_MISSING_FROM_LD
 
-    # WARN: flags in LaunchDarkly that are not known to either the current build
-    # or the last release (ignoring throwaway CI test flags).
+    # Flags in LaunchDarkly that are no longer synchronized parameters in the
+    # current build or the last release (ignoring throwaway CI test flags).
     stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld_tags[key]}
+    unexpected_stale = stale_in_ld - KNOWN_STALE_LD_FLAGS
 
-    # WARN: cloud vs self-managed. Self-managed deployments have no LaunchDarkly
-    # and run on the compiled-in default, so a production LaunchDarkly value that
-    # differs from the compiled-in default means cloud and self-managed behave
-    # differently. That is worth surfacing (e.g. a feature enabled in cloud but
-    # still off by default in self-managed), except for parameters that
-    # deliberately tune cloud-only infrastructure (INTENTIONAL_LD_OVERRIDES).
+    # Cloud vs self-managed: the production LaunchDarkly value differs from the
+    # compiled-in default that self-managed deployments run on. Deliberate
+    # cloud-only tuning is allowlisted via INTENTIONAL_LD_OVERRIDES; everything
+    # else is unexpected (e.g. a feature enabled in cloud but off by default in
+    # self-managed, which should be reconciled in the compiled-in default).
     cloud_vs_self_managed: dict[str, tuple[str, Any]] = {}
     for name in in_both:
         if name in INTENTIONAL_LD_OVERRIDES:
@@ -558,13 +853,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if values_equivalent(current[name], prod_value) is False:
             cloud_vs_self_managed[name] = (current[name], prod_value)
 
-    # WARN: flags whose served default differs *between environments* (e.g.
-    # production vs staging). Environments should serve the same default unless a
-    # staged rollout is in progress. No allowlist needed -- a value overridden
-    # the same way in every environment (e.g. replica expiration) agrees across
-    # environments and so does not warn.
+    # Flags whose served default differs *between* LaunchDarkly environments
+    # (e.g. production vs staging), which usually only happens during a staged
+    # rollout. Long-running ones are allowlisted via KNOWN_CROSS_ENV_DIVERGENCES.
     env_divergences: dict[str, dict[str, Any]] = {}
     for name in in_both:
+        if name in KNOWN_CROSS_ENV_DIVERGENCES:
+            continue
         per_env = served_defaults.get(name, {})
         differs = any(
             values_equivalent(per_env.get(a), per_env.get(b)) is False
@@ -576,40 +871,43 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             }
 
     print(
-        f"Divergence: {len(cloud_vs_self_managed)} flag(s) differ between cloud "
-        f"('{PRODUCTION_ENVIRONMENT}') and the self-managed compiled-in default; "
-        f"{len(env_divergences)} differ between environments."
+        "Discrepancies beyond the known-exceptions allowlists: "
+        f"{len(unexpected_missing)} missing, {len(unexpected_stale)} stale, "
+        f"{len(cloud_vs_self_managed)} cloud-vs-self-managed, "
+        f"{len(env_divergences)} cross-environment."
     )
 
-    if stale_in_ld:
+    if unexpected_missing:
         report(
-            "WARNING: flags in LaunchDarkly that are not synchronized "
-            "parameters in the current build or the last release",
-            stale_in_ld,
+            "ERROR: synchronized parameters missing in LaunchDarkly "
+            "(add an LD flag, or add to KNOWN_MISSING_FROM_LD)",
+            unexpected_missing,
         )
-        print(
-            "These flags are likely stale and could be archived in LaunchDarkly "
-            "once no deployed version relies on them."
+
+    if unexpected_stale:
+        report(
+            "ERROR: stale LaunchDarkly flags -- no longer a synchronized "
+            "parameter in the current build or last release (archive in "
+            "LaunchDarkly, or add to KNOWN_STALE_LD_FLAGS)",
+            unexpected_stale,
         )
 
     if cloud_vs_self_managed:
         print(
-            f"--- WARNING: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
+            f"--- ERROR: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
             f"differs from the self-managed compiled-in default"
         )
         for name in sorted(cloud_vs_self_managed):
             mz_value, prod_value = cloud_vs_self_managed[name]
             print(f"  {name}: self-managed={mz_value!r} cloud={prod_value!r}")
         print(
-            "Self-managed deployments run on the compiled-in default. If the "
-            "difference is intentional cloud-only tuning, add the flag to "
-            "INTENTIONAL_LD_OVERRIDES; otherwise reconcile the compiled-in "
-            "default (e.g. a feature enabled in cloud but still off by default)."
+            "Reconcile the compiled-in default, or -- if this is intentional "
+            "cloud-only tuning -- add the flag to INTENTIONAL_LD_OVERRIDES."
         )
 
     if env_divergences:
         print(
-            f"--- WARNING: flags whose LaunchDarkly default differs between "
+            "--- ERROR: flags whose LaunchDarkly default differs between "
             f"environments ({', '.join(LAUNCHDARKLY_ENVIRONMENTS)})"
         )
         for name in sorted(env_divergences):
@@ -618,33 +916,42 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print(f"  {name}: {rendered}")
         print(
-            "Environments should usually serve the same default; confirm any "
-            "staged rollout is intentional."
+            "Make the environments agree, or -- if this is a deliberate staged "
+            "rollout -- add the flag to KNOWN_CROSS_ENV_DIVERGENCES."
         )
 
-    if missing_in_ld:
-        report(
-            "ERROR: synchronized parameters that are missing in LaunchDarkly",
-            missing_in_ld,
+    # Allowlist entries that are no longer discrepancies, so they can be pruned.
+    resolved_missing = sorted(KNOWN_MISSING_FROM_LD - missing_in_ld)
+    resolved_stale = sorted(KNOWN_STALE_LD_FLAGS - stale_in_ld)
+    if resolved_missing or resolved_stale:
+        print(
+            "--- NOTE: known-exception entries that no longer apply and can be "
+            "pruned from the allowlists"
         )
+        for name in resolved_missing:
+            print(f"  KNOWN_MISSING_FROM_LD: {name}")
+        for name in resolved_stale:
+            print(f"  KNOWN_STALE_LD_FLAGS: {name}")
+
+    failures = {
+        "missing": unexpected_missing,
+        "stale": unexpected_stale,
+        "cloud-vs-self-managed": set(cloud_vs_self_managed),
+        "cross-environment": set(env_divergences),
+    }
+    total = sum(len(v) for v in failures.values())
+    if total:
+        summary = ", ".join(f"{len(v)} {k}" for k, v in failures.items() if v)
         message = (
-            f"{len(missing_in_ld)} synchronized parameter(s) have no flag in "
-            f"LaunchDarkly project '{LAUNCHDARKLY_PROJECT}'. They cannot be "
-            "controlled in production until a flag is created."
+            f"{total} unexpected LaunchDarkly discrepancy/ies ({summary}). "
+            "Resolve them, or add to the appropriate known-exceptions allowlist."
         )
         if args.no_fail:
             print(f"WARNING: {message}")
         else:
             raise UIError(message)
-
-    if (
-        not missing_in_ld
-        and not stale_in_ld
-        and not cloud_vs_self_managed
-        and not env_divergences
-    ):
+    else:
         print(
-            "All synchronized parameters are defined in LaunchDarkly, with "
-            "matching defaults across environments and with the self-managed "
-            "compiled-in default, and no stale flags were found."
+            "No unexpected discrepancies: every difference is covered by the "
+            "known-exceptions allowlists."
         )
