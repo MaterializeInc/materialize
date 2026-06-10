@@ -18,6 +18,8 @@ use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
+use mz_cluster_client::ReplicaId;
+use mz_controller_types::ClusterId;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::Value as JsonValue;
@@ -38,6 +40,11 @@ pub struct SystemParameterFrontend {
     /// to use when populating the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
     key_map: BTreeMap<String, String>,
+    /// The environment ID, used to build scoped (`cluster` / `replica`)
+    /// evaluation contexts.
+    env_id: EnvironmentId,
+    /// Build info, used to build scoped evaluation contexts.
+    build_info: &'static BuildInfo,
     /// Frontend metrics.
     metrics: Metrics,
 }
@@ -71,6 +78,8 @@ impl SystemParameterFrontend {
             super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
                 client: SystemParameterFrontendClient::File { path: path.clone() },
                 key_map: sync_config.key_map.clone(),
+                env_id: sync_config.env_id.clone(),
+                build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
             }),
             SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
@@ -81,6 +90,8 @@ impl SystemParameterFrontend {
                     // context per pass via [`scoped_ld_ctx`].
                     ctx: ld_ctx(&sync_config.env_id, sync_config.build_info, None, None)?,
                 },
+                env_id: sync_config.env_id.clone(),
+                build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
                 key_map: sync_config.key_map.clone(),
             }),
@@ -147,6 +158,95 @@ impl SystemParameterFrontend {
 
         changed
     }
+
+    /// Evaluates the replica-local scoped parameters for each given replica and
+    /// returns, per cluster and replica, the parameter values that differ from
+    /// the environment-wide value held in `params`.
+    ///
+    /// Only the LaunchDarkly client performs scoped evaluation; the file client
+    /// returns an empty map (replicas fall back to the environment-wide value).
+    /// The returned map is sparse: replicas (and clusters) with no overriding
+    /// value are omitted.
+    pub fn pull_replica_overrides(
+        &self,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        replicas: &[ReplicaEvalContext],
+    ) -> BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<String, String>>> {
+        let mut out: BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<String, String>>> =
+            BTreeMap::new();
+
+        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
+            // The file client has no notion of scoped evaluation.
+            return out;
+        };
+
+        if param_names.is_empty() {
+            return out;
+        }
+
+        for replica in replicas {
+            let ctx = match ld_ctx(
+                &self.env_id,
+                self.build_info,
+                Some(&replica.cluster),
+                Some(&replica.replica),
+            ) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    warn!(
+                        replica_id = %replica.replica.id,
+                        "could not build scoped LD context: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            let mut overrides = BTreeMap::new();
+            for &param_name in param_names {
+                let flag_name = self
+                    .key_map
+                    .get(param_name)
+                    .map(|flag_name| flag_name.as_str())
+                    .unwrap_or(param_name);
+
+                let base = params.get(param_name);
+                let flag_var = client.variation(&ctx, flag_name, base.clone());
+                let value = match flag_var {
+                    ld::FlagValue::Bool(v) => v.to_string(),
+                    ld::FlagValue::Str(v) => v,
+                    ld::FlagValue::Number(v) => v.to_string(),
+                    ld::FlagValue::Json(v) => v.to_string(),
+                };
+
+                if value != base {
+                    overrides.insert(param_name.to_string(), value);
+                }
+            }
+
+            if !overrides.is_empty() {
+                out.entry(replica.cluster_id)
+                    .or_default()
+                    .insert(replica.replica_id, overrides);
+            }
+        }
+
+        out
+    }
+}
+
+/// The identity of a single live replica, used to evaluate replica-local scoped
+/// parameters in [`SystemParameterFrontend::pull_replica_overrides`].
+#[derive(Clone, Debug)]
+pub struct ReplicaEvalContext {
+    /// The owning cluster's id.
+    pub cluster_id: ClusterId,
+    /// The replica's id.
+    pub replica_id: ReplicaId,
+    /// The owning cluster's scope context (for the replica-free, cluster pass).
+    pub cluster: ClusterScopeContext,
+    /// The replica's scope context.
+    pub replica: ReplicaScopeContext,
 }
 
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {

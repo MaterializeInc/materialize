@@ -23,6 +23,7 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
+use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -166,6 +167,15 @@ pub enum Command {
         vars: BTreeMap<String, String>,
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
+    /// Replace the replica-local scoped feature-flag overrides, keyed by cluster
+    /// and replica. Computed by the system-parameter sync loop from continuous
+    /// LaunchDarkly evaluation and reconciled into the compute controller's
+    /// per-replica dyncfg layer. See the scoped feature flags design.
+    UpdateReplicaScopedConfig {
+        overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
+        tx: oneshot::Sender<()>,
     },
 
     InjectAuditEvents {
@@ -369,6 +379,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateReplicaScopedConfig { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
@@ -407,6 +418,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateReplicaScopedConfig { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }

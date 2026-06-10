@@ -24,7 +24,10 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
+use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
@@ -553,6 +556,26 @@ Issue a SQL query to get started. Need help?
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetSystemVars { tx });
         rx.await.expect("coordinator unexpectedly gone")
+    }
+
+    /// Returns a snapshot of the catalog.
+    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CatalogSnapshot { tx });
+        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        catalog
+    }
+
+    /// Replaces the replica-local scoped feature-flag overrides, keyed by
+    /// cluster and replica. Used by the system-parameter sync loop to reconcile
+    /// the per-replica dyncfg layer from continuous LaunchDarkly evaluation.
+    pub async fn update_replica_scoped_config(
+        &self,
+        overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::UpdateReplicaScopedConfig { overrides, tx });
+        let _ = rx.await;
     }
 
     #[instrument(level = "debug")]
@@ -1320,6 +1343,7 @@ impl SessionClient {
                 | Command::PrivilegedCancelRequest { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
+                | Command::UpdateReplicaScopedConfig { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }

@@ -434,6 +434,7 @@ impl Message {
                 Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::UpdateReplicaScopedConfig { .. } => "command-update_replica_scoped_config",
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
