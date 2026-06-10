@@ -71,7 +71,7 @@ fn table_ident_from_object_name(
             "Invalid table name from QueryEvent, function identifiers not supported in mysql: {}", name
         ))),
     }).collect::<Result<_, _>>()?;
-    if processed_name_parts.len() != 1 && processed_name_parts.len() != 2) {
+    if processed_name_parts.len() != 1 && processed_name_parts.len() != 2 {
         return Err(TransientError::Generic(anyhow::anyhow!(
             "Invalid table name from QueryEvent: {}",
             name
