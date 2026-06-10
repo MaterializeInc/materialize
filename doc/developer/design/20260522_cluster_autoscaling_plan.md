@@ -261,6 +261,7 @@ before relying** — they drift.
 | **6** | Hydration burst: `AUTO SCALING STRATEGY` SQL + burst strategy + break-glass (last **feature** PR) | add burst (last) | adds `enable_auto_scaling_strategy` / `enable_hydration_burst` (off) | none |
 | — | **Operational rollout** (not a PR): enable the gates at runtime via LaunchDarkly; bake in prod | turn it on | runtime flip — legacy stays as fallback | none |
 | **7** | Flip dyncfg defaults to true + remove legacy paths (only after prod bake) | the cleanup | defaults → on | drop `pending` |
+| **8** | Showcase follow-ups: `retired` drop reason, rollback stamp + audit event + view `state`, burst arming on object existence | polish from live testing | dark behind master gate | none (unshipped v86 amended in place) |
 
 Splitting/merging notes: PR 3 is the largest and may split into **3a** (strategy + hydration
 input + record handling, controller side) and **3b** (`ALTER` SQL reshape + wait-shim + audit
@@ -475,7 +476,8 @@ the lifecycle.
   observability scope. The rollback is already observable: the tombstoned record (past deadline,
   `reconfiguration_in_flight = true`) surfaces in `mz_cluster_reconfigurations` and `SHOW CLUSTERS`,
   and the target-set drops carry the none-desired reason. Lands with the burst lifecycle (PR 6) or
-  a focused follow-up once the seam shape for it is settled.
+  a focused follow-up once the seam shape for it is settled. **→ Closed by PR 8b** via the durable
+  tombstone-stamp option (`rolled_back_at` on the record).
 - **Live `mz_now()`-based timed-out indicator in `SHOW CLUSTERS`.** The `mz_show_clusters` view is
   indexed in `mz_catalog_server`, and an index cannot be built over a relation that uses `mz_now()`,
   so the view exposes only a boolean `reconfiguration_in_flight`. The deadline needed to split
@@ -700,9 +702,153 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 ---
 
+## PR 8 — Showcase follow-ups: drop attribution, rollback observability, burst arming
+
+**Status:** 🚧 In progress — 8a landed (implement/review/revise cycle complete; reviewer ran
+`cluster_controller.slt` end-to-end against a live server, 105/105); 8b/8c not started.
+
+Three independent fixes that fell out of live end-to-end testing for the PM showcase
+(`pm-showcase-cluster-controller.md`, "Known rough edges"). Each is small, lands as its own
+commit, and touches only unreleased surfaces (no migration; the v86 amendments follow the
+in-place recipe PR 4 already used). Workshopped decisions are recorded inline — they are
+settled, not open.
+
+**Goal.** Make the audit log tell the truth about controller-driven replica lifecycle, make a
+`ROLLBACK`-at-deadline observable in history (closing PR 4's deferred item), and stop bursting
+on clusters with nothing to hydrate.
+
+### 8a — `retired` drop reason (no smarts)
+
+A drop happens exactly when no strategy desires the replica, so the diff has no strategy name
+to attribute and today maps the empty set to `manual` — misleading next to creates that carry
+`reconfiguration`/`hydration-burst`. Decision: **no attribution smarts**; one new reason.
+
+- New `CreateOrDropClusterReplicaReasonV1::Retired` (kebab-case `retired`): "the cluster's
+  configuration no longer calls for this replica". **Every controller-emitted drop** carries it —
+  cut-over retiring the old set, rollback/cancel retiring the target set, burst teardown,
+  refresh-window close, and an rf-decrease retiring the surplus (a deliberate semantic shift:
+  that drop reads `retired`, not `manual`, even though the config change was user-initiated).
+- Creates keep per-strategy attribution; **on-refresh creates are restored to `schedule`**
+  (the strategy name is already in the create's attribution list — a one-line mapping change).
+  The legacy `scheduling_policies` detail blob stays gone; only the reason word returns.
+- User-issued `DROP CLUSTER REPLICA` (unmanaged clusters) keeps `manual` — that path is
+  untouched.
+- Update the `reason_from_strategies` doc comment (the on-refresh caveat dissolves) and the
+  design doc's attribution language where it implies drops carry strategy reasons.
+
+Checklist:
+- [x] `Retired` audit variant; drop mapping → `retired`, create mapping restores `schedule`.
+      (`Retired(Empty)` mirrored into the unshipped v86 protos per the `HydrationBurst` recipe,
+      hashes regenerated. Drops bypass `reason_from_strategies` entirely — the now-create-only
+      mapping gained `on-refresh → OnRefresh`, a new detail-less adapter variant converting to
+      `(Schedule, None)`; `ClusterScheduling`'s non-empty-blob contract stays intact for the
+      legacy scheduler. `Decision::DropReplica.reasons` removed — always empty by construction.)
+- [x] Test expectations: `cluster_controller.slt`, `materialized_views.slt`,
+      `materialized-view-refresh-options.td` (creates `manual`→`schedule` on scheduled
+      clusters; drops →`retired`); kernel/adapter unit tests.
+      (`singlereplica_audit_log.slt`'s `manual` drop is a user `DROP CLUSTER REPLICA` on an
+      unmanaged cluster — correctly untouched.)
+- [x] `cargo fmt`/`check` clean; tracker + progress log.
+
+### 8b — Rollback-at-deadline: durable stamp + audit event + view state
+
+Closes PR 4's deferred **`ROLLBACK`-timeout audit event** via the durable-stamp option named
+there. Today a rollback past the deadline performs no durable write — the strategy just stops
+desiring the target replicas — so there is no transition to classify and the audit trail ends
+at `started`.
+
+- Add `rolled_back_at: Option<u64>` to durable `ReconfigurationState` (mirrors `BurstState`'s
+  existing `steady_hydrated_at` stamp pattern). Amend `objects.rs` + unshipped `objects_v86.rs`
+  in place; regenerate hashes/snapshot (PR 4 recipe).
+- Strategy: on the first tick with `now > deadline`, target un-hydrated, and
+  `on_timeout == Rollback`, `update_state` stamps `rolled_back_at = now` (success precedence
+  unchanged: the hydrated check comes first). `desired_replicas` keys the tombstone off
+  `rolled_back_at.is_some()` instead of re-deriving `now > deadline` each tick.
+- **Event vocabulary re-carve** (all unreleased): `finalized` = the realized config cut over
+  (hydrated success under either action, *or* a forced `COMMIT` past the deadline);
+  `timed-out` = the deadline fired and the reconfiguration parked (the rollback stamp
+  transition, emitted exactly once because the stamp is durable). `finalized` now always
+  carries the record's deadline so a reader can tell a late/forced cut-over from an in-time
+  one — this dissolves PR 4's documented `COMMIT`-late-success imprecision.
+- Introspection: `mz_internal.mz_cluster_reconfigurations` gains a text `state` column —
+  `settled` (no record) / `converging` (record, no stamp) / `rolled-back` (stamped). The stamp
+  makes the parked state expressible without `mz_now()`, which the indexed view cannot use —
+  partially recovering PR 4's deferred live timed-out indicator. `SHOW CLUSTERS` columns
+  unchanged.
+
+Checklist:
+- [ ] Durable `rolled_back_at` (+ v86 in-place amendment, snapshots/hashes regenerated).
+- [ ] Strategy stamp + tombstone predicate off the stamp; kernel unit tests (stamp once,
+      restart-idempotent, success precedence).
+- [ ] Classifier re-carve + unit tests; `ReconfigurationLifecycleV1` docstrings updated.
+- [ ] `state` column on the view; `mz_catalog_server_index_accounting.slt` & autogenerated
+      snapshots updated; `cluster_controller.slt` timeout-rollback flow asserts event + state.
+- [ ] `cargo fmt`/`check` clean; tick the PR 4 deferred item; tracker + progress log.
+
+### 8c — Burst arming: existential object semantics
+
+Burst currently arms whenever no steady replica reports fully-hydrated — which is also true
+when the replica simply doesn't exist yet or hasn't registered, so a brand-new empty cluster
+bursts for boot-time + linger. Decision: the arm condition is the design doc's own quantifier.
+
+- Semantics: **burst is warranted iff there exists an object on the cluster that no
+  steady-state replica has hydrated.** Zero objects ⇒ the set is empty ⇒ never warranted —
+  the empty-cluster case falls out vacuously, no special-casing.
+- Implementation sketch: the ctx supplies whether the cluster has any hydratable objects
+  (from the catalog's bound objects, filtered to dataflow-backed items — same source the
+  refresh-window pull reads); a config-style signal excluded from the CaA witness like
+  `burst_enabled`. The burst strategy arms only when it holds and the steady set is
+  un-hydrated. Exact signal shape (field on `ClusterState` vs. on-demand ctx pull) is the
+  implementer's call — match the existing ctx idiom. Teardown paths unchanged: if all objects
+  are dropped mid-burst, the steady set reads vacuously hydrated and the linger clears the
+  record.
+- A crashed/restarting steady replica on a cluster *with* objects still bursts — correct and
+  desirable.
+
+Checklist:
+- [ ] Object-existence signal through the ctx; burst arm condition updated.
+- [ ] Kernel unit tests: empty cluster never arms; arms when the first object lands;
+      crashed-replica-with-objects still arms.
+- [ ] `cluster_controller.slt`: strategy-carrying cluster with no objects shows no burst
+      record/replica across ticks.
+- [ ] `cargo fmt`/`check` clean; tracker + progress log.
+
+**Verification (all three).** Author slt/unit coverage per fix (CI-run); locally `cargo fmt` +
+`cargo check` + kernel/adapter unit tests per the working agreement. Final pass: re-run the
+showcase replay (`pm-showcase-replay.sh`) against a fresh environment and confirm the three
+"known rough edges" are gone (drops read `retired`, the rollback flow emits `timed-out` and
+shows `state = 'rolled-back'`, no burst on the freshly-created empty cluster).
+
+---
+
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-10_ — **PR 8a landed** (implement → adversarial review → revise, run as separate
+  agents). Drops are audited `retired` via a single uniform mapping at the apply site (no
+  record-context smarts, per the settled decision); on-refresh creates read `schedule` again
+  through a new detail-less `ReplicaCreateDropReason::OnRefresh` (the legacy
+  `ClusterScheduling` variant and its non-empty `scheduling_policies` contract are untouched);
+  `Decision::DropReplica.reasons` deleted (always empty by construction). Review verdict
+  APPROVE with minors (test informativeness, comment dedup, rustdoc length) — applied in the
+  revise pass. The reviewer built the slt runner and ran `cluster_controller.slt` against a
+  live server: 105/105. Known residue: the committed PM showcase report still shows `manual`
+  drops in its transcripts; it gets refreshed by the full replay re-run after 8c.
+
+- _2026-06-10_ — **PR 8 planned** (this section). Live end-to-end testing for the PM showcase
+  (`pm-showcase-cluster-controller.md`, run with all gates on against a local environmentd)
+  surfaced three rough edges: (1) every controller-emitted replica *drop* is audited
+  `manual` (drops carry no strategy attribution by construction — empty reasons map to
+  `Manual`); (2) a `ROLLBACK`-at-deadline leaves no audit trace (no durable write happens, so
+  the PR 4 classifier has nothing to classify — the known deferred item); (3) a burst replica
+  is provisioned at cluster creation before any object exists (the replica-centric
+  `steady_hydrated` check reads an absent/unregistered replica as un-hydrated). Workshopped
+  with the user and settled as PR 8a/8b/8c: drops uniformly `retired` (no attribution smarts;
+  on-refresh creates restored to `schedule`, detail blob stays gone), a durable
+  `rolled_back_at` stamp + event re-carve (`finalized` = cut over with deadline carried,
+  `timed-out` = parked) + a `state` column on the introspection view, and burst arming on the
+  existential object condition (zero objects ⇒ vacuously no burst).
 
 - _2026-06-03_ — **PR 6 review follow-up** (fixup on `cluster-autoscaling`, separate commit on PR 6).
   Addressed the adversarial review of the implementation commit:
