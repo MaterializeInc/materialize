@@ -158,11 +158,7 @@ fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
 }
 
-#[sqlfunc(
-    sqlname = "reverse",
-    preserves_uniqueness = true,
-    inverse = to_unary!(Reverse)
-)]
+#[sqlfunc(preserves_uniqueness = true, inverse = to_unary!(Reverse))]
 fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
