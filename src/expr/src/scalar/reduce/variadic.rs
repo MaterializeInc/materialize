@@ -59,6 +59,16 @@ pub(super) fn reduce_call_variadic(
     // Per-function dispatch. Arms are mutually exclusive on discriminant; the
     // bodies only fire when their literal-argument guards hold.
     match func {
+        VariadicFunc::Greatest(_) | VariadicFunc::Least(_) => {
+            reduce_greatest_least(e, column_types);
+        }
+        VariadicFunc::Substr(_)
+            if exprs.len() == 2 && matches!(exprs[1].as_literal(), Some(Ok(Datum::Int32(1)))) =>
+        {
+            // `substr(s, 1)` — the two-argument form — keeps the entire
+            // string, and its evaluation at a start of one is infallible.
+            *e = exprs.swap_remove(0);
+        }
         VariadicFunc::RegexpMatch(_)
             if exprs[1].is_literal() && exprs.get(2).map_or(true, |e| e.is_literal()) =>
         {
@@ -167,6 +177,34 @@ pub(super) fn reduce_call_variadic(
                 Err(err) => MirScalarExpr::literal(Err(err), e.typ(column_types).scalar_type),
             };
         }
+        _ => {}
+    }
+}
+
+/// Simplifies a `Greatest`/`Least` call:
+/// 1. Deduplicate structurally equal operands, keeping first occurrences.
+///    Scalar evaluation is deterministic (the `And`/`Or` and `Coalesce`
+///    reducers already rely on this when they deduplicate), so duplicates of
+///    an expression contribute the same value — over which `greatest`/`least`
+///    are idempotent — or the same error; keeping the first occurrence leaves
+///    unchanged which error surfaces.
+/// 2. Drop literal null operands: both functions ignore null inputs (they
+///    return the max/min of the non-null inputs, and null only when every
+///    input is null).
+/// 3. A call left with a single operand is the identity on it — the call
+///    evaluates the operand once and returns it, null or not — and a call
+///    left with none is null.
+fn reduce_greatest_least(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+    let typ = e.typ(column_types).scalar_type;
+    let MirScalarExpr::CallVariadic { exprs, .. } = e else {
+        unreachable!()
+    };
+    let mut seen = BTreeSet::new();
+    exprs.retain(|x| seen.insert(x.clone()));
+    exprs.retain(|x| !x.is_literal_null());
+    match exprs.len() {
+        0 => *e = MirScalarExpr::literal_null(typ),
+        1 => *e = exprs.swap_remove(0),
         _ => {}
     }
 }
@@ -356,5 +394,70 @@ fn reduce_list_create_list_index_literal(
                 .chain(index_exprs)
                 .collect(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, ReprScalarType};
+
+    use crate::MirScalarExpr;
+    use crate::scalar::func::variadic::{Greatest, Least, Substr};
+
+    #[mz_ore::test]
+    fn greatest_least_null_operand_drop() {
+        let types = [
+            ReprScalarType::Int32.nullable(true),
+            ReprScalarType::Int32.nullable(true),
+        ];
+        let null = || MirScalarExpr::literal_null(ReprScalarType::Int32);
+        let col = MirScalarExpr::column;
+
+        // Null operands drop; a single survivor is the result.
+        let mut e = MirScalarExpr::call_variadic(Greatest, vec![col(0), null()]);
+        e.reduce(&types);
+        assert_eq!(e, col(0));
+
+        let mut e = MirScalarExpr::call_variadic(Least, vec![col(0), null(), col(1)]);
+        e.reduce(&types);
+        assert_eq!(e, MirScalarExpr::call_variadic(Least, vec![col(0), col(1)]));
+
+        // Structurally equal operands deduplicate (scalar evaluation is
+        // deterministic and greatest/least are idempotent), keeping first
+        // occurrences.
+        let mut e = MirScalarExpr::call_variadic(Greatest, vec![col(0), col(0)]);
+        e.reduce(&types);
+        assert_eq!(e, col(0));
+
+        let mut e = MirScalarExpr::call_variadic(Least, vec![col(1), col(0), col(1)]);
+        e.reduce(&types);
+        assert_eq!(e, MirScalarExpr::call_variadic(Least, vec![col(1), col(0)]));
+
+        // Dedup and null-drop compose down to the bare operand.
+        let mut e = MirScalarExpr::call_variadic(Greatest, vec![col(0), null(), col(0)]);
+        e.reduce(&types);
+        assert_eq!(e, col(0));
+
+        // All-null evaluates to null.
+        let mut e = MirScalarExpr::call_variadic(Greatest, vec![null(), null()]);
+        e.reduce(&types);
+        assert!(e.is_literal_null());
+    }
+
+    #[mz_ore::test]
+    fn substr_from_one() {
+        let types = [ReprScalarType::String.nullable(true)];
+        let col = || MirScalarExpr::column(0);
+        let lit = |v| MirScalarExpr::literal_ok(Datum::Int32(v), ReprScalarType::Int32);
+
+        // The two-argument form starting at one is the identity.
+        let mut e = MirScalarExpr::call_variadic(Substr, vec![col(), lit(1)]);
+        e.reduce(&types);
+        assert_eq!(e, col());
+
+        // The three-argument form truncates and must stay.
+        let mut e = MirScalarExpr::call_variadic(Substr, vec![col(), lit(1), lit(5)]);
+        e.reduce(&types);
+        assert_ne!(e, col());
     }
 }
