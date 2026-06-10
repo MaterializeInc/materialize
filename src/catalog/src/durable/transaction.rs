@@ -54,9 +54,9 @@ use crate::durable::objects::{
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    ReplicaConfig, ReplicaSystemConfiguration, Role, RoleKey, RoleValue, Schema, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
     SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -2152,6 +2152,47 @@ impl<'a> Transaction<'a> {
     /// Removes all persisted system configurations.
     pub fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true, self.op_id);
+    }
+
+    /// Returns the persisted replica-local scoped system configurations.
+    ///
+    /// STUB: durable storage for replica-local scoped parameters is not yet
+    /// implemented (see [`ReplicaSystemConfiguration`] and
+    /// `doc/developer/design/20260610_scoped_feature_flags_persistence_notes.md`).
+    /// Always returns empty, so on startup resolution falls back to the
+    /// coordinator's in-memory working copy until the first LaunchDarkly sync.
+    pub fn get_replica_system_configurations(
+        &self,
+    ) -> impl Iterator<Item = ReplicaSystemConfiguration> {
+        std::iter::empty()
+    }
+
+    /// Upserts the persisted replica-local scoped configuration `name` = `value`
+    /// for `replica_id`.
+    ///
+    /// STUB: see [`get_replica_system_configurations`](Self::get_replica_system_configurations);
+    /// currently a no-op.
+    pub fn upsert_replica_system_config(
+        &mut self,
+        replica_id: ReplicaId,
+        name: &str,
+        value: String,
+    ) -> Result<(), CatalogError> {
+        // TODO(scoped-flags): persist into the `replica_system_configurations`
+        // durable collection once it is added (see the implementation note).
+        let _ = (replica_id, name, value);
+        Ok(())
+    }
+
+    /// Removes the persisted replica-local scoped configuration `name` for
+    /// `replica_id`.
+    ///
+    /// STUB: see [`get_replica_system_configurations`](Self::get_replica_system_configurations);
+    /// currently a no-op.
+    pub fn remove_replica_system_config(&mut self, replica_id: ReplicaId, name: &str) {
+        // TODO(scoped-flags): remove from the `replica_system_configurations`
+        // durable collection once it is added (see the implementation note).
+        let _ = (replica_id, name);
     }
 
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
