@@ -1022,6 +1022,32 @@ impl DurableType for SystemConfiguration {
     }
 }
 
+/// A single replica-local scoped system-parameter override: parameter `name`
+/// has value `value` on the replica `replica_id`.
+///
+/// This is the in-memory shape of the durable `replica_system_configurations`
+/// collection that backs replica-local scoped feature flags (step 2 of the
+/// scoped feature flags design). The collection — keyed by `(ReplicaId, name)`
+/// — is the analog of `system_configurations` (`ALTER SYSTEM`), but for
+/// per-replica values; it is written solely by the system-parameter sync loop
+/// and loaded into the coordinator's working copy on startup.
+///
+/// NOTE (stub): the durable collection itself (proto types, `StateUpdateKind`
+/// variant, serialization, snapshot/transaction/persist/debug plumbing, the
+/// `objects_v86` snapshot + no-op migration, and the regenerated encoding
+/// golden files) is not yet wired up. See the implementation note
+/// `doc/developer/design/20260610_scoped_feature_flags_persistence_notes.md`
+/// for the complete recipe. Until then the [`Transaction`] accessors below are
+/// inert, so resolution falls back to the in-memory working copy.
+///
+/// [`Transaction`]: super::Transaction
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ReplicaSystemConfiguration {
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub value: String,
+}
+
 impl DurableType for MzAclItem {
     type Key = SystemPrivilegesKey;
     type Value = SystemPrivilegesValue;
