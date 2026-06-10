@@ -73,6 +73,7 @@ use crate::catalog::{
     is_reserved_role_name, object_type_to_audit_object_type,
     system_object_type_to_audit_object_type,
 };
+use crate::config::ScopedParameters;
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -244,6 +245,16 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
+    /// Persists the durable cache of scoped (per-cluster and per-replica)
+    /// system parameters to match `scoped`, the complete desired state computed
+    /// by the system-parameter sync loop (the sole writer). The handler diffs
+    /// against the current durable contents: it upserts changed/added entries
+    /// and removes entries the sync loop no longer serves, and lazily prunes
+    /// entries whose owning object id is absent from the catalog. See the
+    /// scoped feature flags design.
+    UpdateScopedSystemParameters {
+        scoped: ScopedParameters,
+    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -2690,6 +2701,69 @@ impl Catalog {
                     ObjectType::System,
                     EventDetails::ResetAllV1,
                 )?;
+            }
+            Op::UpdateScopedSystemParameters { scoped } => {
+                // The sync loop pushes the *complete* desired state each tick;
+                // diff it against the durable cache and persist only the delta.
+                // Entries whose owning object id is absent from the catalog are
+                // pruned (lazy GC); object ids are never reused, so such entries
+                // are inert and pruning is hygiene only.
+                let live_clusters: BTreeSet<ClusterId> =
+                    tx.get_clusters().map(|cluster| cluster.id).collect();
+                let live_replicas: BTreeSet<ReplicaId> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+
+                // Cluster-coherent scope.
+                let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
+                    .get_cluster_system_configurations()
+                    .map(|c| ((c.cluster_id, c.name), c.value))
+                    .collect();
+                let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
+                for (cluster_id, values) in &scoped.cluster {
+                    if !live_clusters.contains(cluster_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_cluster.insert((*cluster_id, name.clone()));
+                        if existing_cluster.get(&(*cluster_id, name.clone())) != Some(value) {
+                            tx.upsert_cluster_system_config(*cluster_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (cluster_id, name) in existing_cluster.into_keys() {
+                    if !desired_cluster.contains(&(cluster_id, name.clone()))
+                        || !live_clusters.contains(&cluster_id)
+                    {
+                        tx.remove_cluster_system_config(cluster_id, &name);
+                    }
+                }
+
+                // Replica-local scope.
+                let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
+                    .get_replica_system_configurations()
+                    .map(|r| ((r.replica_id, r.name), r.value))
+                    .collect();
+                let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
+                for (replica_id, values) in &scoped.replica {
+                    if !live_replicas.contains(replica_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_replica.insert((*replica_id, name.clone()));
+                        if existing_replica.get(&(*replica_id, name.clone())) != Some(value) {
+                            tx.upsert_replica_system_config(*replica_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (replica_id, name) in existing_replica.into_keys() {
+                    if !desired_replica.contains(&(replica_id, name.clone()))
+                        || !live_replicas.contains(&replica_id)
+                    {
+                        tx.remove_replica_system_config(replica_id, &name);
+                    }
+                }
             }
             Op::InjectAuditEvents { events } => {
                 for event in events {

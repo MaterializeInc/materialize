@@ -575,6 +575,26 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
+    /// Reads the durable scoped (per-cluster and per-replica) system-parameter
+    /// cache. Used on bootstrap to restore the working copy before the first
+    /// LaunchDarkly sync (and so values survive an LD outage). See the scoped
+    /// feature flags design.
+    pub async fn get_scoped_system_configurations(
+        &self,
+    ) -> Result<
+        (
+            Vec<mz_catalog::durable::ClusterSystemConfiguration>,
+            Vec<mz_catalog::durable::ReplicaSystemConfiguration>,
+        ),
+        Error,
+    > {
+        let mut storage = self.storage().await;
+        let tx = storage.transaction().await?;
+        let clusters = tx.get_cluster_system_configurations().collect();
+        let replicas = tx.get_replica_system_configurations().collect();
+        Ok((clusters, replicas))
+    }
+
     pub async fn allocate_user_id(
         &self,
         commit_ts: mz_repr::Timestamp,

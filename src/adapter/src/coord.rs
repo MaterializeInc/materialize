@@ -2027,11 +2027,48 @@ impl Coordinator {
     /// environment-wide compute configuration so existing replicas observe the
     /// new values. The `cluster`-scoped layer is resolved at plan time (a
     /// follow-up).
-    pub(crate) fn reconcile_scoped_system_parameters(&mut self, scoped: ScopedParameters) {
-        // Nothing changed: skip the redundant builtin-table write and config
-        // re-push. This is the common case on most sync ticks.
+    pub(crate) async fn reconcile_scoped_system_parameters(&mut self, scoped: ScopedParameters) {
+        // Nothing changed: skip the durable write, builtin-table write, and
+        // config re-push. This is the common case on most sync ticks.
         if self.scoped_system_parameters == scoped {
             return;
+        }
+
+        // Persist the diff to the durable cache so the values survive an
+        // `environmentd` restart and an LD outage. The sync loop is the sole
+        // writer. Best-effort: a failure here is logged and retried on the next
+        // sync tick; the in-memory working copy below still takes effect.
+        if let Err(e) = self
+            .catalog_transact(
+                None,
+                vec![crate::catalog::Op::UpdateScopedSystemParameters {
+                    scoped: scoped.clone(),
+                }],
+            )
+            .await
+        {
+            tracing::warn!("failed to persist scoped system parameters: {e}");
+        }
+
+        let builtin_updates = self.apply_scoped_system_parameters(scoped);
+        // Flush the introspection diffs on the next group commit. The notify is
+        // intentionally dropped: we don't await durability of the table append.
+        let _notify = self.builtin_table_update().background(builtin_updates);
+    }
+
+    /// Replaces the scoped working copy and reconciles it into the per-scope
+    /// resolution boundaries, *without* persisting. Used both by
+    /// [`Self::reconcile_scoped_system_parameters`] (after it persists) and on
+    /// bootstrap, where the values are loaded from the durable cache and are
+    /// therefore already persisted.
+    pub(crate) fn apply_scoped_system_parameters(
+        &mut self,
+        scoped: ScopedParameters,
+    ) -> Vec<BuiltinTableUpdate> {
+        // Nothing changed: skip the redundant builtin-table write and config
+        // re-push.
+        if self.scoped_system_parameters == scoped {
+            return Vec::new();
         }
 
         // Emit introspection diffs into `mz_cluster_system_parameters` /
@@ -2087,8 +2124,8 @@ impl Coordinator {
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
 
-        // Flush the introspection diffs on the next group commit.
-        let _ = self.builtin_table_update().background(builtin_updates);
+        // Return the introspection diffs for the caller to flush.
+        builtin_updates
     }
 
     /// Packs `mz_cluster_system_parameters` / `mz_replica_system_parameters`
@@ -2204,6 +2241,52 @@ impl Coordinator {
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
+
+        // Restore the scoped (per-cluster / per-replica) system-parameter
+        // working copy from the durable cache, so the last-known values are in
+        // effect immediately — before the first LaunchDarkly sync, and through
+        // an LD outage. Entries for objects no longer in the catalog are
+        // dropped here (lazy GC); the durable rows are pruned on the next
+        // reconcile. See the scoped feature flags design.
+        let (cluster_cfgs, replica_cfgs) = self
+            .catalog()
+            .get_scoped_system_configurations()
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to load scoped system parameters: {e}");
+                (Vec::new(), Vec::new())
+            });
+        let live_clusters: BTreeSet<ComputeInstanceId> = self
+            .catalog()
+            .clusters()
+            .map(|cluster| cluster.id)
+            .collect();
+        let live_replicas: BTreeSet<ReplicaId> = self
+            .catalog()
+            .clusters()
+            .flat_map(|cluster| cluster.replicas().map(|replica| replica.replica_id))
+            .collect();
+        let mut scoped = ScopedParameters::default();
+        for cfg in cluster_cfgs {
+            if live_clusters.contains(&cfg.cluster_id) {
+                scoped
+                    .cluster
+                    .entry(cfg.cluster_id)
+                    .or_default()
+                    .insert(cfg.name, cfg.value);
+            }
+        }
+        for cfg in replica_cfgs {
+            if live_replicas.contains(&cfg.replica_id) {
+                scoped
+                    .replica
+                    .entry(cfg.replica_id)
+                    .or_default()
+                    .insert(cfg.name, cfg.value);
+            }
+        }
+        let scoped_updates = self.apply_scoped_system_parameters(scoped);
+        builtin_table_updates.extend(scoped_updates);
 
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
