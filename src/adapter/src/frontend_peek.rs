@@ -245,9 +245,8 @@ impl PeekClient {
                             .to_string(),
                     }
                 }
-                // Success responses use the `From` implementation. Streaming
-                // responses cannot reach this arm: their dispatch sites hand
-                // off the guard, and the `From` impl panics on them.
+                // Streaming responses cannot reach this arm: their dispatch
+                // sites hand off the guard. The `From` impl panics on them.
                 Ok(Some(resp)) => resp.into(),
                 Err(e) => StatementEndedExecutionReason::Errored {
                     error: e.to_string(),

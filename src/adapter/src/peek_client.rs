@@ -386,14 +386,10 @@ impl PeekClient {
         // also log the end.
         logging_guard.defuse();
 
-        // Test-only synchronization point. The peek is now registered with the
-        // coordinator but not yet issued; a `pause` failpoint here lets a test
-        // deterministically land a concurrent `DROP CLUSTER` in this window, so
-        // the coordinator retires (and logs the end of) this peek before
-        // `client.peek()` below fails. See the
-        // `workflow_test_drop_cluster_during_registered_peeks_fast_path` test.
-        // Negligible cost when not configured (a registry lookup miss), which
-        // is the only case outside of tests.
+        // Test-only synchronization point: parks a peek between registration
+        // and issue, so a test can land a concurrent DROP CLUSTER in this
+        // window. Used by
+        // workflow_test_drop_cluster_during_registered_peeks_fast_path.
         fail::fail_point!("peek_after_register_before_issue");
 
         let finishing_for_instance = finishing.clone();
@@ -635,9 +631,7 @@ impl StatementLoggingGuard {
 
     /// Hands off logging responsibility without emitting an end-execution
     /// event. Call this at the point where another component takes over
-    /// end-of-execution logging: once a peek is registered with the
-    /// coordinator, or once the coordinator has installed a slow-path peek or
-    /// subscribe. Afterwards the guard is inert.
+    /// end-of-execution logging. Afterwards the guard is inert.
     pub(crate) fn defuse(&mut self) {
         self.id = None;
     }

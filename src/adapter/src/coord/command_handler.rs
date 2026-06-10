@@ -2191,20 +2191,16 @@ impl Coordinator {
         let _ = tx.send(Ok(()));
     }
 
-    /// Handle unregistration of a frontend peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    ///
-    /// Registration made the coordinator the owner of end-of-execution
-    /// logging, so the peek is retired with the given reason. If a concurrent
-    /// teardown (e.g. a `DROP CLUSTER`) already removed and retired the peek,
-    /// its end has already been logged and there is nothing left to do.
+    /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for
+    /// the end-of-execution ownership contract.
     fn handle_unregister_frontend_peek(
         &mut self,
         uuid: Uuid,
         reason: StatementEndedExecutionReason,
         tx: oneshot::Sender<()>,
     ) {
-        // Remove from pending_peeks (this also removes from client_pending_peeks).
+        // A peek missing from `pending_peeks` was already retired, and its end
+        // logged, by a concurrent teardown.
         if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
             self.retire_execution(reason, pending_peek.ctx_extra.defuse());
         }
