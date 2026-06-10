@@ -191,6 +191,9 @@ class ServiceConfig(TypedDict, total=False):
     mem_swappiness: int | None
     """Container swap tendency, 0–100 (Docker `mem_swappiness`)."""
 
+    cap_add: list[str] | None
+    """Linux capabilities to add to the container (e.g. PERFMON for profiling)."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.

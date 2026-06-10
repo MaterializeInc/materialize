@@ -111,6 +111,8 @@ class Materialized(Service):
         external_persist_committer: bool = True,
         persistd_coalesce_max_batch: int = 0,
         persistd_coalesce_concurrency: int = 8,
+        profile_envd: bool = False,
+        profile_samply_path: str = "/home/moritz/samply-static/samply",
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
         ) = None,
@@ -431,6 +433,35 @@ class Materialized(Service):
 
         if networks:
             config["networks"] = networks
+
+        # Make the container profileable with samply in ATTACH mode. We do NOT
+        # wrap the entrypoint to launch envd under `samply record`: launch mode
+        # profiles the whole descendant tree and only writes the profile once
+        # every sampled process exits. envd spawns the cluster replicas
+        # (clusterd) as children; when envd is stopped they reparent to tini and
+        # keep running, so samply waits forever and never serializes. Attach
+        # mode (`samply record -p <envd-pid>`) profiles envd alone and writes on
+        # SIGINT to samply, independent of the cluster processes.
+        #
+        # All that's needed at the container level is to lift the Docker
+        # blockers on perf_event_open and provide an exec-capable samply:
+        #   * Docker's default seccomp profile blocks perf_event_open; allow it.
+        #   * CAP_PERFMON (CAP_SYS_ADMIN on older kernels) lets samply call it.
+        #   * a statically linked (musl) samply is bind-mounted at an
+        #     exec-capable path, independent of the container's glibc.
+        # Then, against the running container:
+        #   pid=$(docker exec NAME sh -c \
+        #     "ps -eo pid,comm | awk '\$2==\"environmentd\"{print \$1}'")
+        #   docker exec -d NAME samply record --save-only -o OUT -p "$pid"
+        #   # ... let it record ...
+        #   docker exec NAME pkill -INT samply   # finalize + write OUT
+        #   docker cp NAME:OUT .
+        if profile_envd:
+            config["security_opt"] = (config.get("security_opt") or []) + [
+                "seccomp=unconfined"
+            ]
+            config["cap_add"] = ["PERFMON", "SYS_ADMIN"]
+            volumes += [f"{profile_samply_path}:/usr/local/bin/samply:ro"]
 
         config.update(
             {

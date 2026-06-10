@@ -34,13 +34,16 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.foundationdb import foundationdb_services
+from materialize.mzcompose.services.foundationdb import (
+    FDB_NUM_NODES,
+    fdb_coordinator_addresses,
+    foundationdb_services,
+)
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
-    metadata_store_services,
 )
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
@@ -1905,6 +1908,8 @@ def make_materialized(
     extra_system_params: dict[str, str] | None = None,
     persistd_coalesce_max_batch: int = 0,
     persistd_coalesce_concurrency: int = 8,
+    external_metadata_store: str | bool = True,
+    profile_envd: bool = False,
 ) -> Materialized:
     """Construct the limits `Materialized` service.
 
@@ -1961,11 +1966,14 @@ def make_materialized(
         # would silently bypass the external store and disable persistd; force
         # external here and let `metadata_store` pick the backend (default
         # postgres-metadata, override with EXTERNAL_METADATA_STORE=cockroach).
-        external_metadata_store=True,
+        # For multi-node fdb the caller passes the coordinator addresses string
+        # so the generated fdb.cluster file lists every node.
+        external_metadata_store=external_metadata_store,
         metadata_store=metadata_store,
         external_persist_committer=external_persist_committer,
         persistd_coalesce_max_batch=persistd_coalesce_max_batch,
         persistd_coalesce_concurrency=persistd_coalesce_concurrency,
+        profile_envd=profile_envd,
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
         support_external_clusterd=True,
     )
@@ -2022,7 +2030,9 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
-    *metadata_store_services(),
+    # The metadata store container is auto-attached as a companion of
+    # `make_materialized()` (see `metadata_store_companions`), so it no longer
+    # needs to be listed here explicitly.
     make_materialized(),
     Mz(app_password=""),
 ]
@@ -2466,6 +2476,30 @@ def workflow_committer_comparison(
         "backing store at once (only meaningful with --coalesce-max-batch)",
     )
     parser.add_argument(
+        "--fdb-storage-engine",
+        default="ssd",
+        choices=["ssd", "memory"],
+        help="FoundationDB storage engine: 'ssd' is durable (fsync), 'memory' "
+        "is RAM-backed. Use 'memory' to match the non-durable SQL stores "
+        "(crdb in_memory, postgres libeatmydata) for a fair comparison",
+    )
+    parser.add_argument(
+        "--tmpfs-data",
+        action="store_true",
+        help="mount each metadata store's on-disk data directory on tmpfs so "
+        "local disk is not a shared bottleneck across variants (fdb "
+        "/var/fdb/data, postgres /var/lib/postgresql/data; crdb is already "
+        "in-memory)",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="run environmentd under `samply record` (launch mode) for "
+        "profiling. Requires a static samply at the path baked into "
+        "make_materialized; writes /scratch/envd.json.gz on shutdown. Lifts "
+        "the Docker seccomp/capability blockers on perf_event_open",
+    )
+    parser.add_argument(
         "--skip-baselines",
         action="store_true",
         help="run only the coalesce variants (requires --coalesce-max-batch); "
@@ -2572,12 +2606,29 @@ def workflow_committer_comparison(
         # hydration collapse is just default-limit starvation rather than a
         # fundamental direct-CaS limit.
         store_services: list[Service]
+        # Address override for the metadata store, used only by fdb so the
+        # generated fdb.cluster file lists every coordinator. `True` lets
+        # make_materialized derive the address from the store name.
+        store_address: str | bool = True
+        # (service-name-predicate, data dir) to mount on tmpfs when
+        # --tmpfs-data is set, so local disk isn't a shared bottleneck.
+        tmpfs_dir: str | None = None
         if store == "cockroach":
+            # in_memory=True already keeps the store entirely in RAM.
             store_services = [Cockroach(in_memory=True)]
         elif store == "foundationdb":
-            # Single-node fdb cluster: a `foundationdb-0` server node plus the
+            # fdb cluster: `foundationdb-0..N-1` server nodes plus the
             # `foundationdb` init/healthcheck service materialized depends on.
-            store_services = list(foundationdb_services(num_nodes=1))
+            # Node count comes from FDB_NUM_NODES (default 1) so multi-node
+            # runs need only an env var.
+            store_services = list(
+                foundationdb_services(
+                    num_nodes=FDB_NUM_NODES,
+                    storage_engine=args.fdb_storage_engine,
+                )
+            )
+            store_address = fdb_coordinator_addresses(num_nodes=FDB_NUM_NODES)
+            tmpfs_dir = "/var/fdb/data"
         else:
             store_services = [
                 PostgresMetadata(
@@ -2591,6 +2642,12 @@ def workflow_committer_comparison(
                     ]
                 )
             ]
+            tmpfs_dir = "/var/lib/postgresql/data"
+
+        if args.tmpfs_data and tmpfs_dir is not None:
+            for svc in store_services:
+                existing = list(svc.config.get("tmpfs", []))
+                svc.config["tmpfs"] = existing + [tmpfs_dir]
         with c.override(
             *store_services,
             make_materialized(
@@ -2600,6 +2657,8 @@ def workflow_committer_comparison(
                 memory=args.memory,
                 persistd_coalesce_max_batch=coalesce,
                 persistd_coalesce_concurrency=args.coalesce_concurrency,
+                external_metadata_store=store_address,
+                profile_envd=args.profile,
             ),
             fail_on_new_service=False,
         ):
