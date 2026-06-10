@@ -343,7 +343,7 @@ impl ComputeState {
             let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
 
             if use_pool && apply_pool_config(enabled, total) {
-                debug!(
+                info!(
                     enabled,
                     fraction,
                     mem_limit,
@@ -363,7 +363,7 @@ impl ComputeState {
                     Backend::Swap
                 };
 
-                debug!(
+                info!(
                     enabled,
                     ?backend,
                     ?codec,
