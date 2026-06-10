@@ -162,6 +162,20 @@ Evaluation composes these into the existing multi-context per pass:
   `environment + organization + build + cluster + replica`. Including the cluster
   lets a rule combine both axes, e.g. *"size family `D` **and** cluster `foo`."*
 
+LD contexts in a multi-context are **siblings, not a hierarchy** — there is no
+attribute inheritance between kinds, but a targeting rule can reference
+attributes from *any* kind present in the evaluated multi-context (each rule
+clause is a `(kind, attribute)` pair). This is why every scoped evaluation must
+keep the `environment` / `organization` / `build` contexts in the bundle
+*alongside* the scope context, rather than evaluating the `cluster` / `replica`
+context standalone: it is what lets rules cross axes (e.g.
+`environment.cloud_provider = "aws" AND cluster.cluster_name = "..."`). We do
+**not** copy environment attributes onto the cluster/replica contexts — that
+would be redundant and risk drift; the environment context simply rides along.
+Concretely, `pull_scoped` adds the scope context to the *same*
+`MultiContextBuilder` that `ld_ctx` already populates with
+environment/organization/build, rather than replacing it.
+
 The `replica` context carries the owning cluster's identity as attributes so that
 replica-local flags can still be cluster-targeted without a second evaluation;
 the standalone `cluster` kind exists specifically for the replica-free,
