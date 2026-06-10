@@ -184,8 +184,7 @@ IGNORED_MZ_PARAMETERS: set[str] = set()
 # Parameters that exist in Materialize but have no LaunchDarkly flag (and are
 # knowingly left unsynchronized). A newly added parameter that is missing from
 # LaunchDarkly fails the build unless it is added here.
-KNOWN_MISSING_FROM_LD: set[str] = set(
-    """
+KNOWN_MISSING_FROM_LD: set[str] = set("""
     0dt_deployment_hydration_check_interval
     arrangement_exert_proportionality
     arrangement_size_history_retention_period
@@ -417,14 +416,12 @@ KNOWN_MISSING_FROM_LD: set[str] = set(
     with_0dt_caught_up_check_allowed_lag
     with_0dt_caught_up_check_cutoff
     with_0dt_deployment_ddl_check_interval
-    """.split()
-)
+    """.split())
 
 # LaunchDarkly flags that are no longer synchronized parameters (in the current
 # build or last release) but are knowingly kept (e.g. awaiting archival). A new
 # stale flag fails the build unless it is added here.
-KNOWN_STALE_LD_FLAGS: set[str] = set(
-    """
+KNOWN_STALE_LD_FLAGS: set[str] = set("""
     allowed_cloud_regions
     balancerd_inject_proxy_protocol_header_http
     balancerd_log_filter
@@ -460,8 +457,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set(
     storage_reclock_to_latest
     use_global_txn_cache_source
     wait_catalog_consolidation_on_startup
-    """.split()
-)
+    """.split())
 
 # Parameters whose production LaunchDarkly value is *deliberately* different from
 # the compiled-in default, because they tune cloud-specific infrastructure that
