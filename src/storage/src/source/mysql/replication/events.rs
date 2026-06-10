@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use sqlparser::ast::{ObjectName, ObjectNamePart, ObjectType, Statement};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -57,7 +58,7 @@ fn mysql_table_name(
 }
 
 fn table_ident_from_object_name(
-    name: ObjectName,
+    name: &ObjectName,
     current_schema: &str,
 ) -> Result<MySqlTableName, TransientError> {
     let processed_name_parts: Vec<String> = name.0.iter().map(|part| match part {
@@ -74,12 +75,12 @@ fn table_ident_from_object_name(
         )));
     }
 
-    let mut name_parts_iter = processed_name_parts.iter();
+    let mut name_parts_iter = processed_name_parts.iter().map(|x| x.as_str());
     mysql_table_name(
-        name_parts_iter.next().map(|x| x.as_str()),
-        name_parts_iter.next().map(|x| x.as_str()),
+        name_parts_iter.next(),
+        name_parts_iter.next(),
         current_schema,
-        &format!("{name}"),
+        &name.to_string(),
     )
 }
 
@@ -179,10 +180,9 @@ pub(super) async fn handle_query_event(
                 .collect();
             is_complete_event = true;
             for (table_name, outputs) in sources_to_drop {
+                tracing::info!(%id, "timely-{worker_id} DDL change dropped outputs: {outputs:?}");
                 for output in outputs {
                     let err = DefiniteError::TableDropped(table_name.to_string());
-                    tracing::info!(%id, "timely-{worker_id} DDL change \
-                            dropped output: {output:?}: {err:?}");
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     let update = (
                         (output.output_index, Err(err.into())),
@@ -269,17 +269,15 @@ fn drop_table_identifiers(
     current_schema: &str,
     query: &str,
 ) -> Result<Vec<MySqlTableName>, TransientError> {
-    let invalid = || TransientError::Generic(anyhow::anyhow!("Invalid DDL query: {}", query));
+    let invalid =
+        |msg| TransientError::Generic(anyhow::anyhow!("Invalid DDL query, {msg}, got: {query}"));
 
-    let parse_result = match Parser::parse_sql(&DIALECT, query) {
-        Ok(result) => result,
-        Err(e) => return Err(TransientError::Generic(anyhow::anyhow!(e))),
-    };
-
-    if parse_result.len() != 1 {
-        return Err(invalid());
-    }
-    let stmt = parse_result.first().unwrap();
+    let parse_result = Parser::parse_sql(&DIALECT, query)
+        .map_err(|e| TransientError::Generic(anyhow::anyhow!(e)))?;
+    let stmt = parse_result
+        .iter()
+        .exactly_one()
+        .map_err(|_| invalid("expected only a single statement from the binlog"))?;
 
     let Statement::Drop {
         object_type,
@@ -288,15 +286,15 @@ fn drop_table_identifiers(
         ..
     } = stmt
     else {
-        return Err(invalid());
+        return Err(invalid("expected DROP statement"));
     };
 
     if *object_type != ObjectType::Table || *temporary {
-        return Err(invalid());
+        return Err(invalid("expected DROP TABLE statement"));
     }
     let table_identifiers: Vec<MySqlTableName> = names
         .iter()
-        .map(|name| table_ident_from_object_name(name.clone(), current_schema))
+        .map(|name| table_ident_from_object_name(&name, current_schema))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(table_identifiers)
 }
@@ -575,66 +573,6 @@ mod tests {
         assert_eq!(
             parse_drop("DROP TABLE `shop`.`orders`,`shop`.`customers`", "shop").unwrap(),
             vec![table("shop", "orders"), table("shop", "customers")],
-        );
-    }
-
-    // Note that mysql doesn't appear to actually pass through comments in the DDL statements from the binlog,
-    // so these comment tests don't represent code that gets exercised in practice.
-    #[mz_ore::test]
-    fn drop_ignores_block_comment_before_name() {
-        assert_eq!(
-            parse_drop("DROP TABLE /* a comment */ orders", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_ignores_trailing_block_comment() {
-        assert_eq!(
-            parse_drop("DROP TABLE orders /* trailing */", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_ignores_double_dash_line_comment() {
-        assert_eq!(
-            parse_drop("DROP TABLE orders -- line comment", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_ignores_hash_line_comment() {
-        assert_eq!(
-            parse_drop("DROP TABLE orders # mysql line comment", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_treats_executable_comment_body_as_sql() {
-        assert_eq!(
-            parse_drop("DROP TABLE /*!40000 orders */", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_with_comment_between_keywords_is_not_detected() {
-        // Tested end-to-end with testdrive and not reproducable as a problem because mysql
-        // scrapes out the comments before it hits the binlog.
-        assert_eq!(
-            parse_drop("DROP /* mid */ TABLE orders", "shop").unwrap(),
-            Vec::<MySqlTableName>::new(),
-        );
-    }
-
-    #[mz_ore::test]
-    fn drop_wrapped_entirely_in_executable_comment_is_not_detected() {
-        assert_eq!(
-            parse_drop("/*!40000 DROP TABLE orders */", "shop").unwrap(),
-            Vec::<MySqlTableName>::new(),
         );
     }
 
