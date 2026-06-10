@@ -778,22 +778,23 @@ pub(crate) async fn validate_sink_connections_exist_impl(
                     )]
                 }
                 CreateSinkConnection::Iceberg {
-                    connection,
+                    catalog_connection,
                     aws_connection,
                     ..
                 } => {
-                    vec![
-                        ObjectId::from_raw_item_name(
-                            connection,
-                            obj.id.expect_database(),
-                            obj.id.schema(),
-                        ),
-                        ObjectId::from_raw_item_name(
+                    let mut ids = vec![ObjectId::from_raw_item_name(
+                        catalog_connection,
+                        obj.id.expect_database(),
+                        obj.id.schema(),
+                    )];
+                    if let Some(aws_connection) = aws_connection {
+                        ids.push(ObjectId::from_raw_item_name(
                             aws_connection,
                             obj.id.expect_database(),
                             obj.id.schema(),
-                        ),
-                    ]
+                        ));
+                    }
+                    ids
                 }
             };
 

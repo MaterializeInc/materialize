@@ -201,11 +201,32 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "SERVICES", []):
-                name = python_service.name
-                if name in self.compose["services"]:
-                    raise UIError(f"service {name!r} specified more than once")
-                self.compose["services"][name] = python_service.config
+            def _register_companion(python_service: Any) -> None:
+                # Companions never override an explicit declaration (or an
+                # already-registered companion). A customized service listed
+                # in SERVICES therefore wins over the default companion of the
+                # same name, and identical companions of sibling services
+                # (e.g. the metadata store of both Materialized and Testdrive)
+                # collapse to a single registration.
+                if python_service.name in self.compose["services"]:
+                    return
+                self.compose["services"][python_service.name] = python_service.config
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
+
+            services = list(getattr(module, "SERVICES", []))
+            # First register all explicit services, keeping the guard against
+            # the same name being spelled out twice. Companions are registered
+            # afterwards so that explicit declarations always take precedence.
+            for python_service in services:
+                if python_service.name in self.compose["services"]:
+                    raise UIError(
+                        f"service {python_service.name!r} specified more than once"
+                    )
+                self.compose["services"][python_service.name] = python_service.config
+            for python_service in services:
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
@@ -531,7 +552,15 @@ class Composition:
                             ), f"Unknown build status {build_status}"
                             time.sleep(1)
                     else:
-                        time.sleep(3)
+                        # Back off exponentially rather than sleeping a flat
+                        # 3s each time. The only `invoke` callers that retry
+                        # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                        # freshly-built mzbuild image can briefly fail to
+                        # resolve in the registry ("failed to resolve reference
+                        # ... not found") before it has propagated. With a flat
+                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
+                        # too short to ride out the propagation delay.
+                        time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(

@@ -496,9 +496,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                    key.extend_datums(&mut datums_local, None);
+                    old.extend_datums(&mut datums_local, None);
+                    new.extend_datums(&mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -524,9 +524,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                    key.extend_datums(&mut datums_local, None);
+                    old.extend_datums(&mut datums_local, None);
+                    new.extend_datums(&mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)

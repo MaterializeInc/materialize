@@ -98,6 +98,7 @@ fn connection_type_name(ct: &CreateConnectionType) -> &'static str {
         CreateConnectionType::Ssh => "SSH Tunnel",
         CreateConnectionType::Aws => "AWS",
         CreateConnectionType::AwsPrivatelink => "AWS PrivateLink",
+        CreateConnectionType::Gcp => "GCP",
         CreateConnectionType::Csr => "Confluent Schema Registry",
         CreateConnectionType::GlueSchemaRegistry => "Glue Schema Registry",
         CreateConnectionType::SqlServer => "SQL Server",

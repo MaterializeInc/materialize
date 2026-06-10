@@ -157,8 +157,11 @@ pub struct Args {
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
-    /// Presently used to render webhook URLs for end users in notices and the
-    /// system catalog. Not used to establish connections directly.
+    /// Used to render absolute URLs the server publishes: webhook URLs in
+    /// notices and the system catalog, and the OAuth Protected Resource
+    /// Metadata `resource`/`resource_metadata` URLs (RFC 9728). Not used to
+    /// establish connections directly. When unset, those URLs fall back to
+    /// the request's `Host` header.
     #[clap(long, env = "HTTP_HOST_NAME")]
     http_host_name: Option<String>,
     /// The URL of the Materialize console to proxy from the /internal-console

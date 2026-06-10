@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/compound/union.rs
-revision: 261d61df83
+revision: fc2aaf02e7
 ---
 
 # mz-transform::compound::union

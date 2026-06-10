@@ -62,6 +62,13 @@ rand.workspace = true
 
 [features]
 default = []
+# Exposes internal types for benchmarks.
+bench = []
+
+[[bench]]
+name = "correction"
+harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "columnar_merger_row"

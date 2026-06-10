@@ -438,6 +438,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 struct QueryInfo {
     is_select: bool,
     num_attributes: Option<usize>,
+    /// Whether the `SELECT` carries an `AS OF` clause. Such queries are
+    /// excluded from the `--auto-index-selects` consistency check: re-running
+    /// them against a freshly created indexed view is inherently racy, because
+    /// the view's `since` advances with time and can move past a historical
+    /// `AS OF`, yielding a spurious "could not find a valid timestamp" failure.
+    has_as_of: bool,
 }
 
 enum PrepareQueryOutcome<'a> {
@@ -1540,9 +1546,13 @@ impl<'a> RunnerInner<'a> {
             [statement] => &statement.ast,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        let (is_select, num_attributes) = match statement {
-            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
-            _ => (false, None),
+        let (is_select, num_attributes, has_as_of) = match statement {
+            Statement::Select(stmt) => (
+                true,
+                derive_num_attributes(&stmt.query.body),
+                stmt.as_of.is_some(),
+            ),
+            _ => (false, None, false),
         };
 
         match output {
@@ -1576,6 +1586,7 @@ impl<'a> RunnerInner<'a> {
         Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
             is_select,
             num_attributes,
+            has_as_of,
         }))
     }
 
@@ -1818,9 +1829,15 @@ impl<'a> RunnerInner<'a> {
             PrepareQueryOutcome::QueryPrepared(QueryInfo {
                 is_select,
                 num_attributes,
+                has_as_of,
             }) => {
                 let query_outcome = self.execute_query(sql, output, location.clone()).await?;
-                if is_select && self.auto_index_selects && query_outcome.success() {
+                // `AS OF` queries are excluded from the indexed-view consistency
+                // check: re-running them against a freshly created indexed view
+                // is racy, since the view's `since` can advance past a historical
+                // `AS OF` and spuriously fail with "could not find a valid
+                // timestamp" even though the one-shot query succeeded.
+                if is_select && !has_as_of && self.auto_index_selects && query_outcome.success() {
                     let view_outcome = self
                         .execute_view(sql, None, output, location.clone())
                         .await?;

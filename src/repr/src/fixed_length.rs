@@ -23,6 +23,23 @@ pub trait ToDatumIter: Sized {
 
     /// Obtains an iterator of datums out of an instance of `&Self`.
     fn to_datum_iter(&self) -> Self::DatumIter<'_>;
+
+    /// Append datums to `target` — all of them (`max == None`) or at most
+    /// `max` (`Some`) — branching on representation ONCE rather than once per
+    /// datum.
+    ///
+    /// The default extends via `to_datum_iter`, identical to the prior
+    /// `target.extend(x.to_datum_iter()[.take(max)])` call sites. Implementors
+    /// backed by packed bytes (e.g. row-spine's `DatumSeq`) should override this
+    /// with a tight loop that pushes directly, avoiding the `Iterator::extend` /
+    /// `take` per-datum machinery.
+    #[inline]
+    fn extend_datums<'a>(&'a self, target: &mut Vec<Datum<'a>>, max: Option<usize>) {
+        match max {
+            Some(max) => target.extend(self.to_datum_iter().into_iter().take(max)),
+            None => target.extend(self.to_datum_iter()),
+        }
+    }
 }
 
 impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
@@ -32,6 +49,11 @@ impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
         Self: 'a;
     fn to_datum_iter(&self) -> Self::DatumIter<'_> {
         (**self).to_datum_iter()
+    }
+    #[inline]
+    fn extend_datums<'a>(&'a self, target: &mut Vec<Datum<'a>>, max: Option<usize>) {
+        // Forward to T's impl so an override isn't lost behind a reference.
+        (**self).extend_datums(target, max)
     }
 }
 

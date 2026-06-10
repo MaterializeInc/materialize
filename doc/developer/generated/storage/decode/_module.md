@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/decode.rs
-revision: b0fa98e931
+revision: 9c9b2926db
 ---
 
 # mz-storage::decode

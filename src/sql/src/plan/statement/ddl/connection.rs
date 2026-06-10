@@ -29,6 +29,7 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
     AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
 };
+use mz_storage_types::connections::gcp::GcpConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
@@ -74,6 +75,7 @@ generate_extracted_config!(
     (Scope, String),
     (SecretAccessKey, with_options::Secret),
     (SecurityProtocol, String),
+    (ServiceAccountKey, with_options::Secret),
     (ServiceName, String),
     (SshTunnel, with_options::Object),
     (SslCertificate, StringOrSecret),
@@ -118,6 +120,7 @@ pub(super) fn validate_options_per_connection_type(
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
         CreateConnectionType::GlueSchemaRegistry => &[AwsConnection, Registry],
+        CreateConnectionType::Gcp => &[ServiceAccountKey],
         CreateConnectionType::Csr => &[
             AwsPrivatelink,
             Password,
@@ -314,6 +317,13 @@ impl ConnectionOptionExtracted {
                     }
                 }
                 ConnectionDetails::AwsPrivatelink(connection)
+            }
+            CreateConnectionType::Gcp => {
+                let credentials_json = self
+                    .service_account_key
+                    .ok_or_else(|| sql_err!("SERVICE ACCOUNT KEY option is required"))?
+                    .into();
+                ConnectionDetails::Gcp(GcpConnection { credentials_json })
             }
             CreateConnectionType::Kafka => {
                 let (tls, sasl) = plan_kafka_security(scx, &self)?;

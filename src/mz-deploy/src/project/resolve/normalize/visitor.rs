@@ -139,8 +139,15 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
             CreateSinkConnection::Kafka { connection, .. } => {
                 self.normalize_raw_item_name(connection);
             }
-            CreateSinkConnection::Iceberg { connection, .. } => {
-                self.normalize_raw_item_name(connection);
+            CreateSinkConnection::Iceberg {
+                catalog_connection,
+                aws_connection,
+                ..
+            } => {
+                self.normalize_raw_item_name(catalog_connection);
+                if let Some(aws_connection) = aws_connection {
+                    self.normalize_raw_item_name(aws_connection);
+                }
             }
         }
     }

@@ -792,6 +792,7 @@ pub enum ConnectionOptionName {
     Scope,
     SecretAccessKey,
     SecurityProtocol,
+    ServiceAccountKey,
     ServiceName,
     SshTunnel,
     SslCertificate,
@@ -836,6 +837,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Scope => "SCOPE",
             ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            ConnectionOptionName::ServiceAccountKey => "SERVICE ACCOUNT KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
             ConnectionOptionName::SshTunnel => "SSH TUNNEL",
             ConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
@@ -886,6 +888,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Scope
             | ConnectionOptionName::SecurityProtocol
             | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceAccountKey
             | ConnectionOptionName::ServiceName
             | ConnectionOptionName::SshTunnel
             | ConnectionOptionName::SslCertificate
@@ -915,6 +918,7 @@ pub enum CreateConnectionType {
     Aws,
     AwsPrivatelink,
     GlueSchemaRegistry,
+    Gcp,
     Kafka,
     Csr,
     Postgres,
@@ -933,6 +937,7 @@ impl CreateConnectionType {
             Self::Aws => "aws",
             Self::AwsPrivatelink => "aws-privatelink",
             Self::GlueSchemaRegistry => "glue-schema-registry",
+            Self::Gcp => "gcp",
             Self::Ssh => "ssh-tunnel",
             Self::MySql => "mysql",
             Self::SqlServer => "sql-server",
@@ -961,6 +966,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::GlueSchemaRegistry => {
                 f.write_str("AWS GLUE SCHEMA REGISTRY");
+            }
+            Self::Gcp => {
+                f.write_str("GCP");
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
@@ -1550,8 +1558,11 @@ pub enum CreateSinkConnection<T: AstInfo> {
         headers: Option<Ident>,
     },
     Iceberg {
-        connection: T::ItemName,
-        aws_connection: T::ItemName,
+        catalog_connection: T::ItemName,
+
+        /// AWS creds for the storage layer.
+        aws_connection: Option<T::ItemName>,
+
         key: Option<SinkKey>,
         options: Vec<IcebergSinkConfigOption<T>>,
     },
@@ -1583,20 +1594,22 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 }
             }
             CreateSinkConnection::Iceberg {
-                connection,
+                catalog_connection,
                 aws_connection,
                 key,
                 options,
             } => {
                 f.write_str("ICEBERG CATALOG CONNECTION ");
-                f.write_node(connection);
+                f.write_node(catalog_connection);
                 if !options.is_empty() {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
-                f.write_str(" USING AWS CONNECTION ");
-                f.write_node(aws_connection);
+                if let Some(aws_connection) = aws_connection {
+                    f.write_str(" USING AWS CONNECTION ");
+                    f.write_node(aws_connection);
+                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" ");
                     f.write_node(key);

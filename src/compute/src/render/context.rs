@@ -324,9 +324,9 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                           ok_session: &mut Session<T, DCB>,
                           err_session: &mut Session<T, ECB<T>>| {
             let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
+            k.extend_datums(&mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
+            v.extend_datums(&mut datums_borrow, Some(max_demand));
             logic(&mut datums_borrow, t, d, ok_session, err_session)
         };
 
@@ -378,9 +378,9 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq, t, d, ok_session: &mut Session<T, DCB>| {
             let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
+            k.extend_datums(&mut datums_borrow, Some(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
+            v.extend_datums(&mut datums_borrow, Some(max_demand));
             logic(&mut datums_borrow, t, d, ok_session)
         };
 

@@ -308,6 +308,11 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
+        // settings above, it is captured once at replica creation (see `handle_create_instance`
+        // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
+        // flipping the flag does not retroactively change arrangements on existing replicas.
+
         // Apply column-paged-batcher configuration. Routes through
         // `apply_tiered_config`, which reuses a process-wide `TieredPolicy`
         // singleton — operator-driven tunes mutate the existing atomics
@@ -319,9 +324,10 @@ impl ComputeState {
         // available, swap otherwise.
         {
             use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::apply_tiered_config;
+            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
+            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
 
             // Budget derivation: fraction × announced memory limit, with a
             // 128 MiB floor so the no-pressure case doesn't page per chunk.
@@ -342,12 +348,13 @@ impl ComputeState {
             debug!(
                 enabled,
                 ?backend,
+                ?codec,
                 fraction,
                 mem_limit,
                 budget_bytes = total,
                 "column-paged batcher: applying tiered config",
             );
-            apply_tiered_config(enabled, total, backend, None);
+            apply_tiered_config(enabled, total, backend, codec);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
@@ -470,6 +477,17 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_create_instance(&mut self, config: InstanceConfig) {
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
+
+        // Apply dictionary compression exactly once, here at instance creation, from the value the
+        // controller captured when the replica was created. We deliberately do NOT re-apply it on
+        // `handle_update_configuration`, so flipping the flag does not retroactively change this
+        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
+        // hosts a single instance, so this single store covers all of the replica's arrangements.
+        mz_row_spine::DICTIONARY_COMPRESSION.store(
+            config.arrangement_dictionary_compression,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
         }

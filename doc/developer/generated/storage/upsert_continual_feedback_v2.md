@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/upsert_continual_feedback_v2.rs
-revision: 225aeaa79f
+revision: 097450b020
 ---
 
 # mz-storage::upsert_continual_feedback_v2
@@ -13,4 +13,4 @@ Drained entries are classified by `drain_sealed_input` into three categories rel
 Output capability is downgraded to the minimum time of any buffered data and dropped when the batcher is empty.
 
 `UpsertDiff` is a custom `Semigroup` diff type that carries the upsert payload and a `from_time` for deduplication; `UpsertKey` and `UpsertValue` are the key and value types exchanged over the dataflow.
-The persist-feedback arrangement is backed by a `ValRowSpine<UpsertKey, _, _>` (using `ValRowBatcher` and `ValRowBuilder`): keys are stored in a columnation arena (`UpsertKey` is a fixed-size `[u8; 32]` and uses `CopyRegion`) and values are stored as packed `Row` bytes in a `DatumContainer`, allowing the OS to evict cold value pages efficiently under memory pressure.
+The persist-feedback arrangement is backed by a `ValRowSpine<UpsertKey, _, _>` (using `ValRowColPagedBuilder`): keys are stored in a columnation arena (`UpsertKey` is a fixed-size `[u8; 32]` and uses `CopyRegion`) and values are stored as packed `Row` bytes in a `DatumContainer`, allowing the OS to evict cold value pages efficiently under memory pressure.

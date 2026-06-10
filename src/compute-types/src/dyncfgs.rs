@@ -79,6 +79,20 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
      before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
 );
 
+/// Compress chunks the column-paged batcher spills, using lz4. Only
+/// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
+/// is applied on the pageout path and reversed on page-in. Trades CPU for a
+/// smaller on-storage (and, for the swap backend, resident) footprint.
+///
+/// Off by default so the spill path's cost stays a pure copy until compression
+/// is shown to pay for itself on the target workload.
+pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
+    "column_paged_batcher_lz4",
+    false,
+    "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
+     `enable_column_paged_batcher_spill = true`.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -345,6 +359,20 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Enable per-column dictionary compression for row containers in arrangements.
+///
+/// The `_alpha` suffix is load-bearing: this feature is not yet considered
+/// production-ready, and the name is meant to make that unmissable at the
+/// `ALTER SYSTEM SET` call site rather than relying on out-of-band warnings.
+///
+/// Disposition: added 2026-06-09, default off; solicit feedback for one month
+/// and remove in the absence of a positive response.
+pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config::new(
+    "enable_arrangement_dictionary_compression_alpha",
+    false,
+    "Enable arrangement dictionary compression (alpha; not yet production-ready).",
+);
+
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed
 /// `compute_peek_response_stash_threshold_bytes`.
@@ -470,6 +498,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
@@ -483,4 +512,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
+        .add(&COLUMN_PAGED_BATCHER_LZ4)
 }

@@ -43,6 +43,7 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
     RowIterator, Timestamp,
 };
+use mz_secrets::SecretsReader;
 use mz_sql::ast::{
     AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
     CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
@@ -63,6 +64,7 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_storage_types::connections::gcp::GcpServiceAccountKeyTokenUri;
 use mz_storage_types::sinks::StorageSinkDesc;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -661,6 +663,19 @@ impl Coordinator {
                     return ctx.retire(Err(err.into()));
                 }
                 self.caching_secrets_reader.invalidate(connection_id);
+            }
+            ConnectionDetails::Gcp(gcp) => {
+                // A service account key defines its own OAuth2 token URI.
+                // We only want to send requests to the actual Google OAuth2 token API,
+                // so we inspect the key as early as we can.
+                if let Err(err) = self
+                    .caching_secrets_reader
+                    .read_string(gcp.credentials_json)
+                    .await
+                    .and_then(|json| GcpServiceAccountKeyTokenUri::validate_json(&json))
+                {
+                    return ctx.retire(Err(err.into()));
+                }
             }
             _ => (),
         };
