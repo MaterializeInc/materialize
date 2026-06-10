@@ -525,19 +525,35 @@ belong in release notes and docs.
 
 ---
 
-## Known rough edges (as of this branch)
+## Rough edges found during this run (since fixed)
 
-Observed during this demo run; worth deciding on before GA, none blocking the
-core flows.
+The original demo run surfaced three rough edges. All three were fixed on
+this branch immediately afterwards (plan-doc "PR 8") and verified by
+re-running this document's full replay; where a transcript above shows the
+old behavior, the note below says what a current build prints instead.
 
-- **A `ROLLBACK`-at-deadline emits no audit event.** The trail for a timed-out
-  reconfiguration ends at `started`; the parked state is visible in
-  `SHOW CLUSTERS` but the timeout firing itself is not in the history.
-  (`timed-out` is currently only recorded for `ON TIMEOUT COMMIT`.)
-- **A short burst fires at cluster creation.** Before the first steady
-  replica reports in, the controller sees "no hydrated steady replica" and
-  arms a burst even though no user objects exist yet; it costs roughly
-  replica-startup time plus the linger duration.
+- **Controller-initiated replica drops were audited `manual`.** Now they
+  carry a dedicated reason, `retired` ("the cluster's configuration no
+  longer calls for this replica"), covering cut-over, rollback/cancel, burst
+  teardown, refresh-window close, and replication-factor decreases. The audit
+  transcripts above that show `drop … manual` print `drop … retired` on a
+  current build (creates are unchanged). On-refresh window-open creates also
+  read `schedule` again instead of `manual`.
+- **A `ROLLBACK`-at-deadline emitted no audit event.** The timeout is now a
+  durable transition: the controller clears the record at the deadline
+  (realized config untouched) and the history reads `started` → `timed-out`,
+  the latter carrying the deadline and the abandoned target; `finalized`
+  always carries the deadline so a late or forced cut-over is
+  distinguishable. This supersedes the parked-tombstone transcript above: on
+  a current build the rolled-back cluster reads settled in `SHOW CLUSTERS`
+  and the introspection view (`in_flight = f`, target back to the realized
+  size), there is no confirm-`ALTER` step to clear, and the audit event is
+  where the abandoned target lives.
+- **A short burst fired at cluster creation.** Burst arming is now
+  existential (a burst runs only when some object on the cluster is not yet
+  hydrated), so a cluster with zero objects never bursts. The burst audit
+  trail in Scenario 2 shows a single `started`/`finished` pair on a current
+  build, not the two pairs captured above.
 
 ---
 
