@@ -15,7 +15,7 @@ use kube::core::Status;
 use kube::core::conversion::{ConversionRequest, ConversionResponse, ConversionReview};
 use kube::core::response::reason;
 
-use mz_cloud_resources::crd::materialize::{v1alpha1, v1alpha2};
+use mz_cloud_resources::crd::materialize::{v1, v1alpha1};
 use tracing::{debug, warn};
 
 pub fn router() -> Router {
@@ -27,7 +27,7 @@ pub fn router() -> Router {
 #[derive(Clone, Copy)]
 enum SupportedVersion {
     V1alpha1,
-    V1alpha2,
+    V1,
 }
 
 impl TryFrom<&str> for SupportedVersion {
@@ -36,7 +36,7 @@ impl TryFrom<&str> for SupportedVersion {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "materialize.cloud/v1alpha1" => Ok(SupportedVersion::V1alpha1),
-            "materialize.cloud/v1alpha2" => Ok(SupportedVersion::V1alpha2),
+            "materialize.cloud/v1" => Ok(SupportedVersion::V1),
             _ => Err(anyhow!("unexpected version: {}", value)),
         }
     }
@@ -45,7 +45,7 @@ impl TryFrom<&str> for SupportedVersion {
 fn version_label(v: SupportedVersion) -> &'static str {
     match v {
         SupportedVersion::V1alpha1 => "v1alpha1",
-        SupportedVersion::V1alpha2 => "v1alpha2",
+        SupportedVersion::V1 => "v1",
     }
 }
 
@@ -68,17 +68,17 @@ fn convert(
     );
     let result = match (from_version, desired_version) {
         (SupportedVersion::V1alpha1, SupportedVersion::V1alpha1) => Ok(value),
-        (SupportedVersion::V1alpha1, SupportedVersion::V1alpha2) => serde_json::from_value::<
-            v1alpha1::Materialize,
-        >(value)
-        .and_then(|mz_v1alpha1| serde_json::to_value(v1alpha2::Materialize::from(mz_v1alpha1)))
-        .map_err(|e| e.into()),
-        (SupportedVersion::V1alpha2, SupportedVersion::V1alpha1) => serde_json::from_value::<
-            v1alpha2::Materialize,
-        >(value)
-        .and_then(|mz_v1alpha2| serde_json::to_value(v1alpha1::Materialize::from(mz_v1alpha2)))
-        .map_err(|e| e.into()),
-        (SupportedVersion::V1alpha2, SupportedVersion::V1alpha2) => Ok(value),
+        (SupportedVersion::V1alpha1, SupportedVersion::V1) => {
+            serde_json::from_value::<v1alpha1::Materialize>(value)
+                .and_then(|mz_v1alpha1| serde_json::to_value(v1::Materialize::from(mz_v1alpha1)))
+                .map_err(|e| e.into())
+        }
+        (SupportedVersion::V1, SupportedVersion::V1alpha1) => {
+            serde_json::from_value::<v1::Materialize>(value)
+                .and_then(|mz_v1| serde_json::to_value(v1alpha1::Materialize::from(mz_v1)))
+                .map_err(|e| e.into())
+        }
+        (SupportedVersion::V1, SupportedVersion::V1) => Ok(value),
     };
     match &result {
         Ok(converted) => {

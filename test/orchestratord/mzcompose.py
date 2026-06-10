@@ -1834,18 +1834,18 @@ class MaterializeCRDVersion(Modification):
     def values(cls, version: MzVersion) -> list[Any]:
         return [
             "materialize.cloud/v1alpha1",
-            "materialize.cloud/v1alpha2",
+            "materialize.cloud/v1",
         ]
 
     @classmethod
     def default(cls) -> Any:
-        return "materialize.cloud/v1alpha2"
+        return "materialize.cloud/v1"
 
     def modify(self, definition: dict[str, Any]) -> None:
-        if operator_supports_v1alpha2(definition):
+        if operator_supports_v1(definition):
             definition["materialize"]["apiVersion"] = self.value
         else:
-            # Older versions do not support v1alpha2
+            # Older versions do not support v1
             definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
@@ -2014,13 +2014,13 @@ class CertificateSource(Modification):
         retry(check, 120)
 
 
-def operator_supports_v1alpha2(definition: dict[str, Any]):
+def operator_supports_v1(definition: dict[str, Any]):
     operator_version = MzVersion.parse(
         definition["operator"]["operator"]["image"]["tag"]
     )
-    # v1alpha2 first ships in v26.29; no released self-managed operator serves
-    # the v1alpha2 CRD, so anything older must use v1alpha1. Keep this in sync
-    # with the release that actually introduces the v1alpha2 CRD.
+    # v1 first ships in v26.29; no released self-managed operator serves
+    # the v1 CRD, so anything older must use v1alpha1. Keep this in sync
+    # with the release that actually introduces the v1 CRD.
     return operator_version >= MzVersion.parse("v26.29.0-dev.0")
 
 
@@ -2521,14 +2521,14 @@ def get_materialize_status_at_stored_version() -> dict[str, Any] | None:
     return get_materialize_at_stored_version().get("status")
 
 
-def get_materialize_v1alpha2() -> dict[str, Any]:
-    """Get the first Materialize resource at v1alpha2."""
+def get_materialize_v1() -> dict[str, Any]:
+    """Get the first Materialize resource at v1."""
     data = json.loads(
         spawn.capture(
             [
                 "kubectl",
                 "get",
-                "materializes.v1alpha2.materialize.cloud",
+                "materializes.v1.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
@@ -2540,14 +2540,14 @@ def get_materialize_v1alpha2() -> dict[str, Any]:
     return data["items"][0]
 
 
-def workflow_v1alpha2_opt_in(
+def workflow_v1_opt_in(
     c: Composition,
     parser: WorkflowArgumentParser,
 ) -> None:
-    """Test that applying a v1alpha2 resource triggers reconciliation only
+    """Test that applying a v1 resource triggers reconciliation only
     when the spec has changed, and not when it is unchanged.
 
-    The conversion webhook computes a rollout hash from the v1alpha2 spec.
+    The conversion webhook computes a rollout hash from the v1 spec.
     When converting to v1alpha1 for storage, it derives a deterministic
     requestRollout UUID from the hash. When the spec is unchanged, the
     derived UUID matches lastCompletedRolloutRequest, so no rollout occurs.
@@ -2573,11 +2573,11 @@ def workflow_v1alpha2_opt_in(
 
     definition = setup(c, args)
 
-    # Step 1: Deploy with v1alpha2, complete initial rollout.
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    # Step 1: Deploy with v1, complete initial rollout.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
     init(definition)
     run(definition, False)
-    print("Initial v1alpha2 deployment completed")
+    print("Initial v1 deployment completed")
 
     # Record the initial v1alpha1 status.
     mz_v1 = get_materialize_v1alpha1()
@@ -2590,10 +2590,10 @@ def workflow_v1alpha2_opt_in(
     ), f"Expected completed rollout: requestRollout={initial_request_rollout} != lastCompletedRolloutRequest={initial_last_completed_rollout_request}"
     print(f"Initial requestRollout: {initial_request_rollout}")
 
-    # Step 2: Re-apply the same spec at v1alpha2 (no changes).
+    # Step 2: Re-apply the same spec at v1 (no changes).
     # The conversion webhook should compute the same hash, deriving the
     # same requestRollout UUID, so no new rollout should occur.
-    print("Re-applying same spec at v1alpha2 (expecting no rollout)...")
+    print("Re-applying same spec at v1 (expecting no rollout)...")
     apply_materialize(definition)
 
     # Wait a bit and verify that no new rollout was triggered.
@@ -2607,14 +2607,14 @@ def workflow_v1alpha2_opt_in(
     assert (
         noop_last_completed_rollout_request == initial_last_completed_rollout_request
     ), f"Expected lastCompletedRolloutRequest unchanged, but changed from {initial_last_completed_rollout_request} to {noop_last_completed_rollout_request}"
-    print("Confirmed: no rollout triggered by v1alpha2 apply with no changes")
+    print("Confirmed: no rollout triggered by v1 apply with no changes")
 
-    # Step 3: Apply at v1alpha2 with a spec change (extra env var).
+    # Step 3: Apply at v1 with a spec change (extra env var).
     # The conversion webhook should compute a different hash, deriving a
     # different requestRollout UUID, triggering a rollout.
-    print("Applying v1alpha2 with changed environmentdExtraEnv (expecting rollout)...")
+    print("Applying v1 with changed environmentdExtraEnv (expecting rollout)...")
     definition["materialize"]["spec"]["environmentdExtraEnv"] = [
-        {"name": "V1ALPHA2_OPT_IN_TEST", "value": "true"},
+        {"name": "V1_OPT_IN_TEST", "value": "true"},
     ]
     run(definition, False)
 
@@ -2635,10 +2635,10 @@ def workflow_v1alpha2_opt_in(
 
     retry(check_rollout_complete, 120)
     print(
-        f"Confirmed: rollout triggered by v1alpha2 spec change. "
+        f"Confirmed: rollout triggered by v1 spec change. "
         f"requestRollout changed from {initial_request_rollout} to {changed_request_rollout}"
     )
-    print("v1alpha2 opt-in test PASSED")
+    print("v1 opt-in test PASSED")
 
 
 OPERATOR_CERT_SECRET = "operator-materialize-operator-cert"
@@ -2649,7 +2649,7 @@ MATERIALIZE_CRD = "materializes.materialize.cloud"
 def conversion_webhook_works() -> bool:
     """Returns whether the conversion webhook is currently functional.
 
-    Reading the Materialize resource at v1alpha2 forces the Kubernetes API
+    Reading the Materialize resource at v1 forces the Kubernetes API
     server to call the conversion webhook to convert the stored v1alpha1
     object. If the webhook's serving certificate isn't trusted by the
     caBundle registered in the CRD, the API server rejects the call and this
@@ -2659,7 +2659,7 @@ def conversion_webhook_works() -> bool:
         [
             "kubectl",
             "get",
-            "materializes.v1alpha2.materialize.cloud",
+            "materializes.v1.materialize.cloud",
             "-n",
             "materialize-environment",
             "-o",
@@ -2767,10 +2767,10 @@ def workflow_webhook_cert_rotation(
     assert definition["operator"]["operator"]["certificate"]["source"] == "cert-manager"
     definition["operator"]["operator"]["args"]["webhookCertReloadInterval"] = "5s"
 
-    # Deploy a v1alpha2 resource. The initial apply already goes through the
-    # conversion webhook (v1alpha2 -> stored v1alpha1), so this confirms the
+    # Deploy a v1 resource. The initial apply already goes through the
+    # conversion webhook (v1 -> stored v1alpha1), so this confirms the
     # webhook works before any rotation.
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
     init(definition)
     apply_materialize(definition)
 
@@ -2869,12 +2869,12 @@ def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,
 ) -> None:
-    """Test ManuallyPromote rollout strategy with both v1alpha1 and v1alpha2
+    """Test ManuallyPromote rollout strategy with both v1alpha1 and v1
     force-promote mechanisms.
 
     Verifies that promotion can be triggered by setting forcePromote to either:
     - The v1alpha1 requestRollout UUID
-    - The v1alpha2 requestedRolloutHash
+    - The v1 requestedRolloutHash
     """
     parser.add_argument(
         "--recreate-cluster",
@@ -2896,8 +2896,8 @@ def workflow_manually_promote(
 
     definition = setup(c, args)
 
-    # Deploy with v1alpha2 and ManuallyPromote strategy.
-    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    # Deploy with v1 and ManuallyPromote strategy.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
     definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
     init(definition)
     run(definition, False)
@@ -2935,8 +2935,8 @@ def workflow_manually_promote(
     wait_for_rollout_complete()
     print("Test 1 PASSED: Promotion via v1alpha1 requestRollout succeeded")
 
-    # --- Test 2: Promote using v1alpha2 requestedRolloutHash ---
-    print("Test 2: Promote using v1alpha2 requestedRolloutHash")
+    # --- Test 2: Promote using v1 requestedRolloutHash ---
+    print("Test 2: Promote using v1 requestedRolloutHash")
 
     # Make another spec change to trigger a new rollout.
     definition["materialize"]["spec"]["environmentdExtraEnv"] = [
@@ -2946,18 +2946,18 @@ def workflow_manually_promote(
 
     wait_for_ready_to_promote()
 
-    # Read the v1alpha2 status to get the requestedRolloutHash.
-    mz_v2 = get_materialize_v1alpha2()
+    # Read the v1 status to get the requestedRolloutHash.
+    mz_v2 = get_materialize_v1()
     requested_rollout_hash = mz_v2["status"]["requestedRolloutHash"]
     mz_name = mz_v2["metadata"]["name"]
-    print(f"Promoting via v1alpha2 requestedRolloutHash: {requested_rollout_hash}")
+    print(f"Promoting via v1 requestedRolloutHash: {requested_rollout_hash}")
 
-    # Patch at v1alpha2 using the hash as forcePromote.
+    # Patch at v1 using the hash as forcePromote.
     spawn.runv(
         [
             "kubectl",
             "patch",
-            "materializes.v1alpha2.materialize.cloud",
+            "materializes.v1.materialize.cloud",
             mz_name,
             "-n",
             "materialize-environment",
@@ -2967,7 +2967,7 @@ def workflow_manually_promote(
         ],
     )
     wait_for_rollout_complete()
-    print("Test 2 PASSED: Promotion via v1alpha2 requestedRolloutHash succeeded")
+    print("Test 2 PASSED: Promotion via v1 requestedRolloutHash succeeded")
 
     print("workflow_manually_promote PASSED")
 
@@ -3145,8 +3145,8 @@ def workflow_orchestratord_upgrade(
     versions.append(get_version(args.tag))
 
     def set_latest_supported_crd_version(definition: dict[str, Any]):
-        if operator_supports_v1alpha2(definition):
-            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+        if operator_supports_v1(definition):
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
         else:
             definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
 
@@ -3276,7 +3276,7 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
         #
         # Use this only for the Balancer/Console CRs. The Materialize CR must
         # be read via `get_materialize_at_stored_version`, since a bare
-        # `materializes` resolves to the default-served v1alpha2 version, which
+        # `materializes` resolves to the default-served v1 version, which
         # lacks `requestRollout`/`lastCompletedRolloutRequest`.
         result: dict[str, Any] = {}
 
@@ -4035,7 +4035,7 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
         # Manually promote it by reading the v1alpha1 resource to get the
         # requestRollout UUID, then patching forcePromote to match it.
-        # Alternatively, forcePromote can be set to the v1alpha2
+        # Alternatively, forcePromote can be set to the v1
         # requestedRolloutHash (tested in workflow_manually_promote).
         mz = get_materialize_v1alpha1()
         request_rollout = mz["spec"]["requestRollout"]
