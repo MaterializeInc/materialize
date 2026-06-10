@@ -198,6 +198,12 @@ the controller (to resolve a given replica's family at dyncfg-push time), and it
 versions and deploys with the rest of the size configuration rather than living
 in a second place that could drift.
 
+The `family` field need not be populated for every size up front:
+`ReplicaAllocation::family()` falls back to deriving `cc` (via `is_cc`) or
+`legacy` when no explicit family is set, so the `legacy` and `cc` families are
+targetable immediately, before the new families (`M`, `D`) get explicit `family`
+entries. Explicit values are required only where the fallback is wrong.
+
 We deliberately do **not** ask LD rule authors to derive the family from the
 size string with `startsWith` / `endsWith` operators. The family is a *curated
 mapping*, not a stable encoding: the new families follow `<family>.<version>`
@@ -295,25 +301,31 @@ rather than reverting to environment-wide defaults. It also removes an asymmetry
 — environment-wide flags already persist in the catalog (via the existing
 `ALTER SYSTEM` path) and survive an LD outage; the scoped layer should too.
 
-The scoped layer is a durable catalog collection, keyed by **object id**, with an
-in-memory working copy used for resolution:
+The scoped layer is **two** durable catalog collections — one per scope, mirroring
+the existing flat `system_configurations` collection rather than a single
+sum-typed key — each keyed by **object id**, with an in-memory working copy used
+for resolution:
 
 ```
-(Cluster(ClusterId) | Replica(ReplicaId), parameter_name) -> value
+cluster_system_configurations:  (ClusterId, parameter_name) -> value
+replica_system_configurations:  (ReplicaId, parameter_name) -> value
 ```
 
 The **sync loop is the sole writer**; there is no user-facing
-`ALTER SYSTEM ... FOR CLUSTER` DDL (see Alternatives). We store only values that
-differ from the environment-wide value, keeping the collection sparse.
+`ALTER SYSTEM ... FOR CLUSTER` DDL (see Alternatives). A row is written **only
+when the scoped evaluation differs from the environment-wide value** (see
+Resolution for why *difference* — not the raw LD evaluation reason — is the
+correct signal), so the collections are sparse: only objects that LD targets to a
+scope-specific value get a row.
 
 Lifecycle:
 
 - **Startup:** load the persisted collection into the working maps, so scoped
   values are in effect immediately — no waiting for the first LD sync.
-- **LD reachable:** each successful tick reconciles the collection to LD's current
-  evaluation, *including removals* — an entry is dropped when LD no longer serves
-  a non-default value for it (distinguished via the `variation_detail` reason, as
-  on the global path), so removing an LD rule propagates.
+- **LD reachable:** each successful tick reconciles the collections to LD's
+  current evaluation, *including removals* — an entry is dropped once the scoped
+  evaluation no longer differs from the environment-wide value (e.g. its LD rule
+  was removed), so changes propagate in both directions.
 - **LD slow / unavailable:** keep serving the last persisted values; do **not**
   revert to the environment-wide value. This is the case that motivates
   persistence.
@@ -328,10 +340,11 @@ entry keyed by a dropped object's id is **inert** — it can never match a futur
 object. A recreated same-named cluster (new id) starts with no cached overrides;
 a name-targeting LD rule re-applies on the next sync under the new id, while an
 incarnation pin keyed by the old id never resurfaces. GC is therefore *not* a
-correctness concern, only hygiene: entries for object ids absent from the catalog
-are pruned lazily (on startup and on each successful reconcile). This is the same
-non-reuse property the dual-identity scheme already relies on (§Identity &
-recreate semantics).
+correctness concern, only hygiene: dead-object entries load into the in-memory
+copy **inert** (they can never match a live object) and are removed on the **first
+reconcile after startup**, and on each successful reconcile thereafter — there is
+no separate startup-time prune pass. This is the same non-reuse property the
+dual-identity scheme already relies on (§Identity & recreate semantics).
 
 ### Resolution: two existing per-scope boundaries
 
@@ -354,6 +367,14 @@ overrides at plan time, at the (already cluster-aware) sequencing sites in
 `src/adapter/src/coord/sequencer/inner/*`. This is the direct path to
 "optimizer flags in LD per cluster."
 
+The cluster-scoped working copy must live in `CatalogState` (behind
+`Arc<Catalog>`), **not** on the coordinator. Cluster-coherent overrides must also
+apply on the fast-path peek route (`frontend_peek`) and inside the bootstrap
+re-optimization closure, and both of those hold only a catalog snapshot, not the
+coordinator. Threading the working copy through the catalog is what makes it
+visible at *every* cluster-aware resolution site rather than just the sequencing
+path.
+
 Precedence for replica-local flags, lowest to highest:
 `Global < ReplicaSizeFamily < Replica(id)` (a specific replica pin beats a size
 family rule).
@@ -375,16 +396,41 @@ gets the same treatment. It also *preserves* today's behavior that a manual
 per-cluster manual pin still beats it, while a cluster-specific *LD* rule beats
 the manual pin.
 
-Crucially this is decided **per feature, only where LD actually serves a value**,
-mirroring the global case (where a manual value survives exactly when LD is
-silent). The implementation uses the LD evaluation *reason* from
-`variation_detail` to distinguish "LD has an opinion" (`RULE_MATCH` /
-`TARGET_MATCH` / `FALLTHROUGH`) from "LD is silent" (`FLAG_NOT_FOUND` / error);
-where LD is silent, the manual `FEATURES` value stands.
+Crucially, whether a cluster-scoped LD value beats a manual `FEATURES` pin is
+decided by **whether LD assigns the cluster a value that differs from the
+environment-wide value** — not by the raw `variation_detail` reason. The reason is
+the wrong signal, in two ways:
 
-The accepted trade-off, stated plainly: an operator's manual `FEATURES` pin can
-be overridden by a cluster-scoped LD rule. That is the same bargain operators
-already accept for `ALTER SYSTEM`, so it is consistent rather than novel.
+- `FALLTHROUGH` *is* the environment-wide value (it is what every context gets
+  absent a specific match). Treating it as a cluster opinion would let any
+  globally-on flag silently override a deliberate per-cluster `FEATURES` pin —
+  coarse scope beating fine scope, the opposite of "more specific wins" — and
+  would record a row for *every* live object, making the collections dense rather
+  than sparse.
+- A `RULE_MATCH` does not say *which* context kind's attributes matched. An
+  environment-level rollout rule (`environment.cloud_provider = "aws"`) also
+  reports `RULE_MATCH`, indistinguishable from a cluster-specific rule without
+  inspecting the rule's clauses — which the SDK does not expose.
+
+Comparing the scoped evaluation to the baseline (env-only) evaluation captures
+exactly *"LD has a **cluster-specific** opinion"*: the cluster context changed the
+result. So `cluster-scoped LD` in the ordering above means **the cluster-scoped
+evaluation differs from env-wide**; where it does not differ, there is no cluster
+opinion and the manual `FEATURES` pin stands. This is the same `differs from
+env-wide` test used at replica scope (which has no manual layer), so the recording
+rule is **uniform across both scopes** — there is no need to special-case
+`FALLTHROUGH` per scope.
+
+The one behavior this does *not* support is reasserting the env-wide value on a
+cluster purely to clear a `FEATURES` pin (LD value equal to env-wide cannot
+override the pin, because it is indistinguishable from "no cluster opinion").
+That is handled by removing the pin, not via LD — an acceptable trade for a simple,
+introspection-free rule.
+
+The accepted trade-off, stated plainly: an operator's manual `FEATURES` pin can be
+overridden by a cluster-scoped LD rule (whenever LD targets the cluster to a
+*different* value). That is the same bargain operators already accept for
+`ALTER SYSTEM`, so it is consistent rather than novel.
 
 ### Worked examples
 
