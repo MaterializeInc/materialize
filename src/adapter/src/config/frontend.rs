@@ -255,9 +255,18 @@ impl SystemParameterFrontend {
         out
     }
 
-    /// Evaluates each of `param_names` against `ctx`, returning the values that
-    /// differ from the environment-wide value held in `params`. Shared by the
-    /// cluster and replica passes.
+    /// Evaluates each of `param_names` against `ctx`, returning the values for
+    /// which LaunchDarkly has a scope-specific *opinion*. Shared by the cluster
+    /// and replica passes.
+    ///
+    /// We record an override exactly when the evaluation reason is
+    /// `RULE_MATCH` / `TARGET_MATCH` / `FALLTHROUGH` (LD is serving a value for
+    /// this context), and *not* when LD is silent (`FLAG_NOT_FOUND` / error /
+    /// off / failed prerequisite). This is deliberately independent of whether
+    /// the served value equals the environment-wide value: a cluster-scoped LD
+    /// rule must beat a manual `CREATE CLUSTER ... FEATURES` pin even when it
+    /// serves the env-wide value, and a manual pin must stand when LD is silent.
+    /// See the scoped feature flags design.
     fn evaluate_scoped_overrides(
         &self,
         client: &ld::Client,
@@ -274,7 +283,21 @@ impl SystemParameterFrontend {
                 .unwrap_or(param_name);
 
             let base = params.get(param_name);
-            let flag_var = client.variation(ctx, flag_name, base.clone());
+            let detail = client.variation_detail(ctx, flag_name, base.clone());
+
+            // Only record when LD has an opinion for this scope.
+            let has_opinion = matches!(
+                detail.reason,
+                ld::Reason::RuleMatch { .. }
+                    | ld::Reason::TargetMatch
+                    | ld::Reason::Fallthrough { .. }
+            );
+            if !has_opinion {
+                continue;
+            }
+            let Some(flag_var) = detail.value else {
+                continue;
+            };
             let value = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),
                 ld::FlagValue::Str(v) => v,
@@ -282,9 +305,7 @@ impl SystemParameterFrontend {
                 ld::FlagValue::Json(v) => v.to_string(),
             };
 
-            if value != base {
-                overrides.insert(param_name.to_string(), value);
-            }
+            overrides.insert(param_name.to_string(), value);
         }
         overrides
     }
