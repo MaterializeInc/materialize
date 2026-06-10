@@ -308,25 +308,31 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 ///
 /// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
 pub mod upsert_stash_pager {
-    use std::sync::{LazyLock, RwLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use mz_timely_util::column_pager::{ColumnPager, shared_pager};
 
-    /// Active pager handed to upsert source-stash batchers. Defaults to
-    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
-    static PAGER: LazyLock<RwLock<ColumnPager>> =
-        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+    /// Whether the stash participates in the shared spill mechanism, applied
+    /// from storage configuration.
+    static ENABLED: AtomicBool = AtomicBool::new(false);
 
-    /// Enable or disable the stash's use of the shared column pager. When
-    /// enabled, the stash spills through the shared budget pool; when disabled
-    /// it keeps every chunk resident.
+    /// Enable or disable the stash's use of the shared spill mechanism. When
+    /// enabled, the stash spills through the shared budget; when disabled it
+    /// keeps every chunk resident. Takes effect for dataflows rendered after
+    /// the change; running dataflows keep the pager they captured.
     pub fn set_enabled(enabled: bool) {
-        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
+        ENABLED.store(enabled, Ordering::Relaxed);
     }
 
-    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
+    /// The upsert-stash pager, resolved against the enable flag and the
+    /// process-wide shared mechanism (buffer pool vs tiered) at the moment of
+    /// the call. Callers capture the result at dataflow render and keep it
+    /// for the dataflow's lifetime, so resolution happens as late as
+    /// possible: a source rendered (or restarted) after a mechanism change
+    /// picks up the new mechanism, rather than the one in effect when
+    /// storage configuration last arrived.
     pub fn pager() -> ColumnPager {
-        PAGER.read().expect("upsert stash pager poisoned").clone()
+        shared_pager(ENABLED.load(Ordering::Relaxed))
     }
 }
 
