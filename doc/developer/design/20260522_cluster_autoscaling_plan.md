@@ -706,10 +706,17 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 ## PR 8 — Showcase follow-ups: drop attribution, rollback observability, burst arming
 
-**Status:** 👀 In review — 8a, 8b, and 8c landed (implement/review/revise cycles complete;
+**Status:** 👀 In review — complete. 8a, 8b, and 8c landed (implement/review/revise cycles;
 each verified with an end-to-end `cluster_controller.slt` run against a live server —
-105/105 after 8a, 131/131 for the full file after 8b's re-cut and 8c). Remaining: the
-full-replay verification pass below.
+105/105 after 8a, 131/131 for the full file after 8b's re-cut and 8c), and the full
+showcase replay (`pm-showcase-replay.sh`, fresh `--reset` environment on the optimized PR 8
+build) confirmed all three rough edges gone: the cut-over drop reads `retired`, the rollback
+history gains its `timed-out` event, and the burst audit shows a single `started`/`finished`
+pair (no at-creation burst). The replay ran against 8b's original durable-stamp form; after
+the re-cut to the record-clear design the rollback flow (`started → timed-out`, deadline on
+every transition, the cluster settled afterwards) was re-verified via the live slt run
+rather than a fresh full replay. The showcase report's rough-edges section was updated to
+record the fixes.
 
 Three independent fixes that fell out of live end-to-end testing for the PM showcase
 (`pm-showcase-cluster-controller.md`, "Known rough edges"). Each is small, lands as its own
@@ -963,6 +970,17 @@ Checklist:
 ## Progress log
 
 Append dated entries as work lands. Newest first.
+
+- _2026-06-10_ — **PR 8 verification pass complete.** Rebuilt optimized binaries and re-ran
+  the full PM-showcase replay (`pm-showcase-replay.sh`) on a fresh `--reset` environment:
+  all three rough edges confirmed gone (cut-over drop audited `retired`; the rollback
+  timeout in the audit history with its deadline; exactly one burst `started`/`finished`
+  pair — no at-creation burst). The replay ran against 8b's original durable-stamp form;
+  after the re-cut the rollback flow (`started → timed-out`, cluster settled afterwards)
+  was re-verified via the live 131/131 `cluster_controller.slt` run, not a fresh full
+  replay. The showcase report's "Known rough edges" section now records the fixes and what
+  a current build prints where its transcripts predate them. PR 8 status → in review,
+  complete.
 
 - _2026-06-10_ — **PR 8c landed** (implement → adversarial review → revise, separate agents;
   the implementation session was cut off twice by an agent session limit and completed by a
