@@ -78,6 +78,12 @@ pub enum ClusterControllerRequest {
         replicas: Vec<ReplicaId>,
         tx: oneshot::Sender<BTreeSet<ReplicaId>>,
     },
+    /// Whether the cluster has any hydratable (dataflow-backed) objects bound to
+    /// it.
+    HasHydratableObjects {
+        cluster_id: ClusterId,
+        tx: oneshot::Sender<bool>,
+    },
     /// The refresh-window live signals for one scheduled cluster (read ts,
     /// compaction estimate, bound REFRESH MVs). `None` for a cluster that is not
     /// scheduled `ON REFRESH`.
@@ -164,6 +170,14 @@ impl ClusterControllerCtx for CoordCtx {
         })
         .await
         .unwrap_or_default()
+    }
+
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool {
+        self.request(|tx| ClusterControllerRequest::HasHydratableObjects { cluster_id, tx })
+            .await
+            // A lost reply means shutdown; "no objects" arms nothing, which is
+            // the safe answer.
+            .unwrap_or(false)
     }
 
     async fn refresh_window_inputs(
@@ -297,6 +311,9 @@ impl Coordinator {
                 let hydrated = self.hydrated_replicas(cluster_id, replicas).await;
                 let _ = tx.send(hydrated);
             }
+            ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
+                let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
+            }
             ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx } => {
                 let inputs = self.refresh_window_inputs(cluster_id).await;
                 let _ = tx.send(inputs);
@@ -380,10 +397,42 @@ impl Coordinator {
             default_burst_linger,
             replicas,
             // Live signals the controller pulls separately (via `hydrated_replicas`
-            // / `refresh_window_inputs`) only when a strategy needs them.
+            // / `refresh_window_inputs` / `has_hydratable_objects`) only when a
+            // strategy needs them.
             hydrated_replicas: BTreeSet::new(),
             refresh_window: None,
+            has_hydratable_objects: false,
         })
+    }
+
+    /// Whether the cluster has any hydratable objects bound to it, backing the
+    /// controller's [`ClusterControllerCtx::has_hydratable_objects`] pull (see
+    /// the trait method for the approximation contract and why mismatches with
+    /// the hydration check are self-healing).
+    ///
+    /// Counts the dataflow-backed items among the cluster's `bound_objects`:
+    /// indexes, materialized views, sinks, and ingestion sources. A webhook
+    /// source is bound to its cluster but runs no dataflow on any replica, so
+    /// it is nothing a burst could accelerate.
+    fn cluster_has_hydratable_objects(&self, cluster_id: ClusterId) -> bool {
+        use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc};
+
+        let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
+            return false;
+        };
+        cluster
+            .bound_objects
+            .iter()
+            .any(|id| match self.catalog().get_entry(id).item() {
+                CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => {
+                    true
+                }
+                CatalogItem::Source(source) => matches!(
+                    source.data_source,
+                    DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
+                ),
+                _ => false,
+            })
     }
 
     /// Of `replicas` on `cluster_id`, which have *all* current (non-transient)

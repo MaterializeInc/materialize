@@ -381,10 +381,12 @@ impl Strategy for OnRefreshStrategy {
 /// The hydration-burst strategy.
 ///
 /// Engaged for clusters whose `AUTO SCALING STRATEGY` sets `ON HYDRATION`. While
-/// the cluster is On and no steady-state (realized-config) replica has all current
-/// objects hydrated, it runs one extra replica at the configured `HYDRATION SIZE`
-/// to accelerate hydration; the burst replica tears down a `linger_duration` after
-/// the steady set first hydrates. The burst is keyed entirely on the presence of a
+/// the cluster is On and there exists an object on it that no steady-state
+/// (realized-config) replica has hydrated, it runs one extra replica at the
+/// configured `HYDRATION SIZE` to accelerate hydration; the burst replica tears
+/// down a `linger_duration` after the steady set first hydrates. Zero objects
+/// make the condition vacuously unsatisfied, so a brand-new cluster never bursts
+/// before its first object lands. The burst is keyed entirely on the presence of a
 /// durable `burst` record (written/cleared by [`Strategy::update_state`]); the
 /// burst replica is an ordinary replica — the union/diff reconciler creates and
 /// drops it by shape+count with no special identity.
@@ -419,7 +421,11 @@ impl HydrationBurstStrategy {
     }
 
     /// Whether at least one steady-state (realized-config) replica reports all
-    /// current objects hydrated.
+    /// current objects hydrated. On a cluster with zero user objects a replica
+    /// reads hydrated once its (near-instant) introspection-log dataflows
+    /// hydrate — the hydration signal counts those too; false when no steady
+    /// replica reports at all (absent, or not yet registered with the compute
+    /// controller).
     fn steady_hydrated(&self, state: &ClusterState) -> bool {
         let steady_shape = state.realized_shape();
         state
@@ -462,9 +468,19 @@ impl Strategy for HydrationBurstStrategy {
         let steady_hydrated = self.steady_hydrated(state);
 
         match &state.burst {
-            // No record: arm a burst only while the steady set is un-hydrated.
+            // No record: arm a burst only while some object exists that the
+            // steady set has not hydrated. The object gate is what keeps an
+            // object-less cluster from bursting: without it, an absent or
+            // not-yet-registered steady replica reads as un-hydrated and a
+            // brand-new cluster would burst at creation with nothing to
+            // accelerate. It also makes `steady_hydrated`'s zero-object
+            // ambiguity (true once a reporting replica's log dataflows hydrate,
+            // false for an absent one) irrelevant here. The record-present arms
+            // below deliberately do not consult the gate: if all objects are
+            // dropped mid-burst, the steady set reads hydrated as soon as a
+            // replica's log dataflows do and the linger clears the record.
             None => {
-                if steady_hydrated {
+                if steady_hydrated || !state.has_hydratable_objects {
                     StateWrite::default()
                 } else {
                     let linger_duration =

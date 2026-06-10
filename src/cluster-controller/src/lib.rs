@@ -164,17 +164,25 @@ impl ClusterController {
         }
     }
 
-    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal
-    /// where a strategy will consult it this tick (see
-    /// [`Self::needs_hydration_signal`]). Probing is per-cluster and not free,
-    /// so a steady cluster with no reconfiguration and no possible burst is
-    /// never probed.
+    /// Populate each cluster's [`ClusterState::has_hydratable_objects`] and
+    /// [`ClusterState::hydrated_replicas`] live signals where a strategy will
+    /// consult them this tick (see [`Self::needs_hydration_signal`]). Probing is
+    /// per-cluster and not free, so a steady cluster with no reconfiguration and
+    /// no possible burst is never probed.
     async fn enrich_hydration(
         &self,
         ctx: &mut dyn ClusterControllerCtx,
         states: &mut [ClusterState],
     ) {
         for state in states.iter_mut() {
+            // The burst strategy arms only for a cluster with at least one
+            // hydratable object, so pull that bit first for arming candidates.
+            // Besides gating the arm condition itself, it lets us skip the
+            // hydration probe entirely for an object-less cluster nothing else
+            // needs probed.
+            if Self::burst_arming_candidate(state) {
+                state.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
+            }
             if !Self::needs_hydration_signal(state) {
                 continue;
             }
@@ -186,22 +194,31 @@ impl ClusterController {
         }
     }
 
-    /// Whether a strategy needs this cluster's per-replica hydration signal this
-    /// tick: a reconfiguration is in flight (graceful cut-over) or a burst is in
-    /// flight or could be warranted (hydration burst). A burst is *possible* when
-    /// the cluster carries an `ON HYDRATION` policy, burst is enabled env-wide, and
-    /// the cluster is On — exactly the condition under which the burst strategy
-    /// reads hydration.
-    fn needs_hydration_signal(state: &ClusterState) -> bool {
-        if state.reconfiguration.is_some() || state.burst.is_some() {
-            return true;
-        }
-        state.burst_enabled
+    /// Whether the burst strategy could *arm* on this cluster this tick: no
+    /// burst record yet, but the cluster carries an `ON HYDRATION` policy, burst
+    /// is enabled env-wide, and the cluster is On. Exactly the condition under
+    /// which the strategy's arm branch consults the object-existence and
+    /// hydration signals.
+    fn burst_arming_candidate(state: &ClusterState) -> bool {
+        state.burst.is_none()
+            && state.burst_enabled
             && state.replication_factor > 0
             && state
                 .auto_scaling_policy
                 .as_ref()
                 .is_some_and(|p| p.on_hydration.is_some())
+    }
+
+    /// Whether a strategy needs this cluster's per-replica hydration signal this
+    /// tick: a reconfiguration is in flight (graceful cut-over), a burst is in
+    /// flight (linger/re-arm lifecycle), or a burst could arm *and* the cluster
+    /// has something to hydrate — with zero hydratable objects the arm branch
+    /// never fires, so the probe would be wasted.
+    fn needs_hydration_signal(state: &ClusterState) -> bool {
+        if state.reconfiguration.is_some() || state.burst.is_some() {
+            return true;
+        }
+        Self::burst_arming_candidate(state) && state.has_hydratable_objects
     }
 
     /// Populate each scheduled cluster's [`ClusterState::refresh_window`] live

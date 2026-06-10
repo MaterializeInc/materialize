@@ -56,6 +56,11 @@ fn observed(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
 
 /// Builds a MANUAL managed cluster state with the given realized size,
 /// replication factor, and replicas. No reconfiguration or burst in flight.
+/// `has_hydratable_objects` defaults to `true` so kernel-level scenarios that
+/// are about replica hydration (not object existence) keep their meaning;
+/// through the seam the field is irrelevant — `FakeCtx::cluster_states`
+/// returns it at the adapter default and the controller's pull consults
+/// `FakeCtx::has_hydratable_objects` instead.
 fn state(
     cluster_id: ClusterId,
     size: &str,
@@ -77,6 +82,7 @@ fn state(
         replicas,
         hydrated_replicas: BTreeSet::new(),
         refresh_window: None,
+        has_hydratable_objects: true,
     }
 }
 
@@ -113,6 +119,17 @@ struct FakeCtx {
     /// Replicas the fake reports as hydrated when the controller probes. A
     /// graceful test sets this to drive cut-over.
     hydrated: BTreeSet<ReplicaId>,
+    /// How many times the controller probed hydration, for asserting that an
+    /// object-less cluster is never probed.
+    hydration_probes: usize,
+    /// What the fake answers when the controller pulls the object-existence
+    /// signal; an absent entry reads `false` (no objects). Held beside the
+    /// states (like `hydrated`) rather than read from them, and
+    /// `cluster_states` returns the state field at the adapter default
+    /// (`false`), so the signal reaches the controller only through the
+    /// `has_hydratable_objects` pull — keeping that pull load-bearing for
+    /// the seam tests.
+    has_hydratable_objects: BTreeMap<ClusterId, bool>,
     /// Refresh-window inputs the fake returns per cluster when the controller
     /// probes a scheduled cluster. An on-refresh test sets this to drive the
     /// window decision.
@@ -130,6 +147,8 @@ impl FakeCtx {
             concurrent_schedule_alter: BTreeMap::new(),
             concurrent_policy_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
+            hydration_probes: 0,
+            has_hydratable_objects: BTreeMap::new(),
             refresh_window: BTreeMap::new(),
         }
     }
@@ -163,6 +182,13 @@ impl ClusterControllerCtx for FakeCtx {
         clusters
             .iter()
             .filter_map(|id| self.states.get(id).cloned())
+            .map(|mut s| {
+                // Live signal, delivered only via the `has_hydratable_objects`
+                // pull: return the field at the adapter default so a seam test
+                // fails if the controller skips the pull.
+                s.has_hydratable_objects = false;
+                s
+            })
             .collect()
     }
 
@@ -175,11 +201,19 @@ impl ClusterControllerCtx for FakeCtx {
         _cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId> {
+        self.hydration_probes += 1;
         replicas
             .iter()
             .copied()
             .filter(|r| self.hydrated.contains(r))
             .collect()
+    }
+
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool {
+        self.has_hydratable_objects
+            .get(&cluster_id)
+            .copied()
+            .unwrap_or(false)
     }
 
     async fn refresh_window_inputs(
@@ -856,6 +890,7 @@ fn reconfiguring_state(
         replicas,
         hydrated_replicas: hydrated,
         refresh_window: None,
+        has_hydratable_objects: true,
     }
 }
 
@@ -1110,6 +1145,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         }],
         hydrated_replicas: BTreeSet::new(),
         refresh_window: None,
+        has_hydratable_objects: true,
     };
     let now = Timestamp::from(1000u64);
 
@@ -1403,6 +1439,7 @@ fn scheduled_state(
         replicas,
         hydrated_replicas: BTreeSet::new(),
         refresh_window,
+        has_hydratable_objects: true,
     }
 }
 
@@ -1915,6 +1952,85 @@ mod hydration_burst {
     }
 
     #[mz_ore::test]
+    fn burst_does_not_arm_without_objects() {
+        // Zero hydratable objects: a burst is never warranted, no matter what
+        // the steady set looks like. Neither an un-hydrated steady replica, an
+        // absent one, nor a hydrated one arms a burst.
+        let base = |replicas| {
+            let mut s = burst_state(
+                "100cc",
+                1,
+                "400cc",
+                Duration::from_millis(10),
+                replicas,
+                None,
+            );
+            s.has_hydratable_objects = false;
+            s
+        };
+
+        // Steady replica present but un-hydrated.
+        let s = base(vec![observed(replica(1), "r0", "100cc")]);
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+        // Steady replica absent entirely (a brand-new cluster's first ticks).
+        let s = base(Vec::new());
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+        // Steady replica reporting hydrated despite zero user objects (its
+        // log dataflows hydrated).
+        let mut s = base(vec![observed(replica(1), "r0", "100cc")]);
+        s.hydrated_replicas.insert(replica(1));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, now(1000))
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn burst_arms_with_unreporting_steady_replica_and_objects() {
+        // A cluster WITH objects whose steady replica reports nothing (crashed,
+        // restarting, or not yet registered with the compute controller) reads
+        // as un-hydrated, so a burst arms — correct: the objects are not served
+        // and a burst replica can pick them up.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        assert!(
+            write.burst.is_some(),
+            "burst arms on an unreporting steady replica"
+        );
+
+        // Same with the steady replica absent entirely.
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(10),
+            Vec::new(),
+            None,
+        );
+        let write = HydrationBurstStrategy.update_state(&s, now(1000));
+        assert!(
+            write.burst.is_some(),
+            "burst arms with no steady replica at all"
+        );
+    }
+
+    #[mz_ore::test]
     fn burst_desires_one_replica_at_hydration_size() {
         // With a record present, the strategy desires exactly one replica at the
         // burst size (with the cluster's AZ pool and logging).
@@ -2147,6 +2263,7 @@ mod hydration_burst {
             None,
         );
         let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
         let controller = ClusterController::new();
         controller.reconcile(&mut ctx).await;
 
@@ -2198,6 +2315,93 @@ mod hydration_burst {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn burst_empty_cluster_never_arms_through_seam() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+
+        // A strategy-carrying cluster with zero hydratable objects never arms,
+        // tick after tick — neither while its steady replica has not yet
+        // registered (reports un-hydrated) nor once it reports hydrated (its
+        // log dataflows). This is the brand-new-cluster case: no burst at
+        // creation.
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        // No `has_hydratable_objects` entry on the ctx: the pull reports no
+        // objects.
+        let mut ctx = FakeCtx::new(vec![s]);
+        let controller = ClusterController::new();
+
+        // Ticks with the steady replica not reporting hydrated (booting).
+        controller.reconcile(&mut ctx).await;
+        ctx.now = Timestamp::from(2000u64);
+        controller.reconcile(&mut ctx).await;
+        // Ticks once it reports.
+        ctx.hydrated.insert(replica(1));
+        ctx.now = Timestamp::from(3000u64);
+        controller.reconcile(&mut ctx).await;
+
+        assert!(
+            ctx.applied.is_empty(),
+            "an object-less cluster produces no decisions at all, got {:?}",
+            ctx.applied
+        );
+        assert!(ctx.states[&c].burst.is_none(), "no burst record ever");
+        assert_eq!(
+            ctx.hydration_probes, 0,
+            "an object-less cluster is never even probed for hydration"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_arms_when_first_object_lands_through_seam() {
+        use super::FakeCtx;
+        use crate::ClusterController;
+        use crate::ctx::Decision;
+
+        // The dual of the never-arms test: the same cluster arms as soon as its
+        // first hydratable object exists while the steady set is un-hydrated.
+        let c = cluster(1);
+        let s = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(0),
+            vec![observed(replica(1), "r0", "100cc")],
+            None,
+        );
+        let mut ctx = FakeCtx::new(vec![s]);
+        let controller = ClusterController::new();
+
+        controller.reconcile(&mut ctx).await;
+        assert!(ctx.applied.is_empty(), "no objects: nothing happens");
+
+        // The first object lands (e.g. CREATE INDEX); the steady replica has
+        // not hydrated it. The controller only learns this through its
+        // `has_hydratable_objects` pull.
+        ctx.has_hydratable_objects.insert(c, true);
+        ctx.now = Timestamp::from(2000u64);
+        controller.reconcile(&mut ctx).await;
+
+        assert!(
+            ctx.states[&c].burst.is_some(),
+            "the burst record was written once an object existed"
+        );
+        let burst_creates: Vec<_> = ctx
+            .creates()
+            .into_iter()
+            .filter(|d| matches!(d, Decision::CreateReplica { shape, .. } if shape.size == "400cc"))
+            .collect();
+        assert_eq!(burst_creates.len(), 1, "one 400cc burst replica created");
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn burst_policy_alter_rejects_in_flight_decision() {
         use super::FakeCtx;
         use crate::ClusterController;
@@ -2222,6 +2426,7 @@ mod hydration_burst {
             None,
         );
         let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
         ctx.witness_check = true;
         // The `ALTER` clears only the policy (size, rf, azs, logging unchanged), so
         // the rejection is attributable solely to the witness `auto_scaling_policy`.
@@ -2274,6 +2479,7 @@ mod hydration_burst {
             None,
         );
         let mut ctx = FakeCtx::new(vec![s]);
+        ctx.has_hydratable_objects.insert(c, true);
         ctx.witness_check = true;
 
         let controller = ClusterController::new();

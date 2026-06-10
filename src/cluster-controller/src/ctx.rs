@@ -137,9 +137,10 @@ pub struct AutoScalingPolicy {
     pub on_hydration: Option<OnHydrationPolicy>,
 }
 
-/// The `ON HYDRATION` burst sub-policy: while a steady replica is not yet hydrated,
-/// run one extra replica at `hydration_size` to accelerate hydration, lingering for
-/// `linger_duration` after the steady set hydrates.
+/// The `ON HYDRATION` burst sub-policy: while some object on the cluster is not
+/// hydrated on a steady replica, run one extra replica at `hydration_size` to
+/// accelerate hydration, lingering for `linger_duration` after the steady set
+/// hydrates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OnHydrationPolicy {
     pub hydration_size: String,
@@ -269,6 +270,17 @@ pub struct ClusterState {
     /// (pulled on demand via [`ClusterControllerCtx::refresh_window_inputs`]);
     /// `None` for MANUAL clusters, which are never probed.
     pub refresh_window: Option<RefreshWindowInputs>,
+    /// Whether the cluster has at least one hydratable object (an index,
+    /// materialized view, ingestion source, or sink bound to it). The burst
+    /// strategy arms only when this holds: with zero objects there is nothing
+    /// a burst could accelerate, so a brand-new cluster never bursts at
+    /// creation. A **live signal** like [`ClusterState::hydrated_replicas`],
+    /// so it is excluded from [`ClusterState::expected`].
+    ///
+    /// Populated on demand (via [`ClusterControllerCtx::has_hydratable_objects`])
+    /// only for clusters where the burst strategy could arm this tick; `false`
+    /// otherwise, where no strategy consults it.
+    pub has_hydratable_objects: bool,
     /// The replicas observed this tick to have *all* current collections on the
     /// cluster hydrated. A **live signal**, not durable state, so it is excluded
     /// from [`ClusterState::expected`] (the compare-and-append witness).
@@ -447,6 +459,22 @@ pub trait ClusterControllerCtx: Send {
         cluster_id: ClusterId,
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
+
+    /// Whether `cluster_id` has at least one hydratable object bound to it (an
+    /// index, materialized view, ingestion source, or sink — the
+    /// dataflow-backed items).
+    ///
+    /// This is a catalog-level approximation of "the hydration check has
+    /// something to count": the per-replica hydration signal treats some item
+    /// classes as trivially hydrated, so the two sets can disagree at the
+    /// margin. The mismatch is self-healing — if this reports objects but the
+    /// hydration check counts none of them, a steady replica reads hydrated
+    /// as soon as its (near-instant) introspection-log dataflows do, and the
+    /// burst record's linger clears it.
+    ///
+    /// Pulled on demand like [`Self::hydrated_replicas`]: the controller asks
+    /// only for clusters where the burst strategy could arm this tick.
+    async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
     /// The refresh-window live signals for one scheduled cluster: the read
     /// timestamp, the compaction estimate, and the bound REFRESH MVs' write

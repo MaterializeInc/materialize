@@ -706,10 +706,10 @@ Because the fallback is removed, this is gated on a successful prod bake, not on
 
 ## PR 8 — Showcase follow-ups: drop attribution, rollback observability, burst arming
 
-**Status:** 🚧 In progress — 8a and 8b landed (implement/review/revise cycles complete; each
-verified with an end-to-end `cluster_controller.slt` run against a live server — 105/105
-after 8a; 8b's run is recorded in its progress entry, the file was reshaped by the re-cut);
-8c not started.
+**Status:** 👀 In review — 8a, 8b, and 8c landed (implement/review/revise cycles complete;
+each verified with an end-to-end `cluster_controller.slt` run against a live server —
+105/105 after 8a, 131/131 for the full file after 8b's re-cut and 8c). Remaining: the
+full-replay verification pass below.
 
 Three independent fixes that fell out of live end-to-end testing for the PM showcase
 (`pm-showcase-cluster-controller.md`, "Known rough edges"). Each is small, lands as its own
@@ -830,12 +830,24 @@ bursts for boot-time + linger. Decision: the arm condition is the design doc's o
   desirable.
 
 Checklist:
-- [ ] Object-existence signal through the ctx; burst arm condition updated.
-- [ ] Kernel unit tests: empty cluster never arms; arms when the first object lands;
+- [x] Object-existence signal through the ctx; burst arm condition updated.
+      (On-demand `has_hydratable_objects` pull, answered from the cluster's `bound_objects`
+      filtered to dataflow-backed items — webhook sources excluded; a documented catalog-level
+      approximation whose mismatches self-heal through the linger path. Excluded from the CaA
+      witness like the other live signals. The pull doubles as a probe gate: an object-less
+      cluster skips the per-replica hydration probe entirely.)
+- [x] Kernel unit tests: empty cluster never arms; arms when the first object lands;
       crashed-replica-with-objects still arms.
-- [ ] `cluster_controller.slt`: strategy-carrying cluster with no objects shows no burst
+      (Seam tests hold the signal beside the states in the `FakeCtx` so the `enrich_hydration`
+      pull is load-bearing — deleting the pull demonstrably fails them.)
+- [x] `cluster_controller.slt`: strategy-carrying cluster with no objects shows no burst
       record/replica across ticks.
-- [ ] `cargo fmt`/`check` clean; tracker + progress log.
+      (Deterministic precisely because of the gate; verified to fail against a pre-8c binary
+      and pass — 134/134 — against the 8c build.)
+- [x] `cargo fmt`/`check` clean; tracker + progress log.
+      (Noted follow-up, out of scope here: `kick_cluster_controller` does not fire on item
+      creates/drops, so arming after the first object lands waits up to one tick interval —
+      consider kicking on item ops whose `item.cluster_id()` is `Some`.)
 
 **Verification (all three).** Author slt/unit coverage per fix (CI-run); locally `cargo fmt` +
 `cargo check` + kernel/adapter unit tests per the working agreement. Final pass: re-run the
@@ -952,6 +964,20 @@ Checklist:
 
 Append dated entries as work lands. Newest first.
 
+- _2026-06-10_ — **PR 8c landed** (implement → adversarial review → revise, separate agents;
+  the implementation session was cut off twice by an agent session limit and completed by a
+  continuation agent). Burst arming is existential: an on-demand `has_hydratable_objects` ctx
+  pull (from `bound_objects`, dataflow-backed items only) gates the arm branch, so an
+  object-less cluster never bursts — and skips the per-replica hydration probe entirely.
+  Review verdict: APPROVE; the one substantive minor (the `FakeCtx` pre-populated the new
+  signal, so seam tests couldn't catch a broken pull) was fixed in the revise pass by holding
+  the signal beside the states — deleting the pull now demonstrably fails the seam tests.
+  Verification note for the record: the first live slt run of the new regression section
+  FAILED — because the runner binary was stale (the rebuild had been OOM-killed and a `tail`
+  pipe masked the exit code), i.e. the section correctly caught pre-8c behavior; after a real
+  rebuild the full file passes (131/131 after the 8b re-cut reshaped the file). Noted follow-ups: kick the controller on item ops
+  (arming currently waits up to one tick after the first object lands); the burst-arming
+  outage mode is only covered by seam tests, the slt asserts the negative case.
 - _2026-06-10_ — **PR 8b landed, then simplified.** First implemented as a durable
   `rolled_back_at` stamp (tombstone retained, view `state` column, v86 amended); on review we
   judged that over-engineered — the audit event is papertrail enough — and re-cut it: the

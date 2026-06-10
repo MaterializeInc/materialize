@@ -643,10 +643,10 @@ ALTER SYSTEM SET enable_auto_scaling_strategy = true
 COMPLETE 0
 
 # These checks exercise the AUTO SCALING STRATEGY SQL surface (parse, render,
-# validation), not live burst arming — the controller's own tests cover arming, and
-# it is non-deterministic here (an arming burst races the steady replica's boot and
-# hydration, then lingers). Disable the break-glass burst strategy so the in-flight
-# burst state is deterministically empty.
+# validation), not burst arming — the next section covers the arming gate; positive
+# arming lives in the controller's own tests. Disable the break-glass burst strategy
+# so the in-flight burst state here is deterministically empty regardless of arming
+# semantics.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_hydration_burst = false
 ----
@@ -755,6 +755,59 @@ COMPLETE 0
 
 statement error AUTO SCALING STRATEGY. cluster option is not available
 CREATE CLUSTER cc_burst_gated (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2')))
+
+# ----- Hydration burst (PR 8c): no burst on a cluster with nothing to hydrate. -----
+#
+# Burst arming is existential: a burst is warranted iff there exists an object on
+# the cluster that no steady replica has hydrated. A strategy-carrying cluster
+# with zero objects therefore never bursts — in particular not at creation, before
+# its steady replica has even registered. With the burst strategy enabled this is
+# deterministic exactly because of the object gate; without it a burst would
+# reliably arm here while the fresh replica boots.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_auto_scaling_strategy = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_hydration_burst = true
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cc_burst_empty (SIZE 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = 'scale=2,workers=2', LINGER DURATION = '600s')))
+
+# Span many 5ms ticks so the controller demonstrably had every chance to arm. A
+# burst that did arm would stick around for its 600s linger and fail the checks
+# below.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# No burst is in flight ...
+query TT
+SELECT name, burst_size FROM (SHOW CLUSTERS) WHERE name = 'cc_burst_empty'
+----
+cc_burst_empty  NULL
+
+# ... the replica set is exactly the steady baseline ...
+query TTT rowsort
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_burst_empty'
+----
+cc_burst_empty  r1  scale=1,workers=1
+
+# ... and the audit log records neither a burst lifecycle event nor a
+# burst-attributed replica.
+query I
+SELECT count(*) FROM mz_catalog.mz_audit_events
+WHERE (details->>'cluster_name' = 'cc_burst_empty' AND details->>'burst_size' IS NOT NULL)
+   OR (object_type = 'cluster-replica' AND details->>'cluster_name' = 'cc_burst_empty'
+       AND details->>'reason' = 'hydration-burst')
+----
+0
+
+statement ok
+DROP CLUSTER cc_burst_empty
 
 # Restore pristine server state (including the tick-interval override).
 reset-server
