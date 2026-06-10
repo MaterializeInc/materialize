@@ -106,6 +106,8 @@ pub struct Args {
     #[clap(long)]
     scheduler_name: Option<String>,
     #[clap(long)]
+    orchestrator_kubernetes_az_label: Option<String>,
+    #[clap(long)]
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
@@ -336,6 +338,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     environmentd_availability_zones: args.environmentd_availability_zones,
                     ephemeral_volume_class: args.ephemeral_volume_class,
                     scheduler_name: args.scheduler_name.clone(),
+                    orchestrator_kubernetes_az_label: args.orchestrator_kubernetes_az_label.clone(),
                     enable_security_context: args.enable_security_context,
                     enable_internal_statement_logging: args.enable_internal_statement_logging,
                     disable_statement_logging: args.disable_statement_logging,
