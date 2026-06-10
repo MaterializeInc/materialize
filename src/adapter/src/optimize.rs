@@ -347,6 +347,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_simplify_quantified_comparisons: config
                 .features
                 .enable_simplify_quantified_comparisons,
+            enable_rowwise_subquery_lowering: config.features.enable_rowwise_subquery_lowering,
         }
     }
 }
