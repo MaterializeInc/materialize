@@ -15,7 +15,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
@@ -23,6 +22,7 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 
@@ -49,13 +49,33 @@ SERVICES = [
             "enable_create_table_from_source": "true",
         },
     ),
+    # mz-deploy runs as a prebuilt mzbuild image (see src/mz-deploy/ci) rather
+    # than a host `cargo build`, so CI doesn't recompile it on every run. The
+    # projects directory is mounted at /projects; the binary reaches the
+    # `materialized` service over the compose network (see create_profiles).
+    Service(
+        name="mz-deploy",
+        config={
+            "mzbuild": "mz-deploy",
+            "volumes": [
+                "./"
+                + os.path.relpath(PROJECTS_DIR, loader.composition_path)
+                + ":/projects",
+            ],
+        },
+    ),
 ]
 
 
-def create_profiles(c: Composition) -> None:
+def create_profiles() -> None:
     """Write profiles.toml into the projects directory, pointing at the
     mzcompose Materialized instance.  Every project under projects/ can
     then use ``--profiles-dir <PROJECTS_DIR>``.
+
+    The mz-deploy container runs on the compose network, so profiles connect
+    to the ``materialized`` service by its network hostname and internal
+    ports (6875 for users, 6877 for ``mz_system``) rather than the host-mapped
+    ports.
 
     Every profile sets ``enable_session_rbac_checks = true`` via the
     libpq-style ``options`` map. Materialize's compiled session default is
@@ -64,17 +84,16 @@ def create_profiles(c: Composition) -> None:
     the role/grant phase in the local mzcompose environment and downstream
     GRANTs fail with "unknown role 'materialize_deployer'". Production
     deployments have the session flag flipped at the server level."""
-    mz_port = c.default_port("materialized")
-    # `setup` issues GRANT ... ON SYSTEM, which only mz_system can perform.
-    mz_system_port = c.port("materialized", 6877)
     rbac_options = '\noptions = { enable_session_rbac_checks = "true" }'
+    # `setup` issues GRANT ... ON SYSTEM, which only mz_system can perform via
+    # the internal port (6877); everything else uses the user port (6875).
     with open(PROJECTS_DIR / "profiles.toml", "w") as f:
         f.write(
-            f'[admin]\nhost = "127.0.0.1"\nport = {mz_system_port}\nusername = "mz_system"{rbac_options}\n\n'
-            f'[default]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "deploy_user"{rbac_options}\n\n'
-            f'[staging]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "deploy_user"{rbac_options}\n\n'
-            f'[dev]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "dev_user"{rbac_options}\n\n'
-            f'[monitor]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "monitor_user"{rbac_options}\n'
+            f'[admin]\nhost = "materialized"\nport = 6877\nusername = "mz_system"{rbac_options}\n\n'
+            f'[default]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{rbac_options}\n\n'
+            f'[staging]\nhost = "materialized"\nport = 6875\nusername = "deploy_user"{rbac_options}\n\n'
+            f'[dev]\nhost = "materialized"\nport = 6875\nusername = "dev_user"{rbac_options}\n\n'
+            f'[monitor]\nhost = "materialized"\nport = 6875\nusername = "monitor_user"{rbac_options}\n'
         )
 
 
@@ -85,19 +104,7 @@ def run_mz_deploy(
     check: bool = True,
     set_default_profile: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    create_profiles(c)
-    # Honor CARGO_TARGET_DIR (the CI builder sets it to /mnt/build) so we look
-    # wherever `cargo build` actually wrote the binary; fall back to the
-    # default workspace target dir for local runs. A relative value resolves
-    # against MZ_ROOT, matching the cwd cargo is invoked from.
-    cargo_target = os.environ.get("CARGO_TARGET_DIR")
-    if cargo_target:
-        target_dir = Path(cargo_target)
-        if not target_dir.is_absolute():
-            target_dir = MZ_ROOT / target_dir
-    else:
-        target_dir = MZ_ROOT / "target"
-    binary = target_dir / "debug" / "mz-deploy"
+    create_profiles()
     project_dir = PROJECTS_DIR / project_name
 
     # Seed the per-project default-profile pointer (equivalent of
@@ -109,25 +116,24 @@ def run_mz_deploy(
     if set_default_profile and not mzprofile.exists():
         mzprofile.write_text("default\n")
 
-    # MZ_DEPLOY_PROFILE in the parent env would defeat the no-profile path.
-    env = os.environ.copy()
-    env.pop("MZ_DEPLOY_PROFILE", None)
-
-    cmd = [
-        str(binary),
-        "-d",
-        str(project_dir),
-        "--profiles-dir",
-        str(PROJECTS_DIR),
-        *args,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # The projects directory is mounted at /projects inside the container and
+    # the image's entrypoint is the binary itself, so these arguments form the
+    # command. `rm=True` discards the container after each invocation.
+    cmd = ["-d", f"/projects/{project_name}", "--profiles-dir", "/projects", *args]
+    result = c.run(
+        "mz-deploy",
+        *cmd,
+        capture=True,
+        capture_stderr=True,
+        check=False,
+        rm=True,
+    )
     if result.returncode != 0:
         print(f"mz-deploy stdout: {result.stdout}", file=sys.stderr)
         print(f"mz-deploy stderr: {result.stderr}", file=sys.stderr)
         if check:
             raise subprocess.CalledProcessError(
-                result.returncode, cmd, result.stdout, result.stderr
+                result.returncode, ["mz-deploy", *cmd], result.stdout, result.stderr
             )
     return result
 
@@ -163,21 +169,17 @@ def phase_actions(phase: dict | None, action: str) -> list[dict]:
 
 
 def setup_base(c: Composition) -> None:
-    """Build mz-deploy, start services, and initialize with roles.
+    """Start services and initialize with roles.
 
     Shared by all workflows. Runs ``setup`` as superuser (admin profile)
     to create the ``materialize_*`` roles, then creates three users with
-    appropriate role grants and system privileges."""
-    subprocess.run(
-        ["cargo", "build", "--bin", "mz-deploy"],
-        cwd=MZ_ROOT,
-        check=True,
-    )
+    appropriate role grants and system privileges. The mz-deploy binary is
+    supplied by its prebuilt mzbuild image (see src/mz-deploy/ci)."""
     c.down(destroy_volumes=True)
     c.up("postgres", "materialized")
 
     # Ensure profiles exist before first run_mz_deploy call
-    create_profiles(c)
+    create_profiles()
 
     # Run setup as superuser (creates materialize_* roles). The production
     # default size is not available in the mzcompose environment, so pass a
