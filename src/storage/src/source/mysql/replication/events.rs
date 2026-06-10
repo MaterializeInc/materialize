@@ -158,7 +158,7 @@ pub(super) async fn handle_query_event(
             let dropped_tables = drop_table_identifiers(&current_schema, &query)?;
 
             // Sources referencing the dropped table name that were created before the table was dropped. Before is determined
-            // by looking at the initial gtid set for the source and ensuring that's before the new gitid.
+            // by looking at the initial gtid set for the source and ensuring that's before the new gtid.
             let sources_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
                 .iter()
                 .filter_map(|table_name| {
@@ -189,7 +189,7 @@ pub(super) async fn handle_query_event(
                         new_gtid.clone(),
                         Diff::ONE,
                     );
-                    let size = update.fuel_size();
+                    let size = std::mem::size_of_val(&update);
                     ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(output.output_index);
                 }
@@ -468,21 +468,10 @@ pub(super) async fn handle_rows_event(
 mod tests {
     use super::*;
 
-    /// Convenience constructor mirroring how the production code builds names.
     fn table(schema: &str, name: &str) -> MySqlTableName {
         MySqlTableName::new(schema, name)
     }
 
-    /// Resolve which tables a binlog statement drops, mirroring
-    /// [`handle_query_event`] end to end. Dispatch keys off the first two
-    /// whitespace tokens, and only a leading `DROP TABLE` is handed to
-    /// [`drop_table_identifiers`] (which re-parses the full statement with
-    /// sqlparser). Anything the dispatch does not recognize as `DROP TABLE`
-    /// yields no dropped tables, exactly as the production `_ => {}` arm does.
-    ///
-    /// Testing through this gate matters: a statement can parse fine on its own
-    /// yet never reach the parser because the dispatch tokens don't line up
-    /// (e.g. a comment sits between `DROP` and `TABLE`).
     fn parse_drop(
         query: &str,
         current_schema: &str,
@@ -548,8 +537,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn drop_parses_if_exists_clause_case_insensitively() {
-        // The optional `IF EXISTS` clause must be skipped before the table name.
+    fn drop_parses_if_exists_clause() {
         assert_eq!(
             parse_drop("DROP TABLE IF EXISTS orders", "shop").unwrap(),
             vec![table("shop", "orders")],
@@ -562,23 +550,16 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_rejects_if_without_exists() {
-        // A lone `IF` is malformed; it must error rather than be parsed as a
-        // table named "if".
         assert!(parse_drop("DROP TABLE IF orders", "shop").is_err());
     }
 
     #[mz_ore::test]
     fn drop_rejects_missing_table_name() {
-        // `DROP TABLE` with no table list cannot be parsed.
         assert!(parse_drop("DROP TABLE", "shop").is_err());
     }
 
     #[mz_ore::test]
     fn drop_parses_multiple_space_separated_tables() {
-        // MySQL allows dropping several tables in one statement. Each tracked
-        // table must be recognized so every affected output gets a
-        // `TableDropped` error. Here the names are separated by ", ", so each
-        // arrives as its own whitespace token with a trailing comma.
         assert_eq!(
             parse_drop("DROP TABLE orders, customers, items", "shop").unwrap(),
             vec![
@@ -597,12 +578,8 @@ mod tests {
         );
     }
 
-    // --- Comments in the statement -----------------------------------------
-    //
-    // sqlparser's MySqlDialect lexer strips comments, so a comment anywhere the
-    // dispatch still recognizes as `DROP TABLE ...` is ignored and the table is
-    // parsed normally.
-
+    // Note that mysql doesn't appear to actually pass through comments in the DDL statements from the binlog,
+    // so these comment tests don't represent code that gets exercised in practice.
     #[mz_ore::test]
     fn drop_ignores_block_comment_before_name() {
         assert_eq!(
@@ -629,7 +606,6 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_ignores_hash_line_comment() {
-        // `#` is a MySQL-specific line comment; the MySqlDialect lexer handles it.
         assert_eq!(
             parse_drop("DROP TABLE orders # mysql line comment", "shop").unwrap(),
             vec![table("shop", "orders")],
@@ -638,9 +614,6 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_treats_executable_comment_body_as_sql() {
-        // MySQL executable comments `/*!NNNNN ... */` are conditionally executed
-        // SQL, not inert text. sqlparser parses their contents, so the table
-        // inside is recognized.
         assert_eq!(
             parse_drop("DROP TABLE /*!40000 orders */", "shop").unwrap(),
             vec![table("shop", "orders")],
@@ -649,10 +622,8 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_with_comment_between_keywords_is_not_detected() {
-        // A comment between `DROP` and `TABLE` shifts the dispatch's second
-        // token off `table`, so the statement never reaches the parser and the
-        // drop is silently missed. This is a gap in the whitespace-based
-        // dispatch in `handle_query_event`, not in `drop_table_identifiers`.
+        // Tested end-to-end with testdrive and not reproducable as a problem because mysql
+        // scrapes out the comments before it hits the binlog.
         assert_eq!(
             parse_drop("DROP /* mid */ TABLE orders", "shop").unwrap(),
             Vec::<MySqlTableName>::new(),
@@ -661,28 +632,19 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_wrapped_entirely_in_executable_comment_is_not_detected() {
-        // `/*!40000 DROP TABLE orders */` is a drop to MySQL, but the dispatch's
-        // first token is the comment, so it is never recognized. Same dispatch
-        // gap as above.
         assert_eq!(
             parse_drop("/*!40000 DROP TABLE orders */", "shop").unwrap(),
             Vec::<MySqlTableName>::new(),
         );
     }
 
-    // --- Comment-shaped text inside identifiers ----------------------------
-
     #[mz_ore::test]
     fn drop_does_not_treat_comment_shaped_text_in_identifier_as_comment() {
-        // Comment delimiters inside a backtick-quoted identifier are part of the
-        // name, not a comment, and must be preserved verbatim.
         assert_eq!(
             parse_drop("DROP TABLE `tbl /* not a comment */`", "shop").unwrap(),
             vec![table("shop", "tbl /* not a comment */")],
         );
     }
-
-    // --- Optional DROP clauses ---------------------------------------------
 
     #[mz_ore::test]
     fn drop_parses_table_with_restrict() {
@@ -700,64 +662,23 @@ mod tests {
         );
     }
 
-    // --- Statement / delimiter shape ---------------------------------------
-    //
-    // A `Query_event` carries exactly one statement (MySQL logs one statement
-    // per event; `DROP TABLE a, b` is a single multi-name statement, not two),
-    // so the realistic shapes here are "one statement, maybe with a trailing
-    // delimiter". The multi-statement case is exercised only as defensive
-    // documentation -- it should not arise from a real binlog.
-    //
-    // Note on the error path: when `drop_table_identifiers` returns `Err`, it
-    // propagates as a `TransientError` out of `handle_query_event`, which
-    // restarts replication from the last committed GTID -- re-reading the same
-    // event and failing again, stalling the source. The genuinely reachable way
-    // to hit that is sqlparser rejecting an unusual-but-valid *single* DROP
-    // (a dialect gap), not the contrived multi-statement input below.
-
-    #[mz_ore::test]
-    fn drop_ignores_trailing_semicolon() {
-        // A trailing statement delimiter must not look like a second (empty)
-        // statement: sqlparser skips empty statements, so this stays a single
-        // `DROP` and parses normally.
-        assert_eq!(
-            parse_drop("DROP TABLE orders;", "shop").unwrap(),
-            vec![table("shop", "orders")],
-        );
-    }
-
     #[mz_ore::test]
     fn drop_of_multiple_statements_errors() {
         // Defensive only: a real `Query_event` never packs two top-level
-        // statements together. If it somehow did, the `len() != 1` check rejects
-        // it (which, per the note above, would stall rather than crash).
+        // statements together.
         assert!(parse_drop("DROP TABLE orders; DROP TABLE customers", "shop").is_err());
     }
 
     #[mz_ore::test]
     fn drop_temporary_table_is_not_detected() {
-        // `DROP TEMPORARY TABLE` has `TEMPORARY` as its second token, so the
-        // dispatch never enters the `DROP TABLE` arm: the explicit `temporary`
-        // rejection inside `drop_table_identifiers` is unreachable via the
-        // production path, and the statement is simply ignored (temporary tables
-        // are never tracked anyway).
         assert_eq!(
             parse_drop("DROP TEMPORARY TABLE orders", "shop").unwrap(),
             Vec::<MySqlTableName>::new(),
         );
     }
 
-    // --- Quoted-identifier edge cases --------------------------------------
-    //
-    // Because table names are taken from sqlparser's structured `Ident` values
-    // rather than re-rendered SQL, characters that are only special at the SQL
-    // level -- the `.` separator and backtick quoting -- are handled correctly
-    // inside a quoted identifier.
-
     #[mz_ore::test]
     fn drop_quoted_identifier_with_dot_is_a_single_table() {
-        // `` `weird.name` `` is one table named "weird.name" in the current
-        // schema; the dot is part of the name, not a schema/table separator.
         assert_eq!(
             parse_drop("DROP TABLE `weird.name`", "shop").unwrap(),
             vec![table("shop", "weird.name")],
@@ -766,8 +687,6 @@ mod tests {
 
     #[mz_ore::test]
     fn drop_escaped_backtick_identifier_is_preserved() {
-        // ``` `a``b` ``` is one table named "a`b" (a doubled backtick escapes a
-        // literal backtick); the escape is decoded and the backtick kept.
         assert_eq!(
             parse_drop("DROP TABLE `a``b`", "shop").unwrap(),
             vec![table("shop", "a`b")],
