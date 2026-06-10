@@ -170,7 +170,7 @@ impl PeekNotification {
                     result_size: u64::cast_from(result_size),
                 }
             }
-            PeekResponse::Error(err) => Self::Error(err.clone()),
+            PeekResponse::Error(err) => Self::Error(err.to_string()),
             PeekResponse::Canceled => Self::Canceled,
         }
     }

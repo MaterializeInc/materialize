@@ -178,7 +178,9 @@ impl ActiveSubscribe {
                 mz_ore::iter::consolidate_update_iter(merged)
             }
             Err(s) => {
-                self.send(PeekResponseUnary::Error(s));
+                self.send(PeekResponseUnary::Error(AdapterError::Unstructured(
+                    anyhow::Error::msg(s),
+                )));
                 return true;
             }
         };
