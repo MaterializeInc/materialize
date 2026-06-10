@@ -409,7 +409,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.test_case("unit-tests"):
         # ── 6. Run unit tests ─────────────────────────────────────
-        result = run_mz_deploy(c, "basic/v1", "test", check=False)
+        # `--no-docker` runs the tests against the mzcompose Materialized
+        # service via the profile connection; mz-deploy's default test path
+        # spins up its own Docker container, which isn't available inside the
+        # mz-deploy container.
+        result = run_mz_deploy(c, "basic/v1", "test", "--no-docker", check=False)
         assert (
             result.returncode != 0
         ), "Expected non-zero exit from test (some tests intentionally fail)"
