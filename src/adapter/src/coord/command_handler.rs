@@ -271,6 +271,19 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::UpdateReplicaScopedConfig { overrides, tx } => {
+                    // Reconcile the compute controller's per-replica dyncfg
+                    // override layer, then re-push the (environment-wide) compute
+                    // configuration so existing replicas observe the new values.
+                    self.controller
+                        .compute
+                        .update_replica_dyncfg_overrides(overrides);
+                    let compute_config =
+                        crate::flags::compute_config(self.catalog().system_config());
+                    self.controller.compute.update_configuration(compute_config);
+                    let _ = tx.send(());
+                }
+
                 Command::InjectAuditEvents {
                     events,
                     conn_id,

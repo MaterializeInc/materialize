@@ -337,6 +337,24 @@ impl ConfigEntry {
         &self.default
     }
 
+    /// Parses a string into a [`ConfigVal`] of this config's type.
+    ///
+    /// The type-erased analog of [`Config::parse_val`], dispatching on the
+    /// variant of this entry's value.
+    pub fn parse_val(&self, val: &str) -> Result<ConfigVal, String> {
+        match self.default {
+            ConfigVal::Bool(_) => <bool as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::U32(_) => <u32 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Usize(_) => <usize as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptUsize(_) => <Option<usize> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::F64(_) => <f64 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::String(_) => <String as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptString(_) => <Option<String> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Duration(_) => <Duration as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Json(_) => <serde_json::Value as ConfigType>::parse(val).map(Into::into),
+        }
+    }
+
     /// The value of this config in the set.
     pub fn val(&self) -> ConfigVal {
         self.val.load()
