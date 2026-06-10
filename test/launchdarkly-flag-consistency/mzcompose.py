@@ -28,11 +28,11 @@ build red:
     `KNOWN_STALE_LD_FLAGS`. (The last release is considered so a flag a deployed
     older version still needs is not flagged.)
   * a flag's production LaunchDarkly default differs from Materialize's
-    compiled-in default. Self-managed deployments have no LaunchDarkly and run
-    on the compiled-in default, so this means cloud and self-managed behave
-    differently (e.g. a feature enabled in cloud but off by default in
-    self-managed) -- unless it is deliberate cloud-only tuning listed in
-    `INTENTIONAL_LD_OVERRIDES`.
+    compiled-in default. A deployment without LaunchDarkly runs on the
+    compiled-in default (modulo a self-managed config map), so this means cloud
+    behaves differently from the out-of-the-box default (e.g. a feature enabled
+    in cloud but off by default) -- unless it is deliberate cloud-only tuning
+    listed in `INTENTIONAL_LD_OVERRIDES`.
   * a flag's served default differs between LaunchDarkly environments (e.g.
     production vs staging), which usually only happens during a staged rollout
     -- unless it is in `KNOWN_CROSS_ENV_DIVERGENCES`.
@@ -85,7 +85,7 @@ LAUNCHDARKLY_PROJECT = os.environ.get("LAUNCHDARKLY_PROJECT", "default")
 # missing/stale checks do not depend on the environment; only the served
 # default value can differ per environment. The first environment is treated as
 # the production / cloud baseline that is compared against the compiled-in
-# default (i.e. what self-managed deployments use).
+# default.
 LAUNCHDARKLY_ENVIRONMENTS = [
     env.strip()
     for env in os.environ.get("LAUNCHDARKLY_ENVIRONMENTS", "production,staging").split(
@@ -461,10 +461,10 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
 
 # Parameters whose production LaunchDarkly value is *deliberately* different from
 # the compiled-in default, because they tune cloud-specific infrastructure that
-# does not apply to self-managed deployments. Excluded from the "cloud vs
-# self-managed" divergence failure (but still subject to the cross-environment
+# does not apply to a default (non-cloud) deployment. Excluded from the "cloud
+# vs default" divergence failure (but still subject to the cross-environment
 # check). Everything else that diverges fails, so a feature accidentally left
-# off in self-managed is caught.
+# off by default is caught.
 INTENTIONAL_LD_OVERRIDES: set[str] = {
     # Cloud replica expiration (confirmed cloud-only behavior).
     "compute_replica_expiration_offset",
@@ -686,6 +686,10 @@ def parse_bytes(value: str, assume_bare_bytes: bool = False) -> int | None:
     return round(float(m.group(1)) * _BYTE_UNITS[m.group(2).lower()])
 
 
+# Unambiguous boolean spellings, excluding bare "0"/"1" (which may be numeric).
+_BOOL_WORDS = {"on", "off", "true", "false", "t", "f", "yes", "no"}
+
+
 def _as_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -718,6 +722,14 @@ def values_equivalent(a: Any, b: Any) -> bool | None:
     if sa == "" or sb == "":
         # Only equal if both are empty; an empty default vs a set value differs.
         return sa == sb
+    # Boolean-like strings: LaunchDarkly may serve a boolean as the string
+    # "true"/"false" rather than a JSON bool, while Materialize prints "on"/"off".
+    # Compare those by value (but not bare "0"/"1", which may be numeric).
+    if sa.lower() in _BOOL_WORDS or sb.lower() in _BOOL_WORDS:
+        ba, bb = _as_bool(sa), _as_bool(sb)
+        if ba is None or bb is None:
+            return None
+        return ba == bb
     da, db = parse_duration_seconds(sa), parse_duration_seconds(sb)
     if da is not None or db is not None:
         # At least one side is a duration with a unit; parse a bare number on
@@ -836,18 +848,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     stale_in_ld = {key for key in ld_keys - known if CI_TEST_TAG not in ld_tags[key]}
     unexpected_stale = stale_in_ld - KNOWN_STALE_LD_FLAGS
 
-    # Cloud vs self-managed: the production LaunchDarkly value differs from the
-    # compiled-in default that self-managed deployments run on. Deliberate
-    # cloud-only tuning is allowlisted via INTENTIONAL_LD_OVERRIDES; everything
-    # else is unexpected (e.g. a feature enabled in cloud but off by default in
-    # self-managed, which should be reconciled in the compiled-in default).
-    cloud_vs_self_managed: dict[str, tuple[str, Any]] = {}
+    # Cloud vs default: the production LaunchDarkly value differs from the
+    # compiled-in default that a deployment without LaunchDarkly runs on.
+    # Deliberate cloud-only tuning is allowlisted via INTENTIONAL_LD_OVERRIDES;
+    # everything else is unexpected (e.g. a feature enabled in cloud but off by
+    # default, which should be reconciled in the compiled-in default).
+    cloud_vs_default: dict[str, tuple[str, Any]] = {}
     for name in in_both:
         if name in INTENTIONAL_LD_OVERRIDES:
             continue
         prod_value = served_defaults.get(name, {}).get(PRODUCTION_ENVIRONMENT)
         if values_equivalent(current[name], prod_value) is False:
-            cloud_vs_self_managed[name] = (current[name], prod_value)
+            cloud_vs_default[name] = (current[name], prod_value)
 
     # Flags whose served default differs *between* LaunchDarkly environments
     # (e.g. production vs staging), which usually only happens during a staged
@@ -869,7 +881,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(
         "Discrepancies beyond the known-exceptions allowlists: "
         f"{len(unexpected_missing)} missing, {len(unexpected_stale)} stale, "
-        f"{len(cloud_vs_self_managed)} cloud-vs-self-managed, "
+        f"{len(cloud_vs_default)} cloud-vs-default, "
         f"{len(env_divergences)} cross-environment."
     )
 
@@ -888,14 +900,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             unexpected_stale,
         )
 
-    if cloud_vs_self_managed:
+    if cloud_vs_default:
         print(
             f"--- ERROR: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
-            f"differs from the self-managed compiled-in default"
+            f"differs from the compiled-in default"
         )
-        for name in sorted(cloud_vs_self_managed):
-            mz_value, prod_value = cloud_vs_self_managed[name]
-            print(f"  {name}: self-managed={mz_value!r} cloud={prod_value!r}")
+        for name in sorted(cloud_vs_default):
+            mz_value, prod_value = cloud_vs_default[name]
+            print(f"  {name}: default={mz_value!r} cloud={prod_value!r}")
         print(
             "Reconcile the compiled-in default, or -- if this is intentional "
             "cloud-only tuning -- add the flag to INTENTIONAL_LD_OVERRIDES."
@@ -932,7 +944,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     failures = {
         "missing": unexpected_missing,
         "stale": unexpected_stale,
-        "cloud-vs-self-managed": set(cloud_vs_self_managed),
+        "cloud-vs-default": set(cloud_vs_default),
         "cross-environment": set(env_divergences),
     }
     total = sum(len(v) for v in failures.values())
