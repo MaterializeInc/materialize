@@ -5083,6 +5083,25 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
             let url = match tc.directive.as_str() {
                 "mcp-agent" => &agents_url,
                 "mcp-developer" => &developer_url,
+                // Setup SQL, executed over pgwire as the default HTTP user
+                // (the role the MCP endpoints run as), e.g. to create user
+                // objects for the `query` tool to target.
+                "sql" => {
+                    let mut client = server
+                        .pg_config()
+                        .user(&HTTP_DEFAULT_USER.name)
+                        .connect(postgres::NoTls)
+                        .unwrap();
+                    // One statement at a time: DDL is not allowed in the
+                    // implicit transaction block of a multi-statement query.
+                    for stmt in tc.input.split(';') {
+                        let stmt = stmt.trim();
+                        if !stmt.is_empty() {
+                            client.batch_execute(stmt).unwrap();
+                        }
+                    }
+                    return "ok\n".to_string();
+                }
                 other => panic!("unknown directive: {}", other),
             };
 

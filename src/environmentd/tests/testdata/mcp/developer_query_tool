@@ -65,6 +65,43 @@ mcp-developer
 {"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: mz_catalog_server\\n\"\n  ]\n]"}],"isError":false}}
 
 # =============================================================================
+# query - EXPLAIN ANALYZE
+# =============================================================================
+
+# EXPLAIN ANALYZE is the headline use case for the dev query tool (it needs a
+# cluster, which query_system_catalog cannot provide). It does NOT parse to
+# Statement::ExplainPlan like plain EXPLAIN does: EXPLAIN ANALYZE ... FOR
+# INDEX/MATERIALIZED VIEW parses to Statement::ExplainAnalyzeObject and
+# EXPLAIN ANALYZE CLUSTER parses to Statement::ExplainAnalyzeCluster, so the
+# read-only validator must allow those variants explicitly.
+#
+# The AS SQL forms are used here because they exercise the exact same
+# statement variants through validation, planning, and execution, but return
+# the generated introspection SQL instead of executing it, which keeps the
+# output deterministic (the executed forms read mz_introspection, whose
+# contents depend on dataflow hydration timing).
+
+sql
+CREATE TABLE t (a int);
+CREATE INDEX t_idx ON t (a)
+----
+ok
+
+# EXPLAIN ANALYZE ... FOR INDEX (Statement::ExplainAnalyzeObject).
+mcp-developer
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN ANALYZE MEMORY FOR INDEX t_idx AS SQL"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":14,"result":{"content":[{"type":"text","text":"[\n  [\n    \"WITH\\n    summary_memory AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_memory,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN\\n                                sum(mas.records) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    )\\nSELECT\\n    repeat(' ', nesting * 2) || operator AS operator,\\n    pg_size_pretty(sm.total_memory) AS total_memory,\\n    sm.total_records AS total_records\\nFROM\\n    mz_introspection.mz_lir_mapping AS mlm\\n        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)\\n        JOIN\\n            mz_introspection.mz_mappable_objects AS mo\\n            ON (mlm.global_id = mo.global_id)\\nWHERE mo.name = 'materialize.public.t_idx'\\nORDER BY mlm.lir_id DESC;\"\n  ]\n]"}],"isError":false}}
+
+# EXPLAIN ANALYZE CLUSTER (Statement::ExplainAnalyzeCluster).
+mcp-developer
+{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN ANALYZE CLUSTER MEMORY AS SQL"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":15,"result":{"content":[{"type":"text","text":"[\n  [\n    \"WITH\\n    per_operator_memory_totals AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    ),\\n    object_memory_totals AS\\n    (\\n        SELECT\\n            pomt.global_id AS global_id,\\n            sum(pomt.total_memory) AS total_memory,\\n            sum(pomt.total_records) AS total_records\\n        FROM per_operator_memory_totals AS pomt\\n        GROUP BY pomt.global_id\\n    )\\nSELECT\\n    mo.name AS object,\\n    mo.global_id AS global_id,\\n    pg_size_pretty(omt.total_memory) AS total_memory,\\n    omt.total_records AS total_records\\nFROM\\n    mz_introspection.mz_mappable_objects AS mo\\n        LEFT JOIN object_memory_totals AS omt USING(global_id)\\nORDER BY\\n    omt.total_memory DESC NULLS LAST,\\n    total_records DESC NULLS LAST,\\n    mo.name DESC;\"\n  ]\n]"}],"isError":false}}
+
+# =============================================================================
 # query - writes and DDL rejected
 # =============================================================================
 

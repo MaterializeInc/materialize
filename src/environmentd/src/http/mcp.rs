@@ -1190,15 +1190,23 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
         )));
     }
 
-    // Allowlist: Only SELECT, SHOW, and EXPLAIN statements permitted
+    // Allowlist: SELECT, SHOW, and every read-only EXPLAIN variant. EXPLAIN
+    // expands to six distinct Statement variants in the parser (ExplainPlan
+    // covers only the most common one). Listing them out exhaustively beats
+    // matching by string prefix so a new write-capable EXPLAIN variant — were
+    // one ever added — would have to be considered here.
     let stmt = &stmts[0];
     use mz_sql_parser::ast::Statement;
 
     match &stmt.ast {
-        Statement::Select(_) | Statement::Show(_) | Statement::ExplainPlan(_) => {
-            // Allowed - read-only operations
-            Ok(())
-        }
+        Statement::Select(_)
+        | Statement::Show(_)
+        | Statement::ExplainPlan(_)
+        | Statement::ExplainPushdown(_)
+        | Statement::ExplainTimestamp(_)
+        | Statement::ExplainSinkSchema(_)
+        | Statement::ExplainAnalyzeObject(_)
+        | Statement::ExplainAnalyzeCluster(_) => Ok(()),
         _ => Err(McpRequestError::QueryValidationFailed(
             "Only SELECT, SHOW, and EXPLAIN statements are allowed".to_string(),
         )),
@@ -1440,7 +1448,18 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_readonly_query_explain() {
+        // Every read-only EXPLAIN variant must be accepted. Each line
+        // corresponds to a distinct Statement::Explain* arm of the parser; if
+        // one of them is dropped from the validator the test that lost its
+        // arm will fail, naming the variant.
         assert!(validate_readonly_query("EXPLAIN SELECT 1").is_ok());
+        assert!(
+            validate_readonly_query("EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM mz_tables").is_ok()
+        );
+        assert!(validate_readonly_query("EXPLAIN TIMESTAMP FOR SELECT 1").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR INDEX foo").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE CLUSTER MEMORY").is_ok());
     }
 
     #[mz_ore::test]
