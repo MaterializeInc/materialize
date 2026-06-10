@@ -937,6 +937,7 @@ impl CatalogState {
             }
             ConnectionDetails::Csr(_)
             | ConnectionDetails::GlueSchemaRegistry(_)
+            | ConnectionDetails::Gcp(_)
             | ConnectionDetails::Postgres(_)
             | ConnectionDetails::MySql(_)
             | ConnectionDetails::SqlServer(_)

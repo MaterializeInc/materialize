@@ -80,6 +80,7 @@ use crate::dyncfgs::{
 use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
+pub mod gcp;
 pub mod inline;
 pub mod string_or_secret;
 
@@ -369,6 +370,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshConnection),
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(gcp::GcpConnection),
     MySql(MySqlConnection<C>),
     SqlServer(SqlServerConnectionDetails<C>),
     IcebergCatalog(IcebergCatalogConnection<C>),
@@ -388,6 +390,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
             Connection::Ssh(ssh) => Connection::Ssh(ssh),
             Connection::Aws(aws) => Connection::Aws(aws),
             Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
+            Connection::Gcp(gcp) => Connection::Gcp(gcp),
             Connection::MySql(mysql) => Connection::MySql(mysql.into_inline_connection(r)),
             Connection::SqlServer(sql_server) => {
                 Connection::SqlServer(sql_server.into_inline_connection(r))
@@ -410,6 +413,7 @@ impl<C: ConnectionAccess> Connection<C> {
             Connection::Ssh(conn) => conn.validate_by_default(),
             Connection::Aws(conn) => conn.validate_by_default(),
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
+            Connection::Gcp(conn) => conn.validate_by_default(),
             Connection::MySql(conn) => conn.validate_by_default(),
             Connection::SqlServer(conn) => conn.validate_by_default(),
             Connection::IcebergCatalog(conn) => conn.validate_by_default(),
@@ -436,6 +440,7 @@ impl Connection<InlinedConnection> {
             Connection::Ssh(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Gcp(conn) => conn.validate(id, storage_configuration).await?,
             Connection::MySql(conn) => {
                 conn.validate(id, storage_configuration).await?;
             }
@@ -524,6 +529,8 @@ pub enum ConnectionValidationError {
     SqlServer(#[from] SqlServerConnectionValidationError),
     #[error(transparent)]
     Aws(#[from] AwsConnectionValidationError),
+    #[error(transparent)]
+    Gcp(#[from] gcp::GcpConnectionValidationError),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
 }
@@ -536,6 +543,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::MySql(e) => e.detail(),
             ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
+            ConnectionValidationError::Gcp(e) => e.detail(),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -547,6 +555,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::MySql(e) => e.hint(),
             ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
+            ConnectionValidationError::Gcp(e) => e.hint(),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -557,6 +566,7 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
+            (Self::Gcp(s), Self::Gcp(o)) => s.alter_compatible(id, o),
             (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o),
             (Self::Csr(s), Self::Csr(o)) => s.alter_compatible(id, o),
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),

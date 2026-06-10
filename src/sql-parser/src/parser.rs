@@ -2456,9 +2456,9 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection_type = match self
-            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, ICEBERG])?
-        {
+        let connection_type = match self.expect_one_of_keywords(&[
+            AWS, GCP, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, ICEBERG,
+        ])? {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
                     CreateConnectionType::AwsPrivatelink
@@ -2469,6 +2469,7 @@ impl<'a> Parser<'a> {
                     CreateConnectionType::Aws
                 }
             }
+            GCP => CreateConnectionType::Gcp,
             KAFKA => CreateConnectionType::Kafka,
             CONFLUENT => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
@@ -2878,10 +2879,14 @@ impl<'a> Parser<'a> {
                     self.expect_keywords(&[ACCESS, KEY])?;
                     ConnectionOptionName::SecretAccessKey
                 }
-                SERVICE => {
-                    self.expect_keyword(NAME)?;
-                    ConnectionOptionName::ServiceName
-                }
+                SERVICE => match self.expect_one_of_keywords(&[ACCOUNT, NAME])? {
+                    ACCOUNT => {
+                        self.expect_keyword(KEY)?;
+                        ConnectionOptionName::ServiceAccountKey
+                    }
+                    NAME => ConnectionOptionName::ServiceName,
+                    _ => unreachable!(),
+                },
                 SESSION => {
                     self.expect_keyword(TOKEN)?;
                     ConnectionOptionName::SessionToken
