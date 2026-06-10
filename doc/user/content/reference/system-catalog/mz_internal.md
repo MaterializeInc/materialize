@@ -829,7 +829,7 @@ environment-wide value for a given cluster.
 <!-- RELATION_SPEC mz_internal.mz_cluster_system_parameters -->
 | Field        | Type     | Meaning                                                                                  |
 | ------------ | -------- | --------                                                                                 |
-| `cluster_id` | [`text`] | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog#mz_clusters).     |
+| `cluster_id` | [`text`] | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).     |
 | `name`       | [`text`] | The name of the cluster-coherent system parameter.                                       |
 | `value`      | [`text`] | The cluster-scoped value of the system parameter, as resolved from LaunchDarkly.         |
 
@@ -843,7 +843,7 @@ environment-wide value for a given cluster replica.
 <!-- RELATION_SPEC mz_internal.mz_replica_system_parameters -->
 | Field        | Type     | Meaning                                                                                          |
 | ------------ | -------- | --------                                                                                         |
-| `replica_id` | [`text`] | The ID of the cluster replica. Corresponds to [`mz_cluster_replicas.id`](#mz_cluster_replicas).  |
+| `replica_id` | [`text`] | The ID of the cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).  |
 | `name`       | [`text`] | The name of the replica-local system parameter.                                                  |
 | `value`      | [`text`] | The replica-scoped value of the system parameter, as resolved from LaunchDarkly.                 |
 
