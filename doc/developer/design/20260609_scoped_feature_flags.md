@@ -54,8 +54,11 @@ not wired to LaunchDarkly.
   silently inherit an override that was meant for the previous incarnation,
   unless the override was authored as a durable predicate (e.g. by name or size
   family) that intentionally applies to the new object too.
-- Behaviour is well-defined when LaunchDarkly is unreachable (same fallback
-  story as today's global flags: fall back to the environment-wide value).
+- Scoped values are **durable**: they survive an `environmentd` restart and
+  remain in effect while LaunchDarkly is slow to sync or unavailable. Resolution
+  falls back to the environment-wide value only on a *cold cache* — i.e. an
+  object we have never successfully evaluated against LD. This matches how
+  environment-wide flags already persist and survive an LD outage.
 
 ## Out of Scope
 
@@ -282,29 +285,53 @@ accidentally carry over; because predicates key on stable names/families, role
 intent survives recreate by design. The operator picks the behavior by choosing
 the attribute. This is why we expose **both** identifiers on each context.
 
-### Storage: in-memory, reconciled from LD — not `ALTER SYSTEM ... FOR CLUSTER`
+### Storage: a durable cache, written solely by the sync loop
 
-The source of truth is the LD ruleset (which targets by name/attributes), and
-the sync loop re-evaluates every tick. So the scoped layer is best modeled as a
-**cache of a continuous LD evaluation**, not durable user-authored state:
+Scoped overrides are **persisted**, so they survive an `environmentd` restart and
+stay in effect while LaunchDarkly is slow to sync or unavailable. This is
+required: LD may take a while to connect/stream after a restart, or be
+unreachable, and during that window we must serve the last-known scoped values
+rather than reverting to environment-wide defaults. It also removes an asymmetry
+— environment-wide flags already persist in the catalog (via the existing
+`ALTER SYSTEM` path) and survive an LD outage; the scoped layer should too.
 
-- The scoped layer is a `BTreeMap<ClusterId, Overrides>` and
-  `BTreeMap<ReplicaId, Overrides>` held in `environmentd`, rebuilt each sync tick
-  by evaluating LD (with the appropriate contexts) for each live cluster/replica
-  in the catalog. We store only values that differ from the environment-wide
-  value, keeping the maps sparse.
-- Drop a cluster/replica → it leaves the catalog → it is no longer evaluated →
-  it falls out of the map. Nothing durable lingers, so nothing can bind a stale
-  override to a recreated object.
-- On `environmentd` restart or LD outage, the maps are simply empty until
-  re-derived, and resolution falls back to the environment-wide value — the same
-  fallback story global flags have today.
+The scoped layer is a durable catalog collection, keyed by **object id**, with an
+in-memory working copy used for resolution:
 
-We deliberately **reject** persisting scoped overrides as `ALTER SYSTEM SET ...
-FOR CLUSTER <name>` DDL (see Alternatives): it would force a name-vs-id binding
-decision, tempt a second (human) writer that the sync loop would overwrite, and
-require explicit GC of dangling entries — reintroducing exactly the recreate
-ambiguity the in-memory model avoids.
+```
+(Cluster(ClusterId) | Replica(ReplicaId), parameter_name) -> value
+```
+
+The **sync loop is the sole writer**; there is no user-facing
+`ALTER SYSTEM ... FOR CLUSTER` DDL (see Alternatives). We store only values that
+differ from the environment-wide value, keeping the collection sparse.
+
+Lifecycle:
+
+- **Startup:** load the persisted collection into the working maps, so scoped
+  values are in effect immediately — no waiting for the first LD sync.
+- **LD reachable:** each successful tick reconciles the collection to LD's current
+  evaluation, *including removals* — an entry is dropped when LD no longer serves
+  a non-default value for it (distinguished via the `variation_detail` reason, as
+  on the global path), so removing an LD rule propagates.
+- **LD slow / unavailable:** keep serving the last persisted values; do **not**
+  revert to the environment-wide value. This is the case that motivates
+  persistence.
+- **Cold cache + LD unavailable** (first-ever startup, object never yet
+  evaluated): fall back to the environment-wide value — unavoidable, since we
+  have never observed LD for it.
+
+Crucially, persisting does **not** reintroduce the recreate ambiguity that sank
+the `ALTER SYSTEM ... FOR CLUSTER` DDL alternative, because of the monotonic id
+allocator (`USER_CLUSTER_ID_ALLOC_KEY`): ids are **never reused**, so a persisted
+entry keyed by a dropped object's id is **inert** — it can never match a future
+object. A recreated same-named cluster (new id) starts with no cached overrides;
+a name-targeting LD rule re-applies on the next sync under the new id, while an
+incarnation pin keyed by the old id never resurfaces. GC is therefore *not* a
+correctness concern, only hygiene: entries for object ids absent from the catalog
+are pruned lazily (on startup and on each successful reconcile). This is the same
+non-reuse property the dual-identity scheme already relies on (§Identity &
+recreate semantics).
 
 ### Resolution: two existing per-scope boundaries
 
@@ -387,16 +414,22 @@ Ordered to de-risk the cleaner boundary first:
    Annotate the parameters the two use cases need (the target optimizer features
    as `Cluster`; `lgalloc` / pager / LZ4 as `Replica`). This is a prerequisite
    for the evaluation steps below, since the sync loop keys off the class.
-1. **Replica-local dyncfg push (use case 2).** Add the `replica` context kind and
-   per-replica evaluation; compute per-replica/size override maps in
-   `environmentd` (in-memory); resolve at the controller's dyncfg push.
-   Demonstrate `replica_size_family = "legacy"` toggling `lgalloc` only on legacy
-   replicas. Zero SQL / catalog / `clusterd` changes.
-2. **Cluster-coherent optimizer flags (use case 1).** Add the `cluster` context
+1. **Replica-local dyncfg push (use case 2), in-memory first.** Add the `replica`
+   context kind and per-replica evaluation; compute per-replica/size override maps
+   in `environmentd` (in-memory, not yet persisted); resolve at the controller's
+   dyncfg push. Demonstrate `replica_size_family = "legacy"` toggling `lgalloc`
+   only on legacy replicas. This validates the eval + push path cheaply, with no
+   catalog/`clusterd` changes; persistence follows next.
+2. **Persist the scoped cache.** Add the durable catalog collection keyed by
+   object id, load it into the working maps on startup, and have the sync loop
+   reconcile it (incl. removals + lazy prune). Demonstrate that scoped values
+   survive an `environmentd` restart and an LD outage, falling back to
+   environment-wide only on a cold cache.
+3. **Cluster-coherent optimizer flags (use case 1).** Add the `cluster` context
    kind (replica-free evaluation); feed the resolved cluster layer into
    `OptimizerFeatureOverrides`. Demonstrate an optimizer feature differing on
    `mz_catalog_server` vs. user clusters.
-3. **Introspection.** Expose resolved scoped values via `mz_internal` relations
+4. **Introspection.** Expose resolved scoped values via `mz_internal` relations
    for debugging (e.g. `mz_cluster_system_parameters`,
    `mz_replica_system_parameters`).
 
@@ -411,11 +444,17 @@ with `contextKind = "cluster"` and `"replica"` cases.
   resolved replica-free; a replica-only model cannot express "evaluate
   independent of any replica" and would permit incoherent per-replica plan
   divergence.
-- **Persisted `ALTER SYSTEM ... FOR CLUSTER` DDL.** Durable and introspectable,
-  but forces a name-vs-id binding choice, invites a human writer the sync loop
-  overwrites, and needs explicit dangling-entry GC on drop. The in-memory
-  reconciled model sidesteps all three. (We can revisit durable persistence later
-  if surviving an LD outage with non-default scoped values becomes a requirement.)
+- **User-facing `ALTER SYSTEM ... FOR CLUSTER` DDL.** Note that *persistence
+  itself is adopted* (see Storage) — what we reject is exposing it as **user
+  DDL**. A human-writable scoped setting would force a name-vs-id binding choice,
+  invite a second writer the sync loop overwrites, and need eager dangling-entry
+  GC. The internal, id-keyed, sync-loop-only durable cache gets the durability
+  without any of these: keying by id avoids the binding choice, a sole writer
+  avoids the conflict, and non-reused ids make stale entries inert (lazy GC).
+- **Pure in-memory cache (no persistence).** Simpler, but loses the last-known
+  values across an `environmentd` restart and during an LD outage — exactly when
+  we most need them — so resolution would wrongly revert to environment-wide
+  defaults until LD re-syncs. Rejected for that reason.
 - **Universal `SystemVars` layering (`system < cluster < session`).** General but
   large/risky, touching every read site. Resolving at the two existing boundaries
   covers both use cases with far less blast radius; this can evolve toward general
