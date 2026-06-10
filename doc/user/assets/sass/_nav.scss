@@ -1,6 +1,6 @@
 .nav {
     border-bottom: 1px solid var(--divider-light);
-    // background: var(--bg-nav);
+    background: var(--bg-nav);
     backdrop-filter: saturate(0.5) blur(5px);
     position: fixed;
     width: 100vw;
@@ -60,7 +60,7 @@
         &:focus,
         &.active {
             text-decoration: none;
-            color: oklch(0.6541 0.2052 293.72);
+            color: var(--highlight);
         }
     }
 
