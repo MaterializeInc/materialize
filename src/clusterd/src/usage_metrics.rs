@@ -21,6 +21,11 @@ use tracing::{debug, error};
 pub(crate) struct Collector {
     pub disk_root: Option<PathBuf>,
 }
+// current state:
+// memory, get this from metrics server
+// CPU, get this from metrics server
+// SWAP (memory + disk), get this from in-process clusterd, also includes (memory limiter)
+//        Rather than in-process, we can scrape cadvisor ourselves. But wouldn't include memory limiter.
 
 impl Collector {
     /// Collect current system usage metrics.
