@@ -145,6 +145,7 @@ impl Catalog {
             role_auth_by_id: imbl::OrdMap::new(),
             network_policies_by_name: imbl::OrdMap::new(),
             system_configuration: Arc::new(system_configuration),
+            scoped_system_parameters: Default::default(),
             default_privileges: Arc::new(DefaultPrivileges::default()),
             system_privileges: Arc::new(PrivilegeMap::default()),
             comments: Arc::new(CommentsMap::default()),
