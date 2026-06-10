@@ -38,9 +38,12 @@ many just ride their compiled-in default. The check therefore runs with
 hard failure once the existing backlog has been triaged.
 
 The set of synchronized parameters (and their defaults) is obtained by booting
-Materialize and running `SHOW ALL` as `mz_system`, then filtering out the
-per-session variables (which are not synchronized) and `enable_launchdarkly`
-(the kill switch, which is explicitly excluded from `iter_synced`).
+Materialize -- with an empty `system_parameter_defaults` and no LaunchDarkly SDK
+key, so that `SHOW ALL` reports the compiled-in defaults rather than mzcompose's
+CI overrides or LaunchDarkly-synced values -- and running `SHOW ALL` as
+`mz_system`, then filtering out the per-session variables (which are not
+synchronized) and `enable_launchdarkly` (the kill switch, which is explicitly
+excluded from `iter_synced`).
 
 Caveat: `SHOW ALL` hides a parameter that is gated behind a *disabled*
 feature flag (`VarDefinition::require_feature_flag`). No system parameter uses
@@ -193,7 +196,20 @@ def collect_synced_parameters(
     synchronized parameters. Returns `None` if the service could not be booted,
     which is treated as best-effort for older releases."""
     try:
-        with c.override(Materialized(image=image, sanity_restart=False)):
+        with c.override(
+            Materialized(
+                image=image,
+                sanity_restart=False,
+                # Read Materialize's *compiled-in* defaults: pass an empty
+                # `system_parameter_defaults` so mzcompose does not apply its CI
+                # test overrides, and don't set an SDK key so the instance does
+                # not sync from LaunchDarkly. `SHOW ALL` then reflects the value
+                # environmentd falls back to when a flag is absent from
+                # LaunchDarkly, which is what the divergence check compares
+                # against.
+                system_parameter_defaults={},
+            )
+        ):
             c.up("materialized")
             params = synced_parameters(c)
             c.stop("materialized")
