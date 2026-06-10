@@ -1192,3 +1192,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17086  mz_session_role_memberships
 17087  mz_builtin_sources
 17088  mz_indexes
+17089  mz_cluster_system_parameters
+17090  mz_replica_system_parameters
