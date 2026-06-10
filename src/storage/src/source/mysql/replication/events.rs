@@ -57,6 +57,9 @@ fn mysql_table_name(
     }
 }
 
+/// This function has the same intent as table_ident except handles the object name type parsed out of the sql by sqlparser rather than a raw string.
+/// The ObjectName type is more flexible than the constraints for an identifier in mysql. i.e. it has a function type, which appears to only be supported
+/// in snowflake. It also has a vector for identifier components, however a table identifier from the binlog should only have 1 or 2 components - never 0 or more than 2
 fn table_ident_from_object_name(
     name: &ObjectName,
     current_schema: &str,
@@ -68,7 +71,7 @@ fn table_ident_from_object_name(
             "Invalid table name from QueryEvent, function identifiers not supported in mysql: {}", name
         ))),
     }).collect::<Result<_, _>>()?;
-    if !(processed_name_parts.len() > 0 && processed_name_parts.len() <= 2) {
+    if processed_name_parts.len() != 1 && processed_name_parts.len() != 2) {
         return Err(TransientError::Generic(anyhow::anyhow!(
             "Invalid table name from QueryEvent: {}",
             name
