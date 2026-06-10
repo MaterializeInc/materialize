@@ -456,6 +456,12 @@ enum Command {
         /// forcing a save. Hidden because it's an editor-integration affordance.
         #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath, hide = true)]
         overlay: Option<PathBuf>,
+        /// Run tests against the profile's Materialize region instead of
+        /// spinning up a local Docker container. Use this when Docker isn't
+        /// available. Tests still run in isolation: each one builds its inputs
+        /// as temporary objects that are discarded when it finishes.
+        #[arg(long, hide = true)]
+        no_docker: bool,
     },
 
     /// Clean up a staging deployment by dropping all resources
@@ -1029,8 +1035,11 @@ async fn run(args: Args) -> Result<(), CliError> {
             filter,
             junit_xml,
             overlay,
+            no_docker,
         } => {
-            let settings = load_settings(false)?;
+            // `--no-docker` connects to the profile's region, so it needs a
+            // connection; the default Docker path supplies its own.
+            let settings = load_settings(no_docker)?;
             if log::json_output_enabled() {
                 return Err(CliError::Message(
                     "--output json is not supported for the 'test' command".to_string(),
@@ -1041,6 +1050,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 filter.as_deref(),
                 junit_xml.as_deref(),
                 overlay.as_deref(),
+                no_docker,
             )
             .await
         }

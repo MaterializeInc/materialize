@@ -332,13 +332,21 @@ impl TestResults {
 /// - [`CliError::TestsFilterMissed`] if `filter` matched no tests
 /// - Project planning, type-check, or JUnit I/O errors are propagated as
 ///   [`CliError::Message`] or the corresponding variant
+/// Connection source for executing unit tests: an ephemeral Docker container
+/// (the default) or the profile's configured Materialize region (`--no-docker`).
+enum TestTarget<'a> {
+    Docker(&'a DockerRuntime),
+    Profile(&'a Client),
+}
+
 pub async fn run(
     settings: &Settings,
     filter: Option<&str>,
     junit_xml: Option<&Path>,
     overlay: Option<&Path>,
+    no_docker: bool,
 ) -> Result<(), CliError> {
-    let results = run_tests(settings, filter, overlay).await?;
+    let results = run_tests(settings, filter, overlay, no_docker).await?;
     let test_results = match results {
         Some(results) => results,
         None => {
@@ -378,6 +386,7 @@ async fn run_tests(
     settings: &Settings,
     filter: Option<&str>,
     overlay: Option<&Path>,
+    no_docker: bool,
 ) -> Result<Option<TestResults>, CliError> {
     let directory = &settings.directory;
     let fs = match overlay {
@@ -396,6 +405,18 @@ async fn run_tests(
     .await?;
     let empty_types = Types::default();
     let runtime = DockerRuntime::new().with_image(&settings.docker_image);
+    // With `--no-docker`, run every test through a single connection to the
+    // profile's region instead of an ephemeral container. Tests stay isolated
+    // because each builds its inputs as temporary objects (dropped per test).
+    let profile_client = if no_docker {
+        Some(
+            Client::connect_with_profile(settings.connection().clone())
+                .await
+                .map_err(CliError::Connection)?,
+        )
+    } else {
+        None
+    };
     let test_filter = filter.map(TestFilter::parse);
 
     if planned_project.tests.is_empty() {
@@ -413,6 +434,10 @@ async fn run_tests(
                 continue;
             }
         }
+        let target = match &profile_client {
+            Some(client) => TestTarget::Profile(client),
+            None => TestTarget::Docker(&runtime),
+        };
         let start_time = Instant::now();
         let outcome = run_single_test(
             &planned_project,
@@ -420,7 +445,7 @@ async fn run_tests(
             test,
             &types_cache,
             &types_lock,
-            &runtime,
+            target,
             &empty_types,
         )
         .await?;
@@ -466,7 +491,7 @@ async fn run_single_test(
     test: &unit_test::UnitTest,
     types_cache: &Option<ProjectCache>,
     types_lock: &Types,
-    runtime: &DockerRuntime,
+    target: TestTarget<'_>,
     empty_types: &Types,
 ) -> Result<TestOutcome, CliError> {
     let dependencies = planned_project
@@ -488,8 +513,15 @@ async fn run_single_test(
         )));
     }
 
-    let client = runtime_client(runtime, empty_types).await?;
-    if let Err(e) = validate_at_time(&client, test).await? {
+    let owned_client;
+    let client: &Client = match target {
+        TestTarget::Profile(client) => client,
+        TestTarget::Docker(runtime) => {
+            owned_client = runtime_client(runtime, empty_types).await?;
+            &owned_client
+        }
+    };
+    if let Err(e) = validate_at_time(client, test).await? {
         return Ok(TestOutcome::ValidationFailed(ValidationFailure::AtTime(e)));
     }
 
