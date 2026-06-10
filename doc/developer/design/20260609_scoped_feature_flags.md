@@ -195,6 +195,29 @@ the controller (to resolve a given replica's family at dyncfg-push time), and it
 versions and deploys with the rest of the size configuration rather than living
 in a second place that could drift.
 
+We deliberately do **not** ask LD rule authors to derive the family from the
+size string with `startsWith` / `endsWith` operators. The family is a *curated
+mapping*, not a stable encoding: the new families follow `<family>.<version>`
+(`M.1`, `D.1`) and would prefix-match, but `cc` and the legacy t-shirt sizes
+(`xsmall`, `2xlarge`, numeric `1`/`2`/`4`, …) share no clean affix, and `legacy`
+is effectively *"everything not in another family"* — which cannot be expressed
+as a positive affix clause at all. Affix matching would also scatter the taxonomy
+across every rule and break whenever a new size is added that does not fit the
+assumed pattern. The explicit attribute, sourced from the size map, avoids all of
+this. We also keep the raw `replica_size` attribute for fine-grained targeting
+(exactly `D.1` vs all of `D`): family is the coarse axis, size the fine one.
+
+This is the opposite call from `is_builtin`, and the distinction is worth stating
+because the two look similar ("can't we just derive it from the id / size
+string?"). `is_builtin` *is* a clean invariant we fully control —
+`matches!(id, ClusterId::System(_))`, equivalently the rendered id starting with
+`s` — so the attribute is semantic sugar: derivable, but kept because
+`is_builtin = true` is more readable in rules and does not bake the id-rendering
+convention into every rule (it must be computed from the enum variant, **not** by
+string-prefixing the rendered id). The rule of thumb: derive-from-string is fine
+for a clean invariant we own (`is_builtin`); it is a trap for a curated product
+mapping (`replica_size_family`).
+
 ### Scope declaration is required, per parameter
 
 Every synced parameter must declare its scope class as part of its definition.
