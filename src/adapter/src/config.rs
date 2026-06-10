@@ -46,7 +46,7 @@ pub use sync::system_parameter_sync;
 /// This is the in-memory working copy. A durable backing (so values survive an
 /// `environmentd` restart and LD outage) is a follow-up; see the scoped feature
 /// flags design.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScopedParameters {
     /// Cluster-coherent overrides, keyed by cluster id. (Populated by the
     /// cluster-coherent path; empty for the replica-local path.)
