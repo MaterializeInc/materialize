@@ -844,6 +844,259 @@ fn lag_lead_inner_ignore_nulls<'a>(
     result
 }
 
+/// Specialized variant of `lag_lead` for the `LagLeadConst` aggregate. The
+/// per-row payload is the bare input Datum (no 3-field `RecordCreate`
+/// wrapper). The sign of `offset` encodes direction (negative = lag, positive
+/// = lead); `default` is the row containing the constant default value as a
+/// single field.
+fn lag_lead_const<'a, I>(
+    datums: I,
+    callers_temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    ignore_nulls: bool,
+    offset: i32,
+    default: &Row,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let temp_storage = RowArena::new();
+    let iter = lag_lead_const_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        ignore_nulls,
+        offset,
+        default,
+    );
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `lag_lead_const`, but doesn't perform the final wrapping in a list,
+/// returning an Iterator instead.
+fn lag_lead_const_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+    ignore_nulls: bool,
+    offset: i32,
+    default: &Row,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Sort the datums according to the ORDER BY expressions and return the
+    // (OriginalRow, InputValue) record. Unlike the generic `lag_lead_no_list`,
+    // the per-row payload is the bare input Datum (no encoded-args record).
+    let datums = order_aggregate_datums(datums, order_by);
+
+    let (orig_rows, args): (Vec<_>, Vec<_>) = datums
+        .into_iter()
+        .map(|d| {
+            let mut iter = d.unwrap_list().iter();
+            let original_row = iter.next().unwrap();
+            let input_value = iter.next().unwrap();
+            (original_row, input_value)
+        })
+        .unzip();
+
+    // Copy the default Datum into `callers_temp_storage` so that its lifetime
+    // matches the iterator's output (`'b`) and can mingle with the input
+    // datums in the inner loop's result vector.
+    let default_datum = callers_temp_storage.push_unary_row(default.clone());
+    let result = if ignore_nulls {
+        lag_lead_inner_const_ignore_nulls(&args, offset, default_datum)
+    } else {
+        lag_lead_inner_const_respect_nulls(&args, offset, default_datum)
+    };
+
+    callers_temp_storage.reserve(result.len());
+    result
+        .into_iter()
+        .zip_eq(orig_rows)
+        .map(|(result_value, original_row)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
+            })
+        })
+}
+
+/// RESPECT NULLS inner loop for `LagLeadConst`. The offset is known at plan
+/// time, so we drop the per-row null/sign branches that
+/// `lag_lead_inner_respect_nulls` had to perform.
+#[allow(clippy::as_conversions)]
+fn lag_lead_inner_const_respect_nulls<'a>(
+    args: &[Datum<'a>],
+    offset: i32,
+    default: Datum<'a>,
+) -> Vec<Datum<'a>> {
+    // Check once up front that even the largest index fits in `i64`, then do
+    // silent `as` conversions from `usize` indexes to `i64` indexes inside
+    // the per-row loop. Mirrors `lag_lead_inner_ignore_nulls_const`.
+    if i64::try_from(args.len()).is_err() {
+        panic!("window partition way too big")
+    }
+    let offset = i64::from(offset);
+    let mut result: Vec<Datum> = Vec::with_capacity(args.len());
+    for idx in 0..args.len() {
+        let idx = idx as i64;
+
+        // Get a Datum from `args`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => args.get(usize::cast_from(i)).copied(),
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        let lagged_value = datums_get(idx + offset).unwrap_or(default);
+        result.push(lagged_value);
+    }
+
+    result
+}
+
+/// IGNORE NULLS inner loop for `LagLeadConst`. Dispatches once on the sign of
+/// the (plan-time-known) offset to a monomorphized helper, removing the
+/// per-row sign branch present in `lag_lead_inner_ignore_nulls`.
+fn lag_lead_inner_const_ignore_nulls<'a>(
+    args: &[Datum<'a>],
+    offset: i32,
+    default: Datum<'a>,
+) -> Vec<Datum<'a>> {
+    if offset == 0 {
+        // Match the semantics of `lag_lead_inner_ignore_nulls`: a 0 offset
+        // under IGNORE NULLS is degenerate. See
+        // https://github.com/MaterializeInc/database-issues/issues/8497
+        return args
+            .iter()
+            .map(|d| {
+                if d.is_null() {
+                    panic!("0 offset in lag/lead IGNORE NULLS");
+                } else {
+                    *d
+                }
+            })
+            .collect();
+    }
+    let abs_offset = offset.unsigned_abs();
+    if offset > 0 {
+        lag_lead_inner_ignore_nulls_const::<true>(args, abs_offset, default)
+    } else {
+        lag_lead_inner_ignore_nulls_const::<false>(args, abs_offset, default)
+    }
+}
+
+/// Monomorphized inner loop for `lag_lead_inner_const_ignore_nulls`.
+/// `FORWARD = true` corresponds to lead (positive offset), `FORWARD = false`
+/// to lag (negative offset). `abs_offset` must be non-zero.
+// `i64` indexes get involved in this function because it's convenient to
+// allow negative indexes and have `datums_get` fail on them, and thus handle
+// the beginning and end of the input vector uniformly, rather than checking
+// underflow separately during index manipulations.
+#[allow(clippy::as_conversions)]
+fn lag_lead_inner_ignore_nulls_const<'a, const FORWARD: bool>(
+    args: &[Datum<'a>],
+    abs_offset: u32,
+    default: Datum<'a>,
+) -> Vec<Datum<'a>> {
+    // We check here once that even the largest index fits in `i64`, and then
+    // do silent `as` conversions from `usize` indexes to `i64` indexes
+    // throughout this function.
+    if i64::try_from(args.len()).is_err() {
+        panic!("window partition way too big")
+    }
+
+    // Preparation: build the skip table appropriate for the (compile-time
+    // known) direction, so we can jump over a run of nulls in constant time.
+    let skip_nulls = if FORWARD {
+        let mut skip_nulls_forward = vec![None; args.len()];
+        let mut last_non_null: i64 = args.len() as i64;
+        let pairs = args
+            .iter()
+            .enumerate()
+            .rev()
+            .zip_eq(skip_nulls_forward.iter_mut().rev());
+        for ((i, d), slot) in pairs {
+            if d.is_null() {
+                *slot = Some(last_non_null);
+            } else {
+                last_non_null = i as i64;
+            }
+        }
+        skip_nulls_forward
+    } else {
+        let mut skip_nulls_backward = vec![None; args.len()];
+        let mut last_non_null: i64 = -1;
+        let pairs = args
+            .iter()
+            .enumerate()
+            .zip_eq(skip_nulls_backward.iter_mut());
+        for ((i, d), slot) in pairs {
+            if d.is_null() {
+                *slot = Some(last_non_null);
+            } else {
+                last_non_null = i as i64;
+            }
+        }
+        skip_nulls_backward
+    };
+
+    // The actual computation.
+    let abs_offset_i64 = i64::from(abs_offset);
+    let mut result: Vec<Datum> = Vec::with_capacity(args.len());
+    for idx in 0..args.len() {
+        let idx = idx as i64; // checked at the beginning of the function that len() fits
+
+        // Get a Datum from `args`. Return None if index is out of range.
+        let datums_get = |i: i64| -> Option<Datum> {
+            match u64::try_from(i) {
+                Ok(i) => args.get(usize::cast_from(i)).copied(),
+                Err(_) => None, // underindexing (negative index)
+            }
+        };
+
+        // We start j from idx, and step j until we have seen `abs_offset`
+        // non-null values or reach the beginning or end of the partition.
+        //
+        // If `abs_offset` is big, then this is slow: Considering the entire
+        // function, it's `O(partition_size * abs_offset)`. However, a common
+        // use case is an offset of 1, for which this doesn't matter.
+        // TODO: For larger offsets, we could have a completely different
+        // implementation that starts the inner loop from the index where we
+        // found the previous result:
+        // https://github.com/MaterializeInc/materialize/pull/29287#discussion_r1738695174
+        let mut j = idx;
+        for _ in 0..abs_offset_i64 {
+            if FORWARD {
+                j += 1;
+            } else {
+                j -= 1;
+            }
+            // Jump over a run of nulls
+            if datums_get(j).is_some_and(|d| d.is_null()) {
+                let ju = j as usize; // `j >= 0` because of the above `is_some_and`
+                j = skip_nulls[ju].expect("checked above that it's null");
+            }
+            if datums_get(j).is_none() {
+                break;
+            }
+        }
+        let lagged_value = match datums_get(j) {
+            Some(datum) => datum,
+            None => default,
+        };
+        result.push(lagged_value);
+    }
+
+    result
+}
+
 /// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
 fn first_value<'a, I>(
     datums: I,
@@ -1186,6 +1439,26 @@ where
                     .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
                     .collect();
                 lag_lead_inner(unwrapped_argss, lag_lead, ignore_nulls)
+            }
+            AggregateFunc::LagLeadConst {
+                order_by: inner_order_by,
+                ignore_nulls,
+                offset,
+                default,
+            } => {
+                assert_eq!(order_by, inner_order_by);
+                // For the const variant, the per-row payload is the bare
+                // input Datum (no encoded-args record). The `encoded_argss`
+                // entries are therefore already the input values.
+                let args = encoded_argss;
+                // Embed the default in `callers_temp_storage` so its lifetime
+                // matches the output Datums.
+                let default_datum = callers_temp_storage.push_unary_row(default.clone());
+                if *ignore_nulls {
+                    lag_lead_inner_const_ignore_nulls(&args, *offset, default_datum)
+                } else {
+                    lag_lead_inner_const_respect_nulls(&args, *offset, default_datum)
+                }
             }
             AggregateFunc::FirstValue {
                 order_by: inner_order_by,
@@ -1917,6 +2190,20 @@ pub enum AggregateFunc {
         lag_lead: LagLeadType,
         ignore_nulls: bool,
     },
+    /// A specialization of `LagLead` for the common case where both the offset
+    /// (`k`) and the default value (`d`) are compile-time constants. The
+    /// per-row payload is the bare input Datum (no 3-field `RecordCreate`
+    /// wrapper). The sign of `offset` encodes direction: negative = lag,
+    /// positive = lead. This is produced by the `specialize_lag_lead` HIR
+    /// transform.
+    LagLeadConst {
+        order_by: Vec<ColumnOrder>,
+        ignore_nulls: bool,
+        /// Sign encodes direction (negative = lag, positive = lead).
+        offset: i32,
+        #[mzreflect(ignore)]
+        default: Row,
+    },
     FirstValue {
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
@@ -2028,6 +2315,19 @@ impl AggregateFunc {
                 lag_lead: lag_lead_type,
                 ignore_nulls,
             } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
+            AggregateFunc::LagLeadConst {
+                order_by,
+                ignore_nulls,
+                offset,
+                default,
+            } => lag_lead_const(
+                datums,
+                temp_storage,
+                order_by,
+                *ignore_nulls,
+                *offset,
+                default,
+            ),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2131,6 +2431,20 @@ impl AggregateFunc {
                 ignore_nulls,
             } => lag_lead_no_list(datums, temp_storage, order_by, lag_lead_type, ignore_nulls)
                 .collect_vec(),
+            AggregateFunc::LagLeadConst {
+                order_by,
+                ignore_nulls,
+                offset,
+                default,
+            } => lag_lead_const_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                *ignore_nulls,
+                *offset,
+                default,
+            )
+            .collect_vec(),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2196,6 +2510,7 @@ impl AggregateFunc {
             | AggregateFunc::Rank { .. }
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
+            | AggregateFunc::LagLeadConst { .. }
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. }
@@ -2258,6 +2573,7 @@ impl AggregateFunc {
             | AggregateFunc::Rank { .. }
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
+            | AggregateFunc::LagLeadConst { .. }
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. }
@@ -2377,6 +2693,37 @@ impl AggregateFunc {
                     element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (column_name, output_type_inner),
+                            (ColumnName::from("?orig_row?"), original_row_type),
+                        ].into(),
+                        custom_id: None,
+                    }),
+                    custom_id: None,
+                }
+            }
+            AggregateFunc::LagLeadConst { offset, .. } => {
+                // The input type for LagLeadConst is ((OriginalRow, ArgValue), OrderByExprs...)
+                // The per-row payload is the bare input Datum (no encoded-args
+                // record), so the output column type is just the input column
+                // type made nullable.
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let value_type = fields[0].unwrap_record_element_type()[1]
+                    .clone()
+                    .nullable(true);
+                // The sign of `offset` encodes lag vs lead.
+                let lag_lead_type = if *offset < 0 {
+                    LagLeadType::Lag
+                } else {
+                    LagLeadType::Lead
+                };
+                let column_name = Self::lag_lead_result_column_name(&lag_lead_type);
+
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
+                        fields: [
+                            (column_name, value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
@@ -2516,6 +2863,22 @@ impl AggregateFunc {
                                                     arg_type,
                                                 );
                                             (name, ty)
+                                        },
+                                        AggregateFunc::LagLeadConst { offset, .. } => {
+                                            // For the const variant the per-call
+                                            // payload is the bare input Datum,
+                                            // not a 3-field encoded-args
+                                            // record. The output type is the
+                                            // arg type made nullable.
+                                            let lag_lead_type = if *offset < 0 {
+                                                LagLeadType::Lag
+                                            } else {
+                                                LagLeadType::Lead
+                                            };
+                                            let name = Self::lag_lead_result_column_name(
+                                                &lag_lead_type,
+                                            );
+                                            (name, arg_type.clone().nullable(true))
                                         },
                                         AggregateFunc::FirstValue { .. } => {
                                             (
@@ -2723,6 +3086,7 @@ impl AggregateFunc {
             | AggregateFunc::Rank { .. }
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
+            | AggregateFunc::LagLeadConst { .. }
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::FusedValueWindowFunc { .. }
@@ -3070,6 +3434,10 @@ impl AggregateFunc {
                 lag_lead: LagLeadType::Lead,
                 ..
             } => "lead",
+            // Specialized constant-args variant. We use a single "lag_lead_const"
+            // name for both directions; the sign of `offset` carries the
+            // lag/lead distinction in EXPLAIN output.
+            Self::LagLeadConst { .. } => "lag_lead_const",
             Self::FirstValue { .. } => "first_value",
             Self::LastValue { .. } => "last_value",
             Self::WindowAggregate { .. } => "window_agg",
@@ -3112,6 +3480,27 @@ where
                     f.write_str("ignore_nulls=true, ")?;
                 }
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                f.write_str("]")
+            }
+            LagLeadConst {
+                order_by,
+                ignore_nulls,
+                offset,
+                default,
+            } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
+                f.write_str(name)?;
+                f.write_str("[")?;
+                if *ignore_nulls {
+                    f.write_str("ignore_nulls=true, ")?;
+                }
+                write!(
+                    f,
+                    "offset={}, default={}, order_by=[{}]",
+                    offset,
+                    default.unpack_first(),
+                    separated(", ", order_by),
+                )?;
                 f.write_str("]")
             }
             FirstValue {

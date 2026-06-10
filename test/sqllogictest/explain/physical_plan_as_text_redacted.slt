@@ -1650,13 +1650,13 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{b}, █, █)))), fused_unnest_list=true)
+      aggr=(lag_lead_const[ignore_nulls=true, offset=3, default=-5, order_by=[]](row(row(row(#0, #1), #1{b}))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=()
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#1{b}, █, █))))
+        map=(row(row(row(#0, #1), #1{b})))
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
@@ -1679,13 +1679,13 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
+      aggr=(lag_lead_const[ignore_nulls=true, offset=-3, default=-5, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), #1{b}), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=(#1, #0)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █)))
+        map=(row(row(row(#0, #1), #1{b}), (#1{b} + █), (#0{a} - █)))
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
