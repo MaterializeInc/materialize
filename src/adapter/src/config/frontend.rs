@@ -172,9 +172,8 @@ impl SystemParameterFrontend {
         params: &SynchronizedParameters,
         param_names: &[&'static str],
         replicas: &[ReplicaEvalContext],
-    ) -> BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<String, String>>> {
-        let mut out: BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<String, String>>> =
-            BTreeMap::new();
+    ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
+        let mut out: BTreeMap<ReplicaId, BTreeMap<String, String>> = BTreeMap::new();
 
         let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
             // The file client has no notion of scoped evaluation.
@@ -225,9 +224,7 @@ impl SystemParameterFrontend {
             }
 
             if !overrides.is_empty() {
-                out.entry(replica.cluster_id)
-                    .or_default()
-                    .insert(replica.replica_id, overrides);
+                out.insert(replica.replica_id, overrides);
             }
         }
 

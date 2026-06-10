@@ -7,20 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
-use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
-use mz_controller_types::ClusterId;
-use mz_dyncfg::{ConfigUpdates, ParameterScope};
+use mz_dyncfg::ParameterScope;
 use tokio::time;
 
 use crate::Client;
 use crate::catalog::Catalog;
 use crate::config::{
-    ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext, SynchronizedParameters,
-    SystemParameterBackend, SystemParameterFrontend, SystemParameterSyncConfig,
+    ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext, ScopedParameters,
+    SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
+    SystemParameterSyncConfig,
 };
 
 /// Run a loop that periodically pulls system parameters defined in the
@@ -117,9 +115,16 @@ async fn sync_replica_scoped_params(
     }
 
     let replicas = build_replica_eval_contexts(&catalog);
-    let overrides = frontend.pull_replica_overrides(params, &param_names, &replicas);
-    let overrides = parse_replica_overrides(&catalog, overrides);
-    client.update_replica_scoped_config(overrides).await;
+    let replica = frontend.pull_replica_overrides(params, &param_names, &replicas);
+
+    // Push the complete desired state to the coordinator, which holds the
+    // working copy and resolves it at the per-replica config push. The
+    // cluster-coherent layer is populated by a separate path (a follow-up).
+    let scoped = ScopedParameters {
+        cluster: Default::default(),
+        replica,
+    };
+    client.update_scoped_system_parameters(scoped).await;
 }
 
 /// Build a [`ReplicaEvalContext`] for every live managed replica in the catalog.
@@ -155,40 +160,4 @@ fn build_replica_eval_contexts(catalog: &Catalog) -> Vec<ReplicaEvalContext> {
         }
     }
     contexts
-}
-
-/// Parse the per-replica string overrides into typed [`ConfigUpdates`], using
-/// the catalog's dyncfg definitions to determine each parameter's type.
-fn parse_replica_overrides(
-    catalog: &Catalog,
-    overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<String, String>>>,
-) -> BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>> {
-    let dyncfgs = catalog.system_config().dyncfgs();
-    let mut out: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>> = BTreeMap::new();
-    for (cluster_id, replicas) in overrides {
-        let mut replica_updates = BTreeMap::new();
-        for (replica_id, values) in replicas {
-            let mut updates = ConfigUpdates::default();
-            for (name, value) in values {
-                let Some(entry) = dyncfgs.entry(&name) else {
-                    // A replica-local scoped parameter that is not a dyncfg has
-                    // no per-replica realization; skip it.
-                    continue;
-                };
-                match entry.parse_val(&value) {
-                    Ok(val) => updates.add_dynamic(&name, val),
-                    Err(e) => {
-                        tracing::warn!(%name, %value, "cannot parse scoped override: {e}");
-                    }
-                }
-            }
-            if !updates.updates.is_empty() {
-                replica_updates.insert(replica_id, updates);
-            }
-        }
-        if !replica_updates.is_empty() {
-            out.insert(cluster_id, replica_updates);
-        }
-    }
-    out
 }

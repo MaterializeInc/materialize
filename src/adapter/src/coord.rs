@@ -117,6 +117,7 @@ use mz_controller::clusters::{
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
+use mz_dyncfg::ConfigUpdates;
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -182,7 +183,9 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
+use crate::config::{
+    ScopedParameters, SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
+};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
 };
@@ -434,7 +437,9 @@ impl Message {
                 Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
-                Command::UpdateReplicaScopedConfig { .. } => "command-update_replica_scoped_config",
+                Command::UpdateScopedSystemParameters { .. } => {
+                    "command-update_scoped_system_parameters"
+                }
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
@@ -2006,9 +2011,70 @@ pub struct Coordinator {
 
     /// Pre-allocated pool of user IDs to amortize persist writes across DDL operations.
     user_id_pool: IdPool,
+
+    /// In-memory working copy of the scoped system parameters, reconciled by the
+    /// system-parameter sync loop (the sole writer) from continuous LaunchDarkly
+    /// evaluation. Resolution reads from this. See [`ScopedParameters`].
+    scoped_system_parameters: ScopedParameters,
 }
 
 impl Coordinator {
+    /// Replaces the scoped system-parameter working copy and reconciles it into
+    /// the per-scope resolution boundaries.
+    ///
+    /// Currently resolves the `replica`-scoped overrides into the compute
+    /// controller's per-replica dyncfg layer, then re-pushes the
+    /// environment-wide compute configuration so existing replicas observe the
+    /// new values. The `cluster`-scoped layer is resolved at plan time (a
+    /// follow-up).
+    pub(crate) fn reconcile_scoped_system_parameters(&mut self, scoped: ScopedParameters) {
+        self.scoped_system_parameters = scoped;
+
+        // Resolve the replica-local overrides into typed per-replica config
+        // updates, routed to the owning cluster's compute instance.
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let replica_overrides = &self.scoped_system_parameters.replica;
+        let mut instance_overrides: BTreeMap<
+            ComputeInstanceId,
+            BTreeMap<ReplicaId, ConfigUpdates>,
+        > = BTreeMap::new();
+        for cluster in self.catalog().clusters() {
+            for replica in cluster.replicas() {
+                let Some(values) = replica_overrides.get(&replica.replica_id) else {
+                    continue;
+                };
+                let mut updates = ConfigUpdates::default();
+                for (name, value) in values {
+                    let Some(entry) = dyncfgs.entry(name) else {
+                        // A replica-local parameter that is not a dyncfg has no
+                        // per-replica realization; skip it.
+                        continue;
+                    };
+                    match entry.parse_val(value) {
+                        Ok(val) => updates.add_dynamic(name, val),
+                        Err(e) => {
+                            tracing::warn!(%name, %value, "cannot parse scoped override: {e}")
+                        }
+                    }
+                }
+                if !updates.updates.is_empty() {
+                    instance_overrides
+                        .entry(cluster.id)
+                        .or_default()
+                        .insert(replica.replica_id, updates);
+                }
+            }
+        }
+
+        self.controller
+            .compute
+            .update_replica_dyncfg_overrides(instance_overrides);
+        // Re-push the environment-wide compute configuration so existing
+        // replicas pick up their (possibly changed) overrides.
+        let compute_config = crate::flags::compute_config(self.catalog().system_config());
+        self.controller.compute.update_configuration(compute_config);
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -4744,6 +4810,7 @@ pub fn serve(
                     license_key,
                     user_id_pool: IdPool::empty(),
                     persist_client,
+                    scoped_system_parameters: ScopedParameters::default(),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

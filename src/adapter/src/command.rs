@@ -23,7 +23,6 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
-use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -47,6 +46,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::config::ScopedParameters;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
@@ -169,12 +169,14 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
-    /// Replace the replica-local scoped feature-flag overrides, keyed by cluster
-    /// and replica. Computed by the system-parameter sync loop from continuous
-    /// LaunchDarkly evaluation and reconciled into the compute controller's
-    /// per-replica dyncfg layer. See the scoped feature flags design.
-    UpdateReplicaScopedConfig {
-        overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    /// Replace the scoped feature-flag overrides (the complete desired state).
+    /// Computed by the system-parameter sync loop from continuous LaunchDarkly
+    /// evaluation; the coordinator stores this working copy and reconciles it
+    /// into the per-scope resolution boundaries (the compute controller's
+    /// per-replica dyncfg layer for `replica`-scoped parameters). See the
+    /// scoped feature flags design.
+    UpdateScopedSystemParameters {
+        overrides: ScopedParameters,
         tx: oneshot::Sender<()>,
     },
 
@@ -379,7 +381,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::UpdateReplicaScopedConfig { .. }
+            | Command::UpdateScopedSystemParameters { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
@@ -418,7 +420,7 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::UpdateReplicaScopedConfig { .. }
+            | Command::UpdateScopedSystemParameters { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
