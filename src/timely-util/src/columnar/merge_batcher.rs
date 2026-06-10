@@ -207,7 +207,8 @@ where
 /// `BatcherEvent` feeds the `mz_arrangement_batcher_*_raw` introspection
 /// tables, which downstream surface as memory-resource dashboards. Bytes
 /// living on swap or in a pager file aren't part of RSS and shouldn't be
-/// reported there.
+/// reported there. Pooled chunks likewise contribute zero: the buffer pool
+/// budgets and accounts its own resident bytes.
 fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, usize) {
     match entry {
         PagedColumn::Resident(col, _) => {
@@ -215,7 +216,9 @@ fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, u
             let bytes = col.length_in_bytes();
             (records, bytes, bytes, 1)
         }
-        PagedColumn::Paged { .. } | PagedColumn::Compressed { .. } => (0, 0, 0, 0),
+        PagedColumn::Paged { .. } | PagedColumn::Compressed { .. } | PagedColumn::Pooled { .. } => {
+            (0, 0, 0, 0)
+        }
     }
 }
 
@@ -1021,6 +1024,10 @@ mod tests {
                     let _ = meta;
                     1
                 }
+                PagedColumn::Pooled { meta, .. } => {
+                    let _ = meta;
+                    1
+                }
                 PagedColumn::Resident(_, _) => {
                     panic!("kept chain entry was Resident under ForcePagePolicy");
                 }
@@ -1030,5 +1037,44 @@ mod tests {
         assert!(kept_records > 0, "expected at least one kept paged entry");
         assert!(policy.out.load(std::sync::atomic::Ordering::Relaxed) > 0);
         let _ = n;
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn batcher_seal_round_trip_pooled() {
+        // Zero-budget pool: every inserted chunk is evicted to its extent as
+        // soon as it lands, so the merge / seal path must fault everything
+        // back in from extents rather than reading pool slots.
+        let pool = mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
+            budget_bytes: 0,
+            class_capacity_bytes: 64 << 20,
+        })
+        .expect("pool creation");
+
+        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
+            differential_dataflow::trace::Batcher::new(None, 0);
+        b.set_pager(ColumnPager::pooled(pool.clone()));
+
+        let n: u64 = 200;
+        for i in 0..n {
+            b.push_into(col(&[((i, 0), 0, 1)]));
+        }
+        let upper = Antichain::from_elem(u64::MAX);
+        let (chain, _description) = differential_dataflow::trace::Batcher::seal(&mut b, upper);
+        let mut out: Vec<KvUpdate> = chain.iter().flat_map(collect_column).collect();
+        out.sort();
+        let expected: Vec<KvUpdate> = (0..n).map(|i| ((i, 0u64), 0u64, 1i64)).collect();
+        assert_eq!(out, expected);
+
+        // The data really round-tripped through extents: the zero budget
+        // forced compressing evictions, and reading the chains back faulted
+        // chunks in from those extents.
+        let stats = pool.stats();
+        assert!(stats.inserts > 0, "expected pool inserts: {stats:?}");
+        assert!(
+            stats.evictions_compress > 0,
+            "expected compressing evictions: {stats:?}"
+        );
+        assert!(stats.faults > 0, "expected extent fault-ins: {stats:?}");
     }
 }
