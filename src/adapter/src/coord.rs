@@ -139,7 +139,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -2073,6 +2073,27 @@ impl Coordinator {
         // replicas pick up their (possibly changed) overrides.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+    }
+
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id` from the in-memory working copy.
+    ///
+    /// These are layered on top of the cluster's manual `CREATE CLUSTER ...
+    /// FEATURES` overrides at plan time, so a cluster-scoped LaunchDarkly rule
+    /// beats a manual `FEATURES` pin (which in turn beats the environment-wide
+    /// value). Empty when LaunchDarkly serves no cluster-specific value, in
+    /// which case the manual `FEATURES` value stands. See the scoped feature
+    /// flags design.
+    pub(crate) fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.scoped_system_parameters
+            .cluster
+            .get(&cluster_id)
+            .cloned()
+            .map(OptimizerFeatureOverrides::from)
+            .unwrap_or_default()
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be

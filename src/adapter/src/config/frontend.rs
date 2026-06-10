@@ -201,34 +201,92 @@ impl SystemParameterFrontend {
                 }
             };
 
-            let mut overrides = BTreeMap::new();
-            for &param_name in param_names {
-                let flag_name = self
-                    .key_map
-                    .get(param_name)
-                    .map(|flag_name| flag_name.as_str())
-                    .unwrap_or(param_name);
-
-                let base = params.get(param_name);
-                let flag_var = client.variation(&ctx, flag_name, base.clone());
-                let value = match flag_var {
-                    ld::FlagValue::Bool(v) => v.to_string(),
-                    ld::FlagValue::Str(v) => v,
-                    ld::FlagValue::Number(v) => v.to_string(),
-                    ld::FlagValue::Json(v) => v.to_string(),
-                };
-
-                if value != base {
-                    overrides.insert(param_name.to_string(), value);
-                }
-            }
-
+            let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
             if !overrides.is_empty() {
                 out.insert(replica.replica_id, overrides);
             }
         }
 
         out
+    }
+
+    /// Evaluates the cluster-coherent scoped parameters for each given cluster
+    /// and returns, per cluster, the parameter values that differ from the
+    /// environment-wide value held in `params`. Evaluated replica-free (the
+    /// `cluster` context kind), so the value cannot vary by replica.
+    ///
+    /// Only the LaunchDarkly client performs scoped evaluation; the file client
+    /// returns an empty map. The returned map is sparse.
+    pub fn pull_cluster_overrides(
+        &self,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        clusters: &[ClusterEvalContext],
+    ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
+        let mut out: BTreeMap<ClusterId, BTreeMap<String, String>> = BTreeMap::new();
+
+        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
+            // The file client has no notion of scoped evaluation.
+            return out;
+        };
+
+        if param_names.is_empty() {
+            return out;
+        }
+
+        for cluster in clusters {
+            let ctx = match ld_ctx(&self.env_id, self.build_info, Some(&cluster.cluster), None) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    warn!(
+                        cluster_id = %cluster.cluster.id,
+                        "could not build scoped LD context: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
+            if !overrides.is_empty() {
+                out.insert(cluster.cluster_id, overrides);
+            }
+        }
+
+        out
+    }
+
+    /// Evaluates each of `param_names` against `ctx`, returning the values that
+    /// differ from the environment-wide value held in `params`. Shared by the
+    /// cluster and replica passes.
+    fn evaluate_scoped_overrides(
+        &self,
+        client: &ld::Client,
+        ctx: &ld::Context,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+    ) -> BTreeMap<String, String> {
+        let mut overrides = BTreeMap::new();
+        for &param_name in param_names {
+            let flag_name = self
+                .key_map
+                .get(param_name)
+                .map(|flag_name| flag_name.as_str())
+                .unwrap_or(param_name);
+
+            let base = params.get(param_name);
+            let flag_var = client.variation(ctx, flag_name, base.clone());
+            let value = match flag_var {
+                ld::FlagValue::Bool(v) => v.to_string(),
+                ld::FlagValue::Str(v) => v,
+                ld::FlagValue::Number(v) => v.to_string(),
+                ld::FlagValue::Json(v) => v.to_string(),
+            };
+
+            if value != base {
+                overrides.insert(param_name.to_string(), value);
+            }
+        }
+        overrides
     }
 }
 
@@ -244,6 +302,16 @@ pub struct ReplicaEvalContext {
     pub cluster: ClusterScopeContext,
     /// The replica's scope context.
     pub replica: ReplicaScopeContext,
+}
+
+/// The identity of a single live cluster, used to evaluate cluster-coherent
+/// scoped parameters in [`SystemParameterFrontend::pull_cluster_overrides`].
+#[derive(Clone, Debug)]
+pub struct ClusterEvalContext {
+    /// The cluster's id.
+    pub cluster_id: ClusterId,
+    /// The cluster's scope context (replica-free).
+    pub cluster: ClusterScopeContext,
 }
 
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
