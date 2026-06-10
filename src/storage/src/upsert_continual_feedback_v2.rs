@@ -81,15 +81,17 @@ use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_row_spine::{DatumSeq, ValRowColPagedBuilder, ValRowSpine};
+use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
+use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::StreamVec;
@@ -153,7 +155,6 @@ where
     }
 }
 
-// ── Source stash diff type ───────────────────────────────────────────────────
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
 // highest `FromTime` (latest source offset) per group. The diff is `Columnar`
@@ -167,8 +168,10 @@ where
 // Derive ordering on the generated `UpsertDiffReference` too: the paged merge
 // batcher requires `Ref: Ord` to sort the `(key, time, diff)` columns it
 // consolidates. The derived order (by `from_time`, then `value`) is fine —
-// "max FromTime wins" is commutative and associative, so the consolidated
-// result doesn't depend on the fold order of equal `(key, time)` runs.
+// "max FromTime wins" can tie only between equal `from_time`s, and a source
+// never emits two distinct values for the same `(key, time, from_time)`, so
+// the consolidated result doesn't depend on the fold order of equal
+// `(key, time)` runs.
 #[derive(Clone, Debug, Default, columnar::Columnar)]
 #[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 struct UpsertDiff<O> {
@@ -237,7 +240,6 @@ fn flush_to_batcher<T, O>(
     }
 }
 
-// ── MergeBatcher type aliases ─────────────────────────────────────────────────
 // The source stash uses the paged columnar merge batcher. Data is pushed in
 // unsorted; the batcher maintains geometrically-sized sorted chains and
 // consolidates via the UpsertDiff Semigroup automatically. Unlike DD's
@@ -255,6 +257,12 @@ type UpsertBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
 /// The chunker that sorts and consolidates raw input into the `Column` chunks
 /// [`UpsertBatcher`] consumes.
 type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
+
+/// The operator's data-output handle. A fueled `Vec` builder so the drain can
+/// `give_fueled` each emitted update and yield to timely under large snapshot
+/// drains instead of monopolizing the worker.
+type UpsertOutputHandle<T> =
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>;
 
 // The persist-feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>`: keys
 // land in a columnation arena (`UpsertKey` is `[u8; 32]` + `Copy`, so it uses
@@ -283,10 +291,13 @@ fn upsert_value_to_row(value: &UpsertValue) -> Row {
     row
 }
 
-/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
-/// `DatumSeq` view returned by a `ValRowSpine` cursor.
-fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
-    decode_upsert_value(seq)
+/// Heap-size estimate for an emitted [`UpsertValue`], used to drive
+/// `give_fueled` yielding on the output edge.
+fn upsert_value_byte_len(value: &UpsertValue) -> usize {
+    match value {
+        Ok(row) => row.byte_len(),
+        Err(err) => std::mem::size_of_val(err.as_ref()),
+    }
 }
 
 /// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] from any datum
@@ -350,7 +361,7 @@ where
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
     FromTime: UpsertSourceTime,
 {
-    // ── Arrange persist feedback ────────────────────────────────────────
+    // Arrange persist feedback.
     // Extract (UpsertKey, UpsertValue) from the persist feedback collection
     // and arrange it. DD manages the spine, batching, and compaction.
     let persist_keyed = persist_input.flat_map(move |result| {
@@ -422,10 +433,11 @@ where
     use timely::dataflow::operators::Probe;
     let (persist_probe, _persist_probe_stream) = persist_arranged.stream.probe();
 
-    // ── Build the async processing operator ─────────────────────────────
+    // Build the async processing operator.
     let mut builder = AsyncOperatorBuilder::new("Upsert V2".to_string(), input.scope());
 
-    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output_handle, output) = builder
+        .new_output::<FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>>();
     let (_snapshot_handle, snapshot_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let (_health_output, health_stream) = builder
@@ -480,7 +492,6 @@ where
         let mut stash_cap: Option<Capability<T>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
-        let mut output_updates = vec![];
         let snapshot_start = std::time::Instant::now();
         let mut prev_persist_upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -488,13 +499,11 @@ where
         let mut rehydration_total: u64 = 0;
         let mut rehydration_updates: u64 = 0;
 
-        // ──────────────────────────────────────────────────────────────────
         // Main operator loop. Each iteration performs four steps:
         //   Step 1: Ingest source data into the batcher.
         //   Step 2: Read the persist frontier and update rehydration state.
         //   Step 3: Seal the batcher, drain eligible entries, push back the rest.
         //   Step 4: Manage the output capability.
-        // ──────────────────────────────────────────────────────────────────
         loop {
             // Block until woken by source input or a persist frontier advance.
             tokio::select! {
@@ -504,7 +513,7 @@ where
                 }
             }
 
-            // ── Step 1: Ingest source data ────────────────────────────────
+            // Step 1: Ingest source data.
             // Read all available source events, wrap each value in an
             // UpsertDiff (carrying FromTime for dedup), and buffer them.
             // Events before the resume_upper are dropped (already persisted).
@@ -548,7 +557,7 @@ where
             // entries for the same (key, time) via the UpsertDiff Semigroup.
             flush_to_batcher(&mut push_buffer, &mut chunker, &mut batcher);
 
-            // ── Step 2: Read persist frontier ─────────────────────────────
+            // Step 2: Read persist frontier.
             // The persist probe tells us which output times have been
             // committed back through the feedback loop. This determines:
             //   - Whether rehydration is complete (persist >= resume_upper).
@@ -586,7 +595,7 @@ where
                 prev_persist_upper = persist_upper.clone();
             }
 
-            // ── Step 3: Seal & drain ──────────────────────────────────────
+            // Step 3: Seal & drain.
             // Seal the batcher at input_upper to extract all source-finalized
             // entries as sorted, consolidated chunks. The seal merges all
             // internal chains (O(N) linear merge of sorted data) and splits
@@ -634,15 +643,20 @@ where
                 let remaining_frontier = batcher.frontier().to_owned();
 
                 let mut ineligible = Vec::new();
+                // `drain_sealed_input` emits eligible output directly through
+                // `output_handle` (fueled), so there is no intermediate output
+                // buffer to drain afterward.
                 let drain_stats = drain_sealed_input(
                     sealed,
                     &mut ineligible,
-                    &mut output_updates,
+                    &output_handle,
+                    &*cap,
                     &persist_upper,
                     &mut persist_trace,
                     &source_config.worker_id,
                     &source_config.id,
-                );
+                )
+                .await;
 
                 upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
                 upsert_metrics
@@ -660,13 +674,7 @@ where
                     rehydration_updates += drain_stats.eligible;
                 }
 
-                // Emit output: retractions of old values and insertions of
-                // new values, all at the eligible timestamp.
-                for (update, ts, diff) in output_updates.drain(..) {
-                    output_handle.give(cap, (update, ts, diff));
-                }
-
-                // ── Step 4: Capability management ─────────────────────────
+                // Step 4: Capability management.
                 // Downgrade the output capability to the minimum time of any
                 // remaining data: either entries still in the batcher (above
                 // input_upper) or ineligible entries being pushed back.
@@ -735,10 +743,11 @@ struct DrainStats {
 ///
 /// The sealed chunks are already sorted and consolidated by the MergeBatcher,
 /// so the trace cursor walks forward through keys in order — seeks amortize.
-fn drain_sealed_input<T, O>(
+async fn drain_sealed_input<T, O>(
     sealed: Vec<Column<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
-    output: &mut Vec<(UpsertValue, T, Diff)>,
+    output_handle: &UpsertOutputHandle<T>,
+    output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
     worker_id: &usize,
@@ -763,7 +772,21 @@ where
     //     `ts == persist_upper` can never again hold) and pin the operator's
     //     output frontier below the shard upper. This mirrors v1's
     //     `relevant = persist_upper.less_equal(ts)`.
-    let mut eligible = Vec::new();
+    // Walk the sealed chunks by reference rather than collecting the eligible
+    // set into an owned Vec. The chunks are globally sorted (the seal merges
+    // all chains into one run), so the cursor seeks still walk forward and
+    // amortize, and eligible values are emitted straight from the column's
+    // `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed ineligible
+    // set is materialized.
+    let mut eligible_count: u64 = 0;
+    let mut result_count: u64 = 0;
+    let mut output_count: u64 = 0;
+    let mut inserts: u64 = 0;
+    let mut updates: u64 = 0;
+    let mut deletes: u64 = 0;
+
+    let (mut cursor, storage) = trace.cursor();
+
     for chunk in &sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
@@ -771,17 +794,81 @@ where
                 // ts < persist_upper: drop.
                 continue;
             }
-            let entry = (
-                *key,
-                ts,
-                <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-            );
-            if persist_upper.less_than(&entry.1) {
-                // ts > persist_upper: re-stash for later.
-                ineligible.push(entry);
-            } else {
-                // ts == persist_upper: process now.
-                eligible.push(entry);
+            if persist_upper.less_than(&ts) {
+                // ts > persist_upper: re-stash for later (owned).
+                ineligible.push((
+                    *key,
+                    ts,
+                    <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                ));
+                continue;
+            }
+
+            // ts == persist_upper: eligible. Look up the prior value for this
+            // key in the persist trace and emit the retraction / insertion. The
+            // spine stores keys in a columnation arena, so we seek by the
+            // column's borrowed `&UpsertKey` directly.
+            eligible_count += 1;
+            cursor.seek_key(&storage, key);
+            let old_value = match cursor.get_key(&storage) {
+                Some(found) if found == key => {
+                    let mut result = None;
+                    while let Some(val) = cursor.get_val(&storage) {
+                        let mut count = Diff::ZERO;
+                        cursor.map_times(&storage, |_time, d| {
+                            count += d.clone();
+                        });
+                        if count.is_positive() {
+                            assert!(
+                                count == 1.into(),
+                                "unexpected multiple entries for the same key in persist trace"
+                            );
+                            assert!(
+                                result.is_none(),
+                                "unexpected multiple values for the same key in persist trace"
+                            );
+                            result = Some(decode_upsert_value(val));
+                        }
+                        cursor.step_val(&storage);
+                    }
+                    result
+                }
+                _ => None,
+            };
+
+            if old_value.is_some() {
+                result_count += 1;
+            }
+
+            match diff.value {
+                Some(row) => {
+                    if let Some(old_val) = old_value {
+                        let size = upsert_value_byte_len(&old_val);
+                        output_handle
+                            .give_fueled(output_cap, (old_val, ts.clone(), Diff::MINUS_ONE), size)
+                            .await;
+                        output_count += 1;
+                        updates += 1;
+                    } else {
+                        inserts += 1;
+                    }
+                    let new_val = decode_upsert_value(row.iter());
+                    let size = upsert_value_byte_len(&new_val);
+                    output_handle
+                        .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
+                        .await;
+                    output_count += 1;
+                }
+                None => {
+                    if let Some(old_val) = old_value {
+                        let size = upsert_value_byte_len(&old_val);
+                        output_handle
+                            .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
+                            .await;
+                        output_count += 1;
+                        deletes += 1;
+                    }
+                }
             }
         }
     }
@@ -790,83 +877,9 @@ where
         worker_id = %worker_id,
         source_id = %source_id,
         ineligible = ineligible.len(),
-        eligible = eligible.len(),
-        "draining stash",
+        eligible = eligible_count,
+        "drained stash",
     );
-
-    let eligible_count = u64::try_from(eligible.len()).expect("eligible count overflows u64");
-
-    if eligible.is_empty() {
-        return DrainStats {
-            eligible: 0,
-            result_count: 0,
-            inserts: 0,
-            updates: 0,
-            deletes: 0,
-            output_count: 0,
-        };
-    }
-
-    let output_before = output.len();
-    let mut result_count: u64 = 0;
-    let mut inserts: u64 = 0;
-    let mut updates: u64 = 0;
-    let mut deletes: u64 = 0;
-
-    let (mut cursor, storage) = trace.cursor();
-
-    for (key, ts, upsert_diff) in eligible {
-        // Look up the current value for this key in the persist trace. The
-        // spine stores keys directly in a columnation arena, so we seek by
-        // borrowed `UpsertKey`.
-        cursor.seek_key(&storage, &key);
-        let old_value = match cursor.get_key(&storage) {
-            Some(found) if found == &key => {
-                let mut result = None;
-                while let Some(val) = cursor.get_val(&storage) {
-                    let mut count = Diff::ZERO;
-                    cursor.map_times(&storage, |_time, diff| {
-                        count += diff.clone();
-                    });
-                    if count.is_positive() {
-                        assert!(
-                            count == 1.into(),
-                            "unexpected multiple entries for the same key in persist trace"
-                        );
-                        result = Some(datum_seq_to_upsert_value(val));
-                    }
-                    cursor.step_val(&storage);
-                }
-                result
-            }
-            _ => None,
-        };
-
-        if old_value.is_some() {
-            result_count += 1;
-        }
-
-        match upsert_diff.value {
-            Some(new_val) => {
-                if let Some(old_val) = old_value {
-                    output.push((old_val, ts.clone(), Diff::MINUS_ONE));
-                    updates += 1;
-                } else {
-                    inserts += 1;
-                }
-                output.push((decode_upsert_value(new_val.iter()), ts, Diff::ONE));
-            }
-            None => {
-                if let Some(old_val) = old_value {
-                    output.push((old_val, ts, Diff::MINUS_ONE));
-                    deletes += 1;
-                }
-            }
-        }
-    }
-
-    let output_count =
-        u64::try_from(output.len() - output_before).expect("output count overflows u64");
 
     DrainStats {
         eligible: eligible_count,
