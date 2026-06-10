@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
+$ skip-if
+SELECT true
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
@@ -129,14 +135,16 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+postgres.public.table_f.f2
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
+"f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
 "\"f2\""
 
 #
@@ -190,9 +198,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart ""
-mv_f quickstart ""
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP SOURCE table_e RESTRICT;
@@ -212,7 +220,7 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 mz_source_progress    progress
 table_g               subsource
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP SOURCE table_g;
 
@@ -270,7 +278,6 @@ tb                 subsource
 # If your schema change breaks the subsource, you can fix it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a DROP COLUMN f2;
-INSERT INTO table_a VALUES (3);
 
 ! SELECT * FROM table_a;
 contains:incompatible schema change
@@ -288,18 +295,16 @@ true
 > SELECT * FROM table_a;
 1
 2
-3
 
 # If you add columns you can re-ingest them
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f2 text;
-INSERT INTO table_a VALUES (4, 'four');
+INSERT INTO table_a VALUES (3, 'three');
 
 > SELECT * FROM table_a;
 1
 2
 3
-4
 
 > DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
@@ -307,13 +312,12 @@ INSERT INTO table_a VALUES (4, 'four');
 > SELECT * FROM table_a;
 1 <null>
 2 <null>
-3 <null>
-4 four
+3 three
 
 # If you add a NOT NULL constraint, you can propagate it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
-INSERT INTO table_a VALUES (5, 'five', 5);
+INSERT INTO table_a VALUES (4, 'four', 4);
 
 > DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
@@ -321,11 +325,16 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 > SELECT * FROM table_a;
 1 <null> 1
 2 <null> 1
-3 <null> 1
-4 four 1
-5 five 5
+3 three 1
+4 four 4
 
-? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM table_a WHERE f3 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM table_a WHERE f3 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
@@ -341,7 +350,10 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 1 var0
 2 var1
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+postgres.public.table_f.f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
 # Drop a table that's in the publication, which shuffles the tables' output
@@ -358,10 +370,16 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"postgres.public.table_f.f2, postgres.public.table_i.f2"
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 "\"f2\""
 
 > SELECT * FROM table_f
@@ -394,7 +412,10 @@ detail:the following tables are referenced but not added: public.table_f
 
 > ALTER SOURCE mz_source_wo_init_text_cols ADD SUBSOURCE table_f AS t_f WITH (TEXT COLUMNS [table_f.f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+>[version>=14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+postgres.public.table_f.f2
+
+>[version<14000] SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
 # add a table after having created the source

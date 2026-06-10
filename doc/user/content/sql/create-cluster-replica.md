@@ -7,73 +7,88 @@ menu:
     parent: commands
 ---
 
-{{< warning >}}
-`CREATE CLUSTER REPLICA` is deprecated.
 
-We recommend migrating to a [managed
-cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
-of manually creating and dropping replicas.
-{{< /warning >}}
+`CREATE CLUSTER REPLICA` provisions a new replica for an [**unmanaged**
+cluster](/sql/create-cluster/#unmanaged-clusters).
 
-`CREATE CLUSTER REPLICA` provisions a new replica of a [cluster](/concepts/clusters/).
-
-## Conceptual framework
-
-A cluster consists of zero or more replicas. Each replica of a cluster is a pool
-of compute resources that performs exactly the same computations on exactly the
-same data.
-
-Using multiple replicas of a cluster facilitates **fault tolerance**. Clusters
-with multiple replicas can tolerate failures of the underlying hardware or
-network. As long as one replica remains reachable, the cluster as a whole
-remains available.
+{{< tip >}}
+When getting started with Materialize, we recommend starting with managed
+clusters.
+{{</ tip >}}
 
 ## Syntax
 
-{{< diagram "create-cluster-replica.svg" >}}
-
-Field | Use
-------|-----
-_cluster_name_ | The cluster you want to attach a replica to.
-_replica_name_ | A name for this replica.
-
-### Options
-
-{{% replica-options %}}
+{{% include-syntax file="examples/create_cluster_replica" example="syntax" %}}
 
 ## Details
 
-### Size
+### Available sizes
 
 The `SIZE` option for replicas is identical to the [`SIZE` option for
-clusters](/sql/create-cluster/#size) option, except that the size applies only
+clusters](/sql/create-cluster/#available-sizes) option, except that the size applies only
 to the new replica.
 
-### Credit usage
+{{< tabs >}}
+{{< tab "cc Clusters" >}}
 
-The replica will consume credits at a rate determined by its size:
+Materialize offers the following cc cluster sizes:
 
-Size      | Legacy size  | Credits per hour
-----------|--------------|-----------------
-`25cc`    | `3xsmall`    | 0.25
-`50cc`    | `2xsmall`    | 0.5
-`100cc`   | `xsmall`     | 1
-`200cc`   | `small`      | 2
-`300cc`   | &nbsp;       | 3
-`400cc`   | `medium`     | 4
-`600cc`   | &nbsp;       | 6
-`800cc`   | `large`      | 8
-`1200cc`  | &nbsp;       | 12
-`1600cc`  | `xlarge`     | 16
-`3200cc`  | `2xlarge`    | 32
-`6400cc`  | `3xlarge`    | 64
-`128C`    | `4xlarge`    | 128
-`256C`    | `5xlarge`    | 256
-`512C`    | `6xlarge`    | 512
+* `25cc`
+* `50cc`
+* `100cc`
+* `200cc`
+* `300cc`
+* `400cc`
+* `600cc`
+* `800cc`
+* `1200cc`
+* `1600cc`
+* `3200cc`
+* `6400cc`
+* `128C`
+* `256C`
+* `512C`
 
-Credit usage is measured at a one second granularity. Credit usage begins when a
-`CREATE CLUSTER REPLICA` provisions the replica and ends when a [`DROP CLUSTER
-REPLICA`] statement deprovisions the replica.
+The resource allocations are proportional to the number in the size name. For
+example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
+cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
+size `400cc`. To determine the specific resource allocations for a size,
+query the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+
+{{< warning >}}
+The values in the `mz_cluster_replica_sizes` table may change at any
+time. You should not rely on them for any kind of capacity planning.
+{{< /warning >}}
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< tab "M.1 Clusters" >}}
+
+{{< note >}}
+M.1 sizes provide access to additional disk capacity compared to
+equivalently-priced cc sizes, which can be beneficial for disk-intensive
+workloads. However, cc sizes offer better compute performance per credit for
+most workloads. We recommend using cc sizes unless your workload specifically
+requires the additional disk capacity that M.1 sizes provide.
+{{< /note >}}
+
+{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
+See also:
+
+- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
+
+- [Materialize service consumption
+  table](https://materialize.com/pdfs/pricing.pdf).
+
+- [Blog:Scaling Beyond Memory: How Materialize Uses Swap for Larger
+  Workloads](https://materialize.com/blog/scaling-beyond-memory/).
+
 
 ### Homogeneous vs. heterogeneous hardware provisioning
 
@@ -93,14 +108,18 @@ machines had computed.
 ## Example
 
 ```mzsql
-CREATE CLUSTER REPLICA c1.r1 (SIZE = '400cc');
+CREATE CLUSTER REPLICA c1.r1 (SIZE = '800cc');
 ```
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-- Ownership of `cluster_name`.
+{{% include-headless "/headless/sql-command-privileges/create-cluster-replica" %}}
+
+## See also
+
+- [`DROP CLUSTER REPLICA`]
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
 [`DROP CLUSTER REPLICA`]: /sql/drop-cluster-replica

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 > DROP SOURCE IF EXISTS mz_source CASCADE;
 > DROP SECRET IF EXISTS pgpass CASCADE;
@@ -32,6 +32,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
     PASSWORD SECRET pgpass
   )
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM POSTGRES
@@ -40,3 +41,4 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 > CREATE TABLE ten FROM SOURCE mz_source (REFERENCE ten);
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT

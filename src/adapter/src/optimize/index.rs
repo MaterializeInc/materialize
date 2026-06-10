@@ -31,26 +31,26 @@ use std::time::{Duration, Instant};
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, ReprRelationType};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
-use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::TransformCtx;
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 
 use crate::optimize::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
 };
 use crate::optimize::{
-    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerCatalog, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
+    OptimizerConfig, OptimizerError, trace_plan,
 };
 
 pub struct Optimizer {
-    /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -74,7 +74,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             exported_index_id,
@@ -145,7 +145,7 @@ impl Optimize<Index> for Optimizer {
             .catalog
             .resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .relation_desc()
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {
@@ -161,13 +161,17 @@ impl Optimize<Index> for Optimizer {
             on_id: index.on,
             key: index.keys.clone(),
         };
-        df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+        df_desc.export_index(
+            self.exported_index_id,
+            index_desc,
+            ReprRelationType::from(on_desc.typ()),
+        );
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyle::Index;
+        let style = ExprPrepMaintained;
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Construct TransformCtx for global optimization.
@@ -178,6 +182,7 @@ impl Optimize<Index> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&mut self.metrics),
         );
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;

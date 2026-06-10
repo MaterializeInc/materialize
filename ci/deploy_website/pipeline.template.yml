@@ -12,7 +12,7 @@ priority: 30
 
 steps:
   - command: bin/ci-builder run nightly ci/deploy_website/website.sh
-    branches: main
+    branches: "main self-managed-docs/*"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small

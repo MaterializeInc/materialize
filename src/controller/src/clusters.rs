@@ -11,32 +11,34 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
-use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_compute_client::controller::{
-    ComputeControllerTimestamp, ComputeReplicaConfig, ComputeReplicaLogging,
-};
+use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
-use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
+use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
+use mz_controller_types::dyncfgs::{
+    ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
-use mz_ore::halt;
-use mz_ore::instrument;
+use mz_ore::cast::CastInto;
 use mz_ore::task::{self, AbortOnDropHandle};
-use mz_repr::adt::numeric::Numeric;
+use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
+use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -75,12 +77,14 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The CPU limit for each process in the replica.
+    pub cpu_request: Option<CpuLimit>,
     /// The disk limit for each process in the replica.
     pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// The number of worker threads in the replica.
-    pub workers: usize,
+    pub workers: NonZero<usize>,
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
@@ -91,6 +95,9 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// Whether instances of this type use swap as the spill-to-disk mechanism.
+    #[serde(default)]
+    pub swap_enabled: bool,
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
@@ -108,6 +115,7 @@ fn default_true() -> bool {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
 fn test_replica_allocation_deserialization() {
     use bytesize::ByteSize;
+    use mz_ore::{assert_err, assert_ok};
 
     let data = r#"
         {
@@ -117,6 +125,7 @@ fn test_replica_allocation_deserialization() {
             "scale": 16,
             "workers": 1,
             "credits_per_hour": "16",
+            "swap_enabled": true,
             "selectors": {
                 "key1": "value1",
                 "key2": "value2"
@@ -134,10 +143,12 @@ fn test_replica_allocation_deserialization() {
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
-            scale: 16,
-            workers: 1,
+            swap_enabled: true,
+            scale: NonZero::new(16).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: BTreeMap::from([
                 ("key1".to_string(), "value1".to_string()),
                 ("key2".to_string(), "value2".to_string())
@@ -150,8 +161,8 @@ fn test_replica_allocation_deserialization() {
             "cpu_limit": 0,
             "memory_limit": "0GiB",
             "disk_limit": "0MiB",
-            "scale": 0,
-            "workers": 0,
+            "scale": 1,
+            "workers": 1,
             "credits_per_hour": "0",
             "cpu_exclusive": true,
             "disabled": true
@@ -168,13 +179,23 @@ fn test_replica_allocation_deserialization() {
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
-            scale: 0,
-            workers: 0,
+            swap_enabled: false,
+            scale: NonZero::new(1).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: Default::default(),
         }
     );
+
+    // `scale` and `workers` must be non-zero.
+    let data = r#"{"scale": 0, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 0, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
 }
 
 /// Configures the location of a cluster replica.
@@ -194,7 +215,7 @@ impl ReplicaLocation {
                 computectl_addrs, ..
             }) => computectl_addrs.len(),
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.scale.into()
+                allocation.scale.cast_into()
             }
         }
     }
@@ -204,7 +225,7 @@ impl ReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
                 billed_as.as_deref()
             }
-            _ => None,
+            ReplicaLocation::Unmanaged(_) => None,
         }
     }
 
@@ -215,14 +236,16 @@ impl ReplicaLocation {
         }
     }
 
-    pub fn workers(&self) -> usize {
-        let workers_per_process = match self {
+    /// Returns the number of workers specified by this replica location.
+    ///
+    /// `None` for unmanaged replicas, whose worker count we don't know.
+    pub fn workers(&self) -> Option<usize> {
+        match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.workers
+                Some(allocation.workers.get() * self.num_processes())
             }
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation { workers, .. }) => *workers,
-        };
-        workers_per_process * self.num_processes()
+            ReplicaLocation::Unmanaged(_) => None,
+        }
     }
 
     /// A pending replica is created as part of an alter cluster of an managed
@@ -232,13 +255,14 @@ impl ReplicaLocation {
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
-            _ => false,
+            ReplicaLocation::Unmanaged(_) => false,
         }
     }
 }
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -258,17 +282,9 @@ pub struct UnmanagedReplicaLocation {
     /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
     pub storagectl_addrs: Vec<String>,
-    /// The network addresses of the storage (Timely) endpoints for
-    /// each process in the replica.
-    pub storage_addrs: Vec<String>,
     /// The network addresses of the computectl endpoints for each process in
     /// the replica.
     pub computectl_addrs: Vec<String>,
-    /// The network addresses of the compute (Timely) endpoints for
-    /// each process in the replica.
-    pub compute_addrs: Vec<String>,
-    /// The workers per process in the replica.
-    pub workers: usize,
 }
 
 /// Information about availability zone constraints for replicas.
@@ -309,9 +325,7 @@ pub struct ManagedReplicaLocation {
     /// is an empty list if none are specified
     #[serde(skip)]
     pub availability_zones: ManagedReplicaAvailabilityZones,
-    /// Whether the replica needs scratch disk space.
-    pub disk: bool,
-    /// Whether the repelica is pending reconfiguration
+    /// Whether the replica is pending reconfiguration
     pub pending: bool,
 }
 
@@ -338,11 +352,7 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
-{
+impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
     ///
     /// A cluster is a combination of a storage instance and a compute instance.
@@ -353,21 +363,24 @@ where
         id: ClusterId,
         config: ClusterConfig,
     ) -> Result<(), anyhow::Error> {
-        self.storage.create_instance(id);
+        self.storage
+            .create_instance(id, config.workload_class.clone());
         self.compute
             .create_instance(id, config.arranged_logs, config.workload_class)?;
         Ok(())
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
+        self.storage
+            .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.
@@ -386,9 +399,12 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        cluster_name: String,
+        replica_name: String,
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
+        enable_storage_introspection_logs: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -397,44 +413,39 @@ where
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             }) => {
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: computectl_addrs,
-                    dataflow_addrs: compute_addrs,
-                    workers,
                 };
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: storagectl_addrs,
-                    dataflow_addrs: storage_addrs,
-                    // Storage and compute on the same replica have linked sizes.
-                    workers,
                 };
                 metrics_task = None;
             }
             ReplicaLocation::Managed(m) => {
-                let workers = m.allocation.workers;
                 let (service, metrics_task_join_handle) = self.provision_replica(
                     cluster_id,
                     replica_id,
+                    cluster_name,
+                    replica_name,
                     role,
                     m,
                     enable_worker_core_affinity,
+                    enable_storage_introspection_logs,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
-                    dataflow_addrs: service.addresses("storage"),
-                    workers,
                 };
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("computectl"),
-                    dataflow_addrs: service.addresses("compute"),
-                    workers,
                 };
                 metrics_task = Some(metrics_task_join_handle);
+
+                // Register the replica for HTTP proxying.
+                let http_addresses = service.addresses("internal-http");
+                self.replica_http_locator
+                    .register_replica(cluster_id, replica_id, http_addresses);
             }
         }
 
@@ -466,6 +477,10 @@ where
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
+
+        // Remove HTTP addresses from the locator.
+        self.replica_http_locator
+            .remove_replica(cluster_id, replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
@@ -606,9 +621,12 @@ where
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        cluster_name: String,
+        replica_name: String,
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
+        enable_storage_introspection_logs: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -626,26 +644,81 @@ where
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
+
+        // TODO(teskje): use the same values as for compute?
+        let storage_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: 1337,
+            ..Default::default()
+        };
+        let compute_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
+            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
+            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
+            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            ..Default::default()
+        };
+
+        let mut disk_limit = location.allocation.disk_limit;
+        let memory_limit = location.allocation.memory_limit;
+        let mut memory_request = None;
+
+        if location.allocation.swap_enabled {
+            // The disk limit we specify in the service config decides whether or not the replica
+            // gets a scratch disk attached. We want to avoid attaching disks to swap replicas, so
+            // make sure to set the disk limit accordingly.
+            disk_limit = Some(DiskLimit::ZERO);
+
+            // We want to keep the memory request equal to the memory limit, to avoid
+            // over-provisioning and ensure replicas have predictable performance. However, to
+            // enable swap, Kubernetes currently requires that request and limit are different.
+            memory_request = memory_limit.map(|MemoryLimit(limit)| {
+                let request = ByteSize::b(limit.as_u64() - 1);
+                MemoryLimit(request)
+            });
+        }
+
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
+                    let storage_timely_config = TimelyConfig {
+                        workers: location.allocation.workers.get(),
+                        addresses: assigned.peer_addresses("storage"),
+                        ..storage_proto_timely_config
+                    };
+                    let compute_timely_config = TimelyConfig {
+                        workers: location.allocation.workers.get(),
+                        addresses: assigned.peer_addresses("compute"),
+                        ..compute_proto_timely_config
+                    };
+
                     let mut args = vec![
                         format!(
                             "--storage-controller-listen-addr={}",
-                            assigned["storagectl"]
+                            assigned.listen_addrs["storagectl"]
                         ),
                         format!(
                             "--compute-controller-listen-addr={}",
-                            assigned["computectl"]
+                            assigned.listen_addrs["computectl"]
                         ),
-                        format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                        format!(
+                            "--internal-http-listen-addr={}",
+                            assigned.listen_addrs["internal-http"]
+                        ),
                         format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
+                        format!(
+                            "--storage-timely-config={}",
+                            storage_timely_config.to_string(),
+                        ),
+                        format!(
+                            "--compute-timely-config={}",
+                            compute_timely_config.to_string(),
+                        ),
                     ];
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
@@ -668,12 +741,28 @@ where
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
                     }
+                    if enable_storage_introspection_logs {
+                        args.push("--enable-storage-introspection-logs".into());
+                    }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
                     }
 
-                    args.extend(secrets_args.clone());
+                    // If swap is enabled, make the replica limit its own heap usage based on the
+                    // configured memory and disk limits.
+                    if location.allocation.swap_enabled
+                        && let Some(memory_limit) = location.allocation.memory_limit
+                        && let Some(disk_limit) = location.allocation.disk_limit
+                        // Currently, the way for replica sizes to request unlimited swap is to
+                        // specify a `disk_limit` of 0. Ideally we'd change this to make them
+                        // specify no disk limit instead, but for now we need to special-case here.
+                        && disk_limit != DiskLimit::ZERO
+                    {
+                        let heap_limit = memory_limit.0 + disk_limit.0;
+                        args.push(format!("--heap-limit={}", heap_limit.as_u64()));
+                    }
 
+                    args.extend(secrets_args.clone());
                     args
                 }),
                 ports: vec![
@@ -702,15 +791,32 @@ where
                     },
                 ],
                 cpu_limit: location.allocation.cpu_limit,
-                memory_limit: location.allocation.memory_limit,
+                cpu_request: location.allocation.cpu_request,
+                memory_limit,
+                memory_request,
                 scale: location.allocation.scale,
                 labels: BTreeMap::from([
                     ("replica-id".into(), replica_id.to_string()),
                     ("cluster-id".into(), cluster_id.to_string()),
+                    ("generation".into(), self.deploy_generation.to_string()),
                     ("type".into(), "cluster".into()),
                     ("replica-role".into(), role_label.into()),
                     ("workers".into(), location.allocation.workers.to_string()),
-                    ("size".into(), location.size.to_string()),
+                    (
+                        "size".into(),
+                        location
+                            .size
+                            .to_string()
+                            .replace("=", "-")
+                            .replace(",", "_"),
+                    ),
+                ]),
+                annotations: BTreeMap::from([
+                    (
+                        "replica-name".into(),
+                        format!("{cluster_name}.{replica_name}"),
+                    ),
+                    ("cluster-name".into(), cluster_name),
                 ]),
                 availability_zones: match location.availability_zones {
                     ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
@@ -719,6 +825,15 @@ where
                 // This provides the orchestrator with some label selectors that
                 // are used to constraint the scheduling of replicas, based on
                 // its internal configuration.
+                //
+                // Selectors include `generation` so that scheduling constraints
+                // (anti-affinity, topology spread) only consider pods of the same
+                // deploy generation. Otherwise, during a generation rollout, the
+                // new-generation pods would be constrained by the placement of
+                // old-generation pods that are about to be torn down, which can
+                // prevent the new pods from scheduling (e.g., when only one AZ
+                // has capacity but it is already occupied by an old-generation
+                // pod).
                 other_replicas_selector: vec![
                     LabelSelector {
                         label_name: "cluster-id".to_string(),
@@ -733,16 +848,29 @@ where
                             value: replica_id.to_string(),
                         },
                     },
-                ],
-                replicas_selector: vec![LabelSelector {
-                    label_name: "cluster-id".to_string(),
-                    // Select ALL replicas.
-                    logic: LabelSelectionLogic::Eq {
-                        value: cluster_id.to_string(),
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
                     },
-                }],
-                disk_limit: location.allocation.disk_limit,
-                disk: location.disk,
+                ],
+                replicas_selector: vec![
+                    LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    },
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
+                    },
+                ],
+                disk_limit,
                 node_selector: location.allocation.selectors,
             },
         )?;

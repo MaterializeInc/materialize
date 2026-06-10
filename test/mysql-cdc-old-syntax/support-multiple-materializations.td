@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -32,7 +31,7 @@ USE public;
 
 CREATE TABLE t1 (id SERIAL PRIMARY KEY, f1 BOOLEAN);
 
-CREATE TABLE t2 (id SERIAL PRIMARY KEY, t1_id INT REFERENCES t1(id), name VARCHAR(32));
+CREATE TABLE t2 (id SERIAL PRIMARY KEY, t1_id BIGINT UNSIGNED REFERENCES t1(id), name VARCHAR(32));
 
 INSERT INTO t1(f1) VALUES (true),(false);
 

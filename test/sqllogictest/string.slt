@@ -119,7 +119,7 @@ SELECT substr('hello', 0/0, 3)
 
 # standard tests
 
-query T colnames
+query T colnames,rowsort
 SELECT to_jsonb(strcol) as strcol FROM substrtest
 ----
 strcol
@@ -731,15 +731,15 @@ SELECT '你' || '好'
 ----
 你好
 
-query error db error: ERROR: operator does not exist: boolean \|\| boolean
+query error operator does not exist: boolean \|\| boolean
 SELECT true || false
 
 # concat_ws
 
-query error db error: ERROR: function concat_ws\(\) does not exist
+query error function concat_ws\(\) does not exist
 SELECT concat_ws();
 
-query error db error: ERROR: function concat_ws\(unknown\) does not exist
+query error function concat_ws\(unknown\) does not exist
 SELECT concat_ws('a');
 
 query T
@@ -810,13 +810,13 @@ SELECT split_part('', 'not', 1)
 query error field position must be greater than zero
 SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
-query error db error: ERROR: function split_part\(\) does not exist
+query error function split_part\(\) does not exist
 SELECT split_part()
 
-query error db error: ERROR: function split_part\(unknown, unknown\) does not exist
+query error function split_part\(unknown, unknown\) does not exist
 SELECT split_part('one', 'two')
 
-query error db error: ERROR: function split_part\(integer, integer, integer\) does not exist
+query error function split_part\(integer, integer, integer\) does not exist
 SELECT split_part(1, 2, 3)
 
 ### lpad ###
@@ -1062,10 +1062,10 @@ SELECT position(42)
 statement error Expected IN, found right parenthesis
 SELECT position('str')
 
-statement error db error: ERROR: function position\(integer, unknown\) does not exist
+statement error function position\(integer, unknown\) does not exist
 SELECT position(42 IN 'str')
 
-statement error db error: ERROR: function position\(unknown, integer\) does not exist
+statement error function position\(unknown, integer\) does not exist
 SELECT position('str' IN 42)
 
 statement error Expected right parenthesis, found comma
@@ -1118,6 +1118,56 @@ query I
 SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
 ----
 2
+
+### strpos ###
+
+query I
+SELECT strpos('hello', 'lo')
+----
+4
+
+query I
+SELECT strpos('hello', 'xyz')
+----
+0
+
+query I
+SELECT strpos('hello', '')
+----
+1
+
+query I
+SELECT strpos('', 'lo')
+----
+0
+
+query I
+SELECT strpos('', '')
+----
+1
+
+# strpos with multi-byte characters
+query I
+SELECT strpos('héllo', 'lo')
+----
+4
+
+# strpos should match position with swapped args
+query B
+SELECT strpos('hello world', 'world') = position('world' IN 'hello world')
+----
+true
+
+# NULL propagation
+query T
+SELECT strpos(NULL, 'lo')
+----
+NULL
+
+query T
+SELECT strpos('hello', NULL)
+----
+NULL
 
 ### left ###
 statement ok
@@ -1246,7 +1296,7 @@ SELECT left('hello', -2147483647)
 (empty)
 
 # i64
-query error db error: ERROR: function left\(unknown, bigint\) does not exist
+query error function left\(unknown, bigint\) does not exist
 SELECT left('hello', 2147483648)
 
 ### right ###
@@ -1376,7 +1426,7 @@ SELECT right('hello', -2147483647)
 (empty)
 
 # i64
-query error db error: ERROR: function right\(unknown, bigint\) does not exist
+query error function right\(unknown, bigint\) does not exist
 SELECT right('hello', 2147483648)
 
 query T
@@ -1742,3 +1792,180 @@ query T
 SELECT starts_with(NULL, 'ab')
 ----
 NULL
+
+# reverse for string
+
+statement ok
+create table words (word text);
+
+statement ok
+insert into words values ('hello'), ('world'), ('!');
+
+query T
+select reverse(word) from words;
+----
+!
+dlrow
+olleh
+
+# string_to_array - begin.
+
+statement ok
+create table string_to_array_words (word text);
+
+statement ok
+insert into string_to_array_words values ('hello world');
+
+# string_to_array - NULL delimiter and null_string not set.
+query T
+select string_to_array(word, NULL) from string_to_array_words;
+----
+{h,e,l,l,o," ",w,o,r,l,d}
+
+# string_to_array - empty string delimiter and null_string not set.
+query T
+select string_to_array(word, '') from string_to_array_words;
+----
+{"hello world"}
+
+# string_to_array - white space delimiter and null_string not set.
+query T
+select string_to_array(word, ' ') from string_to_array_words;
+----
+{hello,world}
+
+# string_to_array - white space delimiter and null_string set to first word in results.
+query T
+select string_to_array(word, ' ', 'hello') from string_to_array_words;
+----
+{NULL,world}
+
+# string_to_array - empty string delimiter and null_string set to whole word.
+# expectation: null_string is still respected if delimiter is empty. (Same as Postgres.)
+query T
+select string_to_array(word, '', 'hello world') from string_to_array_words;
+----
+{NULL}
+
+query T
+select string_to_array(word, '', 'aaa') from string_to_array_words;
+----
+{"hello world"}
+
+query T
+select string_to_array(word, '', null) from string_to_array_words;
+----
+{"hello world"}
+
+# string_to_array - white space delimiter and null_string set to NULL.
+query T
+select string_to_array(word, ' ', NULL) from string_to_array_words;
+----
+{hello,world}
+
+# string_to_array - first word delimiter and null_string not set.
+# expectation: delimiter should convert a full match to empty string.
+query T
+select string_to_array(word, 'hello') from string_to_array_words;
+----
+{""," world"}
+
+# string_to_array - empty string must return an empty array.
+query T
+select string_to_array('', 'hello') from string_to_array_words;
+----
+{}
+
+query T
+select string_to_array('', '') from string_to_array_words;
+----
+{}
+
+# string_to_array - whitespace.
+query T
+select string_to_array(' ', '') from string_to_array_words;
+----
+{" "}
+
+# string_to_array - null input results in null.
+query T
+select string_to_array(null, '') from string_to_array_words;
+----
+NULL
+
+# string_to_array - non string input results in error.
+query error
+select string_to_array('hello world', 0) from string_to_array_words;
+
+# string_to_array - consecutive delimiters produce empty fields.
+query T
+select string_to_array('a||b', '|') from string_to_array_words;
+----
+{a,"",b}
+
+# string_to_array - leading and trailing delimiters produce empty fields.
+query T
+select string_to_array('|a|b|', '|') from string_to_array_words;
+----
+{"",a,b,""}
+
+# string_to_array - null_string set to empty string replaces empty fields with NULL.
+query T
+select string_to_array('a||b', '|', '') from string_to_array_words;
+----
+{a,NULL,b}
+
+query T
+select string_to_array('|a|b|', '|', '') from string_to_array_words;
+----
+{NULL,a,b,NULL}
+
+# string_to_array - null_string matches a token in the middle.
+query T
+select string_to_array('a|b|c', '|', 'b') from string_to_array_words;
+----
+{a,NULL,c}
+
+# string_to_array - null_string matches the last token.
+query T
+select string_to_array('a|b|c', '|', 'c') from string_to_array_words;
+----
+{a,b,NULL}
+
+# string_to_array - NULL delimiter (split into chars) with null_string set.
+query T
+select string_to_array('hello', NULL, 'l') from string_to_array_words;
+----
+{h,e,NULL,NULL,o}
+
+# string_to_array - NULL delimiter (split into chars) with null_string set to NULL.
+query T
+select string_to_array('hello', NULL, NULL) from string_to_array_words;
+----
+{h,e,l,l,o}
+
+# string_to_array - multi-character delimiter.
+query T
+select string_to_array('a<>b<>c', '<>') from string_to_array_words;
+----
+{a,b,c}
+
+# string_to_array - multi-character delimiter with null_string matching middle token.
+query T
+select string_to_array('a<>b<>c', '<>', 'b') from string_to_array_words;
+----
+{a,NULL,c}
+
+# string_to_array - delimiter not present in input.
+query T
+select string_to_array('abc', '|') from string_to_array_words;
+----
+{abc}
+
+# string_to_array - delimiter not present in input, with null_string matching whole input.
+query T
+select string_to_array('abc', '|', 'abc') from string_to_array_words;
+----
+{NULL}
+
+# string_to_array - end.

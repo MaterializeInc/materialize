@@ -35,6 +35,8 @@ pub async fn enable(
     cx: RegionContext,
     version: Option<String>,
     environmentd_extra_arg: Option<Vec<String>>,
+    environmentd_cpu_allocation: Option<String>,
+    environmentd_memory_allocation: Option<String>,
 ) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
@@ -47,7 +49,7 @@ pub async fn enable(
 
     // Loop region creation.
     // After 6 minutes it will timeout.
-    let _ = Retry::default()
+    Retry::default()
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
@@ -56,6 +58,8 @@ pub async fn enable(
                 .create_region(
                     version.clone(),
                     environmentd_extra_arg.clone(),
+                    environmentd_cpu_allocation.clone(),
+                    environmentd_memory_allocation.clone(),
                     cloud_provider.clone(),
                 )
                 .await?;
@@ -68,7 +72,7 @@ pub async fn enable(
 
     // Loop retrieving the region and checking the SQL connection for 6 minutes.
     // After 6 minutes it will timeout.
-    let _ = Retry::default()
+    Retry::default()
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {

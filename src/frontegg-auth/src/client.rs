@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
 
 pub mod tokens;
 
@@ -37,7 +37,6 @@ impl Client {
     pub fn environmentd_default() -> Self {
         let retry_policy = ExponentialBackoff::builder()
             .retry_bounds(Duration::from_millis(200), Duration::from_secs(2))
-            .backoff_exponent(2)
             .build_with_total_retry_duration(Duration::from_secs(30));
 
         let client = reqwest::Client::builder()

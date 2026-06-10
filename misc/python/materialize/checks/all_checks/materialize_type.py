@@ -14,13 +14,9 @@ from materialize.checks.checks import Check
 
 class MaterializeType(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE view v1 (a) AS SELECT 1::mz_timestamp;
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -36,9 +32,7 @@ class MaterializeType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM v1;
                 1
 
@@ -47,6 +41,4 @@ class MaterializeType(Check):
 
                 > SELECT * FROM v3;
                 1
-            """
-            )
-        )
+            """))

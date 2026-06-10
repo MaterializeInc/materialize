@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -77,7 +76,7 @@ $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-# TODO: database-issues#7776 (expected incompatible schema change)
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/7776 is fixed
 $ skip-if
 SELECT true
 

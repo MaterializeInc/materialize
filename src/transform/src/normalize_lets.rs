@@ -24,12 +24,12 @@
 //! be used to renumber bindings in an expression starting from a provided
 //! `IdGen`, which is used to prepare distinct expressions for inlining.
 
-use mz_expr::{visit::Visit, MirRelationExpr};
+use mz_expr::{MirRelationExpr, visit::Visit};
 use mz_ore::assert_none;
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 use mz_repr::optimize::OptimizerFeatures;
 
-use crate::TransformCtx;
+use crate::{TransformCtx, catch_unwind_optimize};
 
 pub use renumbering::renumber_bindings;
 
@@ -38,7 +38,7 @@ pub fn normalize_lets(
     expr: &mut MirRelationExpr,
     features: &OptimizerFeatures,
 ) -> Result<(), crate::TransformError> {
-    NormalizeLets::new(false).action(expr, features)
+    catch_unwind_optimize(|| NormalizeLets::new(false).action(expr, features))
 }
 
 /// Install replace certain `Get` operators with their `Let` value.
@@ -64,12 +64,16 @@ impl NormalizeLets {
 }
 
 impl crate::Transform for NormalizeLets {
+    fn name(&self) -> &'static str {
+        "NormalizeLets"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "normalize_lets")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -128,32 +132,12 @@ impl NormalizeLets {
 
         // A final bottom-up traversal to normalize the shape of nested LetRec blocks
         relation.try_visit_mut_post(&mut |relation| -> Result<(), RecursionLimitError> {
-            // Disassemble `LetRec` into a `Let` stack if possible.
-            // If a `LetRec` remains, return the would-be `Let` bindings to it.
-            // This is to maintain `LetRec`-freedom for `LetRec`-free expressions.
-            let mut bindings = let_motion::harvest_non_recursive(relation);
-            if let MirRelationExpr::LetRec {
-                ids,
-                values,
-                limits,
-                body: _,
-            } = relation
-            {
-                bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
-                support::replace_bindings_from_map(bindings, ids, values, limits);
-            } else {
-                for (id, (value, max_iter)) in bindings.into_iter().rev() {
-                    assert_none!(max_iter);
-                    *relation = MirRelationExpr::Let {
-                        id,
-                        value: Box::new(value),
-                        body: Box::new(relation.take_dangerous()),
-                    };
-                }
-            }
-
             // Move a non-recursive suffix of bindings from the end of the LetRec
             // to the LetRec body.
+            // This is unsafe when applied to expressions which contain `ArrangeBy`,
+            // as if the extracted suffixes reference arrangements they will not be
+            // able to access those arrangements from outside the `LetRec` scope.
+            // It happens to work at the moment, so we don't touch it but should fix.
             let bindings = let_motion::harvest_nonrec_suffix(relation)?;
             if let MirRelationExpr::LetRec {
                 ids: _,
@@ -179,6 +163,20 @@ impl NormalizeLets {
                 }
             }
 
+            // Extract `Let` prefixes from `LetRec`, to reveal their non-recursive nature.
+            // This assists with hoisting e.g. arrangements out of `LetRec` blocks, a thing
+            // we don't promise to do, but it can be helpful to do. This also exposes more
+            // AST nodes to non-`LetRec` analyses, which don't always have parity with `LetRec`.
+            let bindings = let_motion::harvest_non_recursive(relation);
+            for (id, (value, max_iter)) in bindings.into_iter().rev() {
+                assert_none!(max_iter);
+                *relation = MirRelationExpr::Let {
+                    id,
+                    value: Box::new(value),
+                    body: Box::new(relation.take_dangerous()),
+                };
+            }
+
             Ok(())
         })?;
 
@@ -200,6 +198,7 @@ mod support {
     use itertools::Itertools;
 
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+    use mz_repr::ReprRelationType;
     use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
@@ -251,16 +250,18 @@ mod support {
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
     ///
-    /// The method relies on the `analysis::{UniqueKeys, RelationType}` analyses to improve its type
-    /// information for `LetRec` stages.
+    /// The method relies on the `analysis::{UniqueKeys, ReprRelationType}` analyses to improve its
+    /// type information for `LetRec` stages.
     pub(super) fn refresh_types(
         expr: &mut MirRelationExpr,
         features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
-        use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
+        use crate::analysis::{
+            DerivedBuilder, ReprRelationType as ReprRelationTypeAnalysis, UniqueKeys,
+        };
         let mut builder = DerivedBuilder::new(features);
-        builder.require(RelationType);
+        builder.require(ReprRelationTypeAnalysis);
         builder.require(UniqueKeys);
         let derived = builder.visit(expr);
         let derived_view = derived.as_view();
@@ -277,16 +278,16 @@ mod support {
             if !ids.is_empty() {
                 // The `skip(1)` skips the `body` child, and is followed by binding children.
                 for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
-                    let cols = view
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                    let repr_cols = view
+                        .value::<ReprRelationTypeAnalysis>()
+                        .expect("ReprRelationType required")
                         .clone()
                         .expect("Expression not well typed");
                     let keys = view
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
+                    types.insert(*id, ReprRelationType::new(repr_cols).with_keys(keys));
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));
@@ -303,18 +304,24 @@ mod support {
             {
                 if let Some(new_type) = types.get(i) {
                     // Assert that the column length has not changed.
-                    if !new_type.column_types.len() == typ.column_types.len() {
+                    if new_type.column_types.len() != typ.column_types.len() {
                         Err(crate::TransformError::Internal(format!(
                             "column lengths do not match: {:?} v {:?}",
                             new_type.column_types, typ.column_types
                         )))?;
                     }
                     // Assert that the column types have not changed.
+                    // NB the ReprScalarType::eq ignores nullability (correctly!)
+                    // since record field nullability can legitimately differ between the stored
+                    // type and the analysis-recomputed type.
+                    // Note: We also want to ignore nullability changes at the top level, but
+                    // ReprColumnType has the derived Eq, so that wouldn't ignore nullability, hence
+                    // the `.zip_eq(...).all(...)` dance.
                     if !new_type
                         .column_types
                         .iter()
-                        .zip(typ.column_types.iter())
-                        .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
+                        .zip_eq(typ.column_types.iter())
+                        .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
                     {
                         Err(crate::TransformError::Internal(format!(
                             "scalar types do not match: {:?} v {:?}",
@@ -337,7 +344,7 @@ mod let_motion {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
     use mz_ore::stack::RecursionLimitError;
 
@@ -516,8 +523,10 @@ mod let_motion {
             }
 
             let mut bindings = BTreeMap::new();
-            for (id, mut value, max_iter) in
-                izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 bindings.extend(harvest_non_recursive(&mut value));
                 bindings.insert(id, (value, max_iter));
@@ -561,7 +570,11 @@ mod let_motion {
             // The reference count of the current bindings.
             let mut refcnt = BTreeMap::<LocalId, usize>::new();
 
-            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..)) {
+            for ((id, value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
+            {
                 refcnt.clear();
                 super::support::count_local_id_uses(&value, &mut refcnt);
 
@@ -662,7 +675,7 @@ mod inlining {
 
     use std::collections::BTreeMap;
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     use crate::normalize_lets::support::replace_bindings_from_map;
@@ -771,7 +784,10 @@ mod inlining {
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
-            for (id, mut expr, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut expr), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 // Substitute any appropriate prior let bindings.
                 inline_lets_helper(&mut expr, &mut inline_offers)?;
@@ -798,9 +814,6 @@ mod inlining {
                             &expr
                         };
                         match stripped_value {
-                            // TODO: One could imagine CSEing multiple occurrences of a global Get
-                            // to make us read from Persist only once.
-                            // See <https://github.com/MaterializeInc/database-issues/issues/6363>
                             MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                             _ => false,
                         }
@@ -926,6 +939,7 @@ mod renumbering {
 
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::{Id, LocalId, MirRelationExpr};
     use mz_ore::id_gen::IdGen;
 
@@ -978,7 +992,7 @@ mod renumbering {
                         body,
                     } => {
                         stack.push(Err(body));
-                        for (id, value) in ids.iter().rev().zip(values.iter().rev()) {
+                        for (id, value) in ids.iter().rev().zip_eq(values.iter().rev()) {
                             stack.push(Ok(*id));
                             stack.push(Err(value));
                         }

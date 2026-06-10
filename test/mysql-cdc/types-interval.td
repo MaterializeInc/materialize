@@ -33,9 +33,11 @@ CREATE TABLE t1 (f1 TIME(6));
 
 INSERT INTO t1 VALUES (TIME '23:59:59')
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
@@ -65,9 +67,11 @@ contains: error decoding value
 
 > DROP SOURCE mz_source CASCADE;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 ! SELECT * FROM t1;
 contains: error decoding value

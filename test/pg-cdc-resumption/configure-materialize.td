@@ -20,6 +20,7 @@
 
 > DROP SOURCE IF EXISTS mz_source CASCADE;
 
+> BEGIN
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
@@ -31,3 +32,4 @@
 > CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE t2);
 > CREATE TABLE alter_fail_drop_col FROM SOURCE mz_source (REFERENCE alter_fail_drop_col);
 > CREATE TABLE alter_fail_drop_constraint FROM SOURCE mz_source (REFERENCE alter_fail_drop_constraint);
+> COMMIT

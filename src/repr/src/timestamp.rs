@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
+use mz_timely_util::temporal::BucketTimestamp;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -33,8 +35,11 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Ord,
     Hash,
     Default,
-    Arbitrary,
+    bytemuck::AnyBitPattern,
+    bytemuck::NoUninit,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+#[repr(transparent)]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
@@ -61,6 +66,135 @@ impl RustType<ProtoTimestamp> for Timestamp {
 
     fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
         Ok(Timestamp::new(proto.internal))
+    }
+}
+
+mod columnar_timestamp {
+    use crate::Timestamp;
+    use columnar::Columnar;
+    use mz_ore::cast::CastFrom;
+    use std::ops::Range;
+
+    /// A newtype wrapper for a vector of `Timestamp` values.
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct Timestamps<T>(T);
+    impl<D, T: columnar::Push<D>> columnar::Push<D> for Timestamps<T> {
+        #[inline(always)]
+        fn push(&mut self, item: D) {
+            self.0.push(item)
+        }
+    }
+    impl<T: columnar::Clear> columnar::Clear for Timestamps<T> {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.0.clear()
+        }
+    }
+    impl<T: columnar::Len> columnar::Len for Timestamps<T> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+    impl<'a> columnar::Index for Timestamps<&'a [Timestamp]> {
+        type Ref = Timestamp;
+
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            self.0[index]
+        }
+    }
+
+    impl Columnar for Timestamp {
+        #[inline(always)]
+        fn into_owned<'a>(other: columnar::Ref<'a, Self>) -> Self {
+            other
+        }
+        type Container = Timestamps<Vec<Timestamp>>;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
+        where
+            Self: 'a,
+        {
+            thing
+        }
+    }
+
+    impl columnar::Borrow for Timestamps<Vec<Timestamp>> {
+        type Ref<'a> = Timestamp;
+        type Borrowed<'a>
+            = Timestamps<&'a [Timestamp]>
+        where
+            Self: 'a;
+        #[inline(always)]
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Timestamps(self.0.as_slice())
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            Timestamps(item.0)
+        }
+
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+    }
+
+    impl columnar::Container for Timestamps<Vec<Timestamp>> {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range)
+        }
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
+        }
+    }
+
+    impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert!(index < Self::SLICE_COUNT);
+            (
+                u64::cast_from(align_of::<Timestamp>()),
+                bytemuck::cast_slice(self.0),
+            )
+        }
+        #[inline(always)]
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            std::iter::once((
+                u64::cast_from(align_of::<Timestamp>()),
+                bytemuck::cast_slice(self.0),
+            ))
+        }
+    }
+    impl<'a> columnar::FromBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            Timestamps(bytemuck::cast_slice(
+                bytes.next().expect("Iterator exhausted prematurely"),
+            ))
+        }
+    }
+}
+
+impl BucketTimestamp for Timestamp {
+    fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self> {
+        let rhs = 1_u64.checked_shl(exponent)?;
+        Some(self.internal.checked_add(rhs)?.into())
     }
 }
 
@@ -465,32 +599,4 @@ impl TryFrom<Numeric> for Timestamp {
 
 impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
-}
-
-mod flatcontainer {
-    use flatcontainer::{IntoOwned, MirrorRegion};
-    use mz_ore::flatcontainer::MzRegionPreference;
-
-    use crate::Timestamp;
-
-    impl MzRegionPreference for Timestamp {
-        type Owned = Self;
-        type Region = MirrorRegion<Timestamp>;
-    }
-
-    impl<'a> IntoOwned<'a> for Timestamp {
-        type Owned = Self;
-
-        fn into_owned(self) -> Self::Owned {
-            self
-        }
-
-        fn clone_onto(self, other: &mut Self::Owned) {
-            *other = self;
-        }
-
-        fn borrow_as(owned: &'a Self::Owned) -> Self {
-            *owned
-        }
-    }
 }

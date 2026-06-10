@@ -9,22 +9,14 @@
 
 //! Planning of linear joins.
 
-use std::collections::BTreeMap;
-
 use mz_expr::{
-    join_permutations, permutation_for_arrangement, JoinInputCharacteristics, MapFilterProject,
-    MirScalarExpr,
+    Columns, JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
+    permutation_for_arrangement,
 };
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::*;
-use proptest::result::Probability;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::{
-    JoinBuildState, JoinClosure, ProtoLinearJoinPlan, ProtoLinearStagePlan, ProtoMirScalarVec,
-};
 use crate::plan::AvailableCollections;
+use crate::plan::join::{JoinBuildState, JoinClosure};
 
 /// A plan for the execution of a linear join.
 ///
@@ -48,73 +40,12 @@ pub struct LinearJoinPlan {
     pub final_closure: Option<JoinClosure>,
 }
 
-impl Arbitrary for LinearJoinPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            any_with::<Option<Vec<MirScalarExpr>>>((Probability::default(), ((0..3).into(), ()))),
-            any::<Option<JoinClosure>>(),
-            prop::collection::vec(any::<LinearStagePlan>(), 0..3),
-            any::<Option<JoinClosure>>(),
-        )
-            .prop_map(
-                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
-                    LinearJoinPlan {
-                        source_relation,
-                        source_key,
-                        initial_closure,
-                        stage_plans,
-                        final_closure,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
-impl RustType<ProtoLinearJoinPlan> for LinearJoinPlan {
-    fn into_proto(&self) -> ProtoLinearJoinPlan {
-        ProtoLinearJoinPlan {
-            source_relation: self.source_relation.into_proto(),
-            source_key: self.source_key.into_proto(),
-            initial_closure: self.initial_closure.into_proto(),
-            stage_plans: self.stage_plans.into_proto(),
-            final_closure: self.final_closure.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLinearJoinPlan) -> Result<Self, TryFromProtoError> {
-        Ok(LinearJoinPlan {
-            source_relation: proto.source_relation.into_rust()?,
-            source_key: proto.source_key.into_rust()?,
-            initial_closure: proto.initial_closure.into_rust()?,
-            stage_plans: proto.stage_plans.into_rust()?,
-            final_closure: proto.final_closure.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoMirScalarVec> for Vec<MirScalarExpr> {
-    fn into_proto(&self) -> ProtoMirScalarVec {
-        ProtoMirScalarVec {
-            values: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMirScalarVec) -> Result<Self, TryFromProtoError> {
-        proto.values.into_rust()
-    }
-}
-
 /// A plan for the execution of one stage of a linear join.
 ///
 /// Each stage is a binary join between the current accumulated
 /// join results, and a new collection. The former is referred to
 /// as the "stream" and the latter the "lookup".
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct LinearStagePlan {
     /// The index of the relation into which we will look up.
     pub lookup_relation: usize,
@@ -131,36 +62,12 @@ pub struct LinearStagePlan {
     pub closure: JoinClosure,
 }
 
-impl RustType<ProtoLinearStagePlan> for LinearStagePlan {
-    fn into_proto(&self) -> ProtoLinearStagePlan {
-        ProtoLinearStagePlan {
-            lookup_relation: self.lookup_relation.into_proto(),
-            stream_key: self.stream_key.into_proto(),
-            stream_thinning: self.stream_thinning.into_proto(),
-            lookup_key: self.lookup_key.into_proto(),
-            closure: Some(self.closure.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoLinearStagePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            lookup_relation: proto.lookup_relation.into_rust()?,
-            stream_key: proto.stream_key.into_rust()?,
-            stream_thinning: proto.stream_thinning.into_rust()?,
-            lookup_key: proto.lookup_key.into_rust()?,
-            closure: proto
-                .closure
-                .into_rust_if_some("ProtoLinearStagePlan::closure")?,
-        })
-    }
-}
-
 impl LinearJoinPlan {
     /// Create a new join plan from the required arguments.
     pub fn create_from(
         source_relation: usize,
         // When specified, a key and its corresponding permutation and thinning.
-        source_arrangement: Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+        source_arrangement: Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)],
         input_mapper: mz_expr::JoinInputMapper,

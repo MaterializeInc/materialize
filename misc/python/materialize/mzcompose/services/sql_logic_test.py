@@ -14,7 +14,6 @@ from materialize.mzcompose import (
 from materialize.mzcompose.service import (
     Service,
 )
-from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class SqlLogicTest(Service):
@@ -22,17 +21,22 @@ class SqlLogicTest(Service):
         self,
         name: str = "sqllogictest",
         mzbuild: str = "sqllogictest",
-        environment: list[str] = [
-            "MZ_SOFT_ASSERTIONS=1",
-        ],
+        environment: list[str] | None = None,
         volumes: list[str] = ["../..:/workdir"],
-        depends_on: list[str] = [METADATA_STORE],
     ) -> None:
+        if environment is None:
+            environment = [
+                "MZ_SOFT_ASSERTIONS=1",
+                "LD_PRELOAD=libeatmydata.so",
+            ]
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
             + ";".join(
-                f"{key}={value}"
-                for key, value in get_default_system_parameters().items()
+                [
+                    f"{key}={value}"
+                    for key, value in get_default_system_parameters().items()
+                ]
+                + ["enable_lgalloc=false"]
             )
         ]
 
@@ -43,7 +47,6 @@ class SqlLogicTest(Service):
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
-                "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
             },

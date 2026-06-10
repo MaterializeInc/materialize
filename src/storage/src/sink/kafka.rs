@@ -15,11 +15,11 @@
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ row data, the input to this module
+//!               │ stream of arrangement batches (trace reader dropped)
 //!               │
 //!        ┏━━━━━━v━━━━━━┓
-//!        ┃    row      ┃
-//!        ┃   encoder   ┃
+//!        ┃    row      ┃ walks each batch's cursor and emits one
+//!        ┃   encoder   ┃ encoded `KafkaMessage` per DiffPair
 //!        ┗━━━━━━┯━━━━━━┛
 //!               │ encoded data
 //!               │
@@ -36,10 +36,11 @@
 //!
 //! # Encoding
 //!
-//! One part of the dataflow deals with encoding the rows that we read from persist. There isn't
-//! anything surprizing here, it is *almost* just a `Collection::map` with the exception of an
-//! initialization step that makes sure the schemas are published to the Schema Registry. After
-//! that step the operator just encodes each batch it receives record by record.
+//! One part of the dataflow deals with encoding the rows that we read from persist. The encoder
+//! walks the input arrangement's batches via
+//! [`mz_interchange::envelopes::for_each_diff_pair`], producing one encoded `KafkaMessage` per
+//! `DiffPair` observed at each `(key, timestamp)`. An initialization step first ensures that the
+//! schemas are published to the Schema Registry.
 //!
 //! # Sinking
 //!
@@ -73,66 +74,80 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
+use anyhow::{Context, anyhow, bail};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_expr::MirScalarExpr;
-use mz_interchange::avro::{AvroEncoder, DiffPair};
+use mz_expr::{Eval, MirScalarExpr};
+use mz_interchange::avro::AvroEncoder;
 use mz_interchange::encode::Encode;
-use mz_interchange::envelopes::dbz_format;
+use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
+use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
-    GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
+    DEFAULT_FETCH_METADATA_TIMEOUT, GetPartitionsError, MzClientContext, TimeoutConfig,
+    TunnelingClientContext,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::soft_assert_or_log;
 use mz_ore::task::{self, AbortOnDropHandle};
-use mz_ore::vec::VecExt;
+use mz_persist_client::Diagnostics;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::{
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_MESSAGE_MAX_BYTES, SINK_ENSURE_TOPIC_CONFIG,
+    SINK_PROGRESS_SEARCH,
+};
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
-    StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
+use mz_storage_types::sources::SourceData;
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
+use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
-use crate::statistics::SinkStatistics;
-use crate::storage_state::StorageState;
-
-impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
+impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -146,14 +161,35 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+        sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        batches: SinkBatchStream<'scope>,
+        key_is_synthetic: bool,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
-        _err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
-        let mut scope = input.scope();
+        _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<'scope, Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
+        let scope = batches.scope();
+
+        let write_handle = {
+            let persist = Arc::clone(&storage_state.persist_clients);
+            let shard_meta = sink.to_storage_metadata.clone();
+            async move {
+                let client = persist.open(shard_meta.persist_location).await?;
+                let handle = client
+                    .open_writer(
+                        shard_meta.data_shard,
+                        Arc::new(shard_meta.relation_desc),
+                        Arc::new(UnitSchema),
+                        Diagnostics::from_purpose("sink handle"),
+                    )
+                    .await?;
+                Ok(handle)
+            }
+        };
 
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         storage_state
@@ -162,10 +198,13 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            &input,
+            batches,
             sink.envelope,
             self.clone(),
             storage_state.storage_configuration.clone(),
+            sink_id,
+            sink.from,
+            key_is_synthetic,
         );
 
         let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
@@ -177,23 +216,23 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (sink_status, sink_token) = sink_collection(
             format!("kafka-{sink_id}-sink"),
-            &encoded,
+            encoded,
             sink_id,
             self.clone(),
-            sink.partition_strategy.clone(),
             storage_state.storage_configuration.clone(),
             sink,
             metrics,
             statistics,
+            write_handle,
             write_frontier,
         );
 
         let running_status = Some(HealthStatusMessage {
-            index: 0,
+            id: None,
             update: HealthStatusUpdate::Running,
             namespace: StatusNamespace::Kafka,
         })
-        .to_stream(&mut scope);
+        .to_stream(scope);
 
         let status = scope.concatenate([running_status, encode_status, sink_status]);
 
@@ -212,8 +251,6 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
-    /// The strategy to partition the data with.
-    partition_strategy: SinkPartitionStrategy,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
     /// A task to periodically refresh the partition count.
@@ -230,6 +267,8 @@ struct TransactionalProducer {
     staged_bytes: u64,
     /// The timeout to use for network operations.
     socket_timeout: Duration,
+    /// The timeout to use for committing transactions.
+    transaction_timeout: Duration,
 }
 
 impl TransactionalProducer {
@@ -239,7 +278,6 @@ impl TransactionalProducer {
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
-        partition_strategy: SinkPartitionStrategy,
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
@@ -283,6 +321,32 @@ impl TransactionalProducer {
         options.insert("client.id", client_id);
         // We want to be notified regularly with statistics
         options.insert("statistics.interval.ms", "1000".into());
+        // Maximum size of a single produced message, controlled by dyncfg so
+        // operators can raise the limit when messages exceed librdkafka's 1MB
+        // default.
+        options.insert(
+            "message.max.bytes",
+            format!(
+                "{}",
+                KAFKA_SINK_MESSAGE_MAX_BYTES.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum size (bytes) of a produced MessageSet.
+        options.insert(
+            "batch.size",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_SIZE.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum number of messages batched in one MessageSet.
+        options.insert(
+            "batch.num.messages",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_NUM_MESSAGES.get(storage_configuration.config_set())
+            ),
+        );
 
         let ctx = MzClientContext::default();
 
@@ -328,7 +392,6 @@ impl TransactionalProducer {
         let producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
-            partition_strategy,
             partition_count,
             _partition_count_task: partition_count_task.abort_on_drop(),
             progress_topic: connection
@@ -341,6 +404,7 @@ impl TransactionalProducer {
             staged_messages: 0,
             staged_bytes: 0,
             socket_timeout: timeout_config.socket_timeout,
+            transaction_timeout: timeout_config.transaction_timeout,
         };
 
         let timeout = timeout_config.socket_timeout;
@@ -375,6 +439,7 @@ impl TransactionalProducer {
                     storage_configuration,
                     &connection.topic,
                     &connection.topic_options,
+                    EnsureTopicConfig::Skip,
                 )
                 .await?;
                 Antichain::from_elem(Timestamp::minimum())
@@ -406,7 +471,6 @@ impl TransactionalProducer {
         let producer = self.producer.clone();
         task::spawn_blocking(|| &self.task_name, move || f(producer))
             .await
-            .unwrap()
             .check_ssh_status(self.producer.context())
     }
 
@@ -425,7 +489,7 @@ impl TransactionalProducer {
         time: Timestamp,
         diff: Diff,
     ) -> Result<(), KafkaError> {
-        assert_eq!(diff, 1, "invalid sink update");
+        assert_eq!(diff, Diff::ONE, "invalid sink update");
 
         let mut headers = OwnedHeaders::new().insert(Header {
             key: "materialize-timestamp",
@@ -447,15 +511,10 @@ impl TransactionalProducer {
             });
         }
 
-        let partition = match self.partition_strategy {
-            SinkPartitionStrategy::V0 => None,
-            SinkPartitionStrategy::V1 => {
-                let pc = self
-                    .partition_count
-                    .load(std::sync::atomic::Ordering::SeqCst);
-                Some(i32::try_from(message.hash % pc).unwrap())
-            }
-        };
+        let pc = self
+            .partition_count
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let partition = Some(i32::try_from(message.hash % pc).unwrap());
 
         let record = BaseRecord {
             topic: &self.data_topic,
@@ -499,7 +558,7 @@ impl TransactionalProducer {
 
         fail::fail_point!("kafka_sink_commit_transaction");
 
-        let timeout = self.socket_timeout;
+        let timeout = self.transaction_timeout;
         match self
             .spawn_blocking(move |p| p.commit_transaction(timeout))
             .await
@@ -604,26 +663,33 @@ struct KafkaHeader {
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are sent in ascending timestamp order.
-fn sink_collection<G: Scope<Timestamp = Timestamp>>(
+fn sink_collection<'scope>(
     name: String,
-    input: &Collection<G, KafkaMessage, Diff>,
+    input: VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
-    partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
-    sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+    sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
+    write_handle: impl Future<
+        Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
+) -> (
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let buffer_min_capacity =
+        KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS.handle(storage_configuration.config_set());
 
-    let mut input = builder.new_disconnected_input(&input.inner, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(input.inner, Exchange::new(move |_| hashed_id));
 
     let as_of = sink.as_of.clone();
     let sink_version = sink.version;
@@ -638,12 +704,13 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
             ));
 
+            let mut write_handle = write_handle.await?;
+
             let metrics = Arc::new(metrics);
 
             let (mut producer, resume_upper) = TransactionalProducer::new(
                 sink_id,
                 &connection,
-                partition_strategy,
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,
@@ -680,8 +747,10 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             // directly to make sure this doesn't compile if someone attempts to make this operator
             // generic over partial orders in the future.
             let Some(mut upper) = resume_upper.clone().into_option() else {
+                write_frontier.borrow_mut().clear();
                 return Ok(());
             };
+
             let mut deferred_updates = vec![];
             let mut extra_updates = vec![];
             // We must wait until we have data to commit before starting a transaction because
@@ -745,18 +814,47 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         if !transaction_begun {
                             producer.begin_transaction().await?;
                         }
+
                         extra_updates.extend(
                             deferred_updates
-                                .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
+                                .extract_if(.., |(_, time, _)| !progress.less_equal(time)),
                         );
+                        // Shrink after draining items out, so the call actually
+                        // reduces capacity in the oversized-buffer scenario
+                        // (e.g. progress topic was deleted and resume upper is 0).
+                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+
                         for (message, time, diff) in extra_updates.drain(..) {
                             producer.send(&message, time, diff)?;
                         }
+                        extra_updates.shrink_to(buffer_min_capacity.get());
 
-                        info!("{name}: committing transaction for {}", progress.pretty());
+                        debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
                         transaction_begun = false;
+                        let mut expect_upper = write_handle.shared_upper();
+                        loop {
+                            if PartialOrder::less_equal(&progress, &expect_upper) {
+                                // The frontier has already been advanced as far as necessary.
+                                break;
+                            }
+                            // TODO(sinks): include the high water mark in the output topic for
+                            // the messages we've published, if and when we allow reads to the sink
+                            // directly, to allow monitoring the progress of the sink in terms of
+                            // the output system.
+                            const EMPTY: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
+                            match write_handle
+                                .compare_and_append(EMPTY, expect_upper, progress.clone())
+                                .await
+                                .expect("valid usage")
+                            {
+                                Ok(()) => break,
+                                Err(mismatch) => {
+                                    expect_upper = mismatch.current;
+                                }
+                            }
+                        }
                         write_frontier.borrow_mut().clone_from(&progress);
                         match progress.into_option() {
                             Some(new_upper) => upper = new_upper,
@@ -785,7 +883,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         };
 
         HealthStatusMessage {
-            index: 0,
+            id: None,
             update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), hint),
             namespace: if matches!(*error, ContextCreationError::Ssh(_)) {
                 StatusNamespace::Ssh
@@ -872,11 +970,25 @@ async fn determine_sink_progress(
     let ctx = Arc::clone(progress_client_read_committed.client().context());
 
     // Ensure the progress topic exists.
+    let ensure_topic_config =
+        match &*SINK_ENSURE_TOPIC_CONFIG.get(storage_configuration.config_set()) {
+            "skip" => EnsureTopicConfig::Skip,
+            "check" => EnsureTopicConfig::Check,
+            "alter" => EnsureTopicConfig::Alter,
+            _ => {
+                tracing::warn!(
+                    topic = progress_topic,
+                    "unexpected value for ensure-topic-config; skipping checks"
+                );
+                EnsureTopicConfig::Skip
+            }
+        };
     mz_storage_client::sink::ensure_kafka_topic(
         connection,
         storage_configuration,
         &progress_topic,
         progress_topic_options,
+        ensure_topic_config,
     )
     .await
     .add_context("error registering kafka progress topic for sink")?;
@@ -890,6 +1002,7 @@ async fn determine_sink_progress(
     let parent_token = Arc::new(());
     let child_token = Arc::downgrade(&parent_token);
     let task_name = format!("get_latest_ts:{sink_id}");
+    let sink_progress_search = SINK_PROGRESS_SEARCH.get(storage_configuration.config_set());
     let result = task::spawn_blocking(|| task_name, move || {
         let progress_topic = progress_topic.as_ref();
         // Ensure the progress topic has exactly one partition. Kafka only
@@ -965,141 +1078,185 @@ async fn determine_sink_progress(
                 )
             })?;
 
-        // Seek to the beginning of the progress topic.
-        let mut tps = TopicPartitionList::new();
-        tps.add_partition(progress_topic, partition);
-        tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
-        progress_client_read_committed
-            .assign(&tps)
-            .with_context(|| {
-                format!(
-                    "Error seeking in progress topic {}:{}",
-                    progress_topic, partition
-                )
-            })?;
-
-        // Helper to get the progress consumer's current position.
-        let get_position = || {
-            if child_token.strong_count() == 0 {
-                bail!("operation cancelled");
-            }
-            let position = progress_client_read_committed
-                .position()?
-                .find_partition(progress_topic, partition)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "No position info found for progress topic {}",
-                        progress_topic
-                    )
-                })?
-                .offset();
-            let position = match position {
-                Offset::Offset(position) => position,
-                // An invalid offset indicates the consumer has not yet read a
-                // message. Since we assigned the consumer to the beginning of
-                // the topic, it's safe to return the low water mark here, which
-                // indicates the position before the first possible message.
-                //
-                // Note that it's important to return the low water mark and not
-                // the minimum possible offset (i.e., zero) in order to break
-                // out of the loop if the topic is empty but the low water mark
-                // is greater than zero.
-                Offset::Invalid => lo,
-                _ => bail!(
-                    "Consumer::position returned offset of wrong type: {:?}",
-                    position
-                ),
-            };
-            // Record the outstanding number of progress records that remain to be processed
-            let outstanding = u64::try_from(std::cmp::max(0, hi - position)).unwrap();
-            metrics.outstanding_progress_records.set(outstanding);
-            Ok(position)
-        };
-
-        info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
-
-        // Read messages until the consumer is positioned at or beyond the high
-        // water mark.
-        //
-        // We use `read_committed` isolation to ensure we don't see progress
-        // records for transactions that did not commit. This means we have to
-        // wait for the LSO to progress to the high water mark `hi`, which means
-        // waiting for any open transactions for other sinks using the same
-        // progress topic to complete. We set a short transaction timeout (10s)
-        // to ensure we never need to wait more than 10s.
-        //
-        // Note that the stall time on the progress topic is not a function of
-        // transaction size. We've designed our transactions so that the
-        // progress record is always written last, after all the data has been
-        // written, and so the window of time in which the progress topic has an
-        // open transaction is quite small. The only vulnerability is if another
-        // sink using the same progress topic crashes in that small window
-        // between writing the progress record and committing the transaction,
-        // in which case we have to wait out the transaction timeout.
-        //
-        // Important invariant: we only exit this loop successfully (i.e., not
-        // returning an error) if we have positive proof of a position at or
-        // beyond the high water mark. To make this invariant easy to check, do
-        // not use `break` in the body of the loop.
-        let mut last_progress: Option<ProgressRecord> = None;
-        loop {
-            let current_position = get_position()?;
-
-            if current_position >= hi {
-                // consumer is at or beyond the high water mark and has read enough messages
-                break;
-            }
-
-            let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
-                Some(Ok(message)) => message,
-                Some(Err(KafkaError::PartitionEOF(_))) => {
-                    // No message, but the consumer's position may have advanced
-                    // past a transaction control message that positions us at
-                    // or beyond the high water mark. Go around the loop again
-                    // to check.
-                    continue;
-                }
-                Some(Err(e)) => bail!("failed to fetch progress message {e}"),
-                None => {
-                    bail!(
-                        "timed out while waiting to reach high water mark of non-empty \
-                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
-                    );
-                }
-            };
-
-            if message.key() != Some(progress_key.to_bytes()) {
-                // This is a progress message for a different sink.
-                continue;
-            }
-
-            metrics.consumed_progress_records.inc();
-
-            let Some(payload) = message.payload() else {
-                continue
-            };
-            let progress = parse_progress_record(payload)?;
-
-            match last_progress {
-                Some(last_progress) if !PartialOrder::less_equal(&last_progress.frontier, &progress.frontier) => {
-                    bail!(
-                        "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
-                        &last_progress.frontier,
-                        &progress.frontier,
-                    );
-                }
-                _ => last_progress = Some(progress),
+        // This topic might be long, but the desired offset will usually be right near the end.
+        // Instead of always scanning through the entire topic, we scan through exponentially-growing
+        // suffixes of it. (Because writes are ordered, the largest progress record in any suffix,
+        // if present, is the global max.) If we find it in one of our suffixes, we've saved at least
+        // an order of magnitude of work; if we don't, we've added at most a constant factor.
+        let mut start_indices = vec![lo];
+        if sink_progress_search {
+            let mut lookback = hi.saturating_sub(lo) / 10;
+            while lookback >= 20_000 {
+                start_indices.push(hi - lookback);
+                lookback /= 10;
             }
         }
-
-        // If we get here, we are assured that we've read all messages up to
-        // the high water mark, and therefore `last_timestamp` contains the
-        // most recent timestamp for the sink under consideration.
-        Ok(last_progress)
-    }).await.unwrap().check_ssh_status(&ctx);
+        for lo in start_indices.into_iter().rev() {
+            if let Some(found) = progress_search(
+                &progress_client_read_committed,
+                progress_record_fetch_timeout,
+                progress_topic,
+                partition,
+                lo,
+                hi,
+                progress_key.clone(),
+                Weak::clone(&child_token),
+                Arc::clone(&metrics)
+            )? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }).await.check_ssh_status(&ctx);
     // Express interest to the computation until after we've received its result
     drop(parent_token);
     result
+}
+
+fn progress_search<C: ConsumerContext + 'static>(
+    progress_client_read_committed: &BaseConsumer<C>,
+    progress_record_fetch_timeout: Duration,
+    progress_topic: &str,
+    partition: i32,
+    lo: i64,
+    hi: i64,
+    progress_key: ProgressKey,
+    child_token: Weak<()>,
+    metrics: Arc<KafkaSinkMetrics>,
+) -> anyhow::Result<Option<ProgressRecord>> {
+    // Seek to the beginning of the given range in the progress topic.
+    let mut tps = TopicPartitionList::new();
+    tps.add_partition(progress_topic, partition);
+    tps.set_partition_offset(progress_topic, partition, Offset::Offset(lo))?;
+    progress_client_read_committed
+        .assign(&tps)
+        .with_context(|| {
+            format!(
+                "Error seeking in progress topic {}:{}",
+                progress_topic, partition
+            )
+        })?;
+
+    // Helper to get the progress consumer's current position.
+    let get_position = || {
+        if child_token.strong_count() == 0 {
+            bail!("operation cancelled");
+        }
+        let position = progress_client_read_committed
+            .position()?
+            .find_partition(progress_topic, partition)
+            .ok_or_else(|| {
+                anyhow!(
+                    "No position info found for progress topic {}",
+                    progress_topic
+                )
+            })?
+            .offset();
+        let position = match position {
+            Offset::Offset(position) => position,
+            // An invalid offset indicates the consumer has not yet read a
+            // message. Since we assigned the consumer to the beginning of
+            // the topic, it's safe to return the low water mark here, which
+            // indicates the position before the first possible message.
+            //
+            // Note that it's important to return the low water mark and not
+            // the minimum possible offset (i.e., zero) in order to break
+            // out of the loop if the topic is empty but the low water mark
+            // is greater than zero.
+            Offset::Invalid => lo,
+            _ => bail!(
+                "Consumer::position returned offset of wrong type: {:?}",
+                position
+            ),
+        };
+        // Record the outstanding number of progress records that remain to be processed
+        let outstanding = u64::try_from(std::cmp::max(0, hi - position)).unwrap();
+        metrics.outstanding_progress_records.set(outstanding);
+        Ok(position)
+    };
+
+    info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
+
+    // Read messages until the consumer is positioned at or beyond the high
+    // water mark.
+    //
+    // We use `read_committed` isolation to ensure we don't see progress
+    // records for transactions that did not commit. This means we have to
+    // wait for the LSO to progress to the high water mark `hi`, which means
+    // waiting for any open transactions for other sinks using the same
+    // progress topic to complete. We set a short transaction timeout (10s)
+    // to ensure we never need to wait more than 10s.
+    //
+    // Note that the stall time on the progress topic is not a function of
+    // transaction size. We've designed our transactions so that the
+    // progress record is always written last, after all the data has been
+    // written, and so the window of time in which the progress topic has an
+    // open transaction is quite small. The only vulnerability is if another
+    // sink using the same progress topic crashes in that small window
+    // between writing the progress record and committing the transaction,
+    // in which case we have to wait out the transaction timeout.
+    //
+    // Important invariant: we only exit this loop successfully (i.e., not
+    // returning an error) if we have positive proof of a position at or
+    // beyond the high water mark. To make this invariant easy to check, do
+    // not use `break` in the body of the loop.
+    let mut last_progress: Option<ProgressRecord> = None;
+    loop {
+        let current_position = get_position()?;
+
+        if current_position >= hi {
+            // consumer is at or beyond the high water mark and has read enough messages
+            break;
+        }
+
+        let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
+            Some(Ok(message)) => message,
+            Some(Err(KafkaError::PartitionEOF(_))) => {
+                // No message, but the consumer's position may have advanced
+                // past a transaction control message that positions us at
+                // or beyond the high water mark. Go around the loop again
+                // to check.
+                continue;
+            }
+            Some(Err(e)) => bail!("failed to fetch progress message {e}"),
+            None => {
+                bail!(
+                    "timed out while waiting to reach high water mark of non-empty \
+                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
+                );
+            }
+        };
+
+        if message.key() != Some(progress_key.to_bytes()) {
+            // This is a progress message for a different sink.
+            continue;
+        }
+
+        metrics.consumed_progress_records.inc();
+
+        let Some(payload) = message.payload() else {
+            continue;
+        };
+        let progress = parse_progress_record(payload)?;
+
+        match last_progress {
+            Some(last_progress)
+                if !PartialOrder::less_equal(&last_progress.frontier, &progress.frontier) =>
+            {
+                bail!(
+                    "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
+                    &last_progress.frontier,
+                    &progress.frontier,
+                );
+            }
+            _ => last_progress = Some(progress),
+        }
+    }
+
+    // If we get here, we are assured that we've read all messages up to
+    // the high water mark, and therefore `last_timestamp` contains the
+    // most recent timestamp for the sink under consideration.
+    Ok(last_progress)
 }
 
 /// This is the legacy struct that used to be emitted as part of a transactional produce and
@@ -1192,7 +1349,6 @@ async fn fetch_partition_count(
         }
     })
     .await
-    .expect("spawning blocking task cannot fail")
     .check_ssh_status(producer.context())?;
 
     match meta.topics().iter().find(|t| t.name() == topic_name) {
@@ -1235,24 +1391,29 @@ async fn fetch_partition_count_loop<F>(
     }
 }
 
-/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
+/// Walks each arrangement batch and emits encoded Kafka messages, one per
+/// `DiffPair` observed at each `(key, timestamp)`.
 ///
-/// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
-fn encode_collection<G: Scope>(
+/// When `key_is_synthetic`, the batch keys are per-row hashes used only for
+/// worker distribution; the emitted `KafkaMessage` uses no key in that case.
+fn encode_collection<'scope>(
     name: String,
-    input: &Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    batches: SinkBatchStream<'scope>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
 ) -> (
-    Collection<G, KafkaMessage, Diff>,
-    Stream<G, HealthStatusMessage>,
+    VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
+    let mut builder = AsyncOperatorBuilder::new(name, batches.scope());
 
-    let (output, stream) = builder.new_output();
-    let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -1277,12 +1438,24 @@ fn encode_collection<G: Scope>(
                     (Some(desc), Some(KafkaSinkFormatType::Avro {
                         schema,
                         compatibility_level,
-                        csr_connection,
+                        wire_format,
                     })) => {
                         // Ensure that schemas are registered with the schema registry.
                         //
                         // Note that where this lies in the rendering cycle means that we will publish the
                         // schemas each time the sink is rendered.
+                        let csr_connection = match wire_format {
+                            WireFormat::Confluent {
+                                registry: Some(csr),
+                            } => csr,
+                            // Sinks are only ever built with a Confluent
+                            // registry (see the sink planner), so anything
+                            // else is unreachable.
+                            other => unreachable!(
+                                "sink Avro key wire_format must be Confluent with registry, got {:?}",
+                                other
+                            ),
+                        };
                         let ccsr = csr_connection
                             .connect(&storage_configuration, InTask::Yes)
                             .await?;
@@ -1319,8 +1492,17 @@ fn encode_collection<G: Scope>(
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level,
-                    csr_connection,
+                    wire_format,
                 } => {
+                    let csr_connection = match wire_format {
+                        WireFormat::Confluent {
+                            registry: Some(csr),
+                        } => csr,
+                        other => unreachable!(
+                            "sink Avro value wire_format must be Confluent with registry, got {:?}",
+                            other
+                        ),
+                    };
                     // Ensure that schemas are registered with the schema registry.
                     //
                     // Note that where this lies in the rendering cycle means that we will publish the
@@ -1352,73 +1534,100 @@ fn encode_collection<G: Scope>(
 
             let mut row_buf = Row::default();
             let mut datums = DatumVec::new();
+            let mut pk_warner =
+                (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
 
             while let Some(event) = input.next().await {
-                if let Event::Data(cap, rows) = event {
-                    for ((key, value), time, diff) in rows {
-                        let mut hash = None;
-                        let mut headers = vec![];
-                        if connection.headers_index.is_some() || connection.partition_by.is_some() {
-                            // Header values and partition by values are derived from the row that
-                            // produces an event. But it is ambiguous whether to use the `before` or
-                            // `after` from the event. The rule applied here is simple: use `after`
-                            // if it exists (insertions and updates), otherwise fall back to `before`
-                            // (deletions).
-                            //
-                            // It is up to the SQL planner to ensure this produces sensible results.
-                            // (When using the upsert envelope and both `before` and `after` are
-                            // present, it's always unambiguous to use `after` because that's all
-                            // that will be present in the Kafka message; when using the Debezium
-                            // envelope, it's okay to refer to columns in the key because those
-                            // are guaranteed to be the same in both `before` and `after`.)
-                            let row = value
-                                .after
-                                .as_ref()
-                                .or(value.before.as_ref())
-                                .expect("one of before or after must be set");
-                            let row = datums.borrow_with(row);
-
-                            if let Some(i) = connection.headers_index {
-                                headers = encode_headers(row[i]);
+                if let Event::Data(cap, mut batches) = event {
+                    for batch in batches.drain(..) {
+                        for_each_diff_pair(&batch, |key, time, value| {
+                            if let Some(warner) = pk_warner.as_mut() {
+                                warner.observe(key, time);
                             }
+                            // Only emit the arrangement key when the user configured one; relation-key
+                            // and synthetic-hash arrangements exist purely for grouping / worker
+                            // distribution and have no corresponding key encoder.
+                            let key_for_message = if key_encoder.is_some() { key } else { &None };
 
-                            if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &row));
+                            let mut hash = None;
+                            let mut headers = vec![];
+                            if connection.headers_index.is_some()
+                                || connection.partition_by.is_some()
+                            {
+                                // Header values and partition by values are derived from the row
+                                // that produces an event. But it is ambiguous whether to use the
+                                // `before` or `after` from the event. The rule applied here is
+                                // simple: use `after` if it exists (insertions and updates),
+                                // otherwise fall back to `before` (deletions).
+                                //
+                                // It is up to the SQL planner to ensure this produces sensible
+                                // results. (When using the upsert envelope and both `before` and
+                                // `after` are present, it's always unambiguous to use `after`
+                                // because that's all that will be present in the Kafka message;
+                                // when using the Debezium envelope, it's okay to refer to columns
+                                // in the key because those are guaranteed to be the same in both
+                                // `before` and `after`.)
+                                let row = value
+                                    .after
+                                    .as_ref()
+                                    .or(value.before.as_ref())
+                                    .expect("one of before or after must be set");
+                                let row = datums.borrow_with(row);
+
+                                if let Some(i) = connection.headers_index {
+                                    headers = encode_headers(row[i]);
+                                }
+
+                                if let Some(partition_by) = &connection.partition_by {
+                                    hash = Some(evaluate_partition_by(partition_by, &row));
+                                }
                             }
+                            let (encoded_key, hash) = match key_for_message {
+                                Some(key) => {
+                                    let key_encoder =
+                                        key_encoder.as_ref().expect("key present");
+                                    let encoded = key_encoder.encode_unchecked(key.clone());
+                                    let hash =
+                                        hash.unwrap_or_else(|| key_encoder.hash(&encoded));
+                                    (Some(encoded), hash)
+                                }
+                                None => (None, hash.unwrap_or(0)),
+                            };
+                            let value = match envelope {
+                                SinkEnvelope::Upsert => value.after,
+                                SinkEnvelope::Debezium => {
+                                    dbz_format(&mut row_buf.packer(), value);
+                                    Some(row_buf.clone())
+                                }
+                                SinkEnvelope::Append => {
+                                    unreachable!("Append envelope is not valid for Kafka sinks")
+                                }
+                            };
+                            let value = value.map(|value| value_encoder.encode_unchecked(value));
+                            let message = KafkaMessage {
+                                hash,
+                                key: encoded_key,
+                                value,
+                                headers,
+                            };
+                            output.give(&cap, (message, time, Diff::ONE));
+                        });
+                        // Flush after each batch so the final `(key, time)` group of the walk is
+                        // resolved immediately — a PK violation in the last group is otherwise
+                        // held until more data arrives or the operator shuts down.
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.flush();
                         }
-                        let (key, hash) = match key {
-                            Some(key) => {
-                                let key_encoder = key_encoder.as_ref().expect("key present");
-                                let key = key_encoder.encode_unchecked(key);
-                                let hash = hash.unwrap_or_else(|| key_encoder.hash(&key));
-                                (Some(key), hash)
-                            }
-                            None => (None, hash.unwrap_or(0))
-                        };
-                        let value = match envelope {
-                            SinkEnvelope::Upsert => value.after,
-                            SinkEnvelope::Debezium => {
-                                dbz_format(&mut row_buf.packer(), value);
-                                Some(row_buf.clone())
-                            }
-                        };
-                        let value = value.map(|value| value_encoder.encode_unchecked(value));
-                        let message = KafkaMessage {
-                            hash,
-                            key,
-                            value,
-                            headers,
-                        };
-                        output.give(&cap, (message, time, diff));
                     }
                 }
             }
+
             Ok::<(), anyhow::Error>(())
         })
     });
 
     let statuses = errors.map(|error| HealthStatusMessage {
-        index: 0,
+        id: None,
         update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
         namespace: StatusNamespace::Kafka,
     });
@@ -1462,13 +1671,14 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // user-facing `CREATE SINK` docs.
     let temp_storage = RowArena::new();
     match partition_by.eval(row, &temp_storage) {
-        Ok(hash) => match hash {
-            Datum::Int32(i) => i.try_into().unwrap_or(0),
-            Datum::Int64(i) => i.try_into().unwrap_or(0),
-            Datum::UInt32(u) => u64::from(u),
-            Datum::UInt64(u) => u,
-            _ => unreachable!(),
-        },
+        Ok(Datum::UInt64(u)) => u,
+        Ok(datum) => {
+            // If we are here the only valid type that we should be seeing is
+            // null. Anything else is a bug in the planner.
+            soft_assert_or_log!(datum.is_null(), "unexpected partition_by result: {datum:?}");
+            // We treat nulls the same as we treat errors: map them to partition 0.
+            0
+        }
         Err(_) => 0,
     }
 }

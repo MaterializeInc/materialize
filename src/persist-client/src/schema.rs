@@ -14,18 +14,18 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
-use mz_persist_types::schema::{backward_compatible, Migration, SchemaId};
+use mz_persist_types::schema::{Migration, SchemaId, backward_compatible};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 
 use crate::internal::apply::Applier;
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{SchemaCacheMetrics, SchemaMetrics};
-use crate::internal::state::EncodedSchemas;
+use crate::internal::state::{BatchPart, EncodedSchemas};
 
 /// The result returned by [crate::PersistClient::compare_and_evolve_schema].
 #[derive(Debug)]
@@ -94,8 +94,13 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
+    /// Returns the [Applier] backing this cache.
+    pub(crate) fn applier(&self) -> &Applier<K, V, T, D> {
+        &self.applier
+    }
+
     pub fn new(maps: Arc<SchemaCacheMaps<K, V>>, applier: Applier<K, V, T, D>) -> Self {
         let key_migration_by_ids = MigrationCacheMap {
             metrics: applier.metrics.schema.cache_migration.clone(),
@@ -299,12 +304,11 @@ impl MigrationCacheMap {
 pub(crate) enum PartMigration<K: Codec, V: Codec> {
     /// No-op!
     SameSchema { both: Schemas<K, V> },
-    /// This part predates writing down schema ids, so we have to decode and
-    /// potentially migrate it to the target schema via the legacy Codec path.
-    Codec { read: Schemas<K, V> },
+    /// We don't have a schema id for write schema.
+    Schemaless { read: Schemas<K, V> },
     /// We have both write and read schemas, and they don't match.
     Either {
-        _write: Schemas<K, V>,
+        write: Schemas<K, V>,
         read: Schemas<K, V>,
         key_migration: Arc<Migration>,
         val_migration: Arc<Migration>,
@@ -315,14 +319,14 @@ impl<K: Codec, V: Codec> Clone for PartMigration<K, V> {
     fn clone(&self) -> Self {
         match self {
             Self::SameSchema { both } => Self::SameSchema { both: both.clone() },
-            Self::Codec { read } => Self::Codec { read: read.clone() },
+            Self::Schemaless { read } => Self::Schemaless { read: read.clone() },
             Self::Either {
-                _write,
+                write,
                 read,
                 key_migration,
                 val_migration,
             } => Self::Either {
-                _write: _write.clone(),
+                write: write.clone(),
                 read: read.clone(),
                 key_migration: Arc::clone(key_migration),
                 val_migration: Arc::clone(val_migration),
@@ -337,16 +341,35 @@ where
     V: Debug + Codec,
 {
     pub(crate) async fn new<T, D>(
-        write: Option<SchemaId>,
+        part: &BatchPart<T>,
         read: Schemas<K, V>,
         schema_cache: &mut SchemaCache<K, V, T, D>,
     ) -> Result<Self, Schemas<K, V>>
     where
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
+        // At one point in time during our structured data migration, we deprecated the
+        // already written schema IDs because we made all columns at the Arrow/Parquet
+        // level nullable, thus changing the schema parts were written with.
+        //
+        // _After_ this deprecation, we've observed at least one instance where a
+        // structured only Part was written with the schema ID in the _old_ deprecated
+        // field. While unexpected, given the ordering of our releases it is safe to
+        // use the deprecated schema ID if we have a structured only part.
+        let write = match (part.schema_id(), part.deprecated_schema_id()) {
+            (Some(write_id), _) => Some(write_id),
+            (None, Some(deprecated_id))
+                if part.is_structured_only(&schema_cache.applier.metrics.columnar) =>
+            {
+                tracing::warn!(?deprecated_id, "falling back to deprecated schema ID");
+                Some(deprecated_id)
+            }
+            (None, _) => None,
+        };
+
         match (write, read.id) {
-            (None, _) => Ok(PartMigration::Codec { read }),
+            (None, _) => Ok(PartMigration::Schemaless { read }),
             (Some(w), Some(r)) if w == r => Ok(PartMigration::SameSchema { both: read }),
             (Some(w), _) => {
                 let write = schema_cache
@@ -382,7 +405,7 @@ where
                     .inc_by(start.elapsed().as_secs_f64());
 
                 Ok(PartMigration::Either {
-                    _write: write,
+                    write,
                     read,
                     key_migration,
                     val_migration,
@@ -396,7 +419,7 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
     pub(crate) fn codec_read(&self) -> &Schemas<K, V> {
         match self {
             PartMigration::SameSchema { both } => both,
-            PartMigration::Codec { read } => read,
+            PartMigration::Schemaless { read } => read,
             PartMigration::Either { read, .. } => read,
         }
     }
@@ -405,22 +428,23 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{
-        as_string_array, Array, ArrayBuilder, StringArray, StringBuilder, StructArray,
+        Array, ArrayBuilder, StringArray, StringBuilder, StructArray, as_string_array,
     };
     use arrow::datatypes::{DataType, Field};
     use bytes::BufMut;
     use futures::StreamExt;
     use mz_dyncfg::ConfigUpdates;
-    use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
-    use mz_persist_types::stats::{NoneStats, StructStats};
     use mz_persist_types::ShardId;
+    use mz_persist_types::arrow::ArrayOrd;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
+    use mz_persist_types::stats::{NoneStats, StructStats};
     use timely::progress::Antichain;
 
+    use crate::Diagnostics;
     use crate::cli::admin::info_log_non_zero_metrics;
     use crate::read::ReadHandle;
     use crate::tests::new_test_client;
-    use crate::{Diagnostics, DANGEROUS_ENABLE_SCHEMA_EVOLUTION};
 
     use super::*;
 
@@ -484,7 +508,7 @@ mod tests {
     #[derive(Debug, Clone, Default, PartialEq)]
     struct StringsSchema(Vec<bool>);
 
-    impl Schema2<Strings> for StringsSchema {
+    impl Schema<Strings> for StringsSchema {
         type ArrowColumn = StructArray;
         type Statistics = NoneStats;
         type Decoder = StringsDecoder;
@@ -524,6 +548,12 @@ mod tests {
         fn is_null(&self, _: usize) -> bool {
             false
         }
+        fn goodbytes(&self) -> usize {
+            self.0
+                .iter()
+                .map(|val| ArrayOrd::String(val.clone()).goodbytes())
+                .sum()
+        }
         fn stats(&self) -> StructStats {
             StructStats {
                 len: self.0[0].len(),
@@ -557,27 +587,30 @@ mod tests {
             unreachable!()
         }
         fn finish(self) -> Self::FinishedColumn {
-            let arrays = self
-                .arrays
-                .into_iter()
-                .map(|mut x| ArrayBuilder::finish(&mut x))
-                .collect();
-            StructArray::new(self.fields.into(), arrays, None)
+            assert_eq!(self.fields.len(), self.arrays.len(), "invalid schema");
+            if self.fields.is_empty() {
+                StructArray::new_empty_fields(0, None)
+            } else {
+                let arrays = self
+                    .arrays
+                    .into_iter()
+                    .map(|mut x| ArrayBuilder::finish(&mut x))
+                    .collect();
+                StructArray::new(self.fields.into(), arrays, None)
+            }
         }
     }
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn compare_and_evolve_schema(mut dyncfgs: ConfigUpdates) {
-        dyncfgs.add(&DANGEROUS_ENABLE_SCHEMA_EVOLUTION, true);
-
+    async fn compare_and_evolve_schema(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let d = Diagnostics::for_tests();
         let shard_id = ShardId::new();
         let schema0 = StringsSchema(vec![false]);
         let schema1 = StringsSchema(vec![false, true]);
 
-        let write0 = client
+        let mut write0 = client
             .open_writer::<Strings, (), u64, i64>(
                 shard_id,
                 Arc::new(schema0.clone()),
@@ -586,6 +619,8 @@ mod tests {
             )
             .await
             .unwrap();
+
+        write0.try_register_schema().await;
         assert_eq!(write0.write_schemas.id.unwrap(), SchemaId(0));
 
         // Not backward compatible (yet... we don't support dropping a column at
@@ -649,21 +684,19 @@ mod tests {
         assert_eq!(write1.write_schemas.id.unwrap(), SchemaId(1));
     }
 
-    fn strings(xs: &[((Result<Strings, String>, Result<(), String>), u64, i64)]) -> Vec<Vec<&str>> {
+    fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {
         xs.iter()
-            .map(|((k, _), _, _)| k.as_ref().unwrap().0.iter().map(|x| x.as_str()).collect())
+            .map(|((k, _), _, _)| k.0.iter().map(|x| x.as_str()).collect())
             .collect()
     }
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn schema_evolution(mut dyncfgs: ConfigUpdates) {
-        dyncfgs.add(&DANGEROUS_ENABLE_SCHEMA_EVOLUTION, true);
-
+    async fn schema_evolution(dyncfgs: ConfigUpdates) {
         async fn snap_streaming(
             as_of: u64,
             read: &mut ReadHandle<Strings, (), u64, i64>,
-        ) -> Vec<((Result<Strings, String>, Result<(), String>), u64, i64)> {
+        ) -> Vec<((Strings, ()), u64, i64)> {
             // NB: We test with both snapshot_and_fetch and snapshot_and_stream
             // because one uses the consolidating iter and one doesn't.
             let mut ret = read

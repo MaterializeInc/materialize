@@ -13,6 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
+use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
@@ -21,27 +22,39 @@ pub struct Metrics {
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
-    pub queue_busy_seconds: HistogramVec,
+    pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
-    pub storage_usage_collection_time_seconds: HistogramVec,
+    pub storage_usage_collection_time_seconds: Histogram,
+    pub arrangement_sizes_collection_time_seconds: Histogram,
+    pub arrangement_sizes_rows_written: IntCounter,
     pub subscribe_outputs: IntCounterVec,
-    pub canceled_peeks: IntCounterVec,
+    pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_records: IntCounterVec,
-    pub statement_logging_unsampled_bytes: IntCounterVec,
-    pub statement_logging_actual_bytes: IntCounterVec,
-    pub message_batch: HistogramVec,
+    pub statement_logging_unsampled_bytes: IntCounter,
+    pub statement_logging_actual_bytes: IntCounter,
+    pub message_batch: Histogram,
     pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
-    pub append_table_duration_seconds: HistogramVec,
+    pub append_table_duration_seconds: Histogram,
     pub webhook_validation_reduce_failures: IntCounterVec,
     pub webhook_get_appender: IntCounter,
     pub check_scheduling_policies_seconds: HistogramVec,
     pub handle_scheduling_decisions_seconds: HistogramVec,
-    pub row_set_finishing_seconds: HistogramVec,
+    pub row_set_finishing_seconds: Histogram,
+    pub session_startup_table_writes_seconds: Histogram,
+    pub parse_seconds: Histogram,
+    pub pgwire_message_processing_seconds: HistogramVec,
+    pub result_rows_first_to_last_byte_seconds: HistogramVec,
+    pub pgwire_ensure_transaction_seconds: HistogramVec,
+    pub catalog_snapshot_seconds: HistogramVec,
+    pub pgwire_recv_scheduling_delay_ms: HistogramVec,
+    pub catalog_transact_seconds: HistogramVec,
+    pub apply_catalog_implications_seconds: Histogram,
+    pub group_commit_catalog_upper_seconds: Histogram,
 }
 
 impl Metrics {
@@ -93,6 +106,15 @@ impl Metrics {
                 help: "The number of seconds the coord spends collecting usage metrics from storage.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             )),
+            arrangement_sizes_collection_time_seconds: registry.register(metric!(
+                name: "mz_arrangement_sizes_collection_time_seconds",
+                help: "Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.",
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            )),
+            arrangement_sizes_rows_written: registry.register(metric!(
+                name: "mz_arrangement_sizes_rows_written_total",
+                help: "Total rows appended to mz_object_arrangement_size_history since process start.",
+            )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",
                 help: "The total number of different subscribe outputs used",
@@ -136,7 +158,7 @@ impl Metrics {
                 name: "mz_slow_message_handling",
                 help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+                buckets: histogram_seconds_buckets(0.000_128, 512.0),
             )),
             optimization_notices: registry.register(metric!(
                 name: "mz_optimization_notices",
@@ -174,29 +196,143 @@ impl Metrics {
                 help: "The time it takes to run RowSetFinishing::finish.",
                 buckets: histogram_seconds_buckets(0.000_128, 16.0),
             )),
+            session_startup_table_writes_seconds: registry.register(metric!(
+                name: "mz_session_startup_table_writes_seconds",
+                help: "If we had to wait for builtin table writes before processing a query, how long did we wait for.",
+                buckets: histogram_seconds_buckets(0.000_008, 4.0),
+            )),
+            parse_seconds: registry.register(metric!(
+                name: "mz_parse_seconds",
+                help: "The time it takes to parse a SQL statement. (Works for both Simple Queries and the Extended Query protocol.)",
+                buckets: histogram_seconds_buckets(0.001, 8.0),
+            )),
+            pgwire_message_processing_seconds: registry.register(metric!(
+                name: "mz_pgwire_message_processing_seconds",
+                help: "The time it takes to process each of the pgwire message types, measured in the Adapter frontend",
+                var_labels: ["message_type"],
+                buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            result_rows_first_to_last_byte_seconds: registry.register(metric!(
+                name: "mz_result_rows_first_to_last_byte_seconds",
+                help: "The time from just before sending the first result row to sending a final response message after having successfully flushed the last result row to the connection. (This can span multiple FETCH statements.) (This is never observed for unbounded SUBSCRIBEs, i.e., which have no last result row.)",
+                var_labels: ["statement_type"],
+                buckets: histogram_seconds_buckets(0.001, 8192.0),
+            )),
+            pgwire_ensure_transaction_seconds: registry.register(metric!(
+                name: "mz_pgwire_ensure_transaction_seconds",
+                help: "The time it takes to run `ensure_transactions` when processing pgwire messages.",
+                var_labels: ["message_type"],
+                buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            catalog_snapshot_seconds: registry.register(metric!(
+                name: "mz_catalog_snapshot_seconds",
+                help: "The time it takes to run `catalog_snapshot` when fetching the catalog.",
+                var_labels: ["context"],
+                buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            pgwire_recv_scheduling_delay_ms: registry.register(metric!(
+                name: "mz_pgwire_recv_scheduling_delay_ms",
+                help: "The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.",
+                var_labels: ["message_type"],
+                buckets: histogram_milliseconds_buckets(0.128, 512000.),
+            )),
+            catalog_transact_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_seconds",
+                help: "The time it takes to run various catalog transact methods.",
+                var_labels: ["method"],
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            apply_catalog_implications_seconds: registry.register(metric!(
+                name: "mz_apply_catalog_implications_seconds",
+                help: "The time it takes to apply catalog implications.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            group_commit_catalog_upper_seconds: registry.register(metric!(
+                name: "mz_group_commit_catalog_upper_seconds",
+                help: "The time it takes to advance the catalog shard upper during group commit.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
         }
     }
 
     pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {
-        self.row_set_finishing_seconds.with_label_values(&[])
+        self.row_set_finishing_seconds.clone()
     }
 
     pub(crate) fn session_metrics(&self) -> SessionMetrics {
         SessionMetrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
+            session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
+            query_total: self.query_total.clone(),
+            determine_timestamp: self.determine_timestamp.clone(),
+            timestamp_difference_for_strict_serializable_ms: self
+                .timestamp_difference_for_strict_serializable_ms
+                .clone(),
+            optimization_notices: self.optimization_notices.clone(),
+            statement_logging_records: self.statement_logging_records.clone(),
+            statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
+            statement_logging_actual_bytes: self.statement_logging_actual_bytes.clone(),
         }
     }
 }
 
-/// Metrics associated with a [`crate::session::Session`].
+/// Metrics to be accessed from a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
+    session_startup_table_writes_seconds: Histogram,
+    query_total: IntCounterVec,
+    determine_timestamp: IntCounterVec,
+    timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    optimization_notices: IntCounterVec,
+    statement_logging_records: IntCounterVec,
+    statement_logging_unsampled_bytes: IntCounter,
+    statement_logging_actual_bytes: IntCounter,
 }
 
 impl SessionMetrics {
     pub(crate) fn row_set_finishing_seconds(&self) -> &Histogram {
         &self.row_set_finishing_seconds
+    }
+
+    pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
+        &self.session_startup_table_writes_seconds
+    }
+
+    pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.query_total.with_label_values(label_values)
+    }
+
+    pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.determine_timestamp.with_label_values(label_values)
+    }
+
+    pub(crate) fn timestamp_difference_for_strict_serializable_ms(
+        &self,
+        label_values: &[&str],
+    ) -> Histogram {
+        self.timestamp_difference_for_strict_serializable_ms
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.optimization_notices.with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_records(
+        &self,
+        label_values: &[&str],
+    ) -> GenericCounter<AtomicU64> {
+        self.statement_logging_records
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_unsampled_bytes(&self) -> &IntCounter {
+        &self.statement_logging_unsampled_bytes
+    }
+
+    pub(crate) fn statement_logging_actual_bytes(&self) -> &IntCounter {
+        &self.statement_logging_actual_bytes
     }
 }
 
@@ -207,7 +343,7 @@ pub(crate) fn session_type_label_value(user: &User) -> &'static str {
     }
 }
 
-pub(crate) fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
+pub fn statement_type_label_value<T>(stmt: &Statement<T>) -> &'static str
 where
     T: AstInfo,
 {

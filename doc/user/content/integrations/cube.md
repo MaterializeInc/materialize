@@ -3,6 +3,7 @@ title: "Cube"
 description: "How to connect a Cube deployment to Materialize"
 aliases:
   /third-party/cube/
+draft: true
 ---
 
 [Cube](https://cube.dev/) is a headless BI platform that makes data accessible and consistent across every application. It provides data modeling, access control, caching, and a variety of APIs (SQL, GraphQL, and REST) on top of any data warehouse, database, or query engine, including Materialize.

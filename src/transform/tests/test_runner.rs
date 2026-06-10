@@ -19,22 +19,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Write;
 
-    use anyhow::{anyhow, Error};
+    use anyhow::{Error, anyhow};
     use mz_expr::explain::ExplainContext;
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
-        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
+        MirRelationExprDeserializeContext, TestCatalog, build_rel, json_to_spec,
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
+    use mz_repr::GlobalId;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
     use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-    use mz_repr::GlobalId;
     use mz_transform::dataflow::{
-        optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
+        DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
-    use mz_transform::{typecheck, Optimizer, Transform, TransformCtx};
+    use mz_transform::{Optimizer, Transform, TransformCtx, typecheck};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -46,27 +46,33 @@ mod tests {
     const JSON: &str = "json";
     const TEST: &str = "test";
 
-    thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
-            let features = OptimizerFeatures::default();
-            let typecheck_ctx = typecheck::empty_context();
-            let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+    const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
-            #[allow(deprecated)]
-            Optimizer::logical_optimizer(&mut transform_ctx)
-                .transforms
-                .into_iter()
-                .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::movement::ProjectionPushdown::default())
-                ))
-                .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
-                ))
-                .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms.into_iter())
-                .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms.into_iter())
-                .collect::<Vec<_>>()
-            };
+    fn full_transform_list() -> Vec<Box<dyn Transform>> {
+        let features = OptimizerFeatures::default();
+        let typecheck_ctx = typecheck::empty_typechecking_context();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::local(
+            &features,
+            &typecheck_ctx,
+            &mut df_meta,
+            None,
+            Some(TEST_GLOBAL_ID),
+        );
+
+        #[allow(deprecated)]
+        Optimizer::logical_optimizer(&mut transform_ctx)
+            .transforms
+            .into_iter()
+            .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+                mz_transform::movement::ProjectionPushdown::default(),
+            )))
+            .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+                mz_transform::normalize_lets::NormalizeLets::new(false),
+            )))
+            .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms)
+            .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms)
+            .collect::<Vec<_>>()
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -140,7 +146,9 @@ mod tests {
                     non_negative: false,
                     raw_plans: false,
                     raw_syntax: false,
+                    verbose_syntax: true,
                     subtree_size: false,
+                    equivalences: false,
                     timing: false,
                     types: format_contains("types"),
                     ..ExplainConfig::default()
@@ -175,10 +183,21 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, Error> {
-        let features = OptimizerFeatures::default();
-        let typecheck_ctx = typecheck::empty_context();
+        let mut features = OptimizerFeatures::default();
+        // Allow tests to opt into flag-gated transform behavior, e.g.
+        // `build apply=WillDistinct enable_will_distinct_propagation=true`.
+        if args.contains_key("enable_will_distinct_propagation") {
+            features.enable_will_distinct_propagation = true;
+        }
+        let typecheck_ctx = typecheck::empty_typechecking_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &features,
+            &typecheck_ctx,
+            &mut df_meta,
+            None,
+            Some(TEST_GLOBAL_ID),
+        );
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
@@ -187,12 +206,13 @@ mod tests {
         let format_type = get_format_type(args);
 
         let out = match test_type {
-            TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
+            TestType::Opt => {
+                let transforms = full_transform_list();
                 for transform in transforms.iter() {
                     transform.transform(&mut rel, &mut transform_ctx)?;
                 }
-                Ok(convert_rel_to_string(&rel, cat, &format_type))
-            })?,
+                convert_rel_to_string(&rel, cat, &format_type)
+            }
             TestType::Build => convert_rel_to_string(&rel, cat, &format_type),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
@@ -204,32 +224,30 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
-                    for transform in transforms {
-                        let prev = rel.clone();
-                        transform.transform(&mut rel, &mut transform_ctx)?;
+                let transforms = full_transform_list();
+                for transform in transforms {
+                    let prev = rel.clone();
+                    transform.transform(&mut rel, &mut transform_ctx)?;
 
-                        if rel != prev {
-                            if no_change.len() > 0 {
-                                write!(out, "No change:")?;
-                                let mut sep = " ";
-                                for t in no_change.iter() {
-                                    write!(out, "{}{}", sep, t)?;
-                                    sep = ", ";
-                                }
-                                writeln!(out, "\n====")?;
+                    if rel != prev {
+                        if no_change.len() > 0 {
+                            write!(out, "No change:")?;
+                            let mut sep = " ";
+                            for t in no_change.iter() {
+                                write!(out, "{}{}", sep, t)?;
+                                sep = ", ";
                             }
-                            no_change = vec![];
-
-                            write!(out, "Applied {:?}:", transform)?;
-                            writeln!(out, "\n{}", convert_rel_to_string(&rel, cat, &format_type))?;
-                            writeln!(out, "====")?;
-                        } else {
-                            no_change.push(format!("{:?}", transform));
+                            writeln!(out, "\n====")?;
                         }
+                        no_change = vec![];
+
+                        write!(out, "Applied {:?}:", transform)?;
+                        writeln!(out, "\n{}", convert_rel_to_string(&rel, cat, &format_type))?;
+                        writeln!(out, "====")?;
+                    } else {
+                        no_change.push(format!("{:?}", transform));
                     }
-                    Ok(())
-                })?;
+                }
 
                 if no_change.len() > 0 {
                     write!(out, "No change:")?;
@@ -266,15 +284,17 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(
-                mz_transform::column_knowledge::ColumnKnowledge::default(),
+            "EquivalencePropagation" => Ok(Box::new(
+                mz_transform::equivalence_propagation::EquivalencePropagation::default(),
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "Fusion" => Ok(Box::new(mz_transform::fusion::Fusion)),
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
-            "FlatMapToMap" => Ok(Box::new(mz_transform::canonicalization::FlatMapToMap)),
+            "FlatMapElimination" => {
+                Ok(Box::new(mz_transform::canonicalization::FlatMapElimination))
+            }
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::literal_lifting::LiteralLifting::default(),
@@ -310,6 +330,7 @@ mod tests {
             )),
             "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
             "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
+            "WillDistinct" => Ok(Box::new(mz_transform::will_distinct::WillDistinct)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
@@ -341,7 +362,7 @@ mod tests {
                         "MirRelationExpr",
                         &mut MirRelationExprDeserializeContext::new(cat),
                     )?;
-                    let id = cat.insert(&name, rel.typ(), true)?;
+                    let id = cat.insert(&name, rel.sql_typ(), true)?;
                     dataflow.push((id, rel));
                 }
                 other => return Err(format!("Could not parse {:?} as view", other)),
@@ -353,15 +374,22 @@ mod tests {
         let mut out = String::new();
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
-            let typecheck_ctx = typecheck::empty_context();
+            let typecheck_ctx = typecheck::empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx = TransformCtx::local(
+                &features,
+                &typecheck_ctx,
+                &mut df_meta,
+                None,
+                Some(TEST_GLOBAL_ID),
+            );
 
             #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
+                    transform_ctx.set_global_id(id);
                     (
                         id,
                         optimizer
@@ -383,19 +411,26 @@ mod tests {
                     out.push_str(&apply_cross_view_transform(t, &mut dataflow, cat)?[..]);
                 }
             }
-            _ => {}
+            TestType::Steps => {}
         };
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
-            let typecheck_ctx = typecheck::empty_context();
+            let typecheck_ctx = typecheck::empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx = TransformCtx::local(
+                &features,
+                &typecheck_ctx,
+                &mut df_meta,
+                None,
+                Some(TEST_GLOBAL_ID),
+            );
 
             let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
+                    transform_ctx.set_global_id(id);
                     let local_mir_plan = log_optimizer
                         .optimize(rel, &mut transform_ctx)
                         .unwrap()
@@ -436,8 +471,17 @@ mod tests {
         match transform {
             "filter" => {
                 let mut predicates = BTreeMap::new();
-                match optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates) {
-                    Ok(()) => Ok(format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))),
+                match optimize_dataflow_filters_inner(
+                    dataflow
+                        .iter_mut()
+                        .map(|(id, rel)| (Id::Global(*id), rel))
+                        .rev(),
+                    &mut predicates,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Pushed-down predicates:\n{}",
+                        log_pushed_outside_of_dataflow(predicates, cat)
+                    )),
                     Err(e) => Err(e.to_string()),
                 }
             }
@@ -446,15 +490,24 @@ mod tests {
                 if let Some((id, rel)) = dataflow.last() {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
-                match optimize_dataflow_demand_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut demand) {
-                    Ok(()) => Ok(format!("Pushed-down demand:\n{}", log_pushed_outside_of_dataflow(demand, cat))),
+                match optimize_dataflow_demand_inner(
+                    dataflow
+                        .iter_mut()
+                        .map(|(id, rel)| (Id::Global(*id), rel))
+                        .rev(),
+                    &mut demand,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Pushed-down demand:\n{}",
+                        log_pushed_outside_of_dataflow(demand, cat)
+                    )),
                     Err(e) => Err(e.to_string()),
                 }
             }
             _ => Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
                 transform
-            ))
+            )),
         }
     }
 
@@ -547,8 +600,8 @@ mod tests {
 /// [`mz_transform::analysis`] and [`mz_transform::normalize_lets`] to
 /// [`mz_expr`].
 mod explain {
-    use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
     use mz_expr::MirRelationExpr;
+    use mz_expr::explain::{ExplainContext, ExplainSinglePlan, enforce_linear_chains};
     use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
     use mz_transform::analysis::annotate_plan;
     use mz_transform::normalize_lets::normalize_lets;

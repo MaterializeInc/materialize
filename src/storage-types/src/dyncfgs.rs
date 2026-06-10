@@ -71,6 +71,13 @@ pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::n
     "The interval of time to keep when truncating the wallclock lag history.",
 );
 
+/// The interval of time to keep when truncating the wallclock lag histogram.
+pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_global_lag_histogram_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag histogram.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -98,6 +105,15 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
+/// Whether to check the low watermark for Kafka sources and error if the start offset/resume
+/// upper has been compacted away.
+pub const KAFKA_LOW_WATERMARK_CHECK: Config<bool> = Config::new(
+    "kafka_low_watermark_check",
+    true,
+    "Whether to check the low watermark for Kafka sources and error if the start \
+    offset/resume upper has been compacted away.",
+);
+
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -107,6 +123,80 @@ pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Confi
     Connection config. default: 'none'",
     );
 
+pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config::new(
+    "kafka_buffered_event_resize_threshold_elements",
+    1000,
+    "In the Kafka sink operator we might need to buffer messages before emitting them. As a \
+        performance optimization we reuse the buffer allocations, but shrink it to retain at \
+        most this number of elements.",
+);
+
+/// Sets retry.backoff.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RETRY_BACKOFF: Config<Duration> = Config::new(
+    "kafka_retry_backoff",
+    Duration::from_millis(100),
+    "Sets retry.backoff.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets retry.backoff.max.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RETRY_BACKOFF_MAX: Config<Duration> = Config::new(
+    "kafka_retry_backoff_max",
+    Duration::from_secs(1),
+    "Sets retry.backoff.max.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets reconnect.backoff.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RECONNECT_BACKOFF: Config<Duration> = Config::new(
+    "kafka_reconnect_backoff",
+    Duration::from_millis(100),
+    "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.
+/// We default to 30s instead of 10s to avoid constant reconnection attempts in the event of
+/// auth changes or unavailability.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
+    "kafka_reconnect_backoff_max",
+    Duration::from_secs(30),
+    "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets message.max.bytes in librdkafka for Kafka sink producers.
+/// Maximum Kafka protocol request message size. Producer-side, this controls
+/// the maximum size of a single message (including framing) that the client
+/// will allow. Defaults to the librdkafka default of 1,000,000 bytes.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
+    "kafka_sink_message_max_bytes",
+    1_000_000,
+    "Sets message.max.bytes in librdkafka for Kafka sink producers.",
+);
+
+/// Sets batch.size in librdkafka for Kafka sink producers.
+/// Maximum size (in bytes) of all messages batched in one MessageSet, including
+/// protocol framing overhead. Defaults to the librdkafka default of 1,000,000
+/// bytes.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_BATCH_SIZE: Config<usize> = Config::new(
+    "kafka_sink_batch_size",
+    1_000_000,
+    "Sets batch.size in librdkafka for Kafka sink producers.",
+);
+
+/// Sets batch.num.messages in librdkafka for Kafka sink producers.
+/// Maximum number of messages batched in one MessageSet. Defaults to the
+/// librdkafka default of 10,000 messages.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
+    "kafka_sink_batch_num_messages",
+    10_000,
+    "Sets batch.num.messages in librdkafka for Kafka sink producers.",
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -114,13 +204,6 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "mysql_replication_heartbeat_interval",
     Duration::from_secs(30),
     "Replication heartbeat interval requested from the MySQL server.",
-);
-
-/// Interval to fetch `offset_known`, from `@gtid_executed`
-pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "mysql_offset_known_interval",
-    Duration::from_secs(10),
-    "Interval to fetch `offset_known`, from `@gtid_executed`",
 );
 
 // Postgres
@@ -132,11 +215,33 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
 );
 
-/// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
-pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "pg_offset_known_interval",
-    Duration::from_secs(10),
-    "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
+/// Interval to re-validate the schemas of ingested tables.
+pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
+    "pg_schema_validation_interval",
+    Duration::from_secs(15),
+    "Interval to re-validate the schemas of ingested tables.",
+);
+
+/// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
+/// is to emit a definite error forcing source recreation. In cases of HA, the upstream DB may
+/// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
+/// flag puts the onus on the customer to recreate the source if the upstream DB changes timeline
+/// in a way that introduces data loss (e.g. manual failover, restore, etc.).
+pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
+    "pg_source_validate_timeline",
+    true,
+    "Whether to treat a timeline switch as a definite error",
+);
+
+/// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
+/// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
+/// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
+/// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
+/// changes in a way that introduces data loss.
+pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
+    "sql_server_source_validate_restore_history",
+    true,
+    "Whether to treat a restore history change as a definite error",
 );
 
 // Networking
@@ -189,6 +294,21 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
+/// Allow the upsert-v2 source stash's paged columnar merge batcher to spill
+/// cold chains out of RSS via the column pager. The stash draws from the same
+/// shared budget pool (and backend / codec) as the compute column-paged
+/// batcher — there is one budget — but this flag gates the stash's
+/// participation independently of the compute-side
+/// `enable_column_paged_batcher_spill`.
+///
+/// Off by default; the stash keeps every chunk resident until enabled.
+pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
+    "enable_upsert_paged_spill",
+    false,
+    "Allow the upsert-v2 source stash to spill chunks via the shared column pager, gated \
+     independently of the compute `enable_column_paged_batcher_spill`.",
+);
+
 // RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
@@ -205,26 +325,59 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
-/// Whether to use the new reclock implementation.
-pub const STORAGE_USE_RECLOCK_V2: Config<bool> = Config::new(
-    "storage_use_reclock_v2",
-    true,
-    "Whether to use the new reclock implementation.",
-);
-
-/// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
-/// frontier.
-pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
-    "storage_reclock_to_latest",
-    false,
-    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
-);
-
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
-    false,
+    true,
     "Whether to use the new continual feedback upsert operator.",
+);
+
+/// Whether to use the v2 upsert operator.
+pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
+    "enable_upsert_v2",
+    false,
+    "Whether to use the v2 upsert operator.",
+);
+
+/// The interval at which the storage server performs maintenance tasks.
+pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
+    "storage_server_maintenance_interval",
+    Duration::from_millis(10),
+    "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+);
+
+/// If set, iteratively search the progress topic for a progress record with increasing lookback.
+pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
+    "storage_sink_progress_search",
+    true,
+    "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+);
+
+/// Configure how to behave when trying to create an existing topic with specified configs.
+pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
+    "storage_sink_ensure_topic_config",
+    "skip",
+    "If `skip`, don't check the config of existing topics; if `check`, fetch the config and \
+    warn if it does not match the expected configs; if `alter`, attempt to change the upstream to \
+    match the expected configs.",
+);
+
+/// Configure mz-ore overflowing type behavior.
+pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
+    "ore_overflowing_behavior",
+    "soft_panic",
+    "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
+);
+
+/// The time after which we delete per-replica statistics (for sources and
+/// sinks) after there have been no updates.
+///
+/// This time is opportunistic, statistics are not guaranteed to be deleted
+/// after the retention time runs out.
+pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
+    "storage_statistics_retention_duration",
+    Duration::from_secs(86_400), /* one day */
+    "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
 );
 
 /// Adds the full set of all storage `Config`s.
@@ -232,24 +385,44 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
-        .add(&SUSPENDABLE_SOURCES)
-        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
-        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
-        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
-        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
-        .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
-        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
-        .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
-        .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
-        .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
-        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
-        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
-        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
+        .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
+        .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_LOW_WATERMARK_CHECK)
+        .add(&KAFKA_POLL_MAX_WAIT)
+        .add(&KAFKA_RETRY_BACKOFF)
+        .add(&KAFKA_RETRY_BACKOFF_MAX)
+        .add(&KAFKA_RECONNECT_BACKOFF)
+        .add(&KAFKA_RECONNECT_BACKOFF_MAX)
+        .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
+        .add(&KAFKA_SINK_BATCH_SIZE)
+        .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
+        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&ORE_OVERFLOWING_BEHAVIOR)
+        .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
+        .add(&PG_SCHEMA_VALIDATION_INTERVAL)
+        .add(&PG_SOURCE_VALIDATE_TIMELINE)
+        .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
+        .add(&SINK_ENSURE_TOPIC_CONFIG)
+        .add(&SINK_PROGRESS_SEARCH)
+        .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
+        .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
+        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
-        .add(&STORAGE_USE_RECLOCK_V2)
-        .add(&STORAGE_RECLOCK_TO_LATEST)
+        .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
+        .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&ENABLE_UPSERT_V2)
+        .add(&SUSPENDABLE_SOURCES)
+        .add(&ENABLE_UPSERT_PAGED_SPILL)
+        .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
+        .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
+        .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
+        .add(&crate::sources::sql_server::MAX_LSN_WAIT)
+        .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
+        .add(&STATISTICS_RETENTION_DURATION)
 }

@@ -53,11 +53,7 @@ impl Metrics {
     }
 
     fn status_label(is_ok: bool) -> &'static str {
-        if is_ok {
-            "success"
-        } else {
-            "error"
-        }
+        if is_ok { "success" } else { "error" }
     }
 
     fn source_label(&self) -> &'static str {

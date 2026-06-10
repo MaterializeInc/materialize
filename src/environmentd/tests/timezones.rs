@@ -26,6 +26,8 @@
 // > echo "SELECT * FROM pg_catalog.pg_timezone_names ORDER BY name" | psql -h 127.0.0.1 -U postgres -X -q -t -A -F"," > testdata/timezones/names-2023-06-15.csv
 // > echo "SELECT * FROM pg_catalog.pg_timezone_abbrevs ORDER BY abbrev" | psql -h 127.0.0.1 -U postgres -X -q -t -A -F"," > testdata/timezones/abbrevs-2023-06-15.csv
 
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;

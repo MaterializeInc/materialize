@@ -11,29 +11,22 @@
 
 use anyhow::Context;
 use mz_interchange::{avro, protobuf};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::regex::any_regex;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
-use proptest_derive::Arbitrary;
+use mz_repr::{GlobalId, RelationDesc, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::AlterCompatible;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.sources.encoding.rs"
-));
+use crate::wire_format::WireFormat;
 
 /// A description of how to interpret data from various sources
 ///
 /// Almost all sources only present values as part of their records, but Kafka allows a key to be
 /// associated with each record, which has a possibly independent encoding.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceDataEncoding<C: ConnectionAccess = InlinedConnection> {
     pub key: Option<DataEncoding<C>>,
     pub value: DataEncoding<C>,
@@ -56,22 +49,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncoding, R>
             key: self.key.map(|enc| enc.into_inline_connection(&r)),
             value: self.value.into_inline_connection(&r),
         }
-    }
-}
-
-impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
-    fn into_proto(&self) -> ProtoSourceDataEncoding {
-        ProtoSourceDataEncoding {
-            key: self.key.into_proto(),
-            value: Some(self.value.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceDataEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(SourceDataEncoding {
-            key: proto.key.into_rust()?,
-            value: proto.value.into_rust_if_some("ProtoKeyValue::value")?,
-        })
     }
 }
 
@@ -112,7 +89,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDataEncoding<C> {
 
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum DataEncoding<C: ConnectionAccess = InlinedConnection> {
     Avro(AvroEncoding<C>),
     Protobuf(ProtobufEncoding),
@@ -139,40 +116,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
     }
 }
 
-impl RustType<ProtoDataEncoding> for DataEncoding {
-    fn into_proto(&self) -> ProtoDataEncoding {
-        use proto_data_encoding::Kind;
-        ProtoDataEncoding {
-            kind: Some(match self {
-                DataEncoding::Avro(e) => Kind::Avro(e.into_proto()),
-                DataEncoding::Protobuf(e) => Kind::Protobuf(e.into_proto()),
-                DataEncoding::Csv(e) => Kind::Csv(e.into_proto()),
-                DataEncoding::Regex(e) => Kind::Regex(e.into_proto()),
-                DataEncoding::Bytes => Kind::Bytes(()),
-                DataEncoding::Text => Kind::Text(()),
-                DataEncoding::Json => Kind::Json(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
-        use proto_data_encoding::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncoding::kind"))?;
-        Ok(match kind {
-            Kind::Avro(e) => DataEncoding::Avro(e.into_rust()?),
-            Kind::Protobuf(e) => DataEncoding::Protobuf(e.into_rust()?),
-            Kind::Csv(e) => DataEncoding::Csv(e.into_rust()?),
-            Kind::Regex(e) => DataEncoding::Regex(e.into_rust()?),
-            Kind::Bytes(()) => DataEncoding::Bytes,
-            Kind::Text(()) => DataEncoding::Text,
-            Kind::Json(()) => DataEncoding::Json,
-        })
-    }
-}
-
-pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> RelationDesc {
+pub fn included_column_desc(included_columns: Vec<(&str, SqlColumnType)>) -> RelationDesc {
     let mut desc = RelationDesc::builder();
     for (name, ty) in included_columns {
         desc = desc.with_column(name, ty);
@@ -200,13 +144,18 @@ impl<C: ConnectionAccess> DataEncoding<C> {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             Self::Bytes => RelationDesc::builder()
-                .with_column("data", ScalarType::Bytes.nullable(false))
+                .with_column("data", SqlScalarType::Bytes.nullable(false))
                 .finish(),
             Self::Json => RelationDesc::builder()
-                .with_column("data", ScalarType::Jsonb.nullable(false))
+                .with_column("data", SqlScalarType::Jsonb.nullable(false))
                 .finish(),
-            Self::Avro(AvroEncoding { schema, .. }) => {
-                let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
+            Self::Avro(AvroEncoding {
+                schema,
+                reference_schemas,
+                ..
+            }) => {
+                let parsed_schema = avro::parse_schema(schema, reference_schemas)
+                    .context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
             }
             Self::Protobuf(ProtobufEncoding {
@@ -233,26 +182,29 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
                     };
-                    let ty = ScalarType::String.nullable(true);
+                    let ty = SqlScalarType::String.nullable(true);
                     desc.with_column(name, ty)
                 })
                 .finish(),
             Self::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => (1..=*n)
                     .fold(RelationDesc::builder(), |desc, i| {
-                        desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                        desc.with_column(
+                            format!("column{}", i),
+                            SqlScalarType::String.nullable(false),
+                        )
                     })
                     .finish(),
                 ColumnSpec::Header { names } => names
                     .iter()
                     .map(|s| &**s)
                     .fold(RelationDesc::builder(), |desc, name| {
-                        desc.with_column(name, ScalarType::String.nullable(false))
+                        desc.with_column(name, SqlScalarType::String.nullable(false))
                     })
                     .finish(),
             },
             Self::Text => RelationDesc::builder()
-                .with_column("text", ScalarType::String.nullable(false))
+                .with_column("text", SqlScalarType::String.nullable(false))
                 .finish(),
         })
     }
@@ -298,11 +250,16 @@ impl<C: ConnectionAccess> AlterCompatible for DataEncoding<C> {
 }
 
 /// Encoding in Avro format.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
     pub schema: String,
-    pub csr_connection: Option<C::Csr>,
-    pub confluent_wire_format: bool,
+    /// Schemas for types referenced by the main schema, in dependency order.
+    /// These are fetched from the schema registry when the source is created.
+    #[serde(default)]
+    pub reference_schemas: Vec<String>,
+    /// How schema identifiers are framed in the Kafka payload, and the
+    /// registry (if any) used to resolve writer schemas.
+    pub wire_format: WireFormat<C>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
@@ -311,13 +268,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
     fn into_inline_connection(self, r: R) -> AvroEncoding {
         let AvroEncoding {
             schema,
-            csr_connection,
-            confluent_wire_format,
+            reference_schemas,
+            wire_format,
         } = self;
         AvroEncoding {
             schema,
-            csr_connection: csr_connection.map(|csr| r.resolve_connection(csr).unwrap_csr()),
-            confluent_wire_format,
+            reference_schemas,
+            wire_format: wire_format.into_inline_connection(r),
         }
     }
 }
@@ -330,22 +287,19 @@ impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
 
         let AvroEncoding {
             schema,
-            csr_connection,
-            confluent_wire_format,
+            reference_schemas,
+            wire_format,
         } = self;
 
         let compatibility_checks = [
             (schema == &other.schema, "schema"),
             (
-                match (csr_connection, &other.csr_connection) {
-                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
-                    (s, o) => s == o,
-                },
-                "csr_connection",
+                reference_schemas == &other.reference_schemas,
+                "reference_schemas",
             ),
             (
-                confluent_wire_format == &other.confluent_wire_format,
-                "confluent_wire_format",
+                wire_format.alter_compatible(id, &other.wire_format).is_ok(),
+                "wire_format",
             ),
         ];
 
@@ -365,77 +319,23 @@ impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
     }
 }
 
-impl RustType<ProtoAvroEncoding> for AvroEncoding {
-    fn into_proto(&self) -> ProtoAvroEncoding {
-        ProtoAvroEncoding {
-            schema: self.schema.clone(),
-            csr_connection: self.csr_connection.into_proto(),
-            confluent_wire_format: self.confluent_wire_format,
-        }
-    }
-
-    fn from_proto(proto: ProtoAvroEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(AvroEncoding {
-            schema: proto.schema,
-            csr_connection: proto.csr_connection.into_rust()?,
-            confluent_wire_format: proto.confluent_wire_format,
-        })
-    }
-}
-
 /// Encoding in Protobuf format.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
     pub message_name: String,
     pub confluent_wire_format: bool,
 }
 
-impl RustType<ProtoProtobufEncoding> for ProtobufEncoding {
-    fn into_proto(&self) -> ProtoProtobufEncoding {
-        ProtoProtobufEncoding {
-            descriptors: self.descriptors.clone(),
-            message_name: self.message_name.clone(),
-            confluent_wire_format: self.confluent_wire_format,
-        }
-    }
-
-    fn from_proto(proto: ProtoProtobufEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(ProtobufEncoding {
-            descriptors: proto.descriptors,
-            message_name: proto.message_name,
-            confluent_wire_format: proto.confluent_wire_format,
-        })
-    }
-}
-
 /// Arguments necessary to define how to decode from CSV format
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CsvEncoding {
     pub columns: ColumnSpec,
     pub delimiter: u8,
 }
 
-impl RustType<ProtoCsvEncoding> for CsvEncoding {
-    fn into_proto(&self) -> ProtoCsvEncoding {
-        ProtoCsvEncoding {
-            columns: Some(self.columns.into_proto()),
-            delimiter: self.delimiter.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCsvEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(CsvEncoding {
-            columns: proto
-                .columns
-                .into_rust_if_some("ProtoCsvEncoding::columns")?,
-            delimiter: proto.delimiter.into_rust()?,
-        })
-    }
-}
-
 /// Determines the RelationDesc and decoding of CSV objects
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ColumnSpec {
     /// The first row is not a header row, and all columns get default names like `columnN`.
     Count(usize),
@@ -443,31 +343,6 @@ pub enum ColumnSpec {
     ///
     /// Each of the values in `names` becomes the default name of a column in the dataflow.
     Header { names: Vec<String> },
-}
-
-impl RustType<ProtoColumnSpec> for ColumnSpec {
-    fn into_proto(&self) -> ProtoColumnSpec {
-        use proto_column_spec::{Kind, ProtoHeader};
-        ProtoColumnSpec {
-            kind: Some(match self {
-                ColumnSpec::Count(c) => Kind::Count(c.into_proto()),
-                ColumnSpec::Header { names } => Kind::Header(ProtoHeader {
-                    names: names.clone(),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnSpec) -> Result<Self, TryFromProtoError> {
-        use proto_column_spec::{Kind, ProtoHeader};
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnSpec::kind"))?;
-        Ok(match kind {
-            Kind::Count(c) => ColumnSpec::Count(c.into_rust()?),
-            Kind::Header(ProtoHeader { names }) => ColumnSpec::Header { names },
-        })
-    }
 }
 
 impl ColumnSpec {
@@ -487,22 +362,7 @@ impl ColumnSpec {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RegexEncoding {
-    #[proptest(strategy = "any_regex()")]
     pub regex: mz_repr::adt::regex::Regex,
-}
-
-impl RustType<ProtoRegexEncoding> for RegexEncoding {
-    fn into_proto(&self) -> ProtoRegexEncoding {
-        ProtoRegexEncoding {
-            regex: Some(self.regex.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoRegexEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(RegexEncoding {
-            regex: proto.regex.into_rust_if_some("ProtoRegexEncoding::regex")?,
-        })
-    }
 }

@@ -11,8 +11,8 @@
 
 statement ok
 CREATE CLUSTER test REPLICAS(
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
 )
 
 statement ok
@@ -21,8 +21,11 @@ DROP CLUSTER REPLICA test.r1;
 statement ok
 CREATE SOURCE counter IN CLUSTER test FROM LOAD GENERATOR COUNTER
 
+statement ok
+CREATE TABLE counter_tbl FROM SOURCE counter
+
 query I
-SELECT min(counter) FROM counter
+SELECT min(counter) FROM counter_tbl
 ----
 1
 
@@ -31,8 +34,8 @@ DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test REPLICAS(
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
 )
 
 statement ok
@@ -41,7 +44,10 @@ DROP CLUSTER REPLICA test.r2;
 statement ok
 CREATE SOURCE counter IN CLUSTER test FROM LOAD GENERATOR COUNTER
 
+statement ok
+CREATE TABLE counter_tbl FROM SOURCE counter
+
 query I
-SELECT min(counter) FROM counter
+SELECT min(counter) FROM counter_tbl
 ----
 1

@@ -10,23 +10,14 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class UUID(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion(0, 46, 0)
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE uuid_table (f1 UUID, f2 UUID, f3 STRING);
             > INSERT INTO uuid_table VALUES (uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'bar'), 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'baz');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -52,9 +43,7 @@ class UUID(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM uuid_view1;
             0b259031-4bae-587c-870a-2f641fe621fe 9ab9ba37-d48e-5c94-bb56-2ccc3129f361 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
@@ -64,6 +53,4 @@ class UUID(Check):
             0b259031-4bae-587c-870a-2f641fe621fe 9ab9ba37-d48e-5c94-bb56-2ccc3129f361 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
-            """
-            )
-        )
+            """))

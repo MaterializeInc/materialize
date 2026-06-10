@@ -10,9 +10,6 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET min_timestamp_interval = '90ms'
 
 #
@@ -59,6 +56,7 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE direct_source1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -66,7 +64,9 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 
 > CREATE TABLE direct_source1_tbl FROM SOURCE direct_source1 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}';
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE direct_source2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -74,6 +74,7 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 
 > CREATE TABLE direct_source2_tbl FROM SOURCE direct_source2 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}';
+> COMMIT
 
 $ kafka-ingest format=avro topic=data partition=4 schema=${schema}
 {"a": 5}

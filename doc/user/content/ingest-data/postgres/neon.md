@@ -6,6 +6,7 @@ menu:
     parent: "postgresql"
     name: "Neon"
     identifier: "pg-neon"
+    weight: 35
 ---
 
 {{< tip >}}
@@ -191,13 +192,15 @@ skip this step**. For production scenarios, we recommend using [**IP Allow**](ht
 to limit the IP addresses that can connect to your Neon instance.
 {{</ note >}}
 
-### Allow Materialize IPs
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
 
 If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 feature to limit the IP addresses that can connect to your Neon instance, you
 will need to allow inbound traffic from Materialize IP addresses.
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to
    Materialize, run the following query to find the static egress IP addresses,
    for the Materialize region you are running in:
@@ -213,10 +216,34 @@ will need to allow inbound traffic from Materialize IP addresses.
    3. Select **IP Allow**.
    4. Add each Materialize IP address to the list.
 
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+{{< note >}}
+If you are prototyping and your Neon instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
+to limit the IP addresses that can connect to your Neon instance.
+{{</ note >}}
+
+If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
+feature to limit the IP addresses that can connect to your Neon instance, you
+will need to allow inbound traffic from Materialize IP addresses.
+
+2. In your Neon project, add the IPs to your **IP Allow** list:
+
+   1. Select your project in the Neon Console.
+   2. On the Neon **Dashboard**, select **Settings**.
+   3. Select **IP Allow**.
+   4. Add Materialize IP addresses to the list.
+
+{{< /tab >}}
+{{< /tabs >}}
+
 ## C. Ingest data in Materialize
 
 The steps in this section are specific to Materialize. You can run them in the
-[Materialize console's SQL Shell](https://console.materialize.com/) or your
+[Materialize console's SQL Shell](/console/) or your
 preferred SQL client connected to Materialize.
 
 ### 1. (Optional) Create a cluster
@@ -225,16 +252,15 @@ preferred SQL client connected to Materialize.
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-cluster" %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your Neon database and start
-ingesting data.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 1. Run the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
    password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
@@ -277,35 +303,23 @@ ingesting data.
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize (e.g., `dbname`).
 
-3. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Neon database and start ingesting data from the publication
-   you created earlier:
+### 3. Start ingesting data
 
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="ingest-data-step" %}}
 
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
+### 4. Monitor the ingestion status
 
-4. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
+{{% include-from-yaml data="ingest_postgres" name="check-the-ingestion-status" %}}
 
-### 3. Monitor the ingestion status
+### 5. Right-size the cluster
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% include-from-yaml data="ingest_postgres" name="right-size-the-cluster" %}}
 
-### 4. Right-size the cluster
+## D. Explore your data
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="next-steps" %}}
 
-## Next steps
+## Considerations
 
-{{% postgres-direct/next-steps %}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-considerations" %}}

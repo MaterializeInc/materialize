@@ -14,37 +14,57 @@ Runs the Rust-based unit tests in Debug mode.
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
+import sys
+import tempfile
+from argparse import Namespace
+from typing import Any, Literal
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
+from materialize.mzbuild import (
+    RustIncrementalBuildFailure,
+    run_and_detect_rust_incremental_build_failure,
 )
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.service import Service as MzComposeService
+from materialize.mzcompose.services.azurite import Azurite
+from materialize.mzcompose.services.foundationdb import FoundationDB
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
+from materialize.util import PropagatingThread
 from materialize.xcompile import Arch, target
 
+FDB_PORT = 40108
+
 SERVICES = [
-    Zookeeper(),
     Kafka(
         # We need a stable port to advertise, so pick one that is unlikely to
         # conflict with a Kafka cluster running on the local machine.
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://localhost:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
-    Postgres(image="postgres:14.2"),
+    Postgres(),
     CockroachOrPostgresMetadata(),
+    FoundationDB(
+        # We need the same port inside and outside because FDB validates
+        # that the advertised port matches the connection port.
+        ports=[f"{FDB_PORT}:{FDB_PORT}"],
+        allow_host_ports=True,
+    ),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
@@ -52,6 +72,13 @@ SERVICES = [
         allow_host_ports=True,
         additional_directories=["copytos3"],
     ),
+    Azurite(
+        ports=["40111:10000"],
+        allow_host_ports=True,
+    ),
+    MzComposeService(
+        "clusterd", {"mzbuild": "clusterd"}
+    ),  # Only to download the binary
 ]
 
 
@@ -59,229 +86,387 @@ def flatten(xss):
     return [x for xs in xss for x in xs]
 
 
+def pull_image(image: str) -> None:
+    # Check if image exists locally before pulling
+    image_exists = subprocess.run(
+        ["docker", "images", "-q", image],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not image_exists:
+        subprocess.run(
+            ["docker", "pull", image],
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-full", action="store_true")
     parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
+
+    # Delete stale junit xml before anything else, including c.up(). The
+    # mzcompose plugin cleanup hook uploads all junit_*.xml it finds, even
+    # when the build is canceled. If we only delete after c.up(), a
+    # cancellation during service startup leaves the previous build's xml
+    # on disk and it gets uploaded as if it belongs to this build.
+    junit_path = (
+        os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
+    )
+    if os.path.exists(junit_path):
+        os.remove(junit_path)
+
     c.up(
-        "zookeeper", "kafka", "schema-registry", "postgres", c.metadata_store(), "minio"
+        "kafka",
+        "schema-registry",
+        "postgres",
+        c.metadata_store(),
+        "foundationdb",
+        "minio",
+        "azurite",
     )
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See database-issues#3739.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
-    cockroach_url = f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
+    metadata_backend_url = (
+        f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
+    )
+
+    # Create FDB cluster file for tests running on the host
+    fdb_cluster_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cluster", delete=False
+    )
+    fdb_cluster_file.write(f"docker:docker@127.0.0.1:{FDB_PORT}")
+    fdb_cluster_file.close()
 
     env = dict(
         os.environ,
-        ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
-        COCKROACH_URL=cockroach_url,
+        METADATA_BACKEND_URL=metadata_backend_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
-        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
+        FDB_CLUSTER_FILE=fdb_cluster_file.name,
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    extra_env = {}
+
+    metadata = json.loads(
+        subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version=1"]
+        )
+    )
 
     if coverage:
-        # TODO(def-): For coverage inside of clusterd called from unit tests need
-        # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
-        # aggregate the data.
-        (MZ_ROOT / "coverage").mkdir(exist_ok=True)
-        env["CARGO_LLVM_COV_SETUP"] = "no"
-        # There is no pure build command in cargo-llvm-cov, so run with
-        # --version as a workaround.
-        spawn.runv(
-            [
-                "cargo",
-                "llvm-cov",
-                "run",
-                "--bin",
-                "clusterd",
-                "--release",
-                "--no-report",
-                "--",
-                "--version",
-            ],
-            env=env,
-        )
+        run_coverage_test(args, env)
+    elif args.miri_full:
+        run_miri_slow(env)
+    elif args.miri_fast:
+        run_miri_fast(env)
+    elif sanitizer != Sanitizer.none:
+        run_sanitizer(args, env, metadata, sanitizer)
+    else:
+        run_cargo_nextest(c, args, env, metadata)
 
-        cmd = [
+
+def run_coverage_test(args: Namespace, env: dict[str, str]):
+    # TODO(def-): For coverage inside of clusterd called from unit tests need
+    # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
+    # aggregate the data.
+    (MZ_ROOT / "coverage").mkdir(exist_ok=True)
+    env["CARGO_LLVM_COV_SETUP"] = "no"
+    # There is no pure build command in cargo-llvm-cov, so run with
+    # --version as a workaround.
+    spawn.runv(
+        [
             "cargo",
             "llvm-cov",
-            "nextest",
-            "--build-jobs",
-            str(multiprocessing.cpu_count() // 2),
+            "run",
+            "--bin",
+            "clusterd",
             "--release",
-            "--no-clean",
+            "--no-report",
+            "--",
+            "--version",
+        ],
+        env=env,
+    )
+
+    cmd = [
+        "cargo",
+        "llvm-cov",
+        "nextest",
+        "--release",
+        "--no-clean",
+        "--workspace",
+        "--lcov",
+        "--output-path",
+        "coverage/cargotest.lcov",
+        "--profile=coverage",
+        # We still want a coverage report on crash
+        "--ignore-run-fail",
+    ]
+    try:
+        spawn.runv(cmd + args.args, env=env)
+    finally:
+        spawn.runv(["zstd", "coverage/cargotest.lcov"])
+        buildkite.upload_artifact("coverage/cargotest.lcov.zst")
+
+
+def run_miri_slow(env: dict[str, str]):
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            "ci/test/cargo-test-miri.sh",
+        ],
+        env=env,
+    )
+
+
+def run_miri_fast(env: dict[str, str]):
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            "ci/test/cargo-test-miri-fast.sh",
+        ],
+        env=env,
+    )
+
+
+def run_sanitizer(
+    args: Namespace,
+    env: dict[str, str],
+    metadata,
+    sanitizer: Literal[
+        Sanitizer.address,
+        Sanitizer.hwaddress,
+        Sanitizer.cfi,
+        Sanitizer.thread,
+        Sanitizer.leak,
+        Sanitizer.undefined,
+    ],
+):
+    cflags = [
+        f"--target={target(Arch.host())}",
+        f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
+        f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
+    ] + rustc_flags.sanitizer_cflags[sanitizer]
+    ldflags = cflags + [
+        "-fuse-ld=lld",
+        f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
+    ]
+    extra_env = {
+        "CFLAGS": " ".join(cflags),
+        "CXXFLAGS": " ".join(cflags),
+        "LDFLAGS": " ".join(ldflags),
+        "CXXSTDLIB": "stdc++",
+        "CC": "cc",
+        "CXX": "c++",
+        "CPP": "clang-cpp-18",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+        "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+        "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "RUSTFLAGS": (
+            env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.sanitizer[sanitizer])
+        ),
+        "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
+    }
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            *flatten([["--env", f"{key}={val}"] for key, val in extra_env.items()]),
+            "cargo",
+            "build",
             "--workspace",
-            "--lcov",
-            "--output-path",
-            "coverage/cargotest.lcov",
-            "--profile=coverage",
-            # We still want a coverage report on crash
-            "--ignore-run-fail",
-        ]
+            "--no-default-features",
+            "--bin",
+            "clusterd",
+            "-Zbuild-std",
+            "--target",
+            SANITIZER_TARGET,
+            "--profile=ci",
+        ],
+    )
+    # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
+    failed_pkgs: list[str] = []
+    for pkg in metadata["packages"]:
         try:
-            spawn.runv(cmd + args.args, env=env)
-        finally:
-            spawn.runv(["zstd", "coverage/cargotest.lcov"])
-            buildkite.upload_artifact("coverage/cargotest.lcov.zst")
-    else:
-        if args.miri_full:
             spawn.runv(
                 [
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    "ci/test/cargo-test-miri.sh",
-                ],
-                env=env,
-            )
-        elif args.miri_fast:
-            spawn.runv(
-                [
-                    "bin/ci-builder",
-                    "run",
-                    "nightly",
-                    "ci/test/cargo-test-miri-fast.sh",
-                ],
-                env=env,
-            )
-        else:
-            if sanitizer != Sanitizer.none:
-                cflags = [
-                    f"--target={target(Arch.host())}",
-                    f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
-                    f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
-                ] + rustc_flags.sanitizer_cflags[sanitizer]
-                ldflags = cflags + [
-                    "-fuse-ld=lld",
-                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
-                ]
-                extra_env = {
-                    "CFLAGS": " ".join(cflags),
-                    "CXXFLAGS": " ".join(cflags),
-                    "LDFLAGS": " ".join(ldflags),
-                    "CXXSTDLIB": "stdc++",
-                    "CC": "cc",
-                    "CXX": "c++",
-                    "CPP": "clang-cpp-15",
-                    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                    "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "RUSTFLAGS": (
-                        env.get("RUSTFLAGS", "")
-                        + " "
-                        + " ".join(rustc_flags.sanitizer[sanitizer])
+                    *flatten(
+                        [["--env", f"{key}={val}"] for key, val in extra_env.items()]
                     ),
-                    "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
-                }
-                spawn.runv(
-                    [
-                        "bin/ci-builder",
-                        "run",
-                        "nightly",
-                        *flatten(
-                            [
-                                ["--env", f"{key}={val}"]
-                                for key, val in extra_env.items()
-                            ]
-                        ),
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--no-default-features",
-                        "--bin",
-                        "clusterd",
-                        "-Zbuild-std",
-                        "--target",
-                        SANITIZER_TARGET,
-                        # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
-                        "--profile=dev",
-                    ],
-                )
-            else:
-                spawn.runv(
-                    [
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--bin",
-                        "clusterd",
-                        "--profile=ci",
-                    ],
-                    env=env,
-                )
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--package",
+                    pkg["name"],
+                    "--no-default-features",
+                    "--profile=sanitizer",
+                    "--cargo-profile=ci",
+                    # We want all tests to run
+                    "--no-fail-fast",
+                    "-Zbuild-std",
+                    "--target",
+                    SANITIZER_TARGET,
+                    *args.args,
+                ],
+                env=env,
+            )
+        except subprocess.CalledProcessError:
+            print(f"Test against package {pkg['name']} failed, continuing")
+            failed_pkgs.append(pkg["name"])
+    if failed_pkgs:
+        raise ui.UIError(
+            f"Sanitizer tests failed for {len(failed_pkgs)} package(s): "
+            + ", ".join(failed_pkgs)
+        )
 
-            cpu_count = os.cpu_count()
-            assert cpu_count
 
-            partition = buildkite.get_parallelism_index() + 1
-            total = buildkite.get_parallelism_count()
+def run_cargo_nextest(
+    c: Composition, args: Namespace, env: dict[str, str], metadata: Any
+) -> None:
+    # Common args for all nextest runs
+    nextest_common_args = [
+        "--all-features",
+        "--cargo-profile=ci",
+        "--profile=ci",
+    ]
 
-            if sanitizer != Sanitizer.none:
-                # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
-                metadata = json.loads(
-                    subprocess.check_output(
-                        ["cargo", "metadata", "--no-deps", "--format-version=1"]
+    pkgs = [
+        f"--package={p['name']}"
+        for p in metadata["packages"]
+        if p["name"] not in ("mz-environmentd", "mz-balancerd")
+    ]
+
+    # Build `nextest_test_args` based on args and Buildkite parallelism
+    if args.args:
+        nextest_test_args = args.args
+    elif buildkite.get_parallelism_count() == 2:
+        if buildkite.get_parallelism_index() == 1:
+            nextest_test_args = pkgs
+        else:
+            nextest_test_args = [
+                "--package=mz-environmentd",
+                "--package=mz-balancerd",
+            ]
+    else:
+        nextest_test_args = ["--workspace"]
+
+    assert (
+        buildkite.get_parallelism_count() <= 2
+    ), "Special handling of parallelism, only 1 and 2 supported"
+    if buildkite.get_parallelism_count() == 1 or buildkite.get_parallelism_index() == 0:
+
+        def worker() -> None:
+            clusterd = c.compose["services"]["clusterd"]
+            try:
+                image = clusterd["image"]
+                pull_image(image)
+                container_id = subprocess.check_output(
+                    ["docker", "create", image], text=True
+                ).strip()
+                try:
+                    target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+                    os.makedirs(target_dir, exist_ok=True)
+                    subprocess.run(
+                        [
+                            "docker",
+                            "cp",
+                            f"{container_id}:/usr/local/bin/clusterd",
+                            target_dir,
+                        ],
+                        check=True,
                     )
-                )
-                for pkg in metadata["packages"]:
-                    try:
-                        spawn.runv(
-                            [
-                                "bin/ci-builder",
-                                "run",
-                                "nightly",
-                                *flatten(
-                                    [
-                                        ["--env", f"{key}={val}"]
-                                        for key, val in extra_env.items()
-                                    ]
-                                ),
-                                "cargo",
-                                "nextest",
-                                "run",
-                                "--package",
-                                pkg["name"],
-                                "--no-default-features",
-                                "--profile=sanitizer",
-                                # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
-                                "--cargo-profile=dev",
-                                f"--partition=count:{partition}/{total}",
-                                # We want all tests to run
-                                "--no-fail-fast",
-                                "-Zbuild-std",
-                                "--target",
-                                SANITIZER_TARGET,
-                                *args.args,
-                            ],
-                            env=env,
-                        )
-                    except subprocess.CalledProcessError:
-                        print(f"Test against package {pkg['name']} failed, continuing")
-
-            else:
+                finally:
+                    subprocess.run(
+                        ["docker", "rm", container_id],
+                        check=False,
+                    )
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to get clusterd image: {e}")
+                target_dir = os.getenv("CARGO_TARGET_DIR", "target")
+                clusterd_target_dir = target_dir + "/ci-clusterd"
                 spawn.runv(
                     [
                         "cargo",
-                        "nextest",
-                        "run",
+                        "build",
                         "--workspace",
-                        "--all-features",
+                        "--bin",
+                        "clusterd",
                         "--profile=ci",
-                        "--cargo-profile=ci",
-                        f"--partition=count:{partition}/{total}",
-                        *args.args,
                     ],
-                    env=env,
+                    env={**env, "CARGO_TARGET_DIR": clusterd_target_dir},
                 )
+                shutil.copy(
+                    clusterd_target_dir + "/ci/clusterd",
+                    target_dir + "/ci/",
+                )
+
+        clusterd_thread = PropagatingThread(target=worker)
+        clusterd_thread.start()
+        try:
+            run_and_detect_rust_incremental_build_failure(
+                [
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--no-run",
+                    *nextest_common_args,
+                    *nextest_test_args,
+                ],
+                cwd=MZ_ROOT,
+                env=env,
+            )
+        except RustIncrementalBuildFailure:
+            _handle_incremental_build_failure()
+        clusterd_thread.join()
+
+    try:
+        run_and_detect_rust_incremental_build_failure(
+            [
+                "cargo",
+                "nextest",
+                "run",
+                # We want all tests to run
+                "--no-fail-fast",
+                *nextest_common_args,
+                # Be careful about raising this since it will cause
+                # contention in cargo test when running against CRDB
+                # for tagged builds. Also increases test flakiness in
+                # general.
+                f"--test-threads={multiprocessing.cpu_count()}",
+                *nextest_test_args,
+            ],
+            cwd=MZ_ROOT,
+            env=env,
+        )
+    except RustIncrementalBuildFailure:
+        _handle_incremental_build_failure()
+
+
+def _handle_incremental_build_failure() -> None:
+    print("--- Detected incremental build failure, clearing cargo target directories")
+    for dir in ["target", "target-xcompile"]:
+        if os.path.exists(dir):
+            shutil.rmtree(dir, ignore_errors=True)
+    sys.exit(199)

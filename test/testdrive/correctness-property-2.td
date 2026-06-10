@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ set keyschema={
     "type": "record",
@@ -46,6 +46,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE correctness_data
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
@@ -54,6 +55,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 > CREATE TABLE correctness_data_tbl FROM SOURCE correctness_data (REFERENCE "testdrive-correctness-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
+> COMMIT
 
 # Prime tokio-postgres with the missing OIDs.
 > SELECT mz_now(), * FROM correctness_data_tbl WHERE false AS OF AT LEAST 0
@@ -66,7 +68,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 # Start ingestion by adding a replica to the cluster. We must do this from a
 # different connection to not disturbe the transaction we're in.
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
+CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
 # Verify that at timestamp 0 there is only one record whose value is the final value
 > FETCH 1 c WITH (timeout = '1d');

@@ -9,6 +9,12 @@
 
 MZFROM materialized-base
 
+COPY listener_configs/ /listener_configs/
+
+USER materialize
+
+RUN /usr/lib/postgresql/16/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
+
 COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root

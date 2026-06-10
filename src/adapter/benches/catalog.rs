@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mz_adapter::catalog::{Catalog, Op};
 use mz_catalog::durable::test_bootstrap_args;
 use mz_persist_client::PersistClient;
@@ -37,10 +37,8 @@ fn bench_transact(c: &mut Criterion) {
                     name: id.to_string(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
-                catalog
-                    .transact(None, mz_repr::Timestamp::MIN, None, ops)
-                    .await
-                    .unwrap();
+                let commit_ts = catalog.current_upper().await;
+                catalog.transact(None, commit_ts, None, ops).await.unwrap();
             })
         });
         runtime.block_on(async {

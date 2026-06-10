@@ -9,8 +9,8 @@
 
 import random
 import threading
-from collections.abc import Iterator, Sequence
-from copy import copy
+import uuid
+from collections.abc import Iterator
 from enum import Enum
 
 from pg8000.native import identifier, literal
@@ -20,23 +20,43 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
+    DATA_TYPES_FOR_SQL_SERVER,
     NUMBER_TYPES,
+    Boolean,
     Bytea,
     DataType,
     Jsonb,
+    Long,
     Text,
     TextTextMap,
 )
 from materialize.data_ingest.definition import Insert
-from materialize.data_ingest.executor import KafkaExecutor, MySqlExecutor, PgExecutor
+from materialize.data_ingest.executor import (
+    KafkaExecutor,
+    MySqlExecutor,
+    PgExecutor,
+    SqlServerExecutor,
+)
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.parallel_workload.column import (
+    Column,
+    KafkaColumn,
+    MySqlColumn,
+    PostgresColumn,
+    SqlServerColumn,
+    WebhookColumn,
+    naughtify,
+    set_naughty_identifiers,
+)
 from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
-from materialize.util import naughty_strings
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
@@ -52,8 +72,10 @@ MAX_ROLES = 15
 MAX_WEBHOOK_SOURCES = 5
 MAX_KAFKA_SOURCES = 5
 MAX_MYSQL_SOURCES = 5
+MAX_SQL_SERVER_SOURCES = 5
 MAX_POSTGRES_SOURCES = 5
 MAX_KAFKA_SINKS = 5
+MAX_ICEBERG_SINKS = 5
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -64,25 +86,9 @@ MAX_INITIAL_ROLES = 1
 MAX_INITIAL_WEBHOOK_SOURCES = 1
 MAX_INITIAL_KAFKA_SOURCES = 1
 MAX_INITIAL_MYSQL_SOURCES = 1
+MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
 MAX_INITIAL_KAFKA_SINKS = 1
-
-NAUGHTY_IDENTIFIERS = False
-
-
-def naughtify(name: str) -> str:
-    """Makes a string into a naughty identifier, always returns the same
-    identifier when called with the same input."""
-    global NAUGHTY_IDENTIFIERS
-
-    if not NAUGHTY_IDENTIFIERS:
-        return name
-
-    strings = naughty_strings()
-    # This rng is just to get a more interesting integer for the name
-    index = sum([10**i * c for i, c in enumerate(name.encode())]) % len(strings)
-    # Keep them short so we can combine later with other identifiers, 255 char limit
-    return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
 
 
 class BodyFormat(Enum):
@@ -98,52 +104,6 @@ class BodyFormat(Enum):
         if self == BodyFormat.BYTES:
             return Bytea
         raise ValueError(f"Unknown body format {self.name}")
-
-
-class Column:
-    column_id: int
-    data_type: type[DataType]
-    db_object: "DBObject"
-    nullable: bool
-    default: str | None
-    raw_name: str
-
-    def __init__(
-        self,
-        rng: random.Random,
-        column_id: int,
-        data_type: type[DataType],
-        db_object: "DBObject",
-    ):
-        self.column_id = column_id
-        self.data_type = data_type
-        self.db_object = db_object
-        self.nullable = rng.choice([True, False])
-        self.default = rng.choice(
-            [None, str(data_type.random_value(rng, in_query=True))]
-        )
-        self.raw_name = f"c-{self.column_id}-{self.data_type.name()}"
-
-    def name(self, in_query: bool = False) -> str:
-        return (
-            identifier(naughtify(self.raw_name))
-            if in_query
-            else naughtify(self.raw_name)
-        )
-
-    def __str__(self) -> str:
-        return f"{self.db_object}.{self.name(True)}"
-
-    def value(self, rng: random.Random, in_query: bool = False) -> str:
-        return str(self.data_type.random_value(rng, in_query=in_query))
-
-    def create(self) -> str:
-        result = f"{self.name(True)} {self.data_type.name()}"
-        if self.default:
-            result += f" DEFAULT {self.default}"
-        if not self.nullable:
-            result += " NOT NULL"
-        return result
 
 
 class DB:
@@ -194,8 +154,17 @@ class Schema:
         exe.execute(query)
 
 
+class MzTempSchema(Schema):
+    def __init__(self, db: DB):
+        self.db = db
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return "mz_temp"
+
+
 class DBObject:
-    columns: Sequence[Column]
+    columns: list[Column]
     lock: threading.Lock
 
     def __init__(self):
@@ -213,8 +182,11 @@ class Table(DBObject):
     rename: int
     num_rows: int
     schema: Schema
+    temp: bool
 
-    def __init__(self, rng: random.Random, table_id: int, schema: Schema):
+    def __init__(
+        self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
+    ):
         super().__init__()
         self.table_id = table_id
         self.schema = schema
@@ -224,6 +196,7 @@ class Table(DBObject):
         ]
         self.num_rows = 0
         self.rename = 0
+        self.temp = temp
 
     def name(self) -> str:
         if self.rename:
@@ -234,7 +207,10 @@ class Table(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        query = f"CREATE TABLE {self}("
+        query = "CREATE "
+        if self.temp:
+            query += "TEMP "
+        query += f"TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
         exe.execute(query)
@@ -244,14 +220,15 @@ class View(DBObject):
     view_id: int
     base_object: DBObject
     base_object2: DBObject | None
-    source_columns: list[Column]
+    expressions: list[str]
+    columns: list[Column]
     materialized: bool
-    join_column: Column | None
-    join_column2: Column | None
     assert_not_null: list[Column]
     rename: int
     schema: Schema
     refresh: str | None
+    temp: bool
+    target_replica: "ClusterReplica | None"
 
     def __init__(
         self,
@@ -260,38 +237,47 @@ class View(DBObject):
         base_object: DBObject,
         base_object2: DBObject | None,
         schema: Schema,
+        scenario: Scenario = Scenario.Regression,
+        temp: bool = False,
     ):
         super().__init__()
         self.rename = 0
         self.view_id = view_id
+        # In the `RepeatRow` scenario, ~5% of views wrap their body with a
+        # `repeat_row(-1)` cross join (constant-folded into a `Constant` MIR
+        # node with negative diffs), and another ~5% are entirely replaced by
+        # a hardcoded body that drives `repeat_row` from a column of the
+        # `repeat_row_source` table (so the count is non-constant and can be
+        # negative at runtime). The two modes are mutually exclusive. The
+        # matching ignore list for negative-accumulation errors is wired
+        # through `Action.errors_to_ignore`.
+        self.repeat_row_const = scenario == Scenario.RepeatRow and rng.random() < 0.05
+        self.repeat_row_table = (
+            scenario == Scenario.RepeatRow
+            and not self.repeat_row_const
+            and rng.random() < 0.05
+        )
         self.base_object = base_object
         self.base_object2 = base_object2
         self.schema = schema
+        self.temp = temp
+        self.target_replica = None
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
-        self.source_columns = [
-            column
-            for column in rng.sample(all_columns, k=rng.randint(1, len(all_columns)))
+        self.data_types = [
+            rng.choice(list(DATA_TYPES)) for i in range(rng.randint(1, MAX_COLUMNS))
         ]
-        self.columns = [copy(column) for column in self.source_columns]
-        for column in self.columns:
-            column.raw_name = f"{column.raw_name}-{column.db_object.name()}"
-            column.db_object = self
+        self.expressions = [
+            expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
+            for data_type in self.data_types
+        ]
+        self.columns = [
+            Column(rng, i, data_type, self)
+            for i, data_type in enumerate(self.data_types)
+        ]
 
-        self.materialized = rng.choice([True, False])
-
-        self.assert_not_null = (
-            [
-                column
-                for column in rng.sample(
-                    self.columns, k=rng.randint(1, len(self.columns))
-                )
-                if not column.nullable
-            ]
-            if self.materialized
-            else []
-        )
+        self.materialized = not self.temp and rng.choice([True, False])
 
         self.refresh = (
             rng.choice(
@@ -308,15 +294,26 @@ class View(DBObject):
         )
 
         if base_object2:
-            self.join_column = rng.choice(base_object.columns)
-            self.join_column2 = None
-            columns = [
-                c
-                for c in base_object2.columns
-                if c.data_type == self.join_column.data_type
+            self.on_expr = expression(
+                Boolean, all_columns, rng, kind=ExprKind.MATERIALIZABLE
+            )
+
+        self.union = rng.random() < 0.1
+        if self.union:
+            self.expressions2 = [
+                expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
+                for data_type in self.data_types
             ]
-            if columns:
-                self.join_column2 = rng.choice(columns)
+
+        if self.repeat_row_table:
+            # Replace the randomly generated shape with a hardcoded single
+            # `bigint` column matching the body emitted by `get_select`. The
+            # body reads `diff` from `repeat_row_source` and feeds it as the
+            # `repeat_row` count, so the view's accumulation depends on the
+            # current contents of that table.
+            self.data_types = [Long]
+            self.columns = [Column(rng, 0, Long, self)]
+            self.union = False
 
     def name(self) -> str:
         if self.rename:
@@ -326,58 +323,76 @@ class View(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: Executor) -> None:
-        if self.materialized:
-            query = "CREATE MATERIALIZED VIEW"
-        else:
-            query = "CREATE VIEW"
-        columns_str = ", ".join(
-            f"{source_column} AS {column.name(True)}"
-            for source_column, column in zip(self.source_columns, self.columns)
+    def get_select(self) -> str:
+        if self.repeat_row_table:
+            # Hardcoded body that drives `repeat_row` from a column whose
+            # value is determined at runtime, so the count can be negative
+            # depending on the current contents of `repeat_row_source`.
+            col = self.columns[0].name(True)
+            return (
+                f"SELECT r.diff::bigint AS {col} "
+                "FROM materialize.public.repeat_row_source r, repeat_row(r.diff)"
+            )
+
+        def select_str(exprs: str) -> str:
+            select = f"SELECT {exprs} FROM {self.base_object}"
+            if self.base_object2:
+                select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            if self.repeat_row_const:
+                # `repeat_row(-1)` retracts each input row exactly once,
+                # producing a collection with a net-negative accumulation.
+                # Hardcoded to `-1` to avoid blowing up the data size.
+                select = f"SELECT * FROM ({select}) AS rr_inner, repeat_row(-1)"
+            return select
+
+        expressions_str = ", ".join(
+            [
+                f"({expression})::{data_type.name()} AS {column.name(True)}"
+                for expression, data_type, column in zip(
+                    self.expressions, self.data_types, self.columns
+                )
+            ]
         )
 
-        query += f" {self}"
+        query = select_str(expressions_str)
+
+        if self.union:
+            expressions_str2 = ", ".join(
+                [
+                    f"({expression})::{data_type.name()} AS {column.name(True)}"
+                    for expression, data_type, column in zip(
+                        self.expressions2, self.data_types, self.columns
+                    )
+                ]
+            )
+
+            query += f" UNION ALL {select_str(expressions_str2)}"
+
+        return query
+
+    def create(self, exe: Executor) -> None:
+        query = "CREATE "
+        if self.temp:
+            query += "TEMP "
+        if self.materialized:
+            query += "MATERIALIZED "
+        query += f"VIEW {self}"
+
+        if self.target_replica is not None:
+            replica = self.target_replica
+            query += f" IN CLUSTER {replica.cluster} REPLICA {replica}"
 
         options = []
 
         if self.refresh:
             options.append(f"REFRESH {self.refresh}")
 
-        if self.assert_not_null:
-            options.extend(
-                [f"ASSERT NOT NULL {c.name(True)}" for c in self.assert_not_null]
-            )
-
         if options:
             query += f" WITH ({', '.join(options)})"
 
-        query += f" AS SELECT {columns_str} FROM {self.base_object}"
-        if self.base_object2:
-            query += f" JOIN {self.base_object2}"
-            if self.join_column2:
-                query += " ON "
-                # TODO: Generic expression generator
-                if self.join_column2.data_type == TextTextMap:
-                    query += f"map_length({self.join_column}) = map_length({self.join_column2})"
-                else:
-                    query += f"{self.join_column} = {self.join_column2}"
-            else:
-                query += " ON TRUE"
+        query += f" AS {self.get_select()}"
 
         exe.execute(query)
-
-
-class WebhookColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class WebhookSource(DBObject):
@@ -462,19 +477,6 @@ class WebhookSource(DBObject):
         exe.execute(query)
 
 
-class KafkaColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
-
-
 class KafkaSource(DBObject):
     source_id: int
     cluster: "Cluster"
@@ -517,7 +519,7 @@ class KafkaSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        workload = rng.choice(list(WORKLOADS))()
+        workload = rng.choice(list(WORKLOADS))(azurite=False)
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
@@ -533,6 +535,53 @@ class KafkaSource(DBObject):
 
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
+
+
+class IcebergSink(DBObject):
+    sink_id: int
+    rename: int
+    cluster: "Cluster"
+    schema: Schema
+    base_object: DBObject
+    mode: str
+    key: str
+    table_name: str
+
+    def __init__(
+        self,
+        sink_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        base_object: DBObject,
+        rng: random.Random,
+    ):
+        super().__init__()
+        self.sink_id = sink_id
+        self.cluster = cluster
+        self.schema = schema
+        self.base_object = base_object
+        key_cols = [
+            column
+            for column in rng.sample(
+                base_object.columns, k=rng.randint(1, len(base_object.columns))
+            )
+        ]
+        key_col_names = [column.name(True) for column in key_cols]
+        self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        self.table_name = f"icesink_topic{self.sink_id}_{uuid.uuid4().hex[:8]}"
+        self.rename = 0
+
+    def name(self) -> str:
+        if self.rename:
+            return naughtify(f"icesink-{self.sink_id}-{self.rename}")
+        return naughtify(f"icesink-{self.sink_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
+        exe.execute(query)
 
 
 class KafkaSink(DBObject):
@@ -605,14 +654,14 @@ class KafkaSink(DBObject):
 
     def name(self) -> str:
         if self.rename:
-            return naughtify(f"sink-{self.sink_id}-{self.rename}")
-        return naughtify(f"sink-{self.sink_id}")
+            return naughtify(f"kafkasink-{self.sink_id}-{self.rename}")
+        return naughtify(f"kafkasink-{self.sink_id}")
 
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        topic = f"sink_topic{self.sink_id}"
+        topic = f"kafkasink_topic{self.sink_id}"
         maybe_partition = (
             f", TOPIC PARTITION COUNT {self.partition_count}, PARTITION BY {self.partition_key}"
             if self.partition_count
@@ -620,19 +669,6 @@ class KafkaSink(DBObject):
         )
         query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}) {self.key} {self.format} ENVELOPE {self.envelope}"
         exe.execute(query)
-
-
-class MySqlColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class MySqlSource(DBObject):
@@ -677,7 +713,7 @@ class MySqlSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))().generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -688,19 +724,6 @@ class MySqlSource(DBObject):
 
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
-
-
-class PostgresColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class PostgresSource(DBObject):
@@ -745,7 +768,7 @@ class PostgresSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))().generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -756,6 +779,92 @@ class PostgresSource(DBObject):
 
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
+
+
+class SqlServerSource(DBObject):
+    source_id: int
+    cluster: "Cluster"
+    executor: SqlServerExecutor
+    generator: Iterator[Transaction]
+    lock: threading.Lock
+    columns: list[SqlServerColumn]
+    schema: Schema
+    num_rows: int
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        ports: dict[str, int],
+        rng: random.Random,
+        composition: Composition,
+    ):
+        super().__init__()
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.num_rows = 0
+        fields = []
+        for i in range(rng.randint(1, 10)):
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True))
+        for i in range(rng.randint(0, 20)):
+            fields.append(
+                Field(f"value{i}", rng.choice(DATA_TYPES_FOR_SQL_SERVER), False)
+            )
+        self.columns = [
+            SqlServerColumn(field.name, field.data_type, False, self)
+            for field in fields
+        ]
+        self.executor = SqlServerExecutor(
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
+            composition=composition,
+        )
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self.executor.table
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
+
+    def create(self, exe: Executor) -> None:
+        self.executor.create(logging_exe=exe)
+
+
+class S3Object(DBObject):
+    key: str
+    bucket: str
+    format: str
+
+    def __init__(
+        self,
+        key: str,
+        bucket: str,
+        format: str,
+    ):
+        super().__init__()
+        self.key = key
+        self.bucket = bucket
+        self.format = format
+
+    def name(self) -> str:
+        return f"{self.bucket}/{self.key}"
+
+    def __str__(self) -> str:
+        return self.name()
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE TABLE '{self.key}'("
+        query += ",\n    ".join(column.create() for column in self.columns)
+        query += ")"
+        exe.execute(query)
 
 
 class Index:
@@ -894,12 +1003,18 @@ class Database:
     mysql_source_id: int
     postgres_sources: list[PostgresSource]
     postgres_source_id: int
+    sql_server_sources: list[SqlServerSource]
+    sql_server_source_id: int
+    iceberg_sinks: list[IcebergSink]
+    iceberg_sink_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     s3_path: int
+    s3_objects: list[S3Object]
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
+    flags: dict[str, str]
 
     def __init__(
         self,
@@ -911,13 +1026,12 @@ class Database:
         scenario: Scenario,
         naughty_identifiers: bool,
     ):
-        global NAUGHTY_IDENTIFIERS
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
-        NAUGHTY_IDENTIFIERS = naughty_identifiers
+        set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
@@ -940,7 +1054,14 @@ class Database:
             base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
+            view = View(
+                rng,
+                i,
+                base_object,
+                base_object2,
+                rng.choice(self.schemas),
+                scenario=scenario,
+            )
             self.views.append(view)
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
@@ -950,9 +1071,11 @@ class Database:
             Cluster(
                 i,
                 managed=rng.choice([True, False]),
-                size=rng.choice(["1", "2"]),
+                size=rng.choice(
+                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+                ),
                 replication_factor=1,
-                introspection_interval=rng.choice(["0", "1s", "10s"]),
+                introspection_interval="1s",
             )
             for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
         ]
@@ -966,18 +1089,30 @@ class Database:
         self.kafka_sources = []
         self.mysql_sources = []
         self.postgres_sources = []
+        self.sql_server_sources = []
+        self.iceberg_sinks = []
         self.kafka_sinks = []
+        self.s3_objects = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
+        self.sql_server_source_id = len(self.sql_server_sources)
+        self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
+        self.flags = {}
 
     def db_objects(
         self,
     ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
     ]:
         return (
             self.tables
@@ -985,13 +1120,20 @@ class Database:
             + self.kafka_sources
             + self.mysql_sources
             + self.postgres_sources
+            + self.sql_server_sources
             + self.webhook_sources
         )
 
     def db_objects_without_views(
         self,
     ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
     ]:
         return [
             obj for obj in self.db_objects() if type(obj) != View or obj.materialized
@@ -1012,13 +1154,14 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
 
+        exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS sql_server_pass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS minio CASCADE")
+
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {identifier(row[0])}")
-
-        exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
-        exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
-        exe.execute("DROP SECRET IF EXISTS minio CASCADE")
 
         print("Creating connections")
 
@@ -1027,6 +1170,15 @@ class Database:
         )
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+        )
+
+        iceberg_credentials = setup_polaris_for_iceberg(composition)
+        exe.execute(f"CREATE SECRET iceberg_secret AS '{iceberg_credentials[1]}'")
+        exe.execute(
+            f"CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_credentials[0]}', SECRET ACCESS KEY = SECRET iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');"
+        )
+        exe.execute(
+            "CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"
         )
 
         exe.execute("CREATE SECRET pgpass AS 'postgres'")
@@ -1039,27 +1191,48 @@ class Database:
             "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
         )
 
+        exe.execute(
+            f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
+        )
+        exe.execute(
+            f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', DATABASE test, USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
+        )
+
         exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
         )
+
+        if self.scenario == Scenario.RepeatRow:
+            # Hardcoded helper table for the table-driven `repeat_row(diff)`
+            # mode in `View`. Must be created before relations because some
+            # views reference it in their body.
+            exe.execute(
+                "DROP TABLE IF EXISTS materialize.public.repeat_row_source CASCADE"
+            )
+            exe.execute(
+                "CREATE TABLE materialize.public.repeat_row_source (diff bigint NOT NULL)"
+            )
+            exe.execute(
+                "INSERT INTO materialize.public.repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
+            )
 
         print("Creating relations")
 
         for relation in self:
             relation.create(exe)
 
-        if False:  # Questionable use
-            result = composition.run(
-                "sqlsmith",
-                "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                "--exclude-catalog",
-                "--dump-state",
-                capture=True,
-                capture_stderr=True,
-                rm=True,
-            )
-            self.sqlsmith_state = result.stdout
+        # Questionable use
+        # result = composition.run(
+        #     "sqlsmith",
+        #     "--target=host=materialized port=6875 dbname=materialize user=materialize",
+        #     "--exclude-catalog",
+        #     "--dump-state",
+        #     capture=True,
+        #     capture_stderr=True,
+        #     rm=True,
+        # )
+        # self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
         for db in self.dbs:
@@ -1072,18 +1245,19 @@ class Database:
             src.executor.mz_conn.close()
         for src in self.mysql_sources:
             src.executor.mz_conn.close()
+        for src in self.sql_server_sources:
+            src.executor.mz_conn.close()
 
     def update_sqlsmith_state(self, composition: Composition) -> None:
-        if False:  # Questionable use
-            result = composition.run(
-                "sqlsmith",
-                "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                "--exclude-catalog",
-                "--read-state",
-                "--dump-state",
-                stdin=self.sqlsmith_state,
-                capture=True,
-                capture_stderr=True,
-                rm=True,
-            )
-            self.sqlsmith_state = result.stdout
+        result = composition.run(
+            "sqlsmith",
+            "--target=host=materialized port=6875 dbname=materialize user=materialize",
+            "--exclude-catalog",
+            "--read-state",
+            "--dump-state",
+            stdin=self.sqlsmith_state,
+            capture=True,
+            capture_stderr=True,
+            rm=True,
+        )
+        self.sqlsmith_state = result.stdout

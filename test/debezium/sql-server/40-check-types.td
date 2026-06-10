@@ -10,7 +10,7 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
-$ schema-registry-wait topic=sql-server.test.dbo.types_table
+$ schema-registry-wait topic=sql_server.test.dbo.types_table
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -18,12 +18,14 @@ $ schema-registry-wait topic=sql-server.test.dbo.types_table
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE types_table
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.types_table');
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql_server.test.dbo.types_table');
 
-> CREATE TABLE types_table_tbl FROM SOURCE types_table (REFERENCE "sql-server.test.dbo.types_table")
+> CREATE TABLE types_table_tbl FROM SOURCE types_table (REFERENCE "sql_server.test.dbo.types_table")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 #
 # DATETIMEOFFSET is replicated as TEXT, see https://github.com/MaterializeInc/database-issues/issues/2453

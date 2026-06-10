@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-source.svg" >}}
+```sql
+SHOW [REDACTED] CREATE SOURCE <source_name>;
+```
 
-Field | Use
-------|-----
-_source&lowbar;name_ | The source you want use. You can find available source names through [`SHOW SOURCES`](../show-sources).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available source names, see [`SHOW SOURCES`](/sql/show-sources).
 
 ## Examples
 
@@ -32,7 +34,7 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the source.
+{{% include-headless "/headless/sql-command-privileges/show-create-source" %}}
 
 ## Related pages
 

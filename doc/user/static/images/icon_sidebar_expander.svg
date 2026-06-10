@@ -1,8 +1,6 @@
-<svg width="14" height="34" viewBox="0 -10 14 34" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+<svg width="14" height="34" viewBox="0 -10 14 34" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
     <g class="darker">
-        <circle cx="7" cy="7" r="6"/>
-        <path d="M7 4V10" class="hidden-when-open" />
-        <path d="M10 7H4" />
+        <path d="M5 4L9 7L5 10" />
     </g>
     <path d="M7 -10V0" stroke-width="0"/>
     <path d="M7 14V24" stroke-width="0"/>

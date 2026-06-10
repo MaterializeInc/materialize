@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -53,6 +52,3 @@ detail: subsources referencing table: x, y
  mz_source          mysql     quickstart  ""
  mz_source_progress progress  <null>      ""
  t                  subsource quickstart  ""
-
-$ mysql-execute name=mysql
-DROP DATABASE other;

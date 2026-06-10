@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Traits and types for replaying captured timely dataflow streams.
 //!
@@ -13,19 +19,20 @@
 //! provides the protocol and semantics of the [MzReplay] operator.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use timely::container::ContainerBuilder;
 
-use timely::dataflow::channels::pushers::buffer::{Buffer as PushBuffer, Session};
-use timely::dataflow::channels::pushers::{Counter as PushCounter, Tee};
-use timely::dataflow::operators::capture::event::EventIterator;
+use timely::Container;
+use timely::communication::Push;
+use timely::dataflow::channels::Message;
+use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
-use timely::Container;
 
 use crate::activator::ActivatorTrait;
 
@@ -35,7 +42,7 @@ where
     T: Timestamp,
     A: ActivatorTrait,
 {
-    /// Replays `self` into the provided scope, as a `StreamCore<S, CB::Container>` and provides
+    /// Replays `self` into the provided scope, as a `Stream<S, CB::Container>` and provides
     /// a cancellation token. Uses the supplied container builder `CB` to form containers.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
@@ -46,41 +53,30 @@ where
     /// * `period`: Reschedule the operator once the period has elapsed.
     ///    Provide [Duration::MAX] to disable periodic scheduling.
     /// * `activator`: An activator to trigger the operator.
-    fn mz_replay<S: Scope<Timestamp = T>, CB, L>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-        logic: L,
-    ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
-    where
-        CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
-            + 'static;
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>);
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
 where
     T: Timestamp,
-    C: Container,
+    C: Container + Clone,
     I: IntoIterator,
     I::Item: EventIterator<T, C> + 'static,
     A: ActivatorTrait + 'static,
 {
-    fn mz_replay<S: Scope<Timestamp = T>, CB, L>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-        mut logic: L,
-    ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
-    where
-        for<'a> CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
-            + 'static,
-    {
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>) {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -89,14 +85,13 @@ where
 
         let (targets, stream) = builder.new_output();
 
-        let mut output: PushBuffer<_, CB, _> = PushBuffer::new(PushCounter::new(targets));
+        let mut output = PushCounter::new(targets);
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
         let mut started = false;
 
         let mut last_active = Instant::now();
 
-        let mut progress_sofar =
-            <timely::progress::ChangeBatch<_>>::new_from(S::Timestamp::minimum(), 1);
+        let mut progress_sofar = <timely::progress::ChangeBatch<_>>::new_from(T::minimum(), 1);
         let token = Rc::new(ActivateOnDrop::new(
             (),
             Rc::clone(&address),
@@ -127,21 +122,29 @@ where
                     .len()
                     .try_into()
                     .expect("Implausibly large vector");
-                progress.internals[0].update(S::Timestamp::minimum(), len - 1);
-                progress_sofar.update(S::Timestamp::minimum(), len);
+                progress.internals[0].update(T::minimum(), len - 1);
+                progress_sofar.update(T::minimum(), len);
                 started = true;
             }
 
             if weak_token.upgrade().is_some() {
                 for event_stream in event_streams.iter_mut() {
                     while let Some(event) = event_stream.next() {
-                        match &event {
-                            Event::Progress(vec) => {
+                        use Cow::*;
+                        match event {
+                            Owned(Event::Progress(vec)) => {
+                                progress.internals[0].extend(vec.iter().cloned());
+                                progress_sofar.extend(vec.into_iter());
+                            }
+                            Owned(Event::Messages(time, mut data)) => {
+                                Message::push_at(&mut data, time, &mut output);
+                            }
+                            Borrowed(Event::Progress(vec)) => {
                                 progress.internals[0].extend(vec.iter().cloned());
                                 progress_sofar.extend(vec.iter().cloned());
                             }
-                            Event::Messages(time, data) => {
-                                logic(output.session_with_builder(time), data);
+                            Borrowed(Event::Messages(time, data)) => {
+                                Message::push_at(&mut data.clone(), time.clone(), &mut output);
                             }
                         }
                     }
@@ -152,9 +155,8 @@ where
                     .extend(progress_sofar.drain().map(|(time, diff)| (time, -diff)));
             }
 
-            output.cease();
+            output.done();
             output
-                .inner()
                 .produced()
                 .borrow_mut()
                 .drain_into(&mut progress.produceds[0]);

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys TO true
+ALTER SYSTEM SET unsafe_enable_table_keys TO true
 ----
 COMPLETE 0
 
@@ -41,7 +41,7 @@ CREATE INDEX t_idx_empty_key ON t();
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized expressions) INDEX t_idx_empty_key;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX t_idx_empty_key;
 ----
 materialize.notices.t_idx_empty_key:
   ArrangeBy keys=[[]]
@@ -91,6 +91,15 @@ WHERE
   idx.name = 't_idx_empty_key'
 ----
 
-# This further tests `drop_plans_and_metainfos`
+# Verify the notice row is actually retracted from the
+# underlying builtin table (not just hidden by the JOIN).
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'Empty index key'
+----
+0
+
+# This further tests `drop_optimizer_notices`
 statement ok
 DROP SCHEMA notices CASCADE;

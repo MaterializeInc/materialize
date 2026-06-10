@@ -16,6 +16,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE truncate_table (f1 INTEGER PRIMARY KEY);
 INSERT INTO truncate_table VALUES (1),(2),(3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.truncate_table
 
@@ -25,12 +26,14 @@ $ schema-registry-wait topic=postgres.public.truncate_table
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE truncate_table
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.truncate_table');
 
 > CREATE TABLE truncate_table_tbl FROM SOURCE truncate_table (REFERENCE "postgres.public.truncate_table")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM truncate_table_tbl;
 1

@@ -8,9 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use derivative::Derivative;
 use mz_ore::netio::AsyncReady;
 use mz_server_core::TlsMode;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
@@ -116,4 +118,149 @@ where
             Conn::Ssl(inner) => inner.ready(interest).await,
         }
     }
+}
+
+/// Metadata about a user that is required to allocate a [`ConnectionHandle`].
+#[derive(Debug, Clone, Copy)]
+pub struct UserMetadata {
+    pub is_admin: bool,
+    pub should_limit_connections: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionCounter {
+    inner: Arc<Mutex<ConnectionCounterInner>>,
+}
+
+impl ConnectionCounter {
+    /// Returns a [`ConnectionHandle`] which must be kept alive for the entire duration of the
+    /// external connection.
+    ///
+    /// Dropping the [`ConnectionHandle`] decrements the connection count.
+    pub fn allocate_connection(
+        &self,
+        metadata: impl Into<UserMetadata>,
+    ) -> Result<Option<ConnectionHandle>, ConnectionError> {
+        let mut inner = self.inner.lock().expect("environmentd panicked");
+        let metadata = metadata.into();
+
+        if !metadata.should_limit_connections {
+            return Ok(None);
+        }
+
+        if (metadata.is_admin && inner.reserved_remaining() > 0)
+            || inner.non_reserved_remaining() > 0
+        {
+            inner.inc_connection_count();
+            Ok(Some(self.create_handle()))
+        } else {
+            Err(ConnectionError::TooManyConnections {
+                current: inner.current,
+                limit: inner.limit,
+            })
+        }
+    }
+
+    /// Updates the maximum number of connections we allow.
+    pub fn update_limit(&self, new_limit: u64) {
+        let mut inner = self.inner.lock().expect("environmentd panicked");
+        inner.limit = new_limit;
+    }
+
+    /// Updates the number of connections we reserve for superusers.
+    pub fn update_superuser_reserved(&self, new_reserve: u64) {
+        let mut inner = self.inner.lock().expect("environmentd panicked");
+        inner.superuser_reserved = new_reserve;
+    }
+
+    fn create_handle(&self) -> ConnectionHandle {
+        let inner = Arc::clone(&self.inner);
+        let decrement_fn = Box::new(move || {
+            let mut inner = inner.lock().expect("environmentd panicked");
+            inner.dec_connection_count();
+        });
+
+        ConnectionHandle {
+            decrement_fn: Some(decrement_fn),
+        }
+    }
+}
+
+impl Default for ConnectionCounter {
+    fn default() -> Self {
+        let inner = ConnectionCounterInner::new(10, 3);
+        ConnectionCounter {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectionCounterInner {
+    /// Current number of connections.
+    current: u64,
+    /// Total number of connections allowed.
+    limit: u64,
+    /// Number of connections in `limit` we'll reserve for superusers.
+    superuser_reserved: u64,
+}
+
+impl ConnectionCounterInner {
+    fn new(limit: u64, superuser_reserved: u64) -> Self {
+        assert!(superuser_reserved < limit);
+        ConnectionCounterInner {
+            current: 0,
+            limit,
+            superuser_reserved,
+        }
+    }
+
+    fn inc_connection_count(&mut self) {
+        self.current += 1;
+    }
+
+    fn dec_connection_count(&mut self) {
+        self.current -= 1;
+    }
+
+    /// The number of connections still available to superusers.
+    fn reserved_remaining(&self) -> u64 {
+        // Use a saturating sub in case the limit is reduced below the number
+        // of current connections.
+        self.limit.saturating_sub(self.current)
+    }
+
+    /// The number of connections available to non-superusers.
+    fn non_reserved_remaining(&self) -> u64 {
+        // This ensures that at least a few connections remain for superusers.
+        let limit = self.limit.saturating_sub(self.superuser_reserved);
+        // Use a saturating sub in case the limit is reduced below the number
+        // of current connections.
+        limit.saturating_sub(self.current)
+    }
+}
+
+/// Handle to an open connection, allows us to maintain a count of all connections.
+///
+/// When Drop-ed decrements the count of open connections.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct ConnectionHandle {
+    #[derivative(Debug = "ignore")]
+    decrement_fn: Option<Box<dyn FnOnce() -> () + Send + Sync>>,
+}
+
+impl Drop for ConnectionHandle {
+    fn drop(&mut self) {
+        match self.decrement_fn.take() {
+            Some(decrement_fn) => (decrement_fn)(),
+            None => tracing::error!("ConnectionHandle dropped twice!?"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ConnectionError {
+    /// There were too many connections
+    TooManyConnections { current: u64, limit: u64 },
 }

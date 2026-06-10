@@ -11,7 +11,8 @@
 Basic test for Postgres-compatible connections from C# programming language.
 """
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
@@ -19,7 +20,7 @@ SERVICES = [
     Service(
         name="csharp",
         config={
-            "image": "mcr.microsoft.com/dotnet/sdk:5.0-focal",
+            "image": "mcr.microsoft.com/dotnet/sdk:8.0",
             "volumes": [
                 "../../../:/workdir",
             ],

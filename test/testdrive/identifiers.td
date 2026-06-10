@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-! CREATE CLUSTER "." REPLICAS (r1 (SIZE '1'));
+! CREATE CLUSTER "." REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 contains: invalid identifier
 
-! CREATE CLUSTER ".." REPLICAS (r1 (SIZE '1'));
+! CREATE CLUSTER ".." REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 contains: invalid identifier
 
 ! CREATE DATABASE "."
@@ -95,7 +95,7 @@ contains: invalid identifier
 ! CREATE MATERIALIZED VIEW "." AS SELECT 1
 contains: invalid identifier
 
-> CREATE CLUSTER temp_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER temp_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 ! CREATE SOURCE "." IN CLUSTER temp_cluster FROM WEBHOOK BODY FORMAT TEXT;
 contains: invalid identifier

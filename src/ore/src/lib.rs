@@ -22,12 +22,12 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
-#[cfg(feature = "test")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
+#[cfg(feature = "assert-no-tracing")]
 pub mod assert;
 pub mod bits;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
-#[cfg(feature = "bytes_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
+#[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
@@ -36,12 +36,9 @@ pub mod channel;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;
-pub mod codegen;
 pub mod collections;
 pub mod env;
 pub mod error;
-#[cfg(feature = "flatcontainer")]
-pub mod flatcontainer;
 pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
@@ -53,12 +50,6 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
-#[cfg_attr(
-    nightly_doc_features,
-    doc(cfg(all(feature = "bytes_", feature = "region")))
-)]
-#[cfg(all(feature = "bytes_", feature = "region", feature = "tracing_"))]
-pub mod lgbytes;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;
@@ -68,7 +59,14 @@ pub mod netio;
 pub mod now;
 pub mod num;
 pub mod option;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
+#[cfg(feature = "overflowing")]
+pub mod overflowing;
+#[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pager", unix))))]
+#[cfg(all(feature = "pager", unix))]
+pub mod pager;
 #[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "panic")]
 pub mod panic;
 pub mod path;
 pub mod permutations;
@@ -81,6 +79,7 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod retry;
+pub mod secure;
 pub mod serde;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
@@ -95,16 +94,25 @@ pub mod task;
 pub mod test;
 pub mod thread;
 pub mod time;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 pub mod tracing;
+pub mod treat_as_equal;
 pub mod url;
 pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
+#[cfg(feature = "overflowing")]
+pub use overflowing::Overflowing;
+
 #[doc(hidden)]
 pub mod __private {
-    #[cfg(feature = "tracing_")]
+    #[cfg(feature = "tracing")]
     pub use tracing;
 }
+
+// Epoch: 1
+//
+// Bump this whenever we need to change the hash of a build without changing any code.

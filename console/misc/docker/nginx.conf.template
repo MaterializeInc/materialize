@@ -1,0 +1,69 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+server {
+${MZ_NGINX_LISTENER_CONFIG}
+    server_name _;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+        # Disable caching with HTTP headers
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+        add_header Expires 0;
+    }
+
+    location /api {
+        client_max_body_size 100M;
+        proxy_connect_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+
+        # WebSocket support
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_http_version 1.1;
+
+        proxy_request_buffering on;
+        proxy_buffers 16 32k;
+        proxy_buffer_size 64k;
+        proxy_busy_buffers_size 128k;
+        proxy_temp_file_write_size 128k;
+
+        resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+        set $backend ${MZ_ENDPOINT};
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_set_header X-Webhook-Event $http_x_webhook_event;
+    }
+
+    # Cache policy for static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|svg|woff|woff2)$ {
+        root /usr/share/nginx/html;
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript application/x-javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
+    gzip_min_length 256;
+    gzip_comp_level 6;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_buffers 16 8k;
+
+    error_page 404 /404.html;
+}

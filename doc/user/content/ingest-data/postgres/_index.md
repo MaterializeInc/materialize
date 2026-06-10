@@ -7,6 +7,8 @@ menu:
     parent: 'ingest-data'
     weight: 10
     identifier: 'postgresql'
+aliases:
+  - /self-managed/v25.1/ingest-data/postgres/
 ---
 
 ## Change Data Capture (CDC)
@@ -35,21 +37,16 @@ Materialize gives you the following benefits:
 
 ## Supported versions and services
 
-{{< note >}}
-PostgreSQL-compatible database systems are not guaranteed to work with the
-PostgreSQL source out-of-the-box. [Yugabyte](https://www.yugabyte.com/) is
-currently supported with **limitations**.
-{{< /note >}}
-
 The PostgreSQL source requires **PostgreSQL 11+** and is compatible with most
 common PostgreSQL hosted services.
 
-| Integration guides                          |
-| ------------------------------------------- |
-| {{% ingest-data/postgres-native-support %}} |
+## Integration guides
 
-If there is a hosted service or PostgreSQL distribution that is not listed above
-but you would like to use with Materialize, please submit a [feature
-request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
-or reach out in the Materialize [Community
-Slack](https://materialize.com/s/chat).
+To help you get started, the following integration guides are available:
+
+{{% include-md file="shared-content/postgresql-ingest-data-guides.md" %}}
+
+## Considerations
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-considerations" %}}

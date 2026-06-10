@@ -30,8 +30,21 @@ class Scenario(Enum):
     Rename = "rename"
     BackupRestore = "backup-restore"
     ZeroDowntimeDeploy = "0dt-deploy"
+    RepeatRow = "repeat-row"
 
     @classmethod
     def _missing_(cls, value):
         if value == "random":
             return cls(random.choice([elem.value for elem in cls]))
+
+
+ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
+    # Uses a lot of memory, hard to predict how much
+    "memory_limiter_interval": "0",
+    # See https://materializeinc.slack.com/archives/CTESPM7FU/p1758195280629909, should reenable when it performs better
+    "enable_compute_logical_backpressure": "false",
+    # Allows the `Scenario.RepeatRow` scenario to call `repeat_row`. Having
+    # it on outside that scenario is harmless: no Parallel Workload codegen
+    # emits `repeat_row` unless the scenario is active.
+    "enable_repeat_row": "true",
+}

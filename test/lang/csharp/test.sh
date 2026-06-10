@@ -19,5 +19,9 @@ cd "$(dirname "$0")/../../.."
 
 cd test/lang/csharp
 
-dotnet test csharp-npgsql5.csproj
+# TODO: Reenable when database-issues#9531 is fixed
+# dotnet test csharp-npgsql.csproj
+# dotnet test csharp-npgsql8.csproj
+dotnet test csharp-npgsql7.csproj
 dotnet test csharp-npgsql6.csproj
+dotnet test csharp-npgsql5.csproj

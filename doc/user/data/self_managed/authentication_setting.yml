@@ -1,0 +1,48 @@
+columns:
+  - column: "authenticatorKind Value"
+  - column: "Description"
+
+rows:
+  - "authenticatorKind Value": "**None**"
+    "Description": |
+      Disables authentication. All users are trusted based on their claimed
+      identity **without** any verification. **Default**
+  - "authenticatorKind Value": "**SASL/SCRAM**"
+    "Description": |
+      Enables:
+
+      - [SASL/SCRAM-SHA-256
+      authentication](#configuring-saslscram-authentication) for **PostgreSQL
+      wire protocol connections**. SASL/SCRAM-SHA-256 is a challenge-response
+      authentication mechanism that provides enhanced security compared to
+      simple password authentication.
+
+      - Standard password authentication for HTTP/Web Console connections.
+
+      When enabled, users must authenticate with their password.
+
+      {{< tip >}}
+      When enabled, you must also set the `mz_system` user password in
+      `external_login_password_mz_system`. See [Configuring SASL/SCRAM
+      authentication](#configuring-saslscram-authentication) for details.
+      {{</ tip >}}
+  - "authenticatorKind Value": "**Password**"
+    "Description": |
+      Enables [password authentication](#configuring-password-authentication) for
+      users. When enabled, users must authenticate with their password.
+
+      {{< tip >}}
+      When enabled, you must also set the `mz_system` user password in
+      `external_login_password_mz_system`. See [Configuring password
+      authentication](#configuring-password-authentication) for details.
+      {{</ tip >}}
+  - "authenticatorKind Value": "**Oidc**"
+    "Description": |
+      Enables [OIDC authentication](/security/self-managed/sso/) using JWT
+      tokens from an external identity provider. Users authenticate via their
+      organization's identity provider (e.g., Okta, Microsoft Entra ID).
+
+      {{< tip >}}
+      When enabled, you must also set the `mz_system` user password in
+      `external_login_password_mz_system`. See [Single sign-on (SSO)](/security/self-managed/sso/) for details.
+      {{</ tip >}}

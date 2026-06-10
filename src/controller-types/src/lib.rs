@@ -27,4 +27,6 @@ impl From<u64> for WatchSetId {
     }
 }
 
-pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL as DEFAULT_REPLICA_LOGGING_INTERVAL;
+/// Default logging interval for replicas.
+pub const DEFAULT_REPLICA_LOGGING_INTERVAL: std::time::Duration =
+    mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL;

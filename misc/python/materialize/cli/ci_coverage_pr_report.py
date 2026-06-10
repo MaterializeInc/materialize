@@ -27,8 +27,9 @@ Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     r"""
     ( src/(.*$)"
-    | bazel-out/.*/bin/(.*$)
     | external/(.*$)
+    | /usr/local/lib/rustlib/(.*$)
+    | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/src/(.*$)
     )""",
     re.VERBOSE,
 )
@@ -101,7 +102,7 @@ def mark_covered_lines(
                 file = content
             else:
                 result = SOURCE_RE.search(content)
-                assert result, f"Unexpected file {content}"
+                assert result, f"not found: {content}"
                 file = result.group(1)
         # DA:111,15524
         # DA:112,0
@@ -218,7 +219,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         print("Uncovered Lines in PR")
         # Buildkite interprets the +++ and --- chars at the start of line, put
         # in a zero-width space as a workaround.
-        ZWSP = "\u200B"
+        ZWSP = "\u200b"
         print(
             uncovered_report.replace("\n+++", f"\n{ZWSP}+++").replace(
                 "\n---", f"\n{ZWSP}---"
@@ -240,8 +241,8 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         # Buildkite interprets the +++ and --- chars at the start of line, put
         # in a zero-width space as a workaround.
         print(
-            unit_test_only_report.replace("\n+++", "\n\u200B+++").replace(
-                "\n---", "\n\u200B---"
+            unit_test_only_report.replace("\n+++", "\n\u200b+++").replace(
+                "\n---", "\n\u200b---"
             )
         )
         test_case.add_error_info(

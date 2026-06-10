@@ -12,7 +12,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 ----
 COMPLETE 0
 

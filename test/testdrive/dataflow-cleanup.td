@@ -13,6 +13,10 @@
 # This test relies on testdrive's automatic retries, since it queries
 # introspection sources that take a while to update.
 
+# Storage operator IDs are offset by STORAGE_ID_OFFSET (1 << 48).
+# Filter them out so test assertions only see compute operators.
+$ set storage-id-offset=281474976710656
+
 # Introspection subscribes add noise to the introspection sources, so disable them.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
@@ -21,19 +25,19 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 > DROP CLUSTER IF EXISTS test
 
-> CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
+> CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 
 # Verify that an index dataflow is cleaned up when the index is dropped.
 
 > CREATE TABLE t (a int)
 > CREATE INDEX test_index ON t (a)
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 true
 > DROP INDEX test_index
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 
 # Verify that an index dataflow is cleaned up when its input advances to the
@@ -47,19 +51,19 @@ false
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 > DROP INDEX test_index
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 
 # Verify that an MV dataflow is cleaned up when the MV is dropped.
 
 > CREATE MATERIALIZED VIEW test_mv AS SELECT a FROM t
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 true
 > DROP MATERIALIZED VIEW test_mv
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 
 # Verify that an MV dataflow is cleaned up when its input advances to the
@@ -72,16 +76,17 @@ false
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 > DROP MATERIALIZED VIEW test_mv
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 false
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/4712
 
-> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
+> CREATE CLUSTER lgtpch_cluster_cleanup SIZE 'scale=1,workers=1';
 
+> BEGIN
 > CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 100);
 
 > CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
@@ -92,6 +97,7 @@ false
 > CREATE TABLE partsupp FROM SOURCE lgtpch (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE MATERIALIZED VIEW q14 AS
   SELECT
@@ -111,8 +117,8 @@ false
 true
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 0
 > DROP MATERIALIZED VIEW q14
-> SELECT count(*)  FROM mz_introspection.mz_dataflow_operators
+> SELECT count(*) FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
 0

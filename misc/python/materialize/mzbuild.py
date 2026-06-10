@@ -18,31 +18,128 @@ documentation][user-docs].
 import argparse
 import base64
 import collections
+import fcntl
 import hashlib
+import io
 import json
 import multiprocessing
 import os
+import platform
 import re
-import shlex
+import selectors
 import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum, auto
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
+from threading import Lock
 from typing import IO, Any, cast
 
+import requests
 import yaml
+from requests.auth import HTTPBasicAuth
 
-from materialize import bazel as bazel_utils
-from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
+
+GHCR_PREFIX = "ghcr.io/materializeinc/"
+
+
+class RustIncrementalBuildFailure(Exception):
+    pass
+
+
+def run_and_detect_rust_incremental_build_failure(
+    cmd: list[str],
+    cwd: str | Path,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """This function is complex since it prints out each line immediately to
+    stdout/stderr, but still records them at the same time so that we can scan
+    for known incremental build failures."""
+    stdout_result = io.StringIO()
+    stderr_result = io.StringIO()
+    base_env = env if env is not None else os.environ
+    p = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env={**base_env, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
+    )
+
+    sel = selectors.DefaultSelector()
+    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+    assert p.stdout is not None
+    assert p.stderr is not None
+    os.set_blocking(p.stdout.fileno(), False)
+    os.set_blocking(p.stderr.fileno(), False)
+    running = True
+    while running:
+        for key, val in sel.select():
+            output = io.StringIO()
+            running = False
+            while True:
+                new_output = key.fileobj.read(1024)  # type: ignore
+                if not new_output:
+                    break
+                output.write(new_output)
+            contents = output.getvalue()
+            output.close()
+            if not contents:
+                continue
+            # Keep running as long as stdout or stderr have any content
+            running = True
+            if key.fileobj is p.stdout:
+                print(
+                    contents,
+                    end="",
+                    flush=True,
+                )
+                stdout_result.write(contents)
+            else:
+                print(
+                    contents,
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                stderr_result.write(contents)
+    p.wait()
+    retcode = p.poll()
+    assert retcode is not None
+    stdout_contents = stdout_result.getvalue()
+    stdout_result.close()
+    stderr_contents = stderr_result.getvalue()
+    stderr_result.close()
+    if retcode:
+        incremental_build_failure_msgs = [
+            "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
+            "Found unstable fingerprints for",
+            "ld.lld: error: undefined symbol",
+            "signal: 11, SIGSEGV",
+        ]
+        combined = stdout_contents + stderr_contents
+        if any(msg in combined for msg in incremental_build_failure_msgs):
+            raise RustIncrementalBuildFailure()
+
+        raise subprocess.CalledProcessError(
+            retcode, p.args, output=stdout_contents, stderr=stderr_contents
+        )
+    return subprocess.CompletedProcess(
+        p.args, retcode, stdout_contents, stderr_contents
+    )
 
 
 class Fingerprint(bytes):
@@ -57,6 +154,12 @@ class Fingerprint(bytes):
         return base64.b32encode(self).decode()
 
 
+class Profile(Enum):
+    RELEASE = auto()
+    OPTIMIZED = auto()
+    DEV = auto()
+
+
 class RepositoryDetails:
     """Immutable details about a `Repository`.
 
@@ -65,7 +168,7 @@ class RepositoryDetails:
     Attributes:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether the repository is being built in release mode.
+        profile: What profile the repository is being built with.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
@@ -73,32 +176,26 @@ class RepositoryDetails:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
-        bazel: Whether or not to use Bazel as the build system instead of Cargo.
-        bazel_remote_cache: URL of a Bazel Remote Cache that we can build with.
     """
 
     def __init__(
         self,
         root: Path,
         arch: Arch,
-        release_mode: bool,
+        profile: Profile,
         coverage: bool,
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
-        bazel: bool,
-        bazel_remote_cache: str | None,
     ):
         self.root = root
         self.arch = arch
-        self.release_mode = release_mode
+        self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
-        self.bazel = bazel
-        self.bazel_remote_cache = bazel_remote_cache
 
     def build(
         self,
@@ -108,62 +205,30 @@ class RepositoryDetails:
         extra_env: dict[str, str] = {},
     ) -> list[str]:
         """Start a build invocation for the configured architecture."""
-        if self.bazel:
-            assert not channel, "Bazel doesn't support building for multiple channels."
-            return xcompile.bazel(
-                arch=self.arch,
-                subcommand=subcommand,
-                rustflags=rustflags,
-                extra_env=extra_env,
-            )
-        else:
-            return xcompile.cargo(
-                arch=self.arch,
-                channel=channel,
-                subcommand=subcommand,
-                rustflags=rustflags,
-                extra_env=extra_env,
-            )
+        return xcompile.cargo(
+            arch=self.arch,
+            channel=channel,
+            subcommand=subcommand,
+            rustflags=rustflags,
+            extra_env=extra_env,
+        )
 
     def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
-        if self.bazel:
-            return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
-        else:
-            return xcompile.tool(self.arch, name)
+        if platform.system() != "Linux":
+            # We can't use the local tools from macOS to build a Linux executable
+            return ["bin/ci-builder", "run", "stable", name]
+        # If we're on Linux, trust that the tools are installed instead of
+        # loading the slow ci-builder. If you don't have compilation tools
+        # installed you can still run `bin/ci-builder run stable
+        # bin/mzcompose ...`, and most likely the Cargo build will already
+        # fail earlier if you don't have compilation tools installed and
+        # run without the ci-builder.
+        return [name]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
-
-    def bazel_workspace_dir(self) -> Path:
-        """Determine the path to the root of the Bazel workspace."""
-        return self.root
-
-    def bazel_config(self) -> list[str]:
-        """Returns a set of Bazel config flags to set for the build."""
-        flags = []
-
-        if self.release_mode:
-            # If we're a tagged build, then we'll use stamping to update our
-            # build info, otherwise we'll use our side channel/best-effort
-            # approach to update it.
-            if ui.env_is_truthy("BUILDKITE_TAG"):
-                flags.extend(["--config=release-tagged"])
-            elif ui.env_is_truthy("CI"):
-                flags.extend(["--config=release-dev"])
-                bazel_utils.write_git_hash()
-            else:
-                flags.extend(["--config=release-local"])
-                bazel_utils.write_git_hash()
-
-        if self.bazel_remote_cache:
-            flags.append(f"--remote_cache={self.bazel_remote_cache}")
-
-        if ui.env_is_truthy("CI"):
-            flags.append("--config=ci")
-
-        return flags
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
@@ -179,13 +244,19 @@ class RepositoryDetails:
             return path
 
 
-def docker_images() -> set[str]:
+@cache
+def docker_images() -> frozenset[str]:
     """List the Docker images available on the local machine."""
-    return set(
+    return frozenset(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
     )
+
+
+KNOWN_DOCKER_IMAGES_FILE = Path(MZ_ROOT / "known-docker-images.txt")
+_known_docker_images: set[str] | None = None
+_known_docker_images_lock = Lock()
 
 
 def is_docker_image_pushed(name: str) -> bool:
@@ -193,13 +264,141 @@ def is_docker_image_pushed(name: str) -> bool:
 
     Note that this operation requires a rather slow network request.
     """
-    proc = subprocess.run(
-        ["docker", "manifest", "inspect", name],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-    )
-    return proc.returncode == 0
+    global _known_docker_images
+
+    if _known_docker_images is None:
+        with _known_docker_images_lock:
+            if not KNOWN_DOCKER_IMAGES_FILE.exists():
+                _known_docker_images = set()
+            else:
+                with KNOWN_DOCKER_IMAGES_FILE.open() as f:
+                    _known_docker_images = set(line.strip() for line in f)
+
+    if name in _known_docker_images:
+        return True
+
+    if ":" not in name:
+        image, tag = name, "latest"
+    else:
+        image, tag = name.rsplit(":", 1)
+
+    dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
+    dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
+
+    exists: bool = False
+
+    try:
+        if dockerhub_username and dockerhub_token:
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                },
+                auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+                timeout=10,
+            )
+        else:
+            token = requests.get(
+                "https://auth.docker.io/token",
+                params={
+                    "service": "registry.docker.io",
+                    "scope": f"repository:{image}:pull",
+                },
+                timeout=10,
+            ).json()["token"]
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=10,
+            )
+
+        if response.status_code in (401, 429, 500, 502, 503, 504):
+            # Fall back to 5x slower method
+            proc = subprocess.run(
+                ["docker", "manifest", "inspect", name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+            )
+            exists = proc.returncode == 0
+        else:
+            exists = response.status_code == 200
+
+    except Exception as e:
+        print(f"Error checking Docker image: {e}")
+        return False
+
+    if exists:
+        with _known_docker_images_lock:
+            _known_docker_images.add(name)
+            with KNOWN_DOCKER_IMAGES_FILE.open("a") as f:
+                print(name, file=f)
+
+    return exists
+
+
+def is_ghcr_image_pushed(name: str) -> bool:
+    global _known_docker_images
+
+    if _known_docker_images is None:
+        with _known_docker_images_lock:
+            if not KNOWN_DOCKER_IMAGES_FILE.exists():
+                _known_docker_images = set()
+            else:
+                with KNOWN_DOCKER_IMAGES_FILE.open() as f:
+                    _known_docker_images = set(line.strip() for line in f)
+
+    name_without_ghcr = name.removeprefix("ghcr.io/")
+    if name in _known_docker_images:
+        return True
+
+    if ":" not in name_without_ghcr:
+        image, tag = name_without_ghcr, "latest"
+    else:
+        image, tag = name_without_ghcr.rsplit(":", 1)
+
+    exists: bool = False
+
+    try:
+        token = requests.get(
+            "https://ghcr.io/token",
+            params={
+                "scope": f"repository:{image}:pull",
+            },
+            timeout=10,
+        ).json()["token"]
+        response = requests.head(
+            f"https://ghcr.io/v2/{image}/manifests/{tag}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+
+        if response.status_code in (401, 429, 500, 502, 503, 504):
+            # Fall back to 5x slower method
+            proc = subprocess.run(
+                ["docker", "manifest", "inspect", name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+            )
+            exists = proc.returncode == 0
+        else:
+            exists = response.status_code == 200
+
+    except Exception as e:
+        print(f"Error checking Docker image: {e}")
+        return False
+
+    if exists:
+        with _known_docker_images_lock:
+            _known_docker_images.add(name)
+            with KNOWN_DOCKER_IMAGES_FILE.open("a") as f:
+                print(name, file=f)
+
+    return exists
 
 
 def chmod_x(path: Path) -> None:
@@ -284,36 +483,34 @@ class Copy(PreImage):
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
+    @staticmethod
+    @cache
+    def _cargo_shared_inputs() -> frozenset[str]:
+        """Resolve shared Cargo inputs once and cache the result.
+
+        This expands the 'ci/builder' directory glob and filters out
+        non-existent files like '.cargo/config', avoiding repeated
+        git subprocess calls in fingerprint().
+        """
+        inputs: set[str] = set()
+        inputs |= git.expand_globs(Path("."), "ci/builder/**")
+        inputs.add("Cargo.toml")
+        inputs.add("Cargo.lock")
+        if Path(".cargo/config").exists():
+            inputs.add(".cargo/config")
+        return frozenset(inputs)
+
     def inputs(self) -> set[str]:
-        inputs = {
-            "ci/builder",
-            "Cargo.toml",
-            # TODO(benesch): we could in theory fingerprint only the subset of
-            # Cargo.lock that applies to the crates at hand, but that is a
-            # *lot* of work.
-            "Cargo.lock",
-            ".cargo/config",
-            # Even though we are not always building with Bazel, consider its
-            # inputs so that developers with CI_BAZEL_BUILD=0 can still
-            # download the images from Dockerhub
-            ".bazelrc",
-            "WORKSPACE",
-        }
-
-        # Bazel has some rules and additive files that aren't directly
-        # associated with a crate, but can change how it's built.
-        additive_path = self.rd.root / "misc" / "bazel"
-        additive_files = ["BUILD.bazel", "*.bzl"]
-        inputs |= set(git.expand_globs(additive_path, *additive_files))
-
-        return inputs
+        return set(CargoPreImage._cargo_shared_inputs())
 
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether
         # coverage/sanitizer is enabled.
         flags: list[str] = []
-        if self.rd.release_mode:
+        if self.rd.profile == Profile.RELEASE:
             flags += "release"
+        if self.rd.profile == Profile.OPTIMIZED:
+            flags += "optimized"
         if self.rd.coverage:
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
@@ -337,80 +534,19 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
-
-        bazel_bins = config.pop("bazel-bin")
-        self.bazel_bins = (
-            bazel_bins if isinstance(bazel_bins, dict) else {self.bins[0]: bazel_bins}
-        )
-        self.bazel_tars = config.pop("bazel-tar", {})
+        features = config.pop("features", [])
+        self.features = features if isinstance(features, list) else [features]
 
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
-        for bin in self.bins:
-            if bin not in self.bazel_bins:
-                raise ValueError(
-                    f"need to specify a 'bazel-bin' for '{bin}' at '{path}'"
-                )
-
-    @staticmethod
-    def generate_bazel_build_command(
-        rd: RepositoryDetails,
-        bins: list[str],
-        examples: list[str],
-        bazel_bins: dict[str, str],
-        bazel_tars: dict[str, str],
-    ) -> list[str]:
-        assert (
-            rd.bazel
-        ), "Programming error, tried to invoke Bazel when it is not enabled."
-
-        rustflags = []
-        cflags = []
-
-        if rd.coverage:
-            assert (
-                rd.sanitizer == Sanitizer.none
-            ), "cannot get coverage and run a sanitizer at the same time"
-            rustflags += rustc_flags.coverage
-        elif rd.sanitizer != Sanitizer.none:
-            rustflags += rustc_flags.sanitizer[rd.sanitizer]
-            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
-        else:
-            rustflags += ["--cfg=tokio_unstable"]
-
-        extra_env = {
-            "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
-        }
-
-        bazel_build = rd.build(
-            "build",
-            channel=None,
-            rustflags=rustflags,
-            extra_env=extra_env,
-        )
-
-        for bin in bins:
-            bazel_build.append(bazel_bins[bin])
-        for tar in bazel_tars:
-            bazel_build.append(tar)
-        # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
-        assert len(examples) == 0, "Bazel doesn't support building examples."
-
-        # Add extra Bazel config flags.
-        bazel_build.extend(rd.bazel_config())
-
-        return bazel_build
 
     @staticmethod
     def generate_cargo_build_command(
         rd: RepositoryDetails,
         bins: list[str],
         examples: list[str],
+        features: list[str] | None = None,
     ) -> list[str]:
-        assert (
-            not rd.bazel
-        ), "Programming error, tried to invoke Cargo when Bazel is enabled."
-
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
@@ -440,7 +576,7 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-15",
+                "CPP": "clang-cpp-18",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -463,8 +599,10 @@ class CargoBuild(CargoPreImage):
             packages.add(rd.cargo_workspace.crate_for_example(example).name)
         cargo_build.extend(f"--package={p}" for p in packages)
 
-        if rd.release_mode:
+        if rd.profile == Profile.RELEASE:
             cargo_build.append("--release")
+        if rd.profile == Profile.OPTIMIZED:
+            cargo_build.extend(["--profile", "optimized"])
         if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
             cargo_build.append("--no-default-features")
@@ -472,14 +610,16 @@ class CargoBuild(CargoPreImage):
             cargo_build.extend(
                 ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
             )
+        if features:
+            cargo_build.append(f"--features={','.join(features)}")
 
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> dict[str, Any]:
-        super().prepare_batch(cargo_builds)
+    def prepare_batch(cls, instances: list["PreImage"]) -> dict[str, Any]:
+        super().prepare_batch(instances)
 
-        if not cargo_builds:
+        if not instances:
             return {}
 
         # Building all binaries and examples in the same `cargo build` command
@@ -487,85 +627,50 @@ class CargoBuild(CargoPreImage):
         # meaningfully speed up builds.
 
         rd: RepositoryDetails | None = None
-        builds = cast(list[CargoBuild], cargo_builds)
+        builds = cast(list[CargoBuild], instances)
         bins = set()
         examples = set()
-        bazel_bins = dict()
-        bazel_tars = dict()
+        features = set()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
-            bazel_bins.update(build.bazel_bins)
-            bazel_tars.update(build.bazel_tars)
+            features.update(build.features)
         assert rd
 
-        ui.section(f"Common cargo build for: {', '.join(bins | examples)}")
+        ui.section(f"Common build for: {', '.join(bins | examples)}")
 
-        if rd.bazel:
-            cargo_build = cls.generate_bazel_build_command(
-                rd, list(bins), list(examples), bazel_bins, bazel_tars
-            )
-        else:
-            cargo_build = cls.generate_cargo_build_command(
-                rd, list(bins), list(examples)
-            )
+        cargo_build = cls.generate_cargo_build_command(
+            rd, list(bins), list(examples), list(features) if features else None
+        )
 
-        spawn.runv(cargo_build, cwd=rd.root)
+        run_and_detect_rust_incremental_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
         # instantaneous since we just compiled above with the same crates and
         # features. (We don't want to do the compile above with JSON-formatted
         # messages because it wouldn't be human readable.)
-        if rd.bazel:
-            # TODO(parkmycar): Having to assign the same compilation flags as the build process
-            # is a bit brittle. It would be better if the Bazel build process itself could
-            # output the file to a known location.
-            options = rd.bazel_config()
-            paths_to_binaries = {}
-            for bin in bins:
-                paths = bazel_utils.output_paths(bazel_bins[bin], options)
-                assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
-                paths_to_binaries[bin] = paths[0]
-            for tar in bazel_tars:
-                paths = bazel_utils.output_paths(tar, options)
-                assert len(paths) == 1, f"more than one output path found for '{tar}'"
-                paths_to_binaries[tar] = paths[0]
-            prep = {"bazel": paths_to_binaries}
-        else:
-            json_output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                cwd=rd.root,
-            )
-            prep = {"cargo": json_output}
+        json_output = spawn.capture(
+            cargo_build + ["--message-format=json"],
+            cwd=rd.root,
+        )
+        prep = {"cargo": json_output}
 
         return prep
 
     def build(self, build_output: dict[str, Any]) -> None:
-        cargo_profile = "release" if self.rd.release_mode else "debug"
+        cargo_profile = (
+            "release"
+            if self.rd.profile == Profile.RELEASE
+            else "optimized" if self.rd.profile == Profile.OPTIMIZED else "debug"
+        )
 
         def copy(src: Path, relative_dst: Path) -> None:
             exe_path = self.path / relative_dst
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, exe_path)
-
-            # Bazel doesn't add write or exec permissions for built binaries
-            # but `strip` and `objcopy` need write permissions and we add exec
-            # permissions for the built Docker images.
-            current_perms = os.stat(exe_path).st_mode
-            new_perms = (
-                current_perms
-                # chmod +wx
-                | stat.S_IWUSR
-                | stat.S_IWGRP
-                | stat.S_IWOTH
-                | stat.S_IXUSR
-                | stat.S_IXGRP
-                | stat.S_IXOTH
-            )
-            os.chmod(exe_path, new_perms)
 
             if self.strip:
                 # The debug information is large enough that it slows down CI,
@@ -597,10 +702,7 @@ class CargoBuild(CargoPreImage):
                 )
 
         for bin in self.bins:
-            if "bazel" in build_output:
-                src_path = self.rd.bazel_workspace_dir() / build_output["bazel"][bin]
-            else:
-                src_path = self.rd.cargo_target_dir() / cargo_profile / bin
+            src_path = self.rd.cargo_target_dir() / cargo_profile / bin
             copy(src_path, bin)
         for example in self.examples:
             src_path = (
@@ -608,8 +710,7 @@ class CargoBuild(CargoPreImage):
             )
             copy(src_path, Path("examples") / example)
 
-        # Bazel doesn't support 'extract', instead you need to use 'bazel-tar'
-        if self.extract and "bazel" not in build_output:
+        if self.extract:
             cargo_build_json_output = build_output["cargo"]
 
             target_dir = self.rd.cargo_target_dir()
@@ -639,25 +740,13 @@ class CargoBuild(CargoPreImage):
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
-        if self.bazel_tars and "bazel" in build_output:
-            ui.section("Extracing 'bazel-tar'")
-            for tar in self.bazel_tars:
-                # Where Bazel built the tarball.
-                tar_path = self.rd.bazel_workspace_dir() / build_output["bazel"][tar]
-                # Where we need to extract it into.
-                tar_dest = self.path / self.bazel_tars[tar]
-                ui.say(f"extracing {tar_path} to {tar_dest}")
-
-                with tarfile.open(tar_path, "r") as tar_file:
-                    os.makedirs(tar_dest, exist_ok=True)
-                    tar_file.extractall(path=tar_dest)
-
         self.acquired = True
 
     def run(self, prep: dict[str, Any]) -> None:
         super().run(prep)
         self.build(prep)
 
+    @cache
     def inputs(self) -> set[str]:
         deps = set()
 
@@ -669,12 +758,8 @@ class CargoBuild(CargoPreImage):
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(
                 crate, dev=True
             )
-        inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
-        # Even though we are not always building with Bazel, consider its
-        # inputs so that developers with CI_BAZEL_BUILD=0 can still
-        # download the images from Dockerhub
-        inputs |= {"BUILD.bazel"}
 
+        inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
         return inputs
 
 
@@ -697,9 +782,12 @@ class Image:
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
 
+    _context_files_cache: set[str] | None
+
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
+        self._context_files_cache = None
         self.pre_images: list[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
@@ -795,6 +883,7 @@ class ResolvedImage:
         """Whether the underlying image should be pushed to Docker Hub."""
         return self.image.publish
 
+    @cache
     def spec(self) -> str:
         """Return the "spec" for the image.
 
@@ -822,12 +911,29 @@ class ResolvedImage:
         f.seek(0)
         return f
 
-    def build(self, prep: dict[type[PreImage], Any]) -> None:
+    def build(self, prep: dict[type[PreImage], Any], push: bool = False) -> None:
         """Build the image from source.
 
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        # Use a file lock to prevent parallel mzcompose processes from
+        # racing on git clean / copy / strip for the same image directory.
+        lock_dir = self.image.rd.root / "target" / "mzbuild-locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        profile = self.image.rd.profile.name.lower()
+        lock_path = lock_dir / f"{self.image.name}-{profile}.lock"
+        with open(lock_path, "w") as lock_file:
+            ui.say(f"Acquiring lock for {self.spec()}")
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                self._build_locked(prep, push)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    def _build_locked(
+        self, prep: dict[type[PreImage], Any], push: bool = False
+    ) -> None:
         ui.section(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
@@ -835,59 +941,155 @@ class ResolvedImage:
             pre_image.run(prep[type(pre_image)])
         build_args = {
             **self.image.build_args,
+            "BUILD_PROFILE": self.image.rd.profile.name,
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
             "CI_SANITIZER": str(self.image.rd.sanitizer),
         }
         f = self.write_dockerfile()
-        cmd: Sequence[str] = [
-            "docker",
-            "build",
-            "-f",
-            "-",
-            *(f"--build-arg={k}={v}" for k, v in build_args.items()),
-            "-t",
-            self.spec(),
-            f"--platform=linux/{self.image.rd.arch.go_str()}",
-            str(self.image.path),
-        ]
+
+        try:
+            spawn.capture(["docker", "buildx", "version"])
+        except subprocess.CalledProcessError:
+            if push:
+                print(
+                    "docker buildx not found, required to push images. Installation: https://github.com/docker/buildx?tab=readme-ov-file#installing"
+                )
+                raise
+            print(
+                "docker buildx not found, you can install it to build faster. Installation: https://github.com/docker/buildx?tab=readme-ov-file#installing"
+            )
+            print("Falling back to docker build")
+            cmd: Sequence[str] = [
+                "docker",
+                "build",
+                "-f",
+                "-",
+                *(f"--build-arg={k}={v}" for k, v in build_args.items()),
+                "-t",
+                self.spec(),
+                f"--platform=linux/{self.image.rd.arch.go_str()}",
+                str(self.image.path),
+            ]
+        else:
+            docker_tag = f"docker.io/{self.spec()}"
+            ghcr_tag = f"ghcr.io/materializeinc/{self.spec()}"
+            cmd: Sequence[str] = [
+                "docker",
+                "buildx",
+                "build",
+                "--progress=plain",  # less noisy
+                "-f",
+                "-",
+                *(f"--build-arg={k}={v}" for k, v in build_args.items()),
+                "-t",
+                docker_tag,
+                "-t",
+                ghcr_tag,
+                f"--platform=linux/{self.image.rd.arch.go_str()}",
+                str(self.image.path),
+                "--load",
+            ]
+
+        if token := os.getenv("GITHUB_GHCR_TOKEN"):
+            spawn.runv(
+                [
+                    "docker",
+                    "login",
+                    "ghcr.io",
+                    "-u",
+                    "materialize-bot",
+                    "--password-stdin",
+                ],
+                stdin=token.encode(),
+            )
+
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
+
+        if push:
+            # Push to both registries in parallel. With the docker driver,
+            # the image is already in the local daemon after --load, so
+            # docker push is the same mechanism buildx --push uses internally.
+            procs = []
+            for tag in [docker_tag, ghcr_tag]:
+                procs.append(
+                    subprocess.Popen(
+                        ["docker", "push", tag],
+                        stdout=sys.stderr,
+                        stderr=sys.stderr,
+                    )
+                )
+            failures = []
+            for proc in procs:
+                if proc.wait() != 0:
+                    failures.append(proc.args)
+            if failures:
+                raise subprocess.CalledProcessError(1, failures[0])
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
-        ui.header(f"Acquiring {self.spec()}")
         command = ["docker", "pull"]
         # --quiet skips printing the progress bar, which does not display well in CI.
         if ui.env_is_truthy("CI"):
             command.append("--quiet")
         command.append(self.spec())
         if not self.acquired:
+            ui.header(f"Acquiring {self.spec()}")
             sleep_time = 1
             for retry in range(1, max_retries + 1):
                 try:
                     spawn.runv(
                         command,
+                        stdin=subprocess.DEVNULL,
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:
                         # There seems to be no good way to tell what error
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        print(f"Retrying in {sleep_time}s ...")
-                        time.sleep(sleep_time)
-                        sleep_time *= 2
+                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
+                            for retry in range(max_retries):
+                                try:
+                                    build_status = buildkite.get_build_status(build)
+                                except subprocess.CalledProcessError:
+                                    time.sleep(sleep_time)
+                                    sleep_time = min(sleep_time * 2, 10)
+                                    break
+                                print(f"Build {build} status: {build_status}")
+                                if build_status == "failed":
+                                    print(
+                                        f"Build {build} has been marked as failed, exiting hard"
+                                    )
+                                    sys.exit(1)
+                                elif build_status == "success":
+                                    break
+                                assert (
+                                    build_status == "pending"
+                                ), f"Unknown build status {build_status}"
+                                time.sleep(1)
+                        else:
+                            print(f"Retrying in {sleep_time}s ...")
+                            time.sleep(sleep_time)
+                            sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
-        """Report whether the image exists on Docker Hub if it is publishable."""
-        if self.publish and is_docker_image_pushed(self.spec()):
-            ui.say(f"{self.spec()} already exists")
+        """Report whether the image exists on DockerHub & GHCR if it is publishable."""
+        if not self.publish:
+            return False
+        spec = self.spec()
+        if spec.startswith(GHCR_PREFIX):
+            spec = spec.removeprefix(GHCR_PREFIX)
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
+            ui.say(f"{spec} already exists")
             return True
         return False
 
@@ -927,6 +1129,7 @@ class ResolvedImage:
                 out |= dep.list_dependencies(transitive)
         return out
 
+    @cache
     def inputs(self, transitive: bool = False) -> set[str]:
         """List the files tracked as inputs to the image.
 
@@ -937,7 +1140,10 @@ class ResolvedImage:
             inputs: A list of input files, relative to the root of the
                 repository.
         """
-        paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
+        if self.image._context_files_cache is not None:
+            paths = set(self.image._context_files_cache)
+        else:
+            paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
         if not paths:
             # While we could find an `mzbuild.yml` file for this service, expland_globs didn't
             # return any files that matched this service. At the very least, the `mzbuild.yml`
@@ -965,9 +1171,15 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(
-            set(git.expand_globs(self.image.rd.root, *self.inputs()))
-        ):
+        # When inputs come from precomputed sources (crate and image context
+        # batching + resolved CargoPreImage paths), they are already individual
+        # file paths from git. Skip the expensive expand_globs subprocess calls.
+        inputs = self.inputs()
+        if self.image._context_files_cache is not None:
+            resolved_inputs = sorted(inputs)
+        else:
+            resolved_inputs = sorted(set(git.expand_globs(self.image.rd.root, *inputs)))
+        for rel_path in resolved_inputs:
             abs_path = self.image.rd.root / rel_path
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
@@ -990,9 +1202,12 @@ class ResolvedImage:
             self_hash.update(pre_image.extra().encode())
             self_hash.update(b"\0")
 
+        self_hash.update(f"profile={self.image.rd.profile}".encode())
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
+        # This exists to make sure all hashes from before we had a GHCR mirror are invalidated, so that we rebuild when an image doesn't exist on GHCR yet
+        self_hash.update(b"mirror=ghcr")
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -1017,7 +1232,8 @@ class DependencySet:
         The provided `dependencies` must be topologically sorted.
         """
         self._dependencies: dict[str, ResolvedImage] = {}
-        known_images = docker_images()
+        dependencies = list(dependencies)
+        known_images = docker_images() if dependencies else set()
         for d in dependencies:
             image = ResolvedImage(
                 image=d,
@@ -1047,70 +1263,116 @@ class DependencySet:
 
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
-            max_retries = 5 if ui.env_is_truthy("CI") else 1
+            max_retries = (
+                90
+                if os.getenv("CI_WAITING_FOR_BUILD")
+                else (
+                    5
+                    if ui.env_is_truthy("CI")
+                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                    else 1
+                )
+            )
         assert max_retries > 0
 
-        deps_to_build = [
-            dep for dep in self if not dep.publish or not dep.try_pull(max_retries)
-        ]
+        deps_to_check = [dep for dep in self if dep.publish]
+        deps_to_build = [dep for dep in self if not dep.publish]
+        if len(deps_to_check):
+            with ThreadPoolExecutor(max_workers=len(deps_to_check)) as executor:
+                futures = [
+                    executor.submit(dep.try_pull, max_retries) for dep in deps_to_check
+                ]
+                for dep, future in zip(deps_to_check, futures):
+                    try:
+                        if not future.result():
+                            deps_to_build.append(dep)
+                    except Exception:
+                        deps_to_build.append(dep)
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
-        if ui.env_is_truthy("CI"):
+        if ui.env_is_truthy("CI") and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD"):
             expected_deps = [dep for dep in deps_to_build if dep.publish]
             if expected_deps:
                 print(
                     f"+++ Expected builds to be available, the build probably failed, so not proceeding: {expected_deps}"
                 )
-                sys.exit(5)
+                sys.exit(128)
 
         prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
             dep.build(prep)
 
-    def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
+    def ensure(self, pre_build: Callable[[list[ResolvedImage]], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
         Hub.
 
         Images are pushed using their spec as their tag.
 
         Args:
-            post_build: A callback to invoke with each dependency that was built
-                locally.
+            pre_build: A callback to invoke with all dependency that are going
+                       to be built locally, invoked after their cargo build is
+                       done, but before the Docker images are build and
+                       uploaded to DockerHub.
         """
-        deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
+        num_deps = len(list(self))
+        if not num_deps:
+            deps_to_build = []
+        else:
+            with ThreadPoolExecutor(max_workers=num_deps) as executor:
+                futures = list(
+                    executor.map(
+                        lambda dep: (dep, not dep.is_published_if_necessary()), self
+                    )
+                )
+
+            deps_to_build = [dep for dep, should_build in futures if should_build]
+
         prep = self._prepare_batch(deps_to_build)
+        if pre_build:
+            pre_build(deps_to_build)
+        lock = Lock()
+        built_deps: set[str] = set([dep.name for dep in self]) - set(
+            [dep.name for dep in deps_to_build]
+        )
 
-        images_to_push = []
-        for dep in deps_to_build:
-            dep.build(prep)
-            if post_build:
-                post_build(dep)
-            if dep.publish:
-                images_to_push.append(dep.spec())
+        def build_dep(dep):
+            end_time = time.time() + 600
+            while True:
+                if time.time() > end_time:
+                    raise TimeoutError(
+                        f"Timed out in {dep.name} waiting for {[dep2 for dep2 in dep.dependencies if dep2 not in built_deps]}"
+                    )
+                with lock:
+                    if all(dep2 in built_deps for dep2 in dep.dependencies):
+                        break
+                time.sleep(0.01)
+            for attempts_remaining in reversed(range(3)):
+                try:
+                    dep.build(prep, push=dep.publish)
+                    with lock:
+                        built_deps.add(dep.name)
+                    break
+                except Exception:
+                    if not dep.publish or attempts_remaining == 0:
+                        raise
 
-        # Push all Docker images in parallel to minimize build time.
-        ui.section("Pushing images")
-        pushes: list[subprocess.Popen] = []
-        for image in images_to_push:
-            # Piping through `cat` disables terminal control codes, and so the
-            # interleaved progress output from multiple pushes is less hectic.
-            # We don't use `docker push --quiet`, as that disables progress
-            # output entirely.
-            push = subprocess.Popen(
-                f"docker push {shlex.quote(image)} | cat",
-                shell=True,
-            )
-            pushes.append(push)
-
-        for push in pushes:
-            returncode = push.wait()
-            if returncode:
-                raise subprocess.CalledProcessError(returncode, push.args)
+        if deps_to_build:
+            with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
+                futures = [executor.submit(build_dep, dep) for dep in deps_to_build]
+                for future in as_completed(futures):
+                    future.result()
 
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
         Hub. Don't try to download or build them."""
-        return all(dep.is_published_if_necessary() for dep in self)
+        num_deps = len(list(self))
+        if num_deps == 0:
+            return True
+        with ThreadPoolExecutor(max_workers=num_deps) as executor:
+            results = list(
+                executor.map(lambda dep: dep.is_published_if_necessary(), list(self))
+            )
+        return all(results)
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())
@@ -1131,7 +1393,7 @@ class Repository:
     Args:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether to build the repository in release mode.
+        profile: What profile to build the repository in.
         coverage: Whether to enable code coverage instrumentation.
         sanitizer: Whether to a sanitizer (address, thread, leak, memory, none)
         image_registry: The Docker image registry to pull images from and push
@@ -1147,54 +1409,45 @@ class Repository:
         self,
         root: Path,
         arch: Arch = Arch.host(),
-        release_mode: bool = True,
+        profile: Profile = (
+            Profile.RELEASE if ui.env_is_truthy("CI_LTO") else Profile.OPTIMIZED
+        ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
-        image_registry: str = "materialize",
+        image_registry: str = image_registry(),
         image_prefix: str = "",
-        bazel: bool = False,
-        bazel_remote_cache: str | None = None,
     ):
         self.rd = RepositoryDetails(
             root,
             arch,
-            release_mode,
+            profile,
             coverage,
             sanitizer,
             image_registry,
             image_prefix,
-            bazel,
-            bazel_remote_cache,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
-        for path, dirs, files in os.walk(self.root, topdown=True):
-            if path == str(root / "misc"):
-                dirs.remove("python")
-            # Filter out some particularly massive ignored directories to keep
-            # things snappy. Not required for correctness.
-            dirs[:] = set(dirs) - {
-                ".git",
-                ".mypy_cache",
-                "target",
-                "target-ra",
-                "target-xcompile",
-                "mzdata",
-                "node_modules",
-                "venv",
-            }
-            if "mzbuild.yml" in files:
-                image = Image(self.rd, Path(path))
+        for rel_path_s in sorted(
+            git.expand_globs(self.root, "**/mzbuild.yml", "**/mzcompose.py")
+        ):
+            rel_path = Path(rel_path_s)
+            if rel_path.parts[:2] == ("misc", "python"):
+                continue
+
+            parent = self.root / rel_path.parent
+            if rel_path.name == "mzbuild.yml":
+                image = Image(self.rd, parent)
                 if not image.name:
-                    raise ValueError(f"config at {path} missing name")
+                    raise ValueError(f"config at {parent} missing name")
                 if image.name in self.images:
                     raise ValueError(f"image {image.name} exists twice")
                 self.images[image.name] = image
-            if "mzcompose.py" in files:
-                name = Path(path).name
+            elif rel_path.name == "mzcompose.py":
+                name = parent.name
                 if name in self.compositions:
                     raise ValueError(f"composition {name} exists twice")
-                self.compositions[name] = Path(path)
+                self.compositions[name] = parent
 
         # Validate dependencies.
         for image in self.images.values():
@@ -1210,8 +1463,8 @@ class Repository:
 
         This function installs the following options:
 
-          * The mutually-exclusive `--dev`/`--release` options to control the
-            `release_mode` repository attribute.
+          * The mutually-exclusive `--dev`/`--optimized`/`--release` options to control the
+            `profile` repository attribute.
           * The `--coverage` boolean option to control the `coverage` repository
             attribute.
 
@@ -1221,14 +1474,18 @@ class Repository:
         build_mode = parser.add_mutually_exclusive_group()
         build_mode.add_argument(
             "--dev",
-            dest="release",
-            action="store_false",
+            action="store_true",
             help="build Rust binaries with the dev profile",
         )
         build_mode.add_argument(
             "--release",
             action="store_true",
             help="build Rust binaries with the release profile (default)",
+        )
+        build_mode.add_argument(
+            "--optimized",
+            action="store_true",
+            help="build Rust binaries with the optimized profile (optimizations, no LTO, no debug symbols)",
         )
         parser.add_argument(
             "--coverage",
@@ -1243,32 +1500,32 @@ class Repository:
             type=Sanitizer,
             choices=Sanitizer,
         )
+
+        def _parse_arch(s: str) -> Arch:
+            try:
+                return Arch(s)
+            except ValueError:
+                valid = ", ".join(m.value for m in Arch)
+                raise argparse.ArgumentTypeError(
+                    f"invalid arch: {s!r} (choose from {valid})"
+                )
+
         parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
-            type=Arch,
-            choices=Arch,
+            type=_parse_arch,
+            metavar="{" + ",".join(m.value for m in Arch) + "}",
         )
         parser.add_argument(
             "--image-registry",
-            default="materialize",
+            default=image_registry(),
             help="the Docker image registry to pull images from and push images to",
         )
         parser.add_argument(
             "--image-prefix",
             default="",
             help="a prefix to apply to all Docker image names",
-        )
-        parser.add_argument(
-            "--bazel",
-            default=ui.env_is_truthy("CI_BAZEL_BUILD"),
-            action="store_true",
-        )
-        parser.add_argument(
-            "--bazel-remote-cache",
-            default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
-            action="store",
         )
 
     @classmethod
@@ -1278,16 +1535,25 @@ class Repository:
         The provided namespace must contain the options installed by
         `Repository.install_arguments`.
         """
+        if args.release:
+            profile = Profile.RELEASE
+        elif args.optimized:
+            profile = Profile.OPTIMIZED
+        elif args.dev:
+            profile = Profile.DEV
+        else:
+            profile = (
+                Profile.RELEASE if ui.env_is_truthy("CI_LTO") else Profile.OPTIMIZED
+            )
+
         return cls(
             root,
-            release_mode=args.release,
+            profile=profile,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
-            bazel=args.bazel,
-            bazel_remote_cache=args.bazel_remote_cache,
         )
 
     @property
@@ -1307,6 +1573,13 @@ class Repository:
            ValueError: A circular dependency was discovered in the images
                in the repository.
         """
+        # Pre-fetch all crate input files in a single batched git call,
+        # replacing ~118 individual subprocess pairs with one pair.
+        self.rd.cargo_workspace.precompute_crate_inputs()
+        # Pre-fetch all image context files in a single batched git call,
+        # replacing ~41 individual subprocess pairs with one pair.
+        self._precompute_image_context_files()
+
         resolved = OrderedDict()
         visiting = set()
 
@@ -1327,6 +1600,48 @@ class Repository:
 
         return DependencySet(resolved.values())
 
+    def _precompute_image_context_files(self) -> None:
+        """Pre-fetch all image context files in a single batched git call.
+
+        This replaces ~41 individual pairs of git subprocess calls (one per
+        image) with a single pair, then partitions the results by image path.
+        """
+        root = self.rd.root
+        # Use paths relative to root for git specs and partitioning, since
+        # git --relative outputs paths relative to cwd (root). Image paths
+        # may be absolute when MZ_ROOT is an absolute path.
+        image_rel_paths = sorted(
+            set(str(img.path.relative_to(root)) for img in self.images.values())
+        )
+        specs = [f"{p}/**" for p in image_rel_paths]
+
+        empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        diff_files = spawn.capture(
+            ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
+            + specs,
+            cwd=root,
+        )
+        ls_files = spawn.capture(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"] + specs,
+            cwd=root,
+        )
+        all_files = set(
+            f for f in (diff_files + ls_files).split("\0") if f.strip() != ""
+        )
+
+        # Partition files by image path (longest match first for nested paths)
+        image_file_map: dict[str, set[str]] = {p: set() for p in image_rel_paths}
+        sorted_paths = sorted(image_rel_paths, key=len, reverse=True)
+        for f in all_files:
+            for ip in sorted_paths:
+                if f.startswith(ip + "/"):
+                    image_file_map[ip].add(f)
+                    break
+
+        for img in self.images.values():
+            rel = str(img.path.relative_to(root))
+            img._context_files_cache = image_file_map.get(rel, set())
+
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())
 
@@ -1335,14 +1650,59 @@ def publish_multiarch_images(
     tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
 ) -> None:
     """Publishes a set of docker images under a given tag."""
+    always_push_tags = ("latest", "unstable")
+    if ghcr_token := os.getenv("GITHUB_GHCR_TOKEN"):
+        spawn.runv(
+            [
+                "docker",
+                "login",
+                "ghcr.io",
+                "-u",
+                "materialize-bot",
+                "--password-stdin",
+            ],
+            stdin=ghcr_token.encode(),
+        )
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
         name = images[0].image.docker_name(tag)
-        spawn.runv(
-            ["docker", "manifest", "create", name, *(image.spec() for image in images)]
-        )
-        spawn.runv(["docker", "manifest", "push", name])
+        if tag in always_push_tags or not is_docker_image_pushed(name):
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            name,
+                            *(image.spec() for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", name]),
+                )
+            )
+
+        ghcr_name = f"{GHCR_PREFIX}{name}"
+        if ghcr_token and (
+            tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
+        ):
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            ghcr_name,
+                            *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", ghcr_name]),
+                )
+            )
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(

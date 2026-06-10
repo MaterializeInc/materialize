@@ -13,142 +13,172 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro is_cluster_ready(cluster=target.cluster|default(none), lag_threshold='1s') %}
+{#
+  is_cluster_ready macro
+  ======================
+
+  Checks if a cluster is ready for use by evaluating:
+  - Replica health (detects OOM-killed replicas)
+  - Hydration status (are all objects hydrated?)
+  - Lag (is the cluster caught up within the allowed threshold?)
+
+  Returns a dictionary with:
+  - ready: bool - True if status is 'ready'
+  - status: str - 'ready', 'hydrating', 'lagging', or 'failing'
+  - failure_reason: str - 'no_replicas', 'all_replicas_problematic', or None
+  - hydrated_count: int - Number of hydrated objects
+  - total_count: int - Total objects to hydrate
+  - max_lag_secs: int - Maximum lag in seconds
+  - total_replicas: int - Total replicas in cluster
+  - problematic_replicas: int - Replicas with 3+ OOM kills in 24h
+#}
+
+{% macro is_cluster_ready(cluster=target.cluster|default(none), lag_threshold='10s') %}
 
 {% if cluster is none %}
-    {{ exceptions.raise_compiler_error("No cluster specified and no default cluster found in target profile. " ~ current_target_name) }}
+    {{ exceptions.raise_compiler_error("No cluster specified and no default cluster found in target profile.") }}
 {% endif %}
 
-{{ log("Checking pending objects for cluster " ~ cluster, info=True) }}
+{{ log("Checking cluster readiness for: " ~ cluster, info=True) }}
 
-{% set cluster_exists %}
-WITH total_replicas AS (
-    SELECT cluster_id, count(*) AS replicas
-    FROM mz_cluster_replicas
-    GROUP BY cluster_id
-)
-
-SELECT COALESCE(replicas, 0) AS replicas
-FROM mz_clusters
-LEFT JOIN total_replicas ON mz_clusters.id = cluster_id
-WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-{%- endset -%}
-
-{%- set result = run_query(cluster_exists) %}
-{%- if execute -%}
-    {%- if result and result.rows|length > 0 -%}
-        {%- set replicas_value = result.rows[0][0] %}
-        {%- if replicas_value is none or replicas_value == 0 -%}
-            {{ log("Cluster " ~ cluster ~ " has no running replicas", info=true) }}
-            {{ return(false) }}
-        {%- endif -%}
-    {%- else -%}
-        {{ log("Cluster " ~ cluster ~ " does not exist", info=true) }}
-        {{ return(false) }}
-    {%- endif -%}
-{%- endif -%}
-
-{%- set check_pending_objects_sql %}
-WITH dataflows AS (
-    SELECT
-        mz_cluster_replicas.id AS replica_id,
-        mz_indexes.id AS object_id,
-        mz_indexes.name,
-        'index' AS type
-    FROM mz_indexes
-    JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-
-    UNION ALL
-
-    SELECT
-        mz_cluster_replicas.id AS replica_id,
-        mz_materialized_views.id AS object_id,
-        mz_materialized_views.name,
-        'materialized-view' AS type
-    FROM mz_materialized_views
-    JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-
-    UNION ALL
-
-    SELECT
-        mz_cluster_replicas.id AS replica_id,
-        mz_sources.id AS object_id,
-        mz_sources.name,
-        'source' AS type
-    FROM mz_sources
-    JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-
-    UNION ALL
-
-    SELECT
-        mz_cluster_replicas.id AS replica_id,
-        mz_sinks.id AS object_id,
-        mz_sinks.name,
-        'sink' AS type
-    FROM mz_sinks
-    JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-
-),
-
-ready_dataflows AS (
-    SELECT replica_id, object_id, name, type
-    FROM dataflows
-    JOIN mz_internal.mz_hydration_statuses AS h USING (object_id, replica_id)
-    LEFT JOIN mz_internal.mz_materialization_lag AS l USING (object_id)
-    WHERE h.hydrated AND (l.local_lag <= {{ dbt.string_literal(lag_threshold) }} OR l.local_lag IS NULL)
-),
-
-pending_dataflows AS (
-    SELECT replica_id, object_id, name, type
-    FROM dataflows d
-
-    EXCEPT
-
-    SELECT replica_id, object_id, name, type
-    FROM ready_dataflows r
-),
-
-ready_replicas AS (
-    SELECT mz_cluster_replicas.id AS replica_id
-    FROM mz_cluster_replicas
-    JOIN mz_clusters ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
-
-    EXCEPT
-
+{%- set check_cluster_ready_sql %}
+WITH
+-- Detect problematic replicas: 3+ OOM kills in 24h
+problematic_replicas AS (
     SELECT replica_id
-    FROM pending_dataflows
+    FROM mz_internal.mz_cluster_replica_status_history
+    WHERE occurred_at + INTERVAL '24 hours' > mz_now()
+      AND reason = 'oom-killed'
+    GROUP BY replica_id
+    HAVING COUNT(*) >= 3
+),
+
+-- Cluster health: count total vs problematic replicas
+cluster_health AS (
+    SELECT
+        c.name AS cluster_name,
+        c.id AS cluster_id,
+        COUNT(r.id) AS total_replicas,
+        COUNT(pr.replica_id) AS problematic_replicas
+    FROM mz_clusters c
+    LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+    LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
+    WHERE c.name = {{ dbt.string_literal(cluster) }}
+    GROUP BY c.name, c.id
+),
+
+-- Hydration counts per cluster (best replica)
+hydration_counts AS (
+    SELECT
+        c.name AS cluster_name,
+        r.id AS replica_id,
+        COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
+        COUNT(*) AS total
+    FROM mz_clusters c
+    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+    LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+    WHERE c.name = {{ dbt.string_literal(cluster) }}
+    GROUP BY c.name, r.id
+),
+
+hydration_best AS (
+    SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
+    FROM hydration_counts
+    GROUP BY cluster_name
+),
+
+-- Max lag per cluster using mz_wallclock_global_lag
+cluster_lag AS (
+    SELECT
+        c.name AS cluster_name,
+        MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
+    FROM mz_clusters c
+    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+    JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+    JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
+    WHERE c.name = {{ dbt.string_literal(cluster) }}
+    GROUP BY c.name
+),
+
+-- Convert lag_threshold interval to seconds
+lag_threshold_secs AS (
+    SELECT EXTRACT(EPOCH FROM INTERVAL {{ dbt.string_literal(lag_threshold) }}) AS threshold_secs
 )
 
-SELECT object_id, name, type
-FROM pending_dataflows
-WHERE NOT EXISTS (
-    SELECT * FROM ready_replicas
-)
+SELECT
+    ch.cluster_name,
+    ch.cluster_id,
+    CASE
+        WHEN ch.total_replicas = 0 THEN 'failing'
+        WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
+        WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
+        WHEN COALESCE(cl.max_lag_secs, 0) > (SELECT threshold_secs FROM lag_threshold_secs) THEN 'lagging'
+        ELSE 'ready'
+    END AS status,
+    CASE
+        WHEN ch.total_replicas = 0 THEN 'no_replicas'
+        WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
+        ELSE NULL
+    END AS failure_reason,
+    COALESCE(hb.hydrated, 0) AS hydrated_count,
+    COALESCE(hb.total, 0) AS total_count,
+    COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
+    ch.total_replicas,
+    ch.problematic_replicas,
+    (SELECT threshold_secs FROM lag_threshold_secs)::bigint AS threshold_secs
+FROM cluster_health ch
+LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
+LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
 {%- endset %}
 
-{%- set results = run_query(check_pending_objects_sql) %}
+{%- set results = run_query(check_cluster_ready_sql) %}
 {%- if execute -%}
-    {#- If there are results, the query will return at least one row -#}
-    {%- if results and results.column_names and results.rows|length > 0 -%}
-        {#- There are pending objects, so print them -#}
-        {{ log("Some objects still hydrating in cluster " ~ cluster ~ ":", info=True) }}
-        {%- for row in results.rows -%}
-            {{ log("- [" ~ row[2] ~ "(" ~ row[0] ~ ")]: " ~ row[1], info=True) }}
-        {%- endfor -%}
-        {{ return(false) }}
+    {%- if results and results.rows|length > 0 -%}
+        {%- set row = results.rows[0] -%}
+        {%- set cluster_name = row[0] -%}
+        {%- set cluster_id = row[1] -%}
+        {%- set status = row[2] -%}
+        {%- set failure_reason = row[3] -%}
+        {%- set hydrated_count = row[4] -%}
+        {%- set total_count = row[5] -%}
+        {%- set max_lag_secs = row[6] -%}
+        {%- set total_replicas = row[7] -%}
+        {%- set problematic_replicas = row[8] -%}
+        {%- set threshold_secs = row[9] -%}
+
+        {#- Log status details -#}
+        {%- if status == 'ready' -%}
+            {{ log("Cluster " ~ cluster ~ " is ready. Hydration: " ~ hydrated_count ~ "/" ~ total_count ~ ", Lag: " ~ max_lag_secs ~ "s", info=True) }}
+        {%- elif status == 'hydrating' -%}
+            {{ log("Cluster " ~ cluster ~ " is hydrating: " ~ hydrated_count ~ "/" ~ total_count ~ " objects hydrated", info=True) }}
+        {%- elif status == 'lagging' -%}
+            {{ log("Cluster " ~ cluster ~ " is lagging: " ~ max_lag_secs ~ "s (threshold: " ~ threshold_secs ~ "s)", info=True) }}
+        {%- elif status == 'failing' -%}
+            {{ log("Cluster " ~ cluster ~ " is failing: " ~ failure_reason ~ " (" ~ problematic_replicas ~ "/" ~ total_replicas ~ " problematic replicas)", info=True) }}
+        {%- endif -%}
+
+        {{ return({
+            'ready': status == 'ready',
+            'status': status,
+            'failure_reason': failure_reason,
+            'hydrated_count': hydrated_count,
+            'total_count': total_count,
+            'max_lag_secs': max_lag_secs,
+            'total_replicas': total_replicas,
+            'problematic_replicas': problematic_replicas
+        }) }}
     {%- else -%}
-        {#- No pending objects found for the specified cluster -#}
-        {{ log("All objects hydrated in cluster " ~ cluster ~ ". The cluster is ready.", info=True) }}
-        {{ return(true) }}
+        {{ log("Cluster " ~ cluster ~ " does not exist", info=True) }}
+        {{ return({
+            'ready': false,
+            'status': 'failing',
+            'failure_reason': 'cluster_not_found',
+            'hydrated_count': 0,
+            'total_count': 0,
+            'max_lag_secs': 0,
+            'total_replicas': 0,
+            'problematic_replicas': 0
+        }) }}
     {%- endif -%}
 {%- endif -%}
 

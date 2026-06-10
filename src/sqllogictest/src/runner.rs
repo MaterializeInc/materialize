@@ -42,10 +42,17 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
+use maplit::btreemap;
 use md5::{Digest, Md5};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_environmentd::CatalogConfig;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -58,18 +65,22 @@ use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
-use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
+use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value, oid};
+use mz_repr::ColumnName;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
-use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
+    ListenersConfig, SqlListenerConfig,
+};
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -92,8 +103,8 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
-use uuid::fmt::Simple;
 use uuid::Uuid;
+use uuid::fmt::Simple;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -110,6 +121,7 @@ pub enum Outcome<'a> {
     },
     PlanFailure {
         error: anyhow::Error,
+        expected_error: Option<String>,
         location: Location,
     },
     UnexpectedPlanSuccess {
@@ -191,15 +203,23 @@ impl<'a> Outcome<'a> {
         match self {
             Outcome::Unsupported { error, .. }
             | Outcome::ParseFailure { error, .. }
-            | Outcome::PlanFailure { error, .. } => Some(
+            | Outcome::PlanFailure { error, .. } => {
+                // Take only the first line, which should be sufficient for
+                // meaningfully matching the error.
+                let err_str = error.to_string_with_causes();
+                let err_str = err_str.split('\n').next().unwrap();
+                // Strip the "db error: ERROR: " prefix added by the postgres
+                // client library, as it's noisy and not useful for matching.
+                let err_str = err_str.strip_prefix("db error: ERROR: ").unwrap_or(err_str);
                 // This value gets fed back into regex to check that it matches
-                // `self`, so escape its meta characters.
-                regex::escape(
-                    // Take only first string in error message, which should be
-                    // sufficient for meaningfully matching error.
-                    error.to_string().split('\n').next().unwrap(),
-                ),
-            ),
+                // `self`, so escape its meta characters. We need to undo the
+                // escaping of #. `regex::escape` escapes this because it
+                // expects that we use the `x` flag when building a regex, but
+                // this is not the case, so \# would end up being an invalid
+                // escape sequence, which would choke the parsing of the slt
+                // file the next time around.
+                Some(regex::escape(err_str).replace(r"\#", "#"))
+            }
             _ => None,
         }
     }
@@ -224,7 +244,23 @@ impl fmt::Display for Outcome<'_> {
                     error.display_with_causes()
                 )
             }
-            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
+            PlanFailure {
+                error,
+                expected_error,
+                location,
+            } => {
+                if let Some(expected_error) = expected_error {
+                    write!(
+                        f,
+                        "PlanFailure:{}:\nerror does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                        location,
+                        expected_error,
+                        error.display_with_causes()
+                    )
+                } else {
+                    write!(f, "PlanFailure:{}:\n{:#}", location, error)
+                }
+            }
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -289,8 +325,8 @@ impl fmt::Display for Outcome<'_> {
                 location,
             } => write!(
                 f,
-                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
-                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+                "InconsistentViewOutcome:{}{}expected from query: {}{}actually from indexed view: {}",
+                location, INDENT, query_outcome, INDENT, view_outcome
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
@@ -307,7 +343,7 @@ pub struct Outcomes {
 
 impl ops::AddAssign<Outcomes> for Outcomes {
     fn add_assign(&mut self, rhs: Outcomes) {
-        for (lhs, rhs) in self.stats.iter_mut().zip(rhs.stats.iter()) {
+        for (lhs, rhs) in self.stats.iter_mut().zip_eq(rhs.stats.iter()) {
             *lhs += rhs
         }
     }
@@ -402,6 +438,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 struct QueryInfo {
     is_select: bool,
     num_attributes: Option<usize>,
+    /// Whether the `SELECT` carries an `AS OF` clause. Such queries are
+    /// excluded from the `--auto-index-selects` consistency check: re-running
+    /// them against a freshly created indexed view is inherently racy, because
+    /// the view's `since` advances with time and can move past a historical
+    /// `AS OF`, yielding a spurious "could not find a valid timestamp" failure.
+    has_as_of: bool,
 }
 
 enum PrepareQueryOutcome<'a> {
@@ -417,6 +459,7 @@ pub struct Runner<'a> {
 pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
+    password_server_addr: SocketAddr,
     internal_http_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
@@ -426,7 +469,7 @@ pub struct RunnerInner<'a> {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: usize,
+    verbose: bool,
     stdout: &'a dyn WriteFmt,
     _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
@@ -656,7 +699,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
         (Type::Integer, Value::Numeric(d)) => {
-            let mut d = d.0 .0.clone();
+            let mut d = d.0.0.clone();
             let mut cx = numeric::cx_datum();
             // Truncate the decimal to match sqlite.
             if mode == Mode::Standard {
@@ -680,14 +723,14 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         },
         (Type::Real, Value::Numeric(d)) => match mode {
             Mode::Standard => {
-                let mut d = d.0 .0.clone();
+                let mut d = d.0.0.clone();
                 if d.exponent() < -3 {
                     numeric::rescale(&mut d, 3).unwrap();
                 }
                 numeric::munge_numeric(&mut d).unwrap();
                 d.to_standard_notation_string()
             }
-            Mode::Cockroach => d.0 .0.to_standard_notation_string(),
+            Mode::Cockroach => d.0.0.to_standard_notation_string(),
         },
 
         (Type::Text, Value::Text(s)) => {
@@ -709,7 +752,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
-        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
+        (Type::Text, Value::Numeric(d)) => d.0.0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
@@ -821,8 +864,8 @@ impl<'a> Runner<'a> {
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
-        // Ensure quickstart cluster exists with one replica of size '1'. We don't
-        // destroy the existing quickstart cluster replica if it exists, as turning
+        // Ensure quickstart cluster exists with one replica of size `self.config.replica_size`.
+        // We don't destroy the existing quickstart cluster replica if it exists, as turning
         // on a cluster replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
@@ -846,34 +889,61 @@ impl<'a> Runner<'a> {
                 .batch_execute("CREATE CLUSTER quickstart REPLICAS ()")
                 .await?;
         }
-        let mut needs_default_replica = true;
-        for row in inner
+        let mut needs_default_replica = false;
+        let rows = inner
             .system_client
             .query(
                 "SELECT name, size FROM mz_cluster_replicas
-                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
+                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')
+                 ORDER BY name",
                 &[],
             )
-            .await?
-        {
-            let name: &str = row.get("name");
-            let size: &str = row.get("size");
-            if name == "r1" && size == self.config.replicas.to_string() {
-                needs_default_replica = false;
-            } else {
+            .await?;
+        if rows.len() != self.config.replicas {
+            needs_default_replica = true;
+        } else {
+            for (i, row) in rows.iter().enumerate() {
+                let name: &str = row.get("name");
+                let size: &str = row.get("size");
+                if name != format!("r{}", i + 1) || size != self.config.replica_size {
+                    needs_default_replica = true;
+                    break;
+                }
+            }
+        }
+
+        if needs_default_replica {
+            inner
+                .system_client
+                .batch_execute("ALTER CLUSTER quickstart SET (MANAGED = false)")
+                .await?;
+            for row in inner
+                .system_client
+                .query(
+                    "SELECT name FROM mz_cluster_replicas
+                     WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
+                    &[],
+                )
+                .await?
+            {
+                let name: &str = row.get("name");
                 inner
                     .system_client
                     .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
                     .await?;
             }
-        }
-        if needs_default_replica {
+            for i in 1..=self.config.replicas {
+                inner
+                    .system_client
+                    .batch_execute(&format!(
+                        "CREATE CLUSTER REPLICA quickstart.r{i} SIZE '{}'",
+                        self.config.replica_size
+                    ))
+                    .await?;
+            }
             inner
                 .system_client
-                .batch_execute(&format!(
-                    "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
-                    self.config.replicas
-                ))
+                .batch_execute("ALTER CLUSTER quickstart SET (MANAGED = true)")
                 .await?;
         }
 
@@ -899,7 +969,7 @@ impl<'a> Runner<'a> {
             .batch_execute("GRANT CREATE ON CLUSTER quickstart TO materialize")
             .await?;
 
-        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // Some sqllogictests require more than the default amount of tables, so we increase the
         // limit for all tests.
         inner
             .system_client
@@ -909,14 +979,16 @@ impl<'a> Runner<'a> {
         if inner.enable_table_keys {
             inner
                 .system_client
-                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .simple_query("ALTER SYSTEM SET unsafe_enable_table_keys = true")
                 .await?;
         }
 
         inner.ensure_fixed_features().await?;
 
-        inner.client = connect(inner.server_addr, None).await;
-        inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
+        inner.client = connect(inner.server_addr, None, None).await.unwrap();
+        inner.system_client = connect(inner.internal_server_addr, Some("mz_system"), None)
+            .await
+            .unwrap();
         inner.clients = BTreeMap::new();
 
         Ok(())
@@ -930,6 +1002,7 @@ impl<'a> RunnerInner<'a> {
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, timestamp_oracle_url): (SensitiveUrl, SensitiveUrl) = {
             let postgres_url = &config.postgres_url;
+            let prefix = &config.prefix;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
                 .max_tries(5)
@@ -949,17 +1022,17 @@ impl<'a> RunnerInner<'a> {
                 }
             });
             client
-                .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
-                     CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_tsoracle;",
-                )
+                .batch_execute(&format!(
+                    "DROP SCHEMA IF EXISTS {prefix}_tsoracle CASCADE;
+                     CREATE SCHEMA IF NOT EXISTS {prefix}_consensus;
+                     CREATE SCHEMA {prefix}_tsoracle;"
+                ))
                 .await?;
             (
-                format!("{postgres_url}?options=--search_path=sqllogictest_consensus")
+                format!("{postgres_url}?options=--search_path={prefix}_consensus")
                     .parse()
                     .expect("invalid consensus URI"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle")
+                format!("{postgres_url}?options=--search_path={prefix}_tsoracle")
                     .parse()
                     .expect("invalid timestamp oracle URI"),
             )
@@ -1025,8 +1098,71 @@ impl<'a> RunnerInner<'a> {
             orchestrator,
             config.tracing.clone(),
         ));
-        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
-        let host_name = format!("localhost:{}", listeners.http_local_addr().port());
+        let listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls: false,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::Internal,
+                    enable_tls: false,
+                },
+                "password".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap![
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls: false
+                    },
+                    routes: HttpRoutesEnabled {
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false
+                    },
+                    routes: HttpRoutesEnabled {
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: false,
+                    },
+                },
+            ],
+        };
+        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let host_name = format!(
+            "localhost:{}",
+            listeners.http["external"].handle.local_addr.port()
+        );
         let catalog_config = CatalogConfig {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
@@ -1061,24 +1197,45 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
+                replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
+            cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
             metrics_registry,
             now,
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
-            bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_analytics_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_default_cluster_replica_size: config.replica_size.clone(),
+            bootstrap_default_cluster_replication_factor: config
+                .replicas
+                .try_into()
+                .expect("replicas must fit"),
+            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replica_size.clone(),
+            },
+            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replica_size.clone(),
+            },
+            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replica_size.clone(),
+            },
+            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replica_size.clone(),
+            },
+            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replica_size.clone(),
+            },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1094,11 +1251,14 @@ impl<'a> RunnerInner<'a> {
             storage_usage_retention_period: None,
             segment_api_key: None,
             segment_client_side: false,
+            // SLT doesn't like eternally running tasks since it waits for them to finish inbetween SLT files
+            test_only_dummy_segment_client: false,
             egress_addresses: vec![],
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
+            config_sync_file_path: None,
             config_sync_timeout: Duration::from_secs(30),
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
@@ -1106,6 +1266,9 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
+            license_key: ValidatedLicenseKey::for_tests(),
+            external_login_password_mz_system: None,
+            force_builtin_schema_migration: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1115,6 +1278,7 @@ impl<'a> RunnerInner<'a> {
         let (server_addr_tx, server_addr_rx): (oneshot::Sender<Result<_, anyhow::Error>>, _) =
             oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
+        let (password_server_addr_tx, password_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
         let server_thread = thread::spawn(|| {
@@ -1137,26 +1301,33 @@ impl<'a> RunnerInner<'a> {
                 }
             };
             server_addr_tx
-                .send(Ok(server.sql_local_addr()))
+                .send(Ok(server.sql_listener_handles["external"].local_addr))
                 .expect("receiver should not drop first");
             internal_server_addr_tx
-                .send(server.internal_sql_local_addr())
+                .send(server.sql_listener_handles["internal"].local_addr)
+                .expect("receiver should not drop first");
+            password_server_addr_tx
+                .send(server.sql_listener_handles["password"].local_addr)
                 .expect("receiver should not drop first");
             internal_http_server_addr_tx
-                .send(server.internal_http_local_addr())
+                .send(server.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_trigger_rx);
+            runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+        let password_server_addr = password_server_addr_rx.await?;
         let internal_http_server_addr = internal_http_server_addr_rx.await?;
 
-        let system_client = connect(internal_server_addr, Some("mz_system")).await;
-        let client = connect(server_addr, None).await;
+        let system_client = connect(internal_server_addr, Some("mz_system"), None)
+            .await
+            .unwrap();
+        let client = connect(server_addr, None, None).await.unwrap();
 
         let inner = RunnerInner {
             server_addr,
             internal_server_addr,
+            password_server_addr,
             internal_http_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
@@ -1168,7 +1339,7 @@ impl<'a> RunnerInner<'a> {
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
-            verbosity: config.verbosity,
+            verbose: config.verbose,
             stdout: config.stdout,
         };
         inner.ensure_fixed_features().await?;
@@ -1188,7 +1359,7 @@ impl<'a> RunnerInner<'a> {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
-            .execute("ALTER SYSTEM SET enable_unsafe_functions = on", &[])
+            .execute("ALTER SYSTEM SET unsafe_enable_unsafe_functions = on", &[])
             .await?;
         Ok(())
     }
@@ -1248,13 +1419,23 @@ impl<'a> RunnerInner<'a> {
             Record::Simple {
                 conn,
                 user,
+                password,
                 sql,
+                sort,
                 output,
                 location,
                 ..
             } => {
-                self.run_simple(*conn, *user, sql, output, location.clone())
-                    .await
+                self.run_simple(
+                    *conn,
+                    *user,
+                    *password,
+                    sql,
+                    sort.clone(),
+                    output,
+                    location.clone(),
+                )
+                .await
             }
             Record::Copy {
                 table_name,
@@ -1313,12 +1494,18 @@ impl<'a> RunnerInner<'a> {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
+                    if Regex::new(expected_error)?.is_match(&error.to_string_with_causes()) {
                         return Ok(Outcome::Success);
                     }
+                    return Ok(Outcome::PlanFailure {
+                        error: anyhow!(error),
+                        expected_error: Some(expected_error.to_string()),
+                        location,
+                    });
                 }
                 Ok(Outcome::PlanFailure {
                     error: anyhow!(error),
+                    expected_error: None,
                     location,
                 })
             }
@@ -1343,7 +1530,7 @@ impl<'a> RunnerInner<'a> {
                     }));
                 }
                 Err(expected_error) => {
-                    if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
+                    if Regex::new(expected_error)?.is_match(&e.to_string_with_causes()) {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
@@ -1359,9 +1546,13 @@ impl<'a> RunnerInner<'a> {
             [statement] => &statement.ast,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        let (is_select, num_attributes) = match statement {
-            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
-            _ => (false, None),
+        let (is_select, num_attributes, has_as_of) = match statement {
+            Statement::Select(stmt) => (
+                true,
+                derive_num_attributes(&stmt.query.body),
+                stmt.as_of.is_some(),
+            ),
+            _ => (false, None, false),
         };
 
         match output {
@@ -1395,6 +1586,7 @@ impl<'a> RunnerInner<'a> {
         Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
             is_select,
             num_attributes,
+            has_as_of,
         }))
     }
 
@@ -1407,9 +1599,9 @@ impl<'a> RunnerInner<'a> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
+                let error_string = error.to_string_with_causes();
                 return match output {
                     Ok(_) => {
-                        let error_string = format!("{}", error);
                         if error_string.contains("supported") || error_string.contains("overload") {
                             // this is a failure, but it's caused by lack of support rather than by bugs
                             Ok(Outcome::Unsupported {
@@ -1419,16 +1611,18 @@ impl<'a> RunnerInner<'a> {
                         } else {
                             Ok(Outcome::PlanFailure {
                                 error: anyhow!(error),
+                                expected_error: None,
                                 location,
                             })
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
+                        if Regex::new(expected_error)?.is_match(&error_string) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
                                 error: anyhow!(error),
+                                expected_error: Some(expected_error.to_string()),
                                 location,
                             })
                         }
@@ -1543,23 +1737,25 @@ impl<'a> RunnerInner<'a> {
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
-        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        print_sql_if(self.stdout, sql, self.verbose);
         let sql_result = self.client.execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
         let tentative_outcome = if let Err(view_error) = sql_result {
             if let Err(expected_error) = output {
-                if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error)) {
+                if Regex::new(expected_error)?.is_match(&view_error.to_string_with_causes()) {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
                         error: view_error.into(),
+                        expected_error: Some(expected_error.to_string()),
                         location: location.clone(),
                     })
                 }
             } else {
                 Some(Outcome::PlanFailure {
                     error: view_error.into(),
+                    expected_error: None,
                     location: location.clone(),
                 })
             }
@@ -1606,14 +1802,14 @@ impl<'a> RunnerInner<'a> {
         if let Some(outcome) = tentative_outcome {
             view_outcome = outcome;
         } else {
-            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbose);
             view_outcome = self
                 .execute_query(view_sql.as_str(), output, location.clone())
                 .await?;
         }
 
         // Remember to clean up after ourselves by dropping the view.
-        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
         self.client.execute(drop_view.as_str(), &[]).await?;
 
         Ok(view_outcome)
@@ -1633,20 +1829,20 @@ impl<'a> RunnerInner<'a> {
             PrepareQueryOutcome::QueryPrepared(QueryInfo {
                 is_select,
                 num_attributes,
+                has_as_of,
             }) => {
                 let query_outcome = self.execute_query(sql, output, location.clone()).await?;
-                if is_select && self.auto_index_selects {
+                // `AS OF` queries are excluded from the indexed-view consistency
+                // check: re-running them against a freshly created indexed view
+                // is racy, since the view's `since` can advance past a historical
+                // `AS OF` and spuriously fail with "could not find a valid
+                // timestamp" even though the one-shot query succeeded.
+                if is_select && !has_as_of && self.auto_index_selects && query_outcome.success() {
                     let view_outcome = self
                         .execute_view(sql, None, output, location.clone())
                         .await?;
 
-                    // We compare here the query-based and view-based outcomes.
-                    // We only produce a test failure if the outcomes are of different
-                    // variant types, thus accepting smaller deviations in the details
-                    // produced for each variant.
-                    if std::mem::discriminant::<Outcome>(&query_outcome)
-                        != std::mem::discriminant::<Outcome>(&view_outcome)
-                    {
+                    if !view_outcome.success() {
                         // Before producing a failure outcome, we try to obtain a new
                         // outcome for view-based execution exploiting analysis of the
                         // number of attributes. This two-level strategy can avoid errors
@@ -1658,9 +1854,7 @@ impl<'a> RunnerInner<'a> {
                             view_outcome
                         };
 
-                        if std::mem::discriminant::<Outcome>(&query_outcome)
-                            != std::mem::discriminant::<Outcome>(&view_outcome)
-                        {
+                        if !view_outcome.success() {
                             let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
                                 query_outcome: Box::new(query_outcome),
                                 view_outcome: Box::new(view_outcome),
@@ -1690,20 +1884,24 @@ impl<'a> RunnerInner<'a> {
         &mut self,
         name: Option<&str>,
         user: Option<&str>,
-    ) -> &tokio_postgres::Client {
+        password: Option<&str>,
+    ) -> Result<&tokio_postgres::Client, tokio_postgres::Error> {
         match name {
-            None => &self.client,
+            None => Ok(&self.client),
             Some(name) => {
                 if !self.clients.contains_key(name) {
                     let addr = if matches!(user, Some("mz_system") | Some("mz_support")) {
                         self.internal_server_addr
+                    } else if password.is_some() {
+                        // Use password server for password authentication
+                        self.password_server_addr
                     } else {
                         self.server_addr
                     };
-                    let client = connect(addr, user).await;
+                    let client = connect(addr, user, password).await?;
                     self.clients.insert(name.into(), client);
                 }
-                self.clients.get(name).unwrap()
+                Ok(self.clients.get(name).unwrap())
             }
         }
     }
@@ -1712,34 +1910,61 @@ impl<'a> RunnerInner<'a> {
         &mut self,
         conn: Option<&'r str>,
         user: Option<&'r str>,
+        password: Option<&'r str>,
         sql: &'r str,
+        sort: Sort,
         output: &'r Output,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let client = self.get_conn(conn, user).await;
-        let actual = Output::Values(match client.simple_query(sql).await {
-            Ok(result) => result
-                .into_iter()
-                .filter_map(|m| match m {
-                    SimpleQueryMessage::Row(row) => {
-                        let mut s = vec![];
-                        for i in 0..row.len() {
-                            s.push(row.get(i).unwrap_or("NULL"));
+        let actual = match self.get_conn(conn, user, password).await {
+            Ok(client) => match client.simple_query(sql).await {
+                Ok(result) => {
+                    let mut rows = Vec::new();
+
+                    for m in result.into_iter() {
+                        match m {
+                            SimpleQueryMessage::Row(row) => {
+                                let mut s = vec![];
+                                for i in 0..row.len() {
+                                    s.push(row.get(i).unwrap_or("NULL"));
+                                }
+                                rows.push(s.join(","));
+                            }
+                            SimpleQueryMessage::CommandComplete(count) => {
+                                // This applies any sort on the COMPLETE line as
+                                // well, but we do the same for the expected output.
+                                rows.push(format!("COMPLETE {}", count));
+                            }
+                            SimpleQueryMessage::RowDescription(_) => {}
+                            _ => panic!("unexpected"),
                         }
-                        Some(s.join(","))
                     }
-                    SimpleQueryMessage::CommandComplete(count) => {
-                        Some(format!("COMPLETE {}", count))
+
+                    if let Sort::Row = sort {
+                        rows.sort();
                     }
-                    SimpleQueryMessage::RowDescription(_) => None,
-                    _ => panic!("unexpected"),
-                })
-                .collect::<Vec<_>>(),
-            // Errors can contain multiple lines (say if there are details), and rewrite
-            // sticks them each on their own line, so we need to split up the lines here to
-            // each be its own String in the Vec.
-            Err(error) => error.to_string().lines().map(|s| s.to_string()).collect(),
-        });
+
+                    Output::Values(rows)
+                }
+                // Errors can contain multiple lines (say if there are details), and rewrite
+                // sticks them each on their own line, so we need to split up the lines here to
+                // each be its own String in the Vec.
+                Err(error) => Output::Values(
+                    error
+                        .to_string_with_causes()
+                        .lines()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
+            },
+            Err(error) => Output::Values(
+                error
+                    .to_string_with_causes()
+                    .lines()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+        };
         if *output != actual {
             Ok(Outcome::OutputFailure {
                 expected_output: output,
@@ -1769,25 +1994,26 @@ impl<'a> RunnerInner<'a> {
     }
 }
 
-async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(
-        &format!(
-            "host={} port={} user={}",
-            addr.ip(),
-            addr.port(),
-            user.unwrap_or("materialize")
-        ),
-        NoTls,
-    )
-    .await
-    .unwrap();
+async fn connect(
+    addr: SocketAddr,
+    user: Option<&str>,
+    password: Option<&str>,
+) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
+    let mut config = tokio_postgres::Config::new();
+    config.host(addr.ip().to_string());
+    config.port(addr.port());
+    config.user(user.unwrap_or("materialize"));
+    if let Some(password) = password {
+        config.password(password);
+    }
+    let (client, connection) = config.connect(NoTls).await?;
 
     task::spawn(|| "sqllogictest_connect", async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }
     });
-    client
+    Ok(client)
 }
 
 pub trait WriteFmt {
@@ -1797,8 +2023,10 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: usize,
+    pub verbose: bool,
+    pub quiet: bool,
     pub postgres_url: String,
+    pub prefix: String,
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
@@ -1811,27 +2039,64 @@ pub struct RunConfig<'a> {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Persist state is handled specially because:
     /// - Persist background workers do not necessarily shut down immediately once the server is
-    ///   shut down, and may panic if their storage is delete out from under them.
+    ///   shut down, and may panic if their storage is deleted out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
     pub replicas: usize,
+    pub replica_size: String,
 }
+
+/// Indentation used for verbose output of SQL statements.
+const PRINT_INDENT: usize = 4;
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
-        _ => (),
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
+            print_sql(config.stdout, sql, None)
+        }
+        Record::Simple { conn, sql, .. } => print_sql(config.stdout, sql, *conn),
+        Record::Copy {
+            table_name,
+            tsv_path,
+        } => {
+            writeln!(
+                config.stdout,
+                "{}slt copy {} from {}",
+                " ".repeat(PRINT_INDENT),
+                table_name,
+                tsv_path
+            )
+        }
+        Record::ResetServer => {
+            writeln!(config.stdout, "{}reset-server", " ".repeat(PRINT_INDENT))
+        }
+        Record::Halt => {
+            writeln!(config.stdout, "{}halt", " ".repeat(PRINT_INDENT))
+        }
+        Record::HashThreshold { threshold } => {
+            writeln!(
+                config.stdout,
+                "{}hash-threshold {}",
+                " ".repeat(PRINT_INDENT),
+                threshold
+            )
+        }
     }
 }
 
 fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
     if cond {
-        print_sql(stdout, sql)
+        print_sql(stdout, sql, None)
     }
 }
 
-fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
-    writeln!(stdout, "{}", crate::util::indent(sql, 4))
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str, conn: Option<&str>) {
+    let text = if let Some(conn) = conn {
+        format!("[conn={}] {}", conn, sql)
+    } else {
+        sql.to_string()
+    };
+    writeln!(stdout, "{}", util::indent(&text, PRINT_INDENT))
 }
 
 /// Regular expressions for matching error messages that should force a plan failure
@@ -1843,7 +2108,7 @@ const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
     "SHOW commands are not allowed in views",
     "cannot create view with unstable dependencies",
     "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
-    "no schema has been selected to create in",
+    "no valid schema selected",
     r#"system schema '\w+' cannot be modified"#,
     r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
     // NOTE(vmarcos): Column ambiguity that could not be eliminated by our
@@ -1860,16 +2125,12 @@ const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
 /// provides enough information as to whether a warning should be emitted or not.
 fn should_warn(outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::InconsistentViewOutcome {
-            query_outcome,
-            view_outcome,
-            ..
-        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
-            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+        Outcome::InconsistentViewOutcome { view_outcome, .. } => match view_outcome.as_ref() {
+            Outcome::PlanFailure { error, .. } => {
                 INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
                     Regex::new(s)
                         .expect("unexpected error in regular expression parsing")
-                        .is_match(&format!("{:#}", error))
+                        .is_match(&error.to_string_with_causes())
                 })
             }
             _ => false,
@@ -1893,10 +2154,10 @@ pub async fn run_string(
     writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
-        // In maximal-verbosity mode, print the query before attempting to run
+        // In maximal-verbose mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if runner.config.verbosity >= 2 {
+        if runner.config.verbose {
             print_record(runner.config, &record);
         }
 
@@ -1907,9 +2168,9 @@ pub async fn run_string(
             .unwrap();
 
         // Print warnings and failures in verbose mode.
-        if runner.config.verbosity >= 1 && !outcome.success() {
-            if runner.config.verbosity < 2 {
-                // If `verbosity >= 2`, we'll already have printed the record,
+        if !runner.config.quiet && !outcome.success() {
+            if !runner.config.verbose {
+                // If `verbose` is enabled, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
@@ -1924,7 +2185,7 @@ pub async fn run_string(
                 }
                 print_record(runner.config, &record);
             }
-            if runner.config.verbosity >= 2 || outcome.failure() {
+            if runner.config.verbose || outcome.failure() {
                 writeln!(
                     runner.config.stdout,
                     "{}",
@@ -1981,6 +2242,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
         types: &Vec<Type>,
         column_names: Option<&Vec<ColumnName>>,
         actual_output: &Vec<String>,
+        multiline: bool,
     ) {
         buf.append_header(input, expected_output, column_names);
 
@@ -1993,20 +2255,46 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                         buf.append("\n");
                     }
 
-                    if row.len() <= 1 {
-                        buf.append(&row.iter().join("  "));
+                    if row.len() == 0 {
+                        // nothing to do
+                    } else if row.len() == 1 {
+                        // If there is only one column, then there is no need for space
+                        // substitution, so we only do newline substitution.
+                        if multiline {
+                            buf.append(&row[0]);
+                        } else {
+                            buf.append(&row[0].replace('\n', "⏎"))
+                        }
                     } else {
-                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+                        // Substitute spaces with ␠ to avoid mistaking the spaces in the result
+                        // values with spaces that separate columns.
+                        buf.append(
+                            &row.iter()
+                                .map(|col| {
+                                    let mut col = col.replace(' ', "␠");
+                                    if !multiline {
+                                        col = col.replace('\n', "⏎");
+                                    }
+                                    col
+                                })
+                                .join("  "),
+                        );
                     }
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.
+                // No need to substitute spaces, because every value (not row) is on a separate
+                // line. But we do need to substitute newlines.
                 Mode::Standard => {
                     for (j, col) in row.iter().enumerate() {
                         if i != 0 || j != 0 {
                             buf.append("\n");
                         }
-                        buf.append(col);
+                        buf.append(&if multiline {
+                            col.clone()
+                        } else {
+                            col.replace('\n', "⏎")
+                        });
                     }
                 }
             }
@@ -2028,6 +2316,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output_str: expected_output,
                             types,
                             column_names,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2045,6 +2334,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     column_names.as_ref(),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2055,6 +2345,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output: Output::Values(_),
                             output_str: expected_output,
                             types,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2073,6 +2364,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     Some(actual_column_names),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2211,7 +2503,7 @@ impl<'a> RewriteBuffer<'a> {
         self.append(
             &names
                 .iter()
-                .map(|name| name.as_str().replace('␠', " "))
+                .map(|name| name.replace(' ', "␠"))
                 .collect::<Vec<_>>()
                 .join(" "),
         );
@@ -2301,12 +2593,14 @@ fn generate_view_sql(
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
     let name = UnresolvedItemName(vec![Ident::new_unchecked(format!("v{}", view_uuid))]);
-    let projection = expected_column_names.map_or(
-        num_attributes.map_or(vec![], |n| {
-            (1..=n)
-                .map(|i| Ident::new_unchecked(format!("a{i}")))
-                .collect()
-        }),
+    let projection = expected_column_names.map_or_else(
+        || {
+            num_attributes.map_or(vec![], |n| {
+                (1..=n)
+                    .map(|i| Ident::new_unchecked(format!("a{i}")))
+                    .collect()
+            })
+        },
         |cols| {
             cols.iter()
                 .map(|c| Ident::new_unchecked(c.as_str()))
@@ -2405,6 +2699,7 @@ fn generate_view_sql(
                 selection: None,
                 group_by: vec![],
                 having: None,
+                qualify: None,
                 options: vec![],
             })),
             order_by: view_order_by,

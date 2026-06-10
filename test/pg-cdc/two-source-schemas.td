@@ -38,15 +38,19 @@ CREATE TABLE schema2.t1 (f1 INTEGER);
 ALTER TABLE schema2.t1 REPLICA IDENTITY FULL;
 INSERT INTO schema2.t1 VALUES (2);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
+> BEGIN
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
+> COMMIT
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 ! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema2.t1);
 contains:catalog item 't1' already exists
@@ -64,9 +68,11 @@ contains:reference t1 is ambiguous, consider specifying an additional layer of q
 
 > DROP SOURCE mz_source CASCADE;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE t1_1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 > CREATE TABLE t1_2 FROM SOURCE mz_source (REFERENCE schema2.t1);
+> COMMIT
 
 > SELECT * FROM t1_1;
 1

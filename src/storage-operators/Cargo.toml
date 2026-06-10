@@ -10,37 +10,55 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-arrow = { version = "51.0.0", default-features = false }
-async-stream = "0.3.3"
-aws-types = "1.1.1"
-bytesize = "1.1.0"
-differential-dataflow = "0.13.1"
-futures = "0.3.25"
-http = "1.1.0"
+anyhow.workspace = true
+arrow.workspace = true
+arrow-ipc.workspace = true
+async-compression.workspace = true
+async-stream.workspace = true
+aws-types.workspace = true
+aws-smithy-types.workspace = true
+aws-sdk-s3.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+columnar.workspace = true
+columnation.workspace = true
+csv-async.workspace = true
+derivative.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+glob.workspace = true
+http.workspace = true
+itertools.workspace = true
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing", "differential-dataflow", "columnation"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
+mz-pgrepr = { path = "../pgrepr" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "51.0.0", default-features = false, features = ["arrow", "snap"] }
-prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-sentry = { version = "0.29.1" }
-serde = { version = "1.0.152", features = ["derive"] }
-timely = "0.14.1"
-thiserror = "1.0.37"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util", "time"] }
-tracing = "0.1.37"
-uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+parquet.workspace = true
+prometheus.workspace = true
+proptest.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+sentry.workspace = true
+serde.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+timely.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
+tracing.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+[features]
+default = []

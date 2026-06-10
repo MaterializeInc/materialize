@@ -28,7 +28,7 @@ banana
     SASL PASSWORD SECRET password,
     SECURITY PROTOCOL SASL_PLAINTEXT
   )
-contains:Disconnected during handshake; broker might require SSL encryption
+contains:Disconnected: connection closed by peer: receive 0 after POLLIN
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9096',
@@ -113,11 +113,13 @@ contains:Invalid CA certificate
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_plain FROM KAFKA CONNECTION kafka_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_plain_tbl FROM SOURCE text_data_plain (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_plain_tbl
 banana
@@ -130,11 +132,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_scram_sha_256 FROM KAFKA CONNECTION kafka_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_scram_sha_256_tbl FROM SOURCE text_data_scram_sha_256 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_scram_sha_256_tbl
 banana
@@ -147,11 +151,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_scram_sha_512 FROM KAFKA CONNECTION kafka_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_scram_sha_512_tbl FROM SOURCE text_data_scram_sha_512 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_scram_sha_256_tbl
 banana
@@ -166,11 +172,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_ssh_plain FROM KAFKA CONNECTION kafka_ssh_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_ssh_plain_tbl FROM SOURCE text_data_ssh_plain (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_ssh_plain_tbl
 banana
@@ -183,11 +191,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_ssh_scram_sha_256 FROM KAFKA CONNECTION kafka_ssh_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_ssh_scram_sha_256_tbl FROM SOURCE text_data_ssh_scram_sha_256 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_ssh_scram_sha_256_tbl
 banana
@@ -200,11 +210,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_ssh_scram_sha_512 FROM KAFKA CONNECTION kafka_ssh_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_ssh_scram_sha_512_tbl FROM SOURCE text_data_ssh_scram_sha_512 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_ssh_scram_sha_512_tbl
 banana

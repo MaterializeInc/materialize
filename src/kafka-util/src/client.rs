@@ -12,7 +12,7 @@
 use anyhow::bail;
 use aws_config::SdkConfig;
 use fancy_regex::Regex;
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{BTreeMap, btree_map};
 use std::error::Error;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -22,8 +22,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::watch;
 
-use anyhow::{anyhow, Context};
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use anyhow::{Context, anyhow};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -39,7 +39,7 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{debug, error, info, trace, warn, Level};
+use tracing::{Level, debug, info, trace, warn};
 
 use crate::aws;
 
@@ -206,6 +206,7 @@ impl FromStr for MzKafkaError {
             Ok(Self::UnsupportedBrokerVersion)
         } else if s.contains("Disconnected while requesting ApiVersion")
             || s.contains("Broker transport failure")
+            || s.contains("Connection refused")
         {
             Ok(Self::BrokerTransportFailure)
         } else if Regex::new(r"(\d+)/\1 brokers are down")
@@ -287,6 +288,13 @@ pub struct BrokerAddr {
     pub port: u16,
 }
 
+impl BrokerAddr {
+    /// Attempt to resolve this broker address into a list of socket addresses.
+    pub fn to_socket_addrs(&self) -> Result<Vec<SocketAddr>, io::Error> {
+        Ok((self.host.as_str(), self.port).to_socket_addrs()?.collect())
+    }
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -298,6 +306,16 @@ pub struct BrokerRewrite {
     ///
     /// If unspecified, the broker's original port is left unchanged.
     pub port: Option<u16>,
+}
+
+impl BrokerRewrite {
+    /// Apply the rewrite to this broker address.
+    pub fn rewrite(&self, address: &BrokerAddr) -> BrokerAddr {
+        BrokerAddr {
+            host: self.host.clone(),
+            port: self.port.unwrap_or(address.port),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -312,6 +330,78 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
 }
 
+#[derive(Clone)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl std::fmt::Display for ConnectionRulePattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.prefix_wildcard {
+            f.write_str("*")?;
+        }
+        f.write_str(&self.literal_match)?;
+        if self.suffix_wildcard {
+            f.write_str("*")?;
+        }
+        Ok(())
+    }
+}
+
+impl ConnectionRulePattern {
+    /// Does this "{host}:{port}" address fit the pattern?
+    pub fn matches(&self, address: &str) -> bool {
+        if self.prefix_wildcard {
+            if self.suffix_wildcard {
+                address.contains(&self.literal_match)
+            } else {
+                address.ends_with(&self.literal_match)
+            }
+        } else if self.suffix_wildcard {
+            address.starts_with(&self.literal_match)
+        } else {
+            address == self.literal_match
+        }
+    }
+}
+
+#[derive(Clone)]
+/// Given a host address, map it to a different host.
+pub struct HostMappingRules {
+    /// Map matching hosts to a different host. First applicable rule wins.
+    pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
+}
+
+impl HostMappingRules {
+    /// Rewrite this broker address according to the rules. Returns `None` when
+    /// no rule matches.
+    pub fn rewrite(&self, src: &BrokerAddr) -> Option<BrokerAddr> {
+        let address = format!("{}:{}", src.host, src.port);
+        for (pattern, dst) in &self.rules {
+            if pattern.matches(&address) {
+                let result = dst.rewrite(src);
+                info!(
+                    "HostMappingRules: broker {}:{} matched pattern '{}' -> rewriting to {}:{}",
+                    src.host, src.port, pattern, result.host, result.port,
+                );
+                return Some(result);
+            }
+        }
+
+        warn!(
+            "HostMappingRules: broker {}:{} matched no rules, using original address",
+            src.host, src.port,
+        );
+        None
+    }
+}
+
 /// Tunneling clients
 /// used for re-writing ports / hosts
 #[derive(Clone)]
@@ -320,6 +410,8 @@ pub enum TunnelConfig {
     Ssh(SshTunnelConfig),
     /// Re-writes internal hosts using the value, used for privatelink
     StaticHost(String),
+    /// Re-writes internal hosts according to an ordered list of rules, also used for privatelink
+    Rules(HostMappingRules),
     /// Performs no re-writes
     None,
 }
@@ -488,7 +580,12 @@ where
         }
     }
 
+    /// Look up the broker's address in our book of rewrites.
+    /// If we've already rewritten it before, reuse the existing rewrite.
+    /// Otherwise, use our "default tunnel" rewriting strategy to attempt to rewrite this broker's address
+    /// and record it in the book of rewrites.
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
+        info!("kafka: resolve_broker_addr called for {}:{}", host, port);
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
                 BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
@@ -524,8 +621,12 @@ where
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
+            // No (successful) broker address rewrite exists yet.
             None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
+                // "Default tunnel" is actually the configured rewriting strategy used for brokers we haven't already rewritten.
                 match &self.default_tunnel {
+                    // This "default tunnel" is actually a default tunnel.
+                    // Try connecting so we have a valid rewrite for thsi broker address.
                     TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
@@ -542,6 +643,7 @@ where
                                 .await
                         });
                         match ssh_tunnel {
+                            // Use the tunnel we just created, but only if nobody beat us in the race.
                             Ok(ssh_tunnel) => {
                                 let mut rewrites = self.rewrites.lock().expect("poisoned");
                                 let rewrite = match rewrites.entry(addr.clone()) {
@@ -564,6 +666,7 @@ where
 
                                 return_rewrite(rewrite)
                             }
+                            // We couldn't connect. Someone else will have to try again.
                             Err(e) => {
                                 warn!(
                                     "failed to create ssh tunnel for {:?}: {}",
@@ -586,15 +689,45 @@ where
                             }
                         }
                     }
+                    // Our rewrite strategy is to use a specific host, e.g. a PrivateLink endpoint.
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
+                    // Rewrite according to the routing rules.
+                    TunnelConfig::Rules(rules) => {
+                        // If no rules match, just use the address as-is.
+                        let resolved = rules.rewrite(&addr).unwrap_or_else(|| addr.clone());
+                        match resolved.to_socket_addrs() {
+                            Ok(addrs) => {
+                                info!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} resolved to {:?}",
+                                    host, port, resolved.host, resolved.port, addrs,
+                                );
+                                Ok(addrs)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} DNS resolution FAILED: {e}",
+                                    host, port, resolved.host, resolved.port,
+                                );
+                                Err(e)
+                            }
+                        }
+                    }
+                    // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())
                     }
                 }
             }
-            Some(rewrite) => return_rewrite(&rewrite),
+            // This broker's address was already rewritten. Reuse the existing rewrite.
+            Some(rewrite) => {
+                info!(
+                    "kafka: resolve_broker_addr {}:{} using cached rewrite",
+                    host, port
+                );
+                return_rewrite(&rewrite)
+            }
         }
     }
 
@@ -743,8 +876,6 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 /// The timeout for reading records from the progress topic. Set to something slightly longer than
 /// the idle transaction timeout (60s) to wait out any stuck producers.
 pub const DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
-/// The interval we will fetch metadata from, unless overridden by the source.
-pub const DEFAULT_METADATA_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -762,8 +893,6 @@ pub struct TimeoutConfig {
     pub fetch_metadata_timeout: Duration,
     /// The timeout for reading records from the progress topic.
     pub progress_record_fetch_timeout: Duration,
-    /// The interval we will fetch metadata from, unless overridden by the source.
-    pub default_metadata_fetch_interval: Duration,
 }
 
 impl Default for TimeoutConfig {
@@ -775,7 +904,6 @@ impl Default for TimeoutConfig {
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
             fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
             progress_record_fetch_timeout: DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
-            default_metadata_fetch_interval: DEFAULT_METADATA_FETCH_INTERVAL,
         }
     }
 }
@@ -790,7 +918,6 @@ impl TimeoutConfig {
         socket_connection_setup_timeout: Duration,
         fetch_metadata_timeout: Duration,
         progress_record_fetch_timeout: Option<Duration>,
-        default_metadata_fetch_interval: Duration,
     ) -> TimeoutConfig {
         // Constrain values based on ranges here:
         // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
@@ -800,14 +927,14 @@ impl TimeoutConfig {
 
         let transaction_timeout = if transaction_timeout.as_millis() > i32::MAX.try_into().unwrap()
         {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) greater than max \
                 of {}, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}",
                 i32::MAX
             );
             DEFAULT_TRANSACTION_TIMEOUT
         } else if transaction_timeout.as_millis() < 1000 {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) less than max \
                 of 1000ms, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}"
             );
@@ -821,7 +948,7 @@ impl TimeoutConfig {
         let progress_record_fetch_timeout =
             progress_record_fetch_timeout.unwrap_or(progress_record_fetch_timeout_derived_default);
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
-            error!(
+            warn!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
                 timeout ({transaction_timeout:?}), defaulting to transaction timeout {transaction_timeout:?}",
             );
@@ -840,7 +967,7 @@ impl TimeoutConfig {
             std::cmp::min(max_socket_timeout, DEFAULT_SOCKET_TIMEOUT);
         let socket_timeout = socket_timeout.unwrap_or(socket_timeout_derived_default);
         let socket_timeout = if socket_timeout > max_socket_timeout {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
                 of min(30000, transaction.timeout.ms + 100 ({})), \
                 defaulting to the maximum of {max_socket_timeout:?}",
@@ -848,7 +975,7 @@ impl TimeoutConfig {
             );
             max_socket_timeout
         } else if socket_timeout.as_millis() < 10 {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) less than min \
                 of 10ms, defaulting to the default of {socket_timeout_derived_default:?}"
             );
@@ -859,7 +986,7 @@ impl TimeoutConfig {
 
         let socket_connection_setup_timeout =
             if socket_connection_setup_timeout.as_millis() > i32::MAX.try_into().unwrap() {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     greater than max of {}ms, defaulting to the default \
                     of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}",
@@ -867,7 +994,7 @@ impl TimeoutConfig {
                 );
                 DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
             } else if socket_connection_setup_timeout.as_millis() < 10 {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     less than max of 10ms, defaulting to the default of \
                 {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}"
@@ -884,7 +1011,6 @@ impl TimeoutConfig {
             socket_connection_setup_timeout,
             fetch_metadata_timeout,
             progress_record_fetch_timeout,
-            default_metadata_fetch_interval,
         }
     }
 }
@@ -963,4 +1089,44 @@ pub fn create_new_client_config(
     );
 
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_connection_rule_pattern_matches() {
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: ":9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("any-host:9092"));
+        assert!(!p.matches("broker:9093"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: "broker".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("my-broker-host:1234"));
+        assert!(!p.matches("other:9092"));
+    }
 }

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -32,17 +31,19 @@ USE public;
 
 CREATE TABLE t1 (id SERIAL PRIMARY KEY, f1 BOOLEAN);
 
-CREATE TABLE t2 (id SERIAL PRIMARY KEY, t1_id INT REFERENCES t1(id), name VARCHAR(32));
+CREATE TABLE t2 (id SERIAL PRIMARY KEY, t1_id BIGINT UNSIGNED REFERENCES t1(id), name VARCHAR(32));
 
 INSERT INTO t1(f1) VALUES (true),(false);
 
 INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 > CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
 
+> COMMIT
 
 > CREATE MATERIALIZED VIEW t1_mat AS
   SELECT * FROM t1
@@ -60,10 +61,12 @@ INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
 # verify that dropping things allows recreation
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 > CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> COMMIT
 
 > CREATE MATERIALIZED VIEW joiner AS
   SELECT t2.id, t1.f1, t2.name

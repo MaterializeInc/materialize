@@ -27,7 +27,9 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
-    mz.environmentd.sql(f"CREATE CLUSTER sized1 SIZE '{SIZE}-1', REPLICATION FACTOR 2")
+    mz.environmentd.sql(
+        f"CREATE CLUSTER sized1 SIZE 'scale={SIZE},workers=1', REPLICATION FACTOR 2"
+    )
     cluster_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_clusters WHERE name = 'sized1'"
     )[0][0]
@@ -47,12 +49,10 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     assert check == True
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('4'))
             exact:unknown cluster replica availability zone 4
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -81,23 +81,21 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE CLUSTER sizedbad (SIZE="badsize")
             contains:unknown cluster replica size badsize
-            """
-        ),
+            """),
         no_reset=True,
     )
 
     mz.environmentd.sql(
-        'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="1"',
+        'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="scale=1,workers=1"',
         port="internal",
         user="mz_system",
     )
     try:
         mz.environmentd.sql(
-            'CREATE CLUSTER mzsizetest (SIZE="2")',
+            'CREATE CLUSTER mzsizetest (SIZE="scale=1,workers=2")',
             port="internal",
             user="mz_system",
         )
@@ -115,42 +113,33 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
         )
 
 
-def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
+def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
-        ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
         """,
         port="internal",
         user="mz_system",
     )
 
     def assert_replica_names(names, allow_pending=False):
-        replicas = mz.environmentd.sql_query(
-            """
+        replicas = mz.environmentd.sql_query("""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
-            AND mz_clusters.name = 'gracefulatlertest';
-            """
-        )
+            AND mz_clusters.name = 'zdtaltertest';
+            """)
         assert [replica[0] for replica in replicas] == names
         if not allow_pending:
-            assert (
-                len(
-                    mz.environmentd.sql_query(
-                        """
+            assert len(mz.environmentd.sql_query("""
                         SELECT cr.name
                         FROM mz_internal.mz_pending_cluster_replicas  ur
                         INNER join mz_cluster_replicas cr ON cr.id=ur.id
                         INNER join mz_clusters c ON c.id=cr.cluster_id
-                        WHERE c.name = 'gracefulatlertest';
-                        """
-                    )
-                )
-                == 0
-            ), "There should be no pending replicas"
+                        WHERE c.name = 'zdtaltertest';
+                        """)) == 0, "There should be no pending replicas"
 
-    # Basic Graceful reocnfig test cases matrix
+    # Basic zero-downtime reconfig test cases matrix
     # - size change, no replica change
     # - replica size up, no other change
     # - replica size down, with size change
@@ -161,15 +150,16 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     # - names should match r# patter, not end with `-pending`
     # - cancelled statements correctly roll back
     # - timedout until ready queries take the appropriate action
+    # - Fails to zero-downtime alter cluster with source
     mz.environmentd.sql(
-        'CREATE CLUSTER gracefulatlertest ( SIZE = "1" )',
+        'CREATE CLUSTER zdtaltertest ( SIZE = "scale=1,workers=1" )',
         port="internal",
         user="mz_system",
     )
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -178,7 +168,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -187,7 +177,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -196,7 +186,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -205,7 +195,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -214,66 +204,80 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     # Setup for validating cancelation and
     # replica checks during alter
-    mz.environmentd.sql(
-        """
-        DROP CLUSTER IF EXISTS gracefulatlertest CASCADE;
+    mz.testdrive.run(
+        no_reset=True,
+        input=dedent("""
+        $ kafka-create-topic topic=zdt-reconfig
+
+        $ kafka-ingest topic=zdt-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
+        key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
+
+        $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+        DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
+        CREATE CLUSTER zdtaltertest ( SIZE = 'scale=1,workers=1');
+        GRANT ALL ON CLUSTER zdtaltertest TO materialize;
 
-        CREATE CLUSTER gracefulatlertest ( SIZE = '1');
+        SET CLUSTER = zdtaltertest;
 
-        SET CLUSTER = gracefulatlertest;
+        > CREATE TABLE t (a int);
+        > CREATE DEFAULT INDEX ON t;
+        > INSERT INTO t VALUES (42);
 
-        -- now let's give it another go with user-defined objects
-        CREATE TABLE t (a int);
-        CREATE DEFAULT INDEX ON t;
-        INSERT INTO t VALUES (42);
-        GRANT ALL ON CLUSTER gracefulatlertest TO materialize;
-        """,
-        port="internal",
-        user="mz_system",
+        > CREATE CONNECTION kafka_conn
+          TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+        > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+            URL '${testdrive.schema-registry-url}'
+          )
+
+        > CREATE SOURCE kafka_src
+          IN CLUSTER zdtaltertest
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zdt-reconfig-${testdrive.seed}')
+
+        > CREATE TABLE kafka_tbl
+          FROM SOURCE kafka_src (REFERENCE "testdrive-zdt-reconfig-${testdrive.seed}")
+          KEY FORMAT TEXT
+          VALUE FORMAT TEXT
+          ENVELOPE UPSERT
+        """),
     )
 
     # Valudate replicas are correct during an ongoing alter
-    def gracefully_alter():
+    def zero_downtime_alter():
         mz.environmentd.sql(
             """
-            ALTER CLUSTER gracefulatlertest SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
             """,
             port="internal",
             user="mz_system",
         )
 
-    thread = Thread(target=gracefully_alter)
+    thread = Thread(target=zero_downtime_alter)
     thread.start()
     time.sleep(1)
 
     assert_replica_names(["r1", "r1-pending"], allow_pending=True)
     assert (
-        mz.environmentd.sql_query(
-            """
-        SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
-        """
-        )
-        == (["1"],)
+        mz.environmentd.sql_query("""
+        SELECT size FROM mz_clusters WHERE name='zdtaltertest';
+        """) == (["scale=1,workers=1"],)
     ), "Cluster should use original config during alter"
 
     thread.join()
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
-            """
-        SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
-        """
-        )
-        == (["2"],)
+        mz.environmentd.sql_query("""
+        SELECT size FROM mz_clusters WHERE name='zdtaltertest';
+        """) == (["scale=1,workers=2"],)
     ), "Cluster should use new config after alter completes"
 
     # Validate cancelation of alter cluster..with
     mz.environmentd.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 ( SIZE = '1');
+        CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
         """,
         port="internal",
         user="mz_system",
@@ -306,7 +310,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         target=query_with_conn,
         args=[
             """
-            ALTER CLUSTER cluster1 SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
             """,
             conn,
             True,
@@ -323,27 +327,23 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
-            """
+        mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='cluster1';
-        """
-        )
-        == (["1"],)
+        """) == (["scale=1,workers=1"],)
     ), "Cluster should not have updated if canceled during alter"
 
-    # Test graceful reconfig wait until ready
+    # Test zero-downtime reconfig wait until ready
     mz.environmentd.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        DROP CLUSTER IF EXISTS gracefulaltertest CASCADE;
+        DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         """,
         port="internal",
         user="mz_system",
     )
 
-    mz.environmentd.sql(
-        """
-        CREATE CLUSTER slow_hydration( SIZE = "1" );
+    mz.environmentd.sql("""
+        CREATE CLUSTER slow_hydration( SIZE = "scale=1,workers=1" );
         SET CLUSTER TO slow_hydration;
         SET DATABASE TO materialize;
         CREATE TABLE test_table (id int);
@@ -356,15 +356,30 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         SELECT * FROM  a,b,test_table;
 
         CREATE INDEX test_view_idx ON test_view(id);
-        """
-    )
+        """)
 
     mz.testdrive.run(
-        input=dedent(
-            """
-            ! ALTER CLUSTER slow_hydration set (size='4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
+        input=dedent("""
+            ! ALTER CLUSTER slow_hydration set (size='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
             contains: canceling statement, provided timeout lapsed
-            """
-        ),
+            """),
+        no_reset=True,
+    )
+
+    # Test fails to alter with source
+    mz.environmentd.sql("""
+        CREATE CLUSTER cluster_with_source( SIZE = "scale=1,workers=1" );
+        SET CLUSTER TO cluster_with_source;
+        SET DATABASE TO materialize;
+        CREATE SOURCE counter
+          FROM LOAD GENERATOR COUNTER
+          (TICK INTERVAL '500ms');
+        """)
+
+    mz.testdrive.run(
+        input=dedent("""
+            ! ALTER CLUSTER cluster_with_source set (replication factor 2000) WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
+            contains: creating cluster replica would violate max_replicas_per_cluster limit
+            """),
         no_reset=True,
     )

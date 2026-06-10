@@ -10,11 +10,10 @@
 use std::borrow::Cow;
 
 use itertools::Itertools;
-use uncased::UncasedStr;
 
 use mz_ore::str::StrExt;
 
-use crate::session::vars::Var;
+use crate::session::vars::{FeatureFlag, Var};
 
 /// Errors that can occur when working with [`Var`]s
 ///
@@ -88,23 +87,28 @@ pub enum VarError {
     /// The specified session parameter is read only unless in unsafe mode.
     #[error("parameter {} can only be set in unsafe mode", .0.quoted())]
     RequiresUnsafeMode(&'static str),
-    #[error("{} is not supported", .feature)]
-    RequiresFeatureFlag {
-        feature: String,
-        detail: Option<String>,
-        /// If we're running in unsafe mode and hit this error, we should surface the flag name that
-        /// needs to be set to make the feature work.
-        name_hint: Option<&'static UncasedStr>,
-    },
+    #[error(
+        "{} is not {}",
+        .feature_flag.feature_desc,
+        if .feature_flag.flag.is_unsafe() { "supported" } else { "available" }
+    )]
+    RequiresFeatureFlag { feature_flag: &'static FeatureFlag },
 }
 
 impl VarError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::RequiresFeatureFlag { detail, .. } => {
-                match detail {
-                    None => Some("The requested feature is typically meant only for internal development and testing of Materialize.".into()),
-                    o => o.clone()
+            Self::RequiresFeatureFlag { feature_flag } => {
+                if feature_flag.flag.is_unsafe() {
+                    Some(format!(
+                        "The requested feature ({}) is unsafe and is meant only for internal development and testing of Materialize.",
+                        feature_flag.flag.name(),
+                    ))
+                } else {
+                    Some(format!(
+                        "The requested feature ({}) is in private preview.",
+                        feature_flag.flag.name(),
+                    ))
                 }
             }
             _ => None,
@@ -117,8 +121,11 @@ impl VarError {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
-            VarError::RequiresFeatureFlag { name_hint, .. } => {
-                name_hint.map(|name| format!("Enable with {name} flag"))
+            VarError::RequiresFeatureFlag { feature_flag } if !feature_flag.flag.is_unsafe() => {
+                Some(
+                    "Contact support to discuss enabling the feature in your Materialize region."
+                        .into(),
+                )
             }
             _ => None,
         }

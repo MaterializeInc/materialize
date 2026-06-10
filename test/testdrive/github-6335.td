@@ -16,6 +16,7 @@
 # introspection sources that take a while to update.
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
+$ set-sql-timeout duration=360s
 
 # This test uses introspection queries that need to be targeted to a replica
 > SET cluster_replica = r1
@@ -49,5 +50,6 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
   FROM mz_introspection.mz_compute_exports e
   JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
   WHERE e.export_id LIKE 't%' AND
-        d.name NOT LIKE '%introspection-subscribe%'
+        d.name NOT LIKE '%introspection-subscribe%' AND
+        d.name NOT LIKE '%oneshot-select%'
 0

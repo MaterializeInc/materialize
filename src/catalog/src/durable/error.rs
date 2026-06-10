@@ -15,8 +15,8 @@ use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::StorageError;
 
-use crate::durable::persist::antichain_to_timestamp;
 use crate::durable::Epoch;
+use crate::durable::persist::antichain_to_timestamp;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -54,9 +54,10 @@ pub enum DurableCatalogError {
         min_catalog_version: u64,
         catalog_version: u64,
     },
-    /// The applier version in persist is too old for the current catalog. Reading from persist
-    /// would cause other readers to be fenced out.
-    #[error("incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version forward at a time")]
+    #[error(
+        "incompatible persist version {found_version}, current: {catalog_version}, \
+         make sure to upgrade the catalog one major version forward at a time"
+    )]
     IncompatiblePersistVersion {
         found_version: semver::Version,
         catalog_version: semver::Version,
@@ -78,7 +79,7 @@ pub enum DurableCatalogError {
     UniquenessViolation,
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
-    Storage(StorageError<Timestamp>),
+    Storage(StorageError),
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -94,8 +95,8 @@ impl DurableCatalogError {
     }
 }
 
-impl From<StorageError<Timestamp>> for DurableCatalogError {
-    fn from(e: StorageError<Timestamp>) -> Self {
+impl From<StorageError> for DurableCatalogError {
+    fn from(e: StorageError) -> Self {
         DurableCatalogError::Storage(e)
     }
 }
@@ -114,7 +115,9 @@ pub enum FenceError {
     /// This instance was fenced by another instance with a higher deployment generation. This
     /// necessarily means that the other instance also had a higher epoch. The instance that fenced
     /// us believes that they are from a later generation than us.
-    #[error("current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}")]
+    #[error(
+        "current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}"
+    )]
     DeployGeneration {
         current_generation: u64,
         fence_generation: u64,

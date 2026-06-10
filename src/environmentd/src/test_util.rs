@@ -20,13 +20,24 @@ use std::time::Duration;
 use std::{env, fs, iter};
 
 use anyhow::anyhow;
-use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::Future;
+use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
+use http::Uri;
 use hyper::http::header::HeaderMap;
+use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+
+use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigUpdates;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
@@ -34,14 +45,16 @@ use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
-    TracingHandle,
+    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingHandle,
 };
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::{
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpRoutesEnabled,
+};
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
@@ -54,7 +67,7 @@ use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
 use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509Name, X509NameBuilder, X509};
+use openssl::x509::{X509, X509Name, X509NameBuilder};
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -72,9 +85,11 @@ use tracing_capture::SharedStorage;
 use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
-use url::Url;
 
-use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
+use crate::{
+    CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
+    WebSocketAuth, WebSocketResponse,
+};
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -84,7 +99,9 @@ pub static KAFKA_ADDRS: LazyLock<String> =
 pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
-    frontegg: Option<FronteggAuthentication>,
+    frontegg: Option<FronteggAuthenticator>,
+    external_login_password_mz_system: Option<Password>,
+    listeners_config: ListenersConfig,
     unsafe_mode: bool,
     workers: usize,
     now: NowFn,
@@ -92,11 +109,13 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
-    builtin_system_cluster_replica_size: String,
-    builtin_catalog_server_cluster_replica_size: String,
-    builtin_probe_cluster_replica_size: String,
-    builtin_support_cluster_replica_size: String,
-    builtin_analytics_cluster_replica_size: String,
+    default_cluster_replication_factor: u32,
+    builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
+
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -118,18 +137,89 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
+            external_login_password_mz_system: None,
+            listeners_config: ListenersConfig {
+                sql: btreemap![
+                    "external".to_owned() => SqlListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls: false,
+                    },
+                    "internal".to_owned() => SqlListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                ],
+                http: btreemap![
+                    "external".to_owned() => HttpListenerConfig {
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                            authenticator_kind: AuthenticatorKind::None,
+                            allowed_roles: AllowedRoles::Normal,
+                            enable_tls: false,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: false,
+                            metrics: false,
+                            profiling: false,
+                            mcp_agent: false,
+                            mcp_developer: false,
+                            console_config: true,
+                        },
+                    },
+                    "internal".to_owned() => HttpListenerConfig {
+                        base: BaseListenerConfig {
+                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                            authenticator_kind: AuthenticatorKind::None,
+                            allowed_roles: AllowedRoles::NormalAndInternal,
+                            enable_tls: false,
+                        },
+                        routes: HttpRoutesEnabled{
+                            base: true,
+                            webhook: true,
+                            internal: true,
+                            metrics: true,
+                            profiling: true,
+                            mcp_agent: false,
+                            mcp_developer: false,
+                            console_config: true,
+                        },
+                    },
+                ],
+            },
             unsafe_mode: false,
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
-            default_cluster_replica_size: "1".to_string(),
-            builtin_system_cluster_replica_size: "1".to_string(),
-            builtin_catalog_server_cluster_replica_size: "1".to_string(),
-            builtin_probe_cluster_replica_size: "1".to_string(),
-            builtin_support_cluster_replica_size: "1".to_string(),
-            builtin_analytics_cluster_replica_size: "1".to_string(),
+            default_cluster_replica_size: "scale=1,workers=1".to_string(),
+            default_cluster_replication_factor: 1,
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "scale=1,workers=1".to_string(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "scale=1,workers=1".to_string(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "scale=1,workers=1".to_string(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "scale=1,workers=1".to_string(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "scale=1,workers=1".to_string(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -179,18 +269,20 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new().await?;
+        let listeners = Listeners::new(&self).await?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
     pub fn start_blocking(self) -> TestServerWithRuntime {
-        stacker::grow(mz_ore::stack::STACK_SIZE, || {
-            let runtime = Runtime::new().expect("failed to spawn runtime for test");
-            let runtime = Arc::new(runtime);
-            let server = runtime.block_on(self.start());
-            TestServerWithRuntime { runtime, server }
-        })
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(mz_ore::stack::STACK_SIZE)
+            .build()
+            .expect("failed to spawn runtime for test");
+        let runtime = Arc::new(runtime);
+        let server = runtime.block_on(self.start());
+        TestServerWithRuntime { runtime, server }
     }
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
@@ -203,6 +295,12 @@ impl TestHarness {
             cert: cert_path.into(),
             key: key_path.into(),
         });
+        for (_, listener) in &mut self.listeners_config.sql {
+            listener.enable_tls = true;
+        }
+        for (_, listener) in &mut self.listeners_config.http {
+            listener.base.enable_tls = true;
+        }
         self
     }
 
@@ -216,8 +314,262 @@ impl TestHarness {
         self
     }
 
-    pub fn with_frontegg(mut self, frontegg: &FronteggAuthentication) -> Self {
+    pub fn with_frontegg_auth(mut self, frontegg: &FronteggAuthenticator) -> Self {
         self.frontegg = Some(frontegg.clone());
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Frontegg,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Frontegg,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+            },
+        };
+        self
+    }
+
+    pub fn with_oidc_auth(
+        mut self,
+        issuer: Option<String>,
+        authentication_claim: Option<String>,
+        expected_audiences: Option<Vec<String>>,
+        external_login_password_mz_system: Option<Password>,
+    ) -> Self {
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Oidc,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+            },
+        };
+
+        if let Some(issuer) = issuer {
+            self.system_parameter_defaults
+                .insert("oidc_issuer".to_string(), issuer);
+        }
+
+        if let Some(authentication_claim) = authentication_claim {
+            self.system_parameter_defaults.insert(
+                "oidc_authentication_claim".to_string(),
+                authentication_claim,
+            );
+        }
+
+        if let Some(expected_audiences) = expected_audiences {
+            self.system_parameter_defaults.insert(
+                "oidc_audience".to_string(),
+                serde_json::to_string(&expected_audiences).unwrap(),
+            );
+        }
+
+        if let Some(external_login_password_mz_system) = external_login_password_mz_system {
+            self.external_login_password_mz_system = Some(external_login_password_mz_system);
+            self.system_parameter_defaults
+                .insert("enable_password_auth".to_string(), "true".to_string());
+        }
+
+        self
+    }
+
+    pub fn with_password_auth(mut self, mz_system_password: Password) -> Self {
+        self.external_login_password_mz_system = Some(mz_system_password);
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Password,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: false,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "metrics".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: false,
+                        webhook: false,
+                        internal: false,
+                        metrics: true,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+            },
+        };
+        self
+    }
+
+    pub fn with_sasl_scram_auth(mut self, mz_system_password: Password) -> Self {
+        self.external_login_password_mz_system = Some(mz_system_password);
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Sasl,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Password,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: false,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "metrics".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: false,
+                        webhook: false,
+                        internal: false,
+                        metrics: true,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+            },
+        };
         self
     }
 
@@ -254,14 +606,24 @@ impl TestHarness {
         mut self,
         builtin_system_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
+        self.builtin_system_cluster_config.size = builtin_system_cluster_replica_size;
         self
     }
+
+    pub fn with_builtin_system_cluster_replication_factor(
+        mut self,
+        builtin_system_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_system_cluster_config.replication_factor =
+            builtin_system_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_catalog_server_cluster_replica_size =
+        self.builtin_catalog_server_cluster_config.size =
             builtin_catalog_server_cluster_replica_size;
         self
     }
@@ -288,6 +650,14 @@ impl TestHarness {
 
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
+        self
+    }
+
+    pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            config.routes.mcp_agent = agent;
+            config.routes.mcp_developer = developer;
+        }
         self
     }
 
@@ -320,8 +690,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new() -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind_any_local().await?;
+    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
         Ok(Listeners { inner })
     }
 
@@ -349,8 +719,8 @@ impl Listeners {
         let scratch_dir = tempfile::tempdir()?;
         let (consensus_uri, timestamp_oracle_url) = {
             let seed = config.seed;
-            let cockroach_url = env::var("COCKROACH_URL")
-                .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
+            let cockroach_url = env::var("METADATA_BACKEND_URL")
+                .map_err(|_| anyhow!("METADATA_BACKEND_URL environment variable is not set"))?;
             let (client, conn) = tokio_postgres::connect(&cockroach_url, NoTls).await?;
             mz_ore::task::spawn(|| "startup-postgres-conn", async move {
                 if let Err(err) = conn.await {
@@ -393,15 +763,16 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(
-            &crate::BUILD_INFO,
-            persist_now.clone(),
-            mz_dyncfgs::all_dyncfgs(),
-        );
-        persist_cfg.build_version = config.code_version;
+        let dyncfgs = mz_dyncfgs::all_dyncfgs();
+
+        let mut updates = ConfigUpdates::default();
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
-        persist_cfg.consensus_connection_pool_max_size = 1;
+        updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
+        updates.apply(&dyncfgs);
+
+        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), dyncfgs);
+        persist_cfg.build_version = config.code_version;
         // Stress persist more by writing rollups frequently
         persist_cfg.set_rollup_threshold(5);
 
@@ -433,7 +804,7 @@ impl Listeners {
             orchestrator,
             config.orchestrator_tracing_cli_args,
         ));
-        let (tracing_handle, tracing_guard) = if config.enable_tracing {
+        let tracing_handle = if config.enable_tracing {
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
@@ -444,7 +815,7 @@ impl Listeners {
                     endpoint: "http://fake_address_for_testing:8080".to_string(),
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
-                    resource: opentelemetry_sdk::resource::Resource::default(),
+                    resource: opentelemetry_sdk::resource::Resource::builder().build(),
                     max_batch_queue_size: 2048,
                     max_export_batch_size: 512,
                     max_concurrent_exports: 1,
@@ -455,16 +826,17 @@ impl Listeners {
                 sentry: None,
                 build_version: crate::BUILD_INFO.version,
                 build_sha: crate::BUILD_INFO.sha,
-                build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };
-            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config).await?;
-            (tracing_handle, Some(tracing_guard))
+            mz_ore::tracing::configure(config).await?
         } else {
-            (TracingHandle::disabled(), None)
+            TracingHandle::disabled()
         };
-        let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
+        let host_name = format!(
+            "localhost:{}",
+            self.inner.http["external"].handle.local_addr.port()
+        );
         let catalog_config = CatalogConfig {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
@@ -499,6 +871,7 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    replica_http_locator: Default::default(),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,
@@ -510,18 +883,17 @@ impl Listeners {
                 now: config.now,
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
+                cors_allowed_origin_list: Vec::new(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: config
-                    .builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: config
-                    .builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: config
-                    .builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: config
-                    .builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: config
-                    .builtin_analytics_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: config
+                    .default_cluster_replication_factor,
+                bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
+                bootstrap_builtin_catalog_server_cluster_config: config
+                    .builtin_catalog_server_cluster_config,
+                bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
+                bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
+                bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,
@@ -529,11 +901,13 @@ impl Listeners {
                 storage_usage_retention_period: config.storage_usage_retention_period,
                 segment_api_key: None,
                 segment_client_side: false,
+                test_only_dummy_segment_client: false,
                 egress_addresses: vec![],
                 aws_account_id: None,
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
                 launchdarkly_key_map: Default::default(),
+                config_sync_file_path: None,
                 config_sync_timeout: Duration::from_secs(30),
                 config_sync_loop_interval: None,
                 bootstrap_role: config.bootstrap_role,
@@ -541,6 +915,9 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
                 helm_chart_version: None,
+                license_key: ValidatedLicenseKey::for_tests(),
+                external_login_password_mz_system: config.external_login_password_mz_system,
+                force_builtin_schema_migration: None,
             })
             .await?;
 
@@ -548,7 +925,7 @@ impl Listeners {
             inner,
             metrics_registry,
             _temp_dir: temp_dir,
-            _tracing_guard: tracing_guard,
+            _scratch_dir: scratch_dir,
         })
     }
 }
@@ -557,8 +934,9 @@ impl Listeners {
 pub struct TestServer {
     pub inner: crate::Server,
     pub metrics_registry: MetricsRegistry,
+    /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
     _temp_dir: Option<TempDir>,
-    _tracing_guard: Option<TracingGuard>,
+    _scratch_dir: TempDir,
 }
 
 impl TestServer {
@@ -577,20 +955,49 @@ impl TestServer {
         }
     }
 
-    pub fn ws_addr(&self) -> Url {
-        Url::parse(&format!(
+    pub async fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let internal_client = self.connect().internal().await.unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
+                .await
+                .unwrap();
+        }
+    }
+
+    pub fn ws_addr(&self) -> Uri {
+        format!(
             "ws://{}/api/experimental/sql",
-            self.inner.http_local_addr()
-        ))
+            self.inner.http_listener_handles["external"].local_addr
+        )
+        .parse()
         .unwrap()
     }
 
-    pub fn internal_ws_addr(&self) -> Url {
-        Url::parse(&format!(
+    pub fn internal_ws_addr(&self) -> Uri {
+        format!(
             "ws://{}/api/experimental/sql",
-            self.inner.internal_http_local_addr()
-        ))
+            self.inner.http_listener_handles["internal"].local_addr
+        )
+        .parse()
         .unwrap()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.inner.http_listener_handles["external"].local_addr
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.inner.http_listener_handles["internal"].local_addr
+    }
+
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.inner.sql_listener_handles["external"].local_addr
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.inner.sql_listener_handles["internal"].local_addr
     }
 }
 
@@ -627,7 +1034,7 @@ impl<'s> ConnectBuilder<'s, (), NoHandle> {
         ConnectBuilder {
             server,
             pg_config,
-            port: server.inner.sql_local_addr().port(),
+            port: server.sql_local_addr().port(),
             tls: (),
             notice_callback: None,
             _with_handle: NoHandle,
@@ -715,18 +1122,8 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     ///
     /// For example, this will change the port we connect to, and the user we connect as.
     pub fn internal(mut self) -> Self {
-        self.port = self.server.inner.internal_sql_local_addr().port();
+        self.port = self.server.internal_sql_local_addr().port();
         self.pg_config.user(mz_sql::session::user::SYSTEM_USER_NAME);
-        self
-    }
-
-    /// Configures this [`ConnectBuilder`] to connect to the __balancer__ SQL port of the running
-    /// [`TestServer`].
-    ///
-    /// For example, this will change the port we connect to, and the user we connect as.
-    pub fn balancer(mut self) -> Self {
-        self.port = self.server.inner.sql_local_addr().port();
-        self.pg_config.user("materialize");
         self
     }
 
@@ -900,10 +1297,21 @@ impl TestServerWithRuntime {
         }
     }
 
+    /// Disable LaunchDarkly feature flags.
+    pub fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
+                .unwrap();
+        }
+    }
+
     /// Return a [`postgres::Config`] for connecting to the __public__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config(&self) -> postgres::Config {
-        let local_addr = self.server.inner.sql_local_addr();
+        let local_addr = self.server.sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -916,7 +1324,7 @@ impl TestServerWithRuntime {
     /// Return a [`postgres::Config`] for connecting to the __internal__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config_internal(&self) -> postgres::Config {
-        let local_addr = self.server.inner.internal_sql_local_addr();
+        let local_addr = self.server.internal_sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -926,26 +1334,33 @@ impl TestServerWithRuntime {
         config
     }
 
-    /// Return a [`postgres::Config`] for connecting to the __balancer__ SQL port of the running
-    /// `environmentd` server.
-    pub fn pg_config_balancer(&self) -> postgres::Config {
-        let local_addr = self.server.inner.sql_local_addr();
-        let mut config = postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("materialize")
-            .options("--welcome_message=off")
-            .ssl_mode(tokio_postgres::config::SslMode::Disable);
-        config
-    }
-
-    pub fn ws_addr(&self) -> Url {
+    pub fn ws_addr(&self) -> Uri {
         self.server.ws_addr()
     }
 
-    pub fn internal_ws_addr(&self) -> Url {
+    pub fn internal_ws_addr(&self) -> Uri {
         self.server.internal_ws_addr()
+    }
+
+    pub fn http_local_addr(&self) -> SocketAddr {
+        self.server.http_local_addr()
+    }
+
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
+        self.server.internal_http_local_addr()
+    }
+
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.server.sql_local_addr()
+    }
+
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
+        self.server.internal_sql_local_addr()
+    }
+
+    /// Returns the metrics registry for the test server.
+    pub fn metrics_registry(&self) -> &MetricsRegistry {
+        &self.server.metrics_registry
     }
 }
 
@@ -955,7 +1370,7 @@ pub struct MzTimestamp(pub u64);
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
         let n = mz_pgrepr::Numeric::from_sql(ty, raw)?;
-        Ok(MzTimestamp(u64::try_from(n.0 .0)?))
+        Ok(MzTimestamp(u64::try_from(n.0.0)?))
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -1041,7 +1456,7 @@ pub async fn try_get_explain_timestamp(
 pub async fn get_explain_timestamp_determination(
     from_suffix: &str,
     client: &Client,
-) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+) -> Result<TimestampExplanation, anyhow::Error> {
     let row = client
         .query_one(
             &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
@@ -1245,7 +1660,8 @@ pub fn auth_with_ws(
                 password: "".into(),
                 options,
             })
-            .unwrap(),
+            .unwrap()
+            .into(),
         ),
     )
 }
@@ -1273,7 +1689,7 @@ pub fn auth_with_ws_impl(
             Message::Ping(_) => continue,
             Message::Close(None) => return Err(anyhow!("ws closed after auth")),
             Message::Close(Some(close_frame)) => {
-                return Err(anyhow!("ws closed after auth").context(close_frame))
+                return Err(anyhow!("ws closed after auth").context(close_frame));
             }
             _ => panic!("unexpected response: {:?}", resp),
         }

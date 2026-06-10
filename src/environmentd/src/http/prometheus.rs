@@ -8,6 +8,7 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
+use mz_sql::ast::display::escaped_string_literal;
 
 use super::sql::SqlRequest;
 
@@ -28,8 +29,10 @@ impl<'a> PrometheusSqlQuery<'a> {
         SqlRequest::Simple {
             query: if let Some((cluster, replica)) = cluster {
                 format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = '{}'; SET CLUSTER_REPLICA = '{}'; {}",
-                    cluster.name, replica.name, self.query
+                    "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
+                    escaped_string_literal(&cluster.name),
+                    escaped_string_literal(&replica.name),
+                    self.query
                 )
             } else {
                 format!(
@@ -278,7 +281,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -300,7 +306,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -323,7 +332,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -346,7 +358,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -409,7 +424,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         help: "The total time spent computing a dataflow.",
         query: "SELECT
             worker_id,
-            regexp_replace(export_id, '^t.+', 'transient') AS collection_id,
+            CASE
+                WHEN starts_with(export_id, 't') THEN 'transient'
+                ELSE export_id
+            END AS collection_id,
             sum(elapsed_ns)::float8 / 1000000000 AS elapsed_s
         FROM
             mz_internal.mz_scheduling_elapsed_per_worker AS s,
@@ -429,7 +447,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         metric_name: "mz_dataflow_error_count",
         help: "The number of errors in a dataflow",
         query: "SELECT
-            regexp_replace(export_id, '^t.+', 'transient') AS collection_id,
+            CASE
+                WHEN starts_with(export_id, 't') THEN 'transient'
+                ELSE export_id
+            END AS collection_id,
             count::uint8 as count
         FROM mz_internal.mz_compute_error_counts",
         value_column_name: "count",

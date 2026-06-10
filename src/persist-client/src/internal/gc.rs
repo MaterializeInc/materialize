@@ -15,30 +15,33 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, error, warn, Instrument, Span};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tracing::{Instrument, Span, debug, debug_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
+use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
+
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::soft_assert_or_log;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::internal::machine::{retry_external, Machine};
+use crate::ShardId;
+use crate::internal::machine::{Machine, retry_external};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::HollowBlobRef;
-use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
-use crate::ShardId;
+use crate::internal::state::{GC_USE_ACTIVE_GC, HollowBlobRef};
+use crate::internal::state_versions::{InspectDiff, StateVersionsIter, UntypedStateVersionsIter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
@@ -114,7 +117,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub fn new(machine: Machine<K, V, T, D>, isolated_runtime: Arc<IsolatedRuntime>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
@@ -165,7 +168,6 @@ where
                                 .await
                         })
                         .await
-                        .expect("gc_and_truncate failed")
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
@@ -257,9 +259,11 @@ where
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
-            // to delete), we can safely exit.
+            // to delete), we can safely exit. We still call remove_rollups to clear
+            // active_gc if it was set, so the next GC isn't suppressed.
+            let (_removed, maintenance) = machine.remove_rollups(&[]).await;
             machine.applier.metrics.gc.noop.inc();
-            return (RoutineMaintenance::default(), gc_results);
+            return (maintenance, gc_results);
         }
 
         debug!(
@@ -269,14 +273,65 @@ where
             rollups_to_remove_from_state,
         );
 
-        let mut states = machine
-            .applier
-            .state_versions
-            .fetch_all_live_states(req.shard_id)
-            .await
-            .expect("state is initialized")
+        let mut states = if GC_USE_ACTIVE_GC.get(&machine.applier.cfg) {
+            let diffs = machine
+                .applier
+                .state_versions
+                .fetch_live_diffs_through(&req.shard_id, req.new_seqno_since)
+                .await;
+
+            let initial_seqno = diffs.first().expect("state is initialized").seqno;
+
+            let Some(initial_rollup) = gc_rollups.get(initial_seqno) else {
+                // The latest state is always expected to have a reference to a rollup for the
+                // earliest seqno. If our state doesn't, that could mean:
+                // - Our diffs are too old, and some other process has already truncated past this point.
+                //   (But currently we fetch diffs _after_ checking state, so that shouldn't happen.)
+                // - Our diffs are too new... someone has added a rollup for this seqno _after_ we fetched
+                //   state, then truncated to it.
+                // In either case we're working on outdated data and should stop.
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - no rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            let Some(state) = machine
+                .applier
+                .state_versions
+                .fetch_rollup_at_key::<T>(&req.shard_id, initial_rollup)
+                .await
+            else {
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - deleted rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            UntypedStateVersionsIter::new(
+                req.shard_id,
+                machine.applier.cfg.clone(),
+                Arc::clone(&machine.applier.metrics),
+                state,
+                diffs,
+            )
             .check_ts_codec()
-            .expect("ts codec has not changed");
+            .expect("ts codec has not changed")
+        } else {
+            machine
+                .applier
+                .state_versions
+                .fetch_all_live_states(req.shard_id)
+                .await
+                .expect("state is initialized")
+                .check_ts_codec()
+                .expect("ts codec has not changed")
+        };
+
         let initial_seqno = states.state().seqno;
         report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
@@ -333,12 +388,7 @@ where
         while let Some(_) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.blob_deletes().for_each(|blob| match blob {
-                    HollowBlobRef::Batch(batch) => {
-                        seqno_held_parts += batch.part_count();
-                    }
-                    HollowBlobRef::Rollup(_) => {}
-                });
+                seqno_held_parts += diff.part_deletes().count();
             }
         }) {}
 
@@ -358,25 +408,18 @@ where
             .rollups
             .contains_key(&initial_seqno);
 
-        debug_assert!(
+        // this should never be true in the steady-state, but may be true the
+        // first time GC runs after fixing any correctness bugs related to our
+        // state version invariants. we'll make it an error so we can track
+        // any violations in Sentry, but opt not to panic because the root
+        // cause of the violation cannot be from this GC run (in fact, this
+        // GC run, assuming it's correct, should have fixed the violation!)
+        soft_assert_or_log!(
             valid_pre_gc_state,
-            "rollups = {:?}, state seqno = {}",
+            "earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
             states.state().collections.rollups,
             initial_seqno
         );
-
-        if !valid_pre_gc_state {
-            // this should never be true in the steady-state, but may be true the
-            // first time GC runs after fixing any correctness bugs related to our
-            // state version invariants. we'll make it an error so we can track
-            // any violations in Sentry, but opt not to panic because the root
-            // cause of the violation cannot be from this GC run (in fact, this
-            // GC run, assuming it's correct, should have fixed the violation!)
-            error!("earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
-                states.state().collections.rollups,
-                initial_seqno
-            );
-        }
 
         report_step_timing(
             &machine
@@ -424,7 +467,7 @@ where
             // By our invariant, `states` should always begin on a rollup.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup before searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
@@ -456,7 +499,7 @@ where
             // to maintain our invariant.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup after searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
@@ -519,18 +562,14 @@ where
         while let Some(state) = states.next(|diff| match diff {
             InspectDiff::FromInitial(_) => {}
             InspectDiff::Diff(diff) => {
-                diff.blob_deletes().for_each(|blob| match blob {
-                    HollowBlobRef::Batch(batch) => {
-                        for part in &batch.parts {
-                            // we use BTreeSets for fast lookups elsewhere, but we should never
-                            // see repeat blob insertions within a single GC run, otherwise we
-                            // have a logic error or our diffs are incorrect (!)
-                            assert!(batch_parts_to_delete.add(part));
-                        }
-                    }
-                    HollowBlobRef::Rollup(rollup) => {
-                        assert!(rollups_to_delete.insert(rollup.key.to_owned()));
-                    }
+                diff.rollup_deletes().for_each(|rollup| {
+                    // we use BTreeSets for fast lookups elsewhere, but we should never
+                    // see repeat rollup insertions within a single GC run, otherwise we
+                    // have a logic error or our diffs are incorrect (!)
+                    assert!(rollups_to_delete.insert(rollup.key.to_owned()));
+                });
+                diff.part_deletes().for_each(|part| {
+                    assert!(batch_parts_to_delete.add(part));
                 });
             }
         }) {
@@ -553,24 +592,15 @@ where
         F: FnMut(&Counter),
     {
         let shard_id = machine.shard_id();
-        let delete_semaphore = Semaphore::new(
-            machine
-                .applier
-                .cfg
-                .dynamic
-                .gc_blob_delete_concurrency_limit(),
-        );
+        let concurrency_limit = GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg);
+        let delete_semaphore = Semaphore::new(concurrency_limit);
 
         let batch_parts = std::mem::take(batch_parts);
         batch_parts
             .delete(
                 machine.applier.state_versions.blob.borrow(),
                 shard_id,
-                machine
-                    .applier
-                    .cfg
-                    .dynamic
-                    .gc_blob_delete_concurrency_limit(),
+                concurrency_limit,
                 &*machine.applier.metrics,
                 &machine.applier.metrics.retries.external.batch_delete,
             )
@@ -645,14 +675,25 @@ struct GcRollups {
 
 impl GcRollups {
     fn new(rollups_lte_seqno_since: Vec<(SeqNo, PartialRollupKey)>, gc_req: &GcReq) -> Self {
-        assert!(rollups_lte_seqno_since
-            .iter()
-            .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since));
+        assert!(
+            rollups_lte_seqno_since
+                .iter()
+                .all(|(seqno, _rollup)| *seqno <= gc_req.new_seqno_since)
+        );
         let rollup_seqnos = rollups_lte_seqno_since.iter().map(|(x, _)| *x).collect();
         Self {
             rollups_lte_seqno_since,
             rollup_seqnos,
         }
+    }
+
+    /// Return the rollup key for the given seqno, if it exists.
+    fn get(&self, seqno: SeqNo) -> Option<&PartialRollupKey> {
+        let index = self
+            .rollups_lte_seqno_since
+            .binary_search_by_key(&seqno, |(k, _)| *k)
+            .ok()?;
+        Some(&self.rollups_lte_seqno_since[index].1)
     }
 
     fn contains_seqno(&self, seqno: &SeqNo) -> bool {

@@ -15,6 +15,7 @@
 
 //! Stack management utilities.
 
+use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
@@ -239,7 +240,11 @@ impl RecursionGuard {
             *depth += 1;
             Ok(())
         } else {
-            Err(RecursionLimitError { limit: self.limit })
+            let backtrace = Backtrace::force_capture();
+            Err(RecursionLimitError {
+                limit: self.limit,
+                backtrace,
+            })
         }
     }
 
@@ -249,15 +254,17 @@ impl RecursionGuard {
 }
 
 /// A [`RecursionGuard`]'s recursion limit was reached.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RecursionLimitError {
     limit: usize,
-    // todo: add backtrace (say, bottom 20 frames) once `std::backtrace` stabilizes in Rust 1.65
+    backtrace: Backtrace,
 }
 
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "exceeded recursion limit of {}", self.limit)
+        writeln!(f, "exceeded recursion limit of {}", self.limit)?;
+        writeln!(f, "backtrace:")?;
+        write!(f, "{}", self.backtrace)
     }
 }
 

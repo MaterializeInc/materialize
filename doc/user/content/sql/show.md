@@ -8,16 +8,14 @@ menu:
 
 ---
 
-`SHOW` displays the value of a configuration parameter.
+`SHOW` displays the value of either a specified configuration parameter or all
+configuration parameters.
 
 ## Syntax
 
-{{< diagram "show-stmt.svg" >}}
-
-Field                  | Use
------------------------|-----
-_name_                 | The name of the configuration parameter to display.
-**ALL**                | Display the values of all configuration parameters.
+```sql
+SHOW [ <name> | ALL ];
+```
 
 ### Aliased configuration parameters
 
@@ -27,7 +25,7 @@ configuration parameters.
 - `schema`: an alias for showing the first resolvable schema in `search_path`
 - `time zone`: an alias for `timezone`
 
-{{% configuration-parameters %}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Examples
 

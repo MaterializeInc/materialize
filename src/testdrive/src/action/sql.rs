@@ -10,10 +10,10 @@
 use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as _};
-use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -61,10 +61,12 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | CreateDatabase(_)
         | CreateSchema(_)
         | CreateSource(_)
+        | CreateWebhookSource(_)
         | CreateSink(_)
         | CreateMaterializedView(_)
         | CreateView(_)
         | CreateTable(_)
+        | CreateTableFromSource(_)
         | CreateIndex(_)
         | CreateType(_)
         | CreateRole(_)
@@ -80,6 +82,8 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     let query = &cmd.query;
     print_query(query, Some(&stmt));
     let expected_output = &cmd.expected_output;
+    state.error_line_count = 0;
+    state.error_string = "".to_string();
     let (state, res) = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
@@ -90,29 +94,47 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
     .retry_async_with_state(state, |retry_state, state| async move {
         let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
+        let start = SystemTime::now();
         match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
-                if retry_state.i != 0 {
-                    println!();
-                }
-                println!(
-                    "rows match; continuing at ts {}",
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64()
-                );
+                let now = SystemTime::now();
+                let epoch = SystemTime::UNIX_EPOCH;
+                let ts = now.duration_since(epoch).unwrap().as_secs_f64();
+                let delay = now.duration_since(start).unwrap().as_secs_f64();
+                println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }
             Err(e) => {
-                if retry_state.i == 0 && should_retry {
-                    print!("rows didn't match; sleeping to see if dataflow catches up");
-                }
                 if let Some(backoff) = retry_state.next_backoff {
-                    if !backoff.is_zero() {
-                        print!(" {:.0?}", backoff);
-                        io::stdout().flush().unwrap();
+                    if !backoff.is_zero()
+                        && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI"))
+                    {
+                        let error_string = format!("{:?}", e);
+                        if error_string != state.error_string {
+                            // Remove old status lines so as not to spam the output
+                            for _ in 0..state.error_line_count {
+                                print!("\x1B[1A\x1B[2K");
+                            }
+                            state.error_line_count = 0;
+                            state.error_string = error_string;
+                            state.error_line_count = state.error_string.lines().count() + 1;
+                            if state.error_string.ends_with('\n') {
+                                print!("{}", state.error_string);
+                            } else {
+                                println!("{}", state.error_string);
+                                state.error_line_count += 1;
+                            }
+                            println!(
+                                "rows didn't match; sleeping to see if dataflow catches up 🕑 {:.0?}",
+                                retry_state.next_backoff.unwrap_or_default()
+                            );
+                        }
                     }
+                } else {
+                    for _ in 0..state.error_line_count {
+                        print!("\x1B[1A\x1B[2K");
+                    }
+                    state.error_line_count = 0;
                 }
                 (state, Err(e))
             }
@@ -120,7 +142,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     })
     .await;
     if let Err(e) = res {
-        println!();
         return Err(e);
     }
     if state.consistency_checks == super::consistency::Level::Statement {
@@ -128,6 +149,30 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
 
     Ok(ControlFlow::Continue)
+}
+
+/// Quote and escape `value` using only the escape sequences that
+/// `parser::split_line` recognises (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`).
+///
+/// Avoids `format!("{:?}", …)` because Rust's Debug impl also emits `\u{N}`
+/// for non-printable Unicode, which the parser does not understand and would
+/// silently corrupt on the next read.
+fn escape_for_parser(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\0"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn rewrite_result(
@@ -141,8 +186,12 @@ fn rewrite_result(
     for row in content {
         let mut formatted_row = Vec::<String>::new();
         for value in row {
-            if value.is_empty() || value.contains(|x: char| char::is_ascii_whitespace(&x)) {
-                formatted_row.push("\"".to_owned() + &value + "\"");
+            if value.is_empty()
+                || value.contains(|x: char| char::is_ascii_whitespace(&x))
+                || value.contains('"')
+                || value.contains('\\')
+            {
+                formatted_row.push(escape_for_parser(&value));
             } else {
                 formatted_row.push(value);
             }
@@ -178,7 +227,7 @@ async fn try_run_sql(
     .await;
 
     if query_with_timeout.is_err() {
-        bail!("query timed out")
+        bail!("query timed out\n")
     }
 
     let rows: Vec<_> = query_with_timeout
@@ -196,7 +245,7 @@ async fn try_run_sql(
         Some(
             actual
                 .iter()
-                .zip(raw_actual.into_iter())
+                .zip_eq(raw_actual)
                 .map(|(actual, unreplaced)| match unreplaced {
                     Some(raw_row) => raw_row,
                     None => actual.clone(),
@@ -222,7 +271,7 @@ async fn try_run_sql(
                         return Ok(());
                     } else {
                         bail!(
-                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                            "column name mismatch\nexpected: {:?}\nactual:   {:?}\n",
                             column_names,
                             actual_columns
                         );
@@ -307,6 +356,7 @@ async fn try_run_sql(
     }
 }
 
+#[derive(Clone)]
 enum ErrorMatcher {
     Contains(String),
     Exact(String),
@@ -352,7 +402,7 @@ impl ErrorMatcher {
 
 pub async fn run_fail_sql(
     cmd: FailSqlCommand,
-    state: &State,
+    state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     use Statement::{AlterSink, Commit, CreateConnection, Fetch, Rollback};
 
@@ -397,7 +447,8 @@ pub async fn run_fail_sql(
         Some(_) => true,
     };
 
-    let state = &state;
+    state.error_line_count = 0;
+    state.error_string = "".to_string();
     let res = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
@@ -406,45 +457,55 @@ pub async fn run_fail_sql(
             .max_tries(state.max_tries),
         false => Retry::default().max_duration(state.timeout).max_tries(1),
     }
-    .retry_async_canceling(|retry_state| {
-        let expected_error = &expected_error;
-        let expected_detail = &expected_detail;
-        let expected_hint = &expected_hint;
+    .retry_async_with_state_canceling(state, |retry_state, state| {
+        let expected_error = expected_error.clone();
+        let expected_detail = expected_detail.clone();
+        let expected_hint = expected_hint.clone();
         async move {
             match try_run_fail_sql(
                 state,
                 query,
-                expected_error,
+                &expected_error,
                 expected_detail.as_ref(),
                 expected_hint.as_ref(),
             )
             .await
             {
                 Ok(()) => {
-                    if retry_state.i != 0 {
-                        println!();
-                    }
                     println!("query error matches; continuing");
-                    Ok(())
+                    (state, Ok(()))
                 }
                 Err(e) => {
-                    if retry_state.i == 0 && should_retry {
-                        print!(
-                            "query error didn't match; \
-                                sleeping to see if dataflow produces error shortly"
-                        );
-                    }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:.0?}", backoff);
-                        io::stdout().flush().unwrap();
+                        if !backoff.is_zero() && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI")) {
+                            let error_string = format!("{:?}", e);
+                            if error_string != state.error_string {
+                                // Remove old status lines so as not to spam the output
+                                for _ in 0..state.error_line_count {
+                                    print!("\x1B[1A\x1B[2K");
+                                }
+                                state.error_line_count = 0;
+                                state.error_string = error_string;
+                                state.error_line_count = state.error_string.lines().count() + 1;
+                                if state.error_string.ends_with('\n') {
+                                    print!("{}", state.error_string);
+                                } else {
+                                    println!("{}", state.error_string);
+                                    state.error_line_count += 1;
+                                }
+                                println!("query error didn't match; sleeping to see if dataflow produces error shortly 🕑 {:.0?}", retry_state.next_backoff.unwrap_or_default());
+                            }
+                        }
                     } else {
-                        println!();
+                        for _ in 0..state.error_line_count {
+                            print!("\x1B[1A\x1B[2K");
+                        }
+                        state.error_line_count = 0;
                     }
-                    Err(e)
+                    (state, Err(e))
                 }
             }
-        }
-    })
+        }})
     .await;
 
     // If a timeout was expected, check whether the retry operation timed
@@ -520,7 +581,9 @@ async fn try_run_fail_sql(
 pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     use Statement::*;
     if let Some(CreateSecret(_)) = stmt {
-        println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
+        println!(
+            "> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]"
+        );
     } else {
         println!("> {}", query)
     }
@@ -576,7 +639,7 @@ pub fn decode_row(
 
     impl fmt::Display for NumericStandardNotation {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}", self.0 .0 .0.to_standard_notation_string())
+            write!(f, "{}", self.0.0.0.to_standard_notation_string())
         }
     }
 
@@ -642,7 +705,7 @@ pub fn decode_row(
             Type::BOOL_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<bool>>>>(i)
                 .map(|a| a.to_string()),
-            Type::INT2_ARRAY => row
+            Type::INT2_ARRAY | Type::INT2_VECTOR => row
                 .get::<_, Option<Array<ArrayElement<i16>>>>(i)
                 .map(|a| a.to_string()),
             Type::INT4_ARRAY => row
@@ -759,7 +822,8 @@ impl<'a> FromSql<'a> for MzTimestamp {
     }
 }
 
-struct MzAclItem(#[allow(dead_code)] String);
+#[allow(dead_code)]
+struct MzAclItem(String);
 
 impl<'a> FromSql<'a> for MzAclItem {
     fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
@@ -791,7 +855,7 @@ impl Display for TestdriveRow<'_> {
 
         for col_str in &self.0[0..self.0.len()] {
             if col_str.contains(' ') || col_str.contains('"') || col_str.is_empty() {
-                cols.push(format!("{:?}", col_str));
+                cols.push(escape_for_parser(col_str));
             } else {
                 cols.push(col_str.to_string());
             }

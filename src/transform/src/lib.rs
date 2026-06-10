@@ -23,19 +23,52 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::{fmt, iter};
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_repr::optimize::OptimizerFeatures;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
+
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::collect_notices::CollectNotices;
+use crate::column_knowledge::ColumnKnowledge;
+use crate::dataflow::DataflowMetainfo;
+use crate::demand::Demand;
+use crate::equivalence_propagation::EquivalencePropagation;
+use crate::fold_constants::FoldConstants;
+use crate::join_implementation::JoinImplementation;
+use crate::literal_constraints::LiteralConstraints;
+use crate::literal_lifting::LiteralLifting;
+use crate::movement::ProjectionPushdown;
+use crate::non_null_requirements::NonNullRequirements;
+use crate::normalize_lets::NormalizeLets;
+use crate::normalize_ops::NormalizeOps;
+use crate::predicate_pushdown::PredicatePushdown;
+use crate::reduce_elision::ReduceElision;
+use crate::reduce_reduction::ReduceReduction;
+use crate::reduction_pushdown::ReductionPushdown;
+use crate::redundant_join::RedundantJoin;
+use crate::semijoin_idempotence::SemijoinIdempotence;
+use crate::threshold_elision::ThresholdElision;
+use crate::typecheck::{SharedTypecheckingContext, Typecheck};
+use crate::union_cancel::UnionBranchCancellation;
+use crate::will_distinct::WillDistinct;
+
+pub use dataflow::optimize_dataflow;
 
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
+pub mod case_literal;
+pub mod coalesce_case;
+pub mod collect_notices;
 pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
@@ -56,6 +89,7 @@ pub mod notice;
 pub mod ordering;
 pub mod predicate_pushdown;
 pub mod reduce_elision;
+pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_elimination;
@@ -64,11 +98,6 @@ pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
 pub mod will_distinct;
-
-use crate::dataflow::DataflowMetainfo;
-use crate::typecheck::SharedContext;
-pub use dataflow::optimize_dataflow;
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -96,10 +125,14 @@ pub struct TransformCtx<'a> {
     pub stats: &'a dyn StatisticsOracle,
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
-    /// Typechecking context.
-    pub typecheck_ctx: &'a SharedContext,
+    /// Representation typechecking context.
+    pub typechecking_ctx: &'a SharedTypecheckingContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
+    /// Metrics for the optimizer.
+    pub metrics: Option<&'a mut OptimizerMetrics>,
+    /// The last hash of the query, if known.
+    pub last_hash: BTreeMap<GlobalId, u64>,
 }
 
 const FOLD_CONSTANTS_LIMIT: usize = 10000;
@@ -113,29 +146,34 @@ impl<'a> TransformCtx<'a> {
     /// [`MirRelationExpr`].
     pub fn local(
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a typecheck::SharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
+        metrics: Option<&'a mut OptimizerMetrics>,
+        global_id: Option<GlobalId>,
     ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
-            global_id: None,
+            global_id,
             features,
-            typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
             df_meta,
+            metrics,
+            last_hash: Default::default(),
         }
     }
 
     /// Generates a [`TransformCtx`] instance for the global MIR optimization
     /// stage.
     ///
-    /// Used to call [`dataflow::optimize_dataflow`].
+    /// Used to call [`optimize_dataflow`].
     pub fn global(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a SharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
+        metrics: Option<&'a mut OptimizerMetrics>,
     ) -> Self {
         Self {
             indexes,
@@ -143,27 +181,73 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             df_meta,
-            typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
+            metrics,
+            last_hash: Default::default(),
         }
     }
 
-    fn typecheck(&self) -> SharedContext {
-        Arc::clone(self.typecheck_ctx)
+    fn typechecking_context(&self) -> SharedTypecheckingContext {
+        Arc::clone(self.typechecking_ctx)
     }
 
-    fn set_global_id(&mut self, global_id: GlobalId) {
+    /// Lets self know the id of the object that is being optimized.
+    pub fn set_global_id(&mut self, global_id: GlobalId) {
         self.global_id = Some(global_id);
     }
 
     fn reset_global_id(&mut self) {
         self.global_id = None;
     }
+
+    /// Updates `last_hash` with the hash of the given MIR plan for the id `self.global_id`.
+    /// Returns the hash.
+    fn update_last_hash(&mut self, plan: &MirRelationExpr) -> u64 {
+        let hash = plan.hash_to_u64();
+        if let Some(id) = self.global_id {
+            self.last_hash.insert(id, hash);
+        }
+        hash
+    }
 }
 
 /// Types capable of transforming relation expressions.
-pub trait Transform: std::fmt::Debug {
-    /// Transform a relation into a functionally equivalent relation.
+pub trait Transform: fmt::Debug {
+    /// Transforms a relation into a functionally equivalent relation.
+    ///
+    /// This is a wrapper around `actually_perform_transform` that also
+    /// measures the time taken and updates the optimizer metrics.
     fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: &mut TransformCtx,
+    ) -> Result<(), TransformError> {
+        let hash_before = args
+            .global_id
+            .and_then(|id| args.last_hash.get(&id).copied())
+            .unwrap_or_else(|| relation.hash_to_u64());
+
+        mz_ore::soft_assert_eq_no_log!(hash_before, relation.hash_to_u64(), "cached hash clash");
+        // actually run the transform, recording the time taken
+        let start = std::time::Instant::now();
+        let res = self.actually_perform_transform(relation, args);
+        let duration = start.elapsed();
+
+        let hash_after = args.update_last_hash(relation);
+        if let Some(metrics) = &mut args.metrics {
+            let transform_name = self.name();
+            metrics.observe_transform_time(transform_name, duration);
+            metrics.inc_transform(hash_before != hash_after, transform_name);
+        }
+
+        res
+    }
+
+    /// Transform a relation into a functionally equivalent relation.
+    ///
+    /// You transform should implement this method, but users should call
+    /// `transform` instead.
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -176,6 +260,9 @@ pub trait Transform: std::fmt::Debug {
     fn debug(&self) -> String {
         format!("{:?}", self)
     }
+
+    /// A short string naming the transform, as it will be reported in metrics.
+    fn name(&self) -> &'static str;
 }
 
 /// Errors that can occur during a transformation.
@@ -212,6 +299,64 @@ impl Error for TransformError {}
 impl From<RecursionLimitError> for TransformError {
     fn from(error: RecursionLimitError) -> Self {
         TransformError::Internal(error.to_string())
+    }
+}
+
+/// Implemented by error types that sometimes want to indicate that an error should cause a panic
+/// even in a `catch_unwind` context. Useful for implementing `mz_unsafe.mz_panic('forced panic')`.
+pub trait MaybeShouldPanic {
+    /// Whether the error means that we want a panic. If yes, then returns the error msg.
+    fn should_panic(&self) -> Option<String>;
+}
+
+impl MaybeShouldPanic for TransformError {
+    fn should_panic(&self) -> Option<String> {
+        match self {
+            TransformError::CallerShouldPanic(msg) => Some(msg.to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// Catch panics in the given optimization, and demote them to [`TransformError::Internal`] error.
+///
+/// Additionally, if the result of the optimization is an error (not a panic) that indicates we
+/// should panic, then panic.
+pub fn catch_unwind_optimize<Opt, To, E>(optimization: Opt) -> Result<To, E>
+where
+    Opt: FnOnce() -> Result<To, E>,
+    E: From<TransformError> + MaybeShouldPanic,
+{
+    match mz_ore::panic::catch_unwind_with_details(AssertUnwindSafe(optimization)) {
+        Ok(Err(e)) if e.should_panic().is_some() => {
+            // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
+            // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
+            // panic the caller.
+            panic!("{}", e.should_panic().expect("checked above"));
+        }
+        Ok(result) => result,
+        Err(panic) => {
+            // A panic during optimization is always a bug; log an error, including the panic
+            // location and a backtrace from the panic site, so we learn about it. Pass the
+            // pieces as structured fields rather than encoding them into the message string.
+            let location = panic.location.as_deref().unwrap_or("<unknown location>");
+            let backtrace = panic
+                .backtrace
+                .as_deref()
+                .unwrap_or("<backtrace unavailable>");
+            tracing::error!(
+                location,
+                backtrace,
+                message = %panic.message,
+                "caught a panic during query optimization",
+            );
+
+            // Surface at least the panic location in the user-facing error, so that internal
+            // errors are actionable without having to grep the logs for the backtrace. The
+            // `CaughtPanic` `Display` impl appends the panic location to the message.
+            let msg = format!("unexpected panic during query optimization: {panic}");
+            Err(TransformError::Internal(msg).into())
+        }
     }
 }
 
@@ -303,12 +448,16 @@ impl Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = self.name)
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -359,7 +508,7 @@ impl Transform for Fixpoint {
                             // relevant issues, see
                             // https://github.com/MaterializeInc/database-issues/issues/8197#issuecomment-2200172227
                             mz_repr::explain::trace_plan(relation);
-                            soft_panic_or_log!(
+                            error!(
                                 "Fixpoint `{}` detected a loop of length {} after {} iterations",
                                 self.name,
                                 i - seen_i,
@@ -367,6 +516,7 @@ impl Transform for Fixpoint {
                             );
                             return Ok(());
                         }
+                        ctx.update_last_hash(&again);
                         self.apply_transforms(
                             &mut again,
                             ctx,
@@ -444,7 +594,7 @@ macro_rules! transforms {
         }
         transforms!(@op fill $buf with $($transforms)*);
     };
-    // Internal rule. Matchesl lines without a guard: `$transform`.
+    // Internal rule. Matches lines without a guard: `$transform`.
     (@op fill $buf:ident with $transform:expr, $($transforms:tt)*) => {
         $buf.push($transform);
         transforms!(@op fill $buf with $($transforms)*);
@@ -454,9 +604,12 @@ macro_rules! transforms {
         // do nothing
     };
     ($($transforms:tt)*) => {{
-        let mut __buf = Vec::<Box<dyn Transform>>::new();
-        transforms!(@op fill __buf with $($transforms)*);
-        __buf
+        #[allow(clippy::vec_init_then_push)]
+        {
+            let mut __buf = Vec::<Box<dyn Transform>>::new();
+            transforms!(@op fill __buf with $($transforms)*);
+            __buf
+        }
     }};
 }
 
@@ -477,43 +630,44 @@ impl Default for FuseAndCollapse {
                 Box::new(canonicalization::ProjectionExtraction),
                 Box::new(movement::ProjectionLifting::default()),
                 Box::new(fusion::Fusion),
-                Box::new(canonicalization::FlatMapToMap),
+                Box::new(canonicalization::FlatMapElimination),
                 Box::new(fusion::join::Join),
-                Box::new(normalize_lets::NormalizeLets::new(false)),
+                Box::new(NormalizeLets::new(false)),
                 Box::new(fusion::reduce::Reduce),
-                Box::new(crate::will_distinct::WillDistinct),
+                Box::new(WillDistinct),
                 Box::new(compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
-                Box::new(union_cancel::UnionBranchCancellation),
+                Box::new(UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(normalize_lets::NormalizeLets::new(false)),
+                Box::new(NormalizeLets::new(false)),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
-                Box::new(redundant_join::RedundantJoin::default()),
+                Box::new(RedundantJoin::default()),
                 Box::new(semijoin_elimination::SemijoinElimination::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(fold_constants::FoldConstants {
-                    limit: Some(FOLD_CONSTANTS_LIMIT),
-                }),
-                Box::new(canonicalization::ReduceScalars),
+                Box::new(fold_constants_fixpoint(true)),
             ],
         }
     }
 }
 
 impl Transform for FuseAndCollapse {
+    fn name(&self) -> &'static str {
+        "FuseAndCollapse"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fuse_and_collapse")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -527,11 +681,41 @@ impl Transform for FuseAndCollapse {
 }
 
 /// Run the [`FuseAndCollapse`] transforms in a fixpoint.
-pub fn fuse_and_collapse() -> Fixpoint {
+pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
     Fixpoint {
-        name: "fuse_and_collapse",
+        name: "fuse_and_collapse_fixpoint",
         limit: 100,
         transforms: FuseAndCollapse::default().transforms,
+    }
+}
+
+/// Does constant folding to a fixpoint: An expression all of whose leaves are constants, of size
+/// small enough to be inlined and folded should reach a single `MirRelationExpr::Constant`.
+///
+/// If `limit` is false, it does constant folding even on large constants.
+///
+/// This needs to call `FoldConstants` together with `NormalizeLets` in a fixpoint loop, because
+/// currently `FoldConstants` doesn't inline CTEs, so these two need to alternate until fixpoint.
+///
+/// Also note that `FoldConstants` can break the normalized form by removing all references to a
+/// Let.
+///
+/// We also call `ReduceScalars`, because that does constant folding inside scalar expressions.
+pub fn fold_constants_fixpoint(limit: bool) -> Fixpoint {
+    Fixpoint {
+        name: "fold_constants_fixpoint",
+        limit: 100,
+        transforms: vec![
+            Box::new(FoldConstants {
+                limit: if limit {
+                    Some(FOLD_CONSTANTS_LIMIT)
+                } else {
+                    None
+                },
+            }),
+            Box::new(canonicalization::ReduceScalars),
+            Box::new(NormalizeLets::new(false)),
+        ],
     }
 }
 
@@ -546,10 +730,7 @@ pub fn normalize() -> Fixpoint {
     Fixpoint {
         name: "normalize",
         limit: 100,
-        transforms: vec![
-            Box::new(normalize_lets::NormalizeLets::new(false)),
-            Box::new(normalize_ops::NormalizeOps),
-        ],
+        transforms: vec![Box::new(NormalizeLets::new(false)), Box::new(NormalizeOps)],
     }
 }
 
@@ -571,17 +752,21 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
-        let transforms: Vec<Box<dyn Transform>> = vec![
-            Box::new(typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
+        let transforms: Vec<Box<dyn Transform>> = transforms![
+            // 0. `Transform`s that don't actually change the plan.
+            Box::new(Typecheck::new(ctx.typechecking_context()).strict_join_equivalences()),
+            Box::new(CollectNotices),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
-            Box::new(non_null_requirements::NonNullRequirements::default()),
+            Box::new(NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
-            Box::new(fuse_and_collapse()),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
-            Box::new(threshold_elision::ThresholdElision),
+            Box::new(fuse_and_collapse_fixpoint()),
+            // 3. Needs to happen before LiteralLifting, EquivalencePropagation
+            // make (literal) filters look more complicated than what the NonNegative Analysis can
+            // recognize.
+            Box::new(ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(Fixpoint {
@@ -589,15 +774,10 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(predicate_pushdown::PredicatePushdown::default()),
-                    Box::new(equivalence_propagation::EquivalencePropagation::default()),
-                    // Lifts the information `col = literal`
-                    // TODO (database-issues#2062): this also tries to lift `!isnull(col)` but
-                    // less well than the previous transform. Eliminate
-                    // redundancy between the two transforms.
-                    Box::new(column_knowledge::ColumnKnowledge::default()),
+                    Box::new(PredicatePushdown::default()),
+                    Box::new(EquivalencePropagation::default()),
                     // Lifts the information `col1 = col2`
-                    Box::new(demand::Demand::default()),
+                    Box::new(Demand::default()),
                     Box::new(FuseAndCollapse::default()),
                 ],
             }),
@@ -606,25 +786,27 @@ impl Optimizer {
                 name: "fixpoint_logical_02",
                 limit: 100,
                 transforms: vec![
-                    Box::new(semijoin_idempotence::SemijoinIdempotence::default()),
+                    Box::new(SemijoinIdempotence::default()),
                     // Pushes aggregations down
-                    Box::new(reduction_pushdown::ReductionPushdown),
+                    Box::new(ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
-                    Box::new(reduce_elision::ReduceElision),
+                    Box::new(ReduceElision),
+                    // Rips complex reduces apart.
+                    Box::new(ReduceReduction),
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(literal_lifting::LiteralLifting::default()),
+                    Box::new(LiteralLifting::default()),
                     // Identifies common relation subexpressions.
                     Box::new(cse::relation_cse::RelationCSE::new(false)),
                     Box::new(FuseAndCollapse::default()),
                 ],
             }),
             Box::new(
-                typecheck::Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
         ];
         Self {
@@ -641,9 +823,9 @@ impl Optimizer {
     /// rendering.
     pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
-        let transforms: Vec<Box<dyn Transform>> = vec![
+        let transforms: Vec<Box<dyn Transform>> = transforms![
             Box::new(
-                typecheck::Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -656,11 +838,11 @@ impl Optimizer {
             // - Currently, JoinImplementation can't be before LiteralLifting because the latter
             //   sometimes creates `Unimplemented` joins (despite LiteralLifting already having been
             //   run in the logical optimizer).
-            // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
+            // - Not running EquivalencePropagation in the same fixpoint loop with JoinImplementation
             //   is slightly hurting our plans. However, I'd say we should fix these problems by
-            //   making ColumnKnowledge (and/or JoinImplementation) smarter (database-issues#5289), rather than
+            //   making EquivalencePropagation (and/or JoinImplementation) smarter (database-issues#5289), rather than
             //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
-            //   then we either run the risk of ColumnKnowledge invalidating a join plan (database-issues#5260),
+            //   then we either run the risk of EquivalencePropagation invalidating a join plan (database-issues#5260),
             //   or we would have to run JoinImplementation an unbounded number of times, which is
             //   also not good database-issues#4639.
             //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
@@ -677,41 +859,52 @@ impl Optimizer {
             Box::new(Fixpoint {
                 name: "fixpoint_physical_01",
                 limit: 100,
-                transforms: vec![
-                    Box::new(column_knowledge::ColumnKnowledge::default()),
-                    Box::new(fold_constants::FoldConstants {
-                        limit: Some(FOLD_CONSTANTS_LIMIT),
-                    }),
-                    Box::new(canonicalization::ReduceScalars),
-                    Box::new(demand::Demand::default()),
-                    Box::new(literal_lifting::LiteralLifting::default()),
+                transforms: transforms![
+                    Box::new(EquivalencePropagation::default()),
+                    Box::new(fold_constants_fixpoint(true)),
+                    Box::new(coalesce_case::CoalesceCase::default());
+                        if ctx.features.enable_coalesce_case_transform,
+                    Box::new(Demand::default()),
+                    // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
+                    Box::new(ProjectionPushdown::default()),
+                    Box::new(LiteralLifting::default()),
                 ],
             }),
-            Box::new(literal_constraints::LiteralConstraints),
+            Box::new(LiteralConstraints),
             Box::new(Fixpoint {
                 name: "fixpoint_join_impl",
                 limit: 100,
-                transforms: vec![Box::new(join_implementation::JoinImplementation::default())],
+                transforms: vec![Box::new(JoinImplementation::default())],
             }),
-            Box::new(canonicalize_mfp::CanonicalizeMfp),
+            Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
-            Box::new(fold_constants::FoldConstants {
-                limit: Some(FOLD_CONSTANTS_LIMIT),
-            }),
-            Box::new(canonicalization::ReduceScalars),
-            // Remove threshold operators which have no effect.
-            // Must be done at the very end of the physical pass, because before
-            // that (at least at the moment) we cannot be sure that all trees
-            // are simplified equally well so they are structurally almost
-            // identical. Check the `threshold_elision.slt` tests that fail if
-            // you remove this transform for examples.
-            Box::new(threshold_elision::ThresholdElision),
-            // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
-            // (For example, `FoldConstants` can break the normalized form by removing all
-            // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)
-            Box::new(normalize_lets::NormalizeLets::new(false)),
-            Box::new(typecheck::Typecheck::new(ctx.typecheck()).disallow_new_globals()),
+            // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
+            // is cut in half by `RelationCSE`, then we'd like to push projections behind the new
+            // Get as much as possible. This is because a fork in the plan involves copying the
+            // data. (But we need `ProjectionPushdown` to skip joins, because it can't deal with
+            // filled in JoinImplementations.)
+            Box::new(ProjectionPushdown::skip_joins());
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
+            // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
+            Box::new(CanonicalizeMfp);
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
+            // Rewrite If-chains matching a single expression against literals
+            // into a CaseLiteral lookup for O(log n) evaluation.
+            Box::new(case_literal::CaseLiteralTransform);
+                if ctx.features.enable_case_literal_transform,
+            // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
+            // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
+            // - The rendering expects some invariants about Let/LetRecs.
+            // - `CollectIndexRequests` needs a normalized plan.
+            //   https://github.com/MaterializeInc/database-issues/issues/6371
+            Box::new(fold_constants_fixpoint(true)),
+            Box::new(
+                Typecheck::new(ctx.typechecking_context())
+                    .disallow_new_globals()
+                    .disallow_dummy()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "physical",
@@ -726,48 +919,45 @@ impl Optimizer {
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
     pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
-        let mut typechecker = typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences();
-
+        let mut repr_typechecker =
+            Typecheck::new(ctx.typechecking_context()).strict_join_equivalences();
         if !allow_new_globals {
-            typechecker = typechecker.disallow_new_globals();
+            repr_typechecker = repr_typechecker.disallow_new_globals();
         }
 
-        let transforms: Vec<Box<dyn Transform>> = vec![
-            Box::new(typechecker),
+        let transforms: Vec<Box<dyn Transform>> = transforms![
+            Box::new(repr_typechecker),
             // Delete unnecessary maps.
             Box::new(fusion::Fusion),
             Box::new(Fixpoint {
                 name: "fixpoint_logical_cleanup_pass_01",
                 limit: 100,
                 transforms: vec![
-                    Box::new(canonicalize_mfp::CanonicalizeMfp),
+                    Box::new(CanonicalizeMfp),
                     // Remove threshold operators which have no effect.
-                    Box::new(threshold_elision::ThresholdElision),
+                    Box::new(ThresholdElision),
                     // Projection pushdown may unblock fusing joins and unions.
                     Box::new(fusion::join::Join),
                     // Predicate pushdown required to tidy after join fusion.
-                    Box::new(predicate_pushdown::PredicatePushdown::default()),
-                    Box::new(redundant_join::RedundantJoin::default()),
+                    Box::new(PredicatePushdown::default()),
+                    Box::new(RedundantJoin::default()),
                     Box::new(semijoin_elimination::SemijoinElimination::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(fusion::Fusion),
                     Box::new(compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
-                    Box::new(union_cancel::UnionBranchCancellation),
+                    Box::new(UnionBranchCancellation),
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(fold_constants::FoldConstants {
-                        limit: Some(FOLD_CONSTANTS_LIMIT),
-                    }),
-                    Box::new(canonicalization::ReduceScalars),
+                    Box::new(fold_constants_fixpoint(true)),
                 ],
             }),
             Box::new(
-                typecheck::Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
         ];
         Self {
@@ -780,16 +970,32 @@ impl Optimizer {
     pub fn fast_path_optimizer(_ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = vec![
             Box::new(canonicalization::ReduceScalars),
-            Box::new(literal_constraints::LiteralConstraints),
-            Box::new(canonicalize_mfp::CanonicalizeMfp),
+            Box::new(LiteralConstraints),
+            Box::new(CanonicalizeMfp),
             // We might have arrived at a constant, e.g., due to contradicting literal constraints.
-            Box::new(fold_constants::FoldConstants {
-                limit: Some(FOLD_CONSTANTS_LIMIT),
+            Box::new(Fixpoint {
+                name: "fast_path_fold_constants_fixpoint",
+                limit: 100,
+                transforms: vec![
+                    Box::new(FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
+                    Box::new(canonicalization::ReduceScalars),
+                ],
             }),
         ];
         Self {
             name: "fast_path_optimizer",
             transforms,
+        }
+    }
+
+    /// Builds a tiny optimizer, which just folds constants. For more details, see
+    /// [fold_constants_fixpoint].
+    pub fn constant_optimizer(_ctx: &mut TransformCtx, limit: bool) -> Self {
+        Self {
+            name: "fast_path_optimizer",
+            transforms: vec![Box::new(fold_constants_fixpoint(limit))],
         }
     }
 
@@ -808,15 +1014,6 @@ impl Optimizer {
         ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         let transform_result = self.transform(&mut relation, ctx);
-
-        // Make sure we are not swallowing any notice.
-        // TODO: we should actually wire up notices that come from here. This is not urgent, because
-        // currently notices can only come from the physical MIR optimizer (specifically,
-        // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
-        soft_assert_or_log!(
-            ctx.df_meta.optimizer_notices.is_empty(),
-            "logical MIR optimization unexpectedly produced notices"
-        );
 
         match transform_result {
             Ok(_) => {
@@ -843,6 +1040,8 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        args.update_last_hash(relation);
+
         for transform in self.transforms.iter() {
             transform.transform(relation, args)?;
         }

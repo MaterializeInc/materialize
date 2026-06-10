@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
+$ set-sql-timeout duration=60s
 
 # TODO(def-) Reenable when database-issues#7900 is fixed
 $ skip-if
@@ -92,6 +91,7 @@ INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
 CREATE TABLE drop_table (f1 int, f2 int);
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE public.add_columns);
@@ -114,6 +114,7 @@ INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 > CREATE TABLE alter_table_supported FROM SOURCE mz_source (REFERENCE public.alter_table_supported);
 > CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE public.truncate_table);
 > CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE public.drop_table);
+> COMMIT
 
 #
 # Add column
@@ -141,7 +142,7 @@ ALTER TABLE remove_column DROP COLUMN f2;
 INSERT INTO remove_column VALUES (3);
 
 ! select * from remove_column;
-contains:incompatible schema change
+contains:Incompatible schema change
 
 
 #
@@ -165,9 +166,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
-# TODO(def-): Reenable when database-issues#7655 is fixed
-# ! select * from alter_column_type_2;
-# contains:incompatible schema change
+! select * from alter_column_type_2;
+contains:incompatible schema change
 
 #
 # Drop NOT NULL
@@ -357,20 +357,19 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 contains:incompatible schema change
 
 
-# TODO: database-issues#7655 (column drop & recreate detection)
 # Change column attnum
 
-# > SELECT * from alter_table_change_attnum;
-# f1_orig f2_orig
+> SELECT * from alter_table_change_attnum;
+f1_orig f2_orig
 
 # Ensure simpl name swap doesn't fool schema detection
-# $ mysql-execute name=mysql
-# ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
-# ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
-# INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
+$ mysql-execute name=mysql
+ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
+ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
+INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-# ! SELECT * FROM alter_table_change_attnum;
-# contains:incompatible schema change
+! SELECT * FROM alter_table_change_attnum;
+contains:incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1

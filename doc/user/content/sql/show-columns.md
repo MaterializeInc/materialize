@@ -13,11 +13,16 @@ subsource, materialized view, view, or table.
 
 ## Syntax
 
-{{< diagram "show-columns.svg" >}}
+```sql
+SHOW COLUMNS FROM <object_name>
+[LIKE <pattern> | WHERE <condition(s)>]
+;
+```
 
-Field | Use
-------|-----
-_item&lowbar;ref_ | The name of the object whose columns you want to view. This can be a source, subsource, materialized view, view, or table.
+Syntax element                | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show columns that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show columns that match the condition(s).
 
 ## Details
 
@@ -66,7 +71,7 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing `item_ref`.
+{{% include-headless "/headless/sql-command-privileges/show-columns" %}}
 
 ## Related pages
 

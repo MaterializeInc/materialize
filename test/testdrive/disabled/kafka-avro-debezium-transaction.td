@@ -167,6 +167,7 @@ $ kafka-create-topic topic=data-txdata
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data_txdata
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-txdata-${testdrive.seed}')
@@ -175,6 +176,7 @@ $ kafka-create-topic topic=data-txdata
   FORMAT AVRO USING SCHEMA '${txschema}'
   ENVELOPE NONE
 
+> COMMIT
 
 $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=4
 {"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
@@ -192,6 +194,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 #
 # Create a source using an inline schema.
 #
+> BEGIN
 > CREATE SOURCE data_schema_inline
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -201,7 +204,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
   )
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE data2_schema_inline
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
@@ -211,6 +216,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data2-${testdrive.seed}')
   )
+> COMMIT
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 5}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c", "transaction": {"total_order": null, "id": "1"}}
@@ -350,6 +356,7 @@ a  b
 $ unset-regex
 
 # Reingest to verify that we keep transactionality
+> BEGIN
 > CREATE SOURCE data_sink_reingest
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
@@ -357,6 +364,7 @@ $ unset-regex
 > CREATE TABLE data_sink_reingest_tbl FROM SOURCE data_sink_reingest (REFERENCE "testdrive-data-sink-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT after::text FROM data_sink_reingest_tbl ORDER BY transaction ASC
 (1,1)
@@ -378,6 +386,7 @@ $ unset-regex
 $ kafka-create-topic topic=data-txdata-bad-schema
 $ kafka-create-topic topic=data-bad-schema
 
+> BEGIN
 > CREATE SOURCE data_txdata_bad_schema
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-txdata-bad-schema-${testdrive.seed}')
@@ -386,6 +395,7 @@ $ kafka-create-topic topic=data-bad-schema
   FORMAT AVRO USING SCHEMA '${txschema-bad-schema}'
   ENVELOPE NONE
 
+> COMMIT
 
 $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-schema} timestamp=4
 {"status": "BEGIN", "id": null, "event_count": null, "data_collections": null}

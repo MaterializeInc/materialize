@@ -1,0 +1,45 @@
+{{ $fields := slice }}
+{{ $variables := .variables | default (dict) }}
+{{ $omit_column := .omit_column | default "" }}
+{{ $omit_value := .omit_value | default "" }}
+
+<table>
+<thead>
+<tr>
+{{ range .columns }}
+<th>{{ .column }}</th>
+{{ $fields = $fields | append (dict "field" .column) }}
+{{ end }}
+</tr>
+</thead>
+<tbody>
+{{ range .rows }}
+{{ $row := . }}
+{{/* Skip row if it matches omit criteria */}}
+{{ $shouldSkip := false }}
+{{/* New: Skip row if column value matches omit_column:omit_value */}}
+{{ if and $omit_column $omit_value }}
+  {{ $rowValue := index $row $omit_column }}
+  {{ if eq $rowValue $omit_value }}
+    {{ $shouldSkip = true }}
+  {{ end }}
+{{ end }}
+{{ if not $shouldSkip }}
+<tr>
+{{ range $fields }}
+{{ $field := .field }}
+{{ $cellValue := index $row $field }}
+{{/* Replace template variables in the cell value */}}
+{{ range $key, $value := $variables }}
+  {{ $placeholder := printf "{{ $%s }}" $key }}
+  {{ $cellValue = replace $cellValue $placeholder $value }}
+{{ end }}
+<td>
+{{ $cellValue | markdownify }}
+</td>
+{{ end }}
+</tr>
+{{ end }}
+{{ end }}
+</tbody>
+</table>

@@ -46,19 +46,10 @@ class AlterConnectionSshChangeBase(Check):
         self.ssh_change = ssh_change
         self.index = index
 
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.79.0-dev")
-
     def initialize(self) -> Testdrive:
         i = self.index
 
-        return Testdrive(
-            schema()
-            + dedent(
-                f"""
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_table_keys = true;
-
+        return Testdrive(schema() + dedent(f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -70,14 +61,9 @@ class AlterConnectionSshChangeBase(Check):
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}a
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
-                >[version<11900] CREATE SOURCE alter_connection_source_{i}a
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}')
-                  FORMAT TEXT
-                  ENVELOPE NONE;
-
-                >[version>=11900] CREATE SOURCE alter_connection_source_{i}a_src
+                > CREATE SOURCE alter_connection_source_{i}a_src
                   FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}');
-                >[version>=11900] CREATE TABLE alter_connection_source_{i}a FROM SOURCE alter_connection_source_{i}a_src (REFERENCE "testdrive-alter-connection-{i}a-${{testdrive.seed}}")
+                > CREATE TABLE alter_connection_source_{i}a FROM SOURCE alter_connection_source_{i}a_src (REFERENCE "testdrive-alter-connection-{i}a-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -98,9 +84,7 @@ class AlterConnectionSshChangeBase(Check):
                   ENVELOPE DEBEZIUM;
 
                 $ kafka-verify-topic sink=materialize.public.alter_connection_sink_{i} await-value-schema=true
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         i = self.index
@@ -125,14 +109,9 @@ class AlterConnectionSshChangeBase(Check):
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}b
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
-                >[version<11900] CREATE SOURCE alter_connection_source_{i}b
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}')
-                  FORMAT TEXT
-                  ENVELOPE NONE;
-
-                >[version>=11900] CREATE SOURCE alter_connection_source_{i}b_src
+                > CREATE SOURCE alter_connection_source_{i}b_src
                   FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}');
-                >[version>=11900] CREATE TABLE alter_connection_source_{i}b FROM SOURCE alter_connection_source_{i}b_src (REFERENCE "testdrive-alter-connection-{i}b-${{testdrive.seed}}")
+                > CREATE TABLE alter_connection_source_{i}b FROM SOURCE alter_connection_source_{i}b_src (REFERENCE "testdrive-alter-connection-{i}b-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -163,9 +142,7 @@ class AlterConnectionSshChangeBase(Check):
     def validate(self) -> Testdrive:
         i = self.index
 
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT regexp_match(create_sql, '(ssh-bastion-host|other_ssh_bastion)') FROM (SHOW CREATE CONNECTION ssh_tunnel_{i});
                 {"{other_ssh_bastion}" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "{ssh-bastion-host}"}
 
@@ -184,14 +161,9 @@ class AlterConnectionSshChangeBase(Check):
                 thirty
                 fourty
 
-                >[version<11900] CREATE SOURCE alter_connection_sink_source_{i}
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE NONE;
-
-                >[version>=11900] CREATE SOURCE alter_connection_sink_source_{i}_src
+                > CREATE SOURCE alter_connection_sink_source_{i}_src
                   FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}');
-                >[version>=11900] CREATE TABLE alter_connection_sink_source_{i} FROM SOURCE alter_connection_sink_source_{i}_src (REFERENCE "testdrive-alter-connection-sink-{i}-${{testdrive.seed}}")
+                > CREATE TABLE alter_connection_sink_source_{i} FROM SOURCE alter_connection_sink_source_{i}_src (REFERENCE "testdrive-alter-connection-sink-{i}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
 
@@ -215,11 +187,8 @@ class AlterConnectionSshChangeBase(Check):
                 <null> (2)
                 <null> (3)
 
-                >[version<11900] DROP SOURCE IF EXISTS alter_connection_sink_source_{i} CASCADE
-                >[version>=11900] DROP SOURCE IF EXISTS alter_connection_sink_source_{i}_src CASCADE
-                """
-            )
-        )
+                > DROP SOURCE IF EXISTS alter_connection_sink_source_{i}_src CASCADE
+                """))
 
 
 @externally_idempotent(False)
@@ -238,3 +207,47 @@ class AlterConnectionToNonSsh(AlterConnectionSshChangeBase):
 class AlterConnectionHost(AlterConnectionSshChangeBase):
     def __init__(self, base_version: MzVersion, rng: Random | None):
         super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng)
+
+
+class AlterConnectionDependencyOrder(Check):
+    """
+    Ensure that ALTER-ing a CONNECTION to reference one with a greater ID, does not panic.
+    """
+
+    def __init__(
+        self,
+        base_version: MzVersion,
+        rng: Random | None,
+    ):
+        super().__init__(base_version, rng)
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.144.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE CONNECTION my_kafka_alter_conn TO KAFKA (BROKER 'localhost:32816') WITH (VALIDATE = false);
+                > CREATE CONNECTION other_ssh TO SSH TUNNEL (host 'foo', user 'bar', port 42) WITH (VALIDATE = false);
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER CONNECTION my_kafka_alter_conn SET (BROKER 'localhost:32816' USING SSH TUNNEL other_ssh) WITH (VALIDATE = false);
+                """,
+                """
+                > CREATE CONNECTION another_kafka_conn TO KAFKA (BROKER 'localhost:32816') WITH (VALIDATE = false);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                $ set-from-sql var=other_ssh_id
+                SELECT id FROM mz_connections WHERE name = 'other_ssh';
+
+                > SELECT name FROM mz_connections WHERE create_sql LIKE '%[${other_ssh_id} AS %';
+                my_kafka_alter_conn
+                """))

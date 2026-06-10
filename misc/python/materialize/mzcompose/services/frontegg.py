@@ -10,6 +10,7 @@
 
 from materialize.mzcompose.service import (
     Service,
+    ServiceConfig,
     ServiceDependency,
 )
 from materialize.ui import UIError
@@ -27,7 +28,14 @@ class FronteggMock(Service):
         name: str = "frontegg-mock",
         mzbuild: str = "frontegg-mock",
         volumes: list[str] = [],
+        networks: (
+            dict[str, dict[str, list[str]]]
+            | dict[str, dict[str, str]]
+            | list[str]
+            | None
+        ) = None,
         depends_on: list[str] = [],
+        expires_in_secs: int | None = None,
     ) -> None:
         command = [
             "--listen-addr=0.0.0.0:6880",
@@ -36,6 +44,8 @@ class FronteggMock(Service):
             "--issuer",
             issuer,
         ]
+        if expires_in_secs is not None:
+            command += [f"--expires-in-secs={expires_in_secs}"]
         if encoding_key:
             command += ["--encoding-key", encoding_key]
         elif encoding_key_file:
@@ -54,13 +64,15 @@ class FronteggMock(Service):
             s: {"condition": "service_started"} for s in depends_on
         }
 
-        super().__init__(
-            name=name,
-            config={
-                "mzbuild": mzbuild,
-                "command": command,
-                "ports": [6880],
-                "volumes": volumes,
-                "depends_on": depends_graph,
-            },
-        )
+        config: ServiceConfig = {
+            "mzbuild": mzbuild,
+            "command": command,
+            "ports": [6880],
+            "volumes": volumes,
+            "depends_on": depends_graph,
+        }
+
+        if networks:
+            config["networks"] = networks
+
+        super().__init__(name=name, config=config)

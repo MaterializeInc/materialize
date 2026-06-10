@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::anyhow;
-use rdkafka::admin::{NewTopic, TopicReplication};
-
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
+use anyhow::anyhow;
+use mz_kafka_util::admin::EnsureTopicConfig;
+use rdkafka::admin::{NewTopic, TopicReplication};
 
 pub async fn run_create_topic(
     mut cmd: BuiltinCommand,
@@ -113,8 +113,13 @@ pub async fn run_create_topic(
         new_topic
     };
 
-    mz_kafka_util::admin::ensure_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
-        .await?;
+    mz_kafka_util::admin::ensure_topic(
+        &state.kafka_admin,
+        &state.kafka_admin_opts,
+        &new_topic,
+        EnsureTopicConfig::Check,
+    )
+    .await?;
     state.kafka_topics.insert(topic_name, partitions);
     Ok(ControlFlow::Continue)
 }

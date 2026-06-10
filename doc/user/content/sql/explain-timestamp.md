@@ -16,18 +16,7 @@ change arbitrarily in future versions of Materialize.
 
 ## Syntax
 
-{{< diagram "explain-timestamp.svg" >}}
-
-### Output format
-
-You can select between `JSON` and `TEXT` for the output format of `EXPLAIN TIMESTAMP`. Non-text
-output is more machine-readable and can be parsed by common graph visualization libraries,
-while formatted text is more human-readable.
-
-Output type | Description
-------|-----
-**TEXT** | Format the explanation output as UTF-8 text.
-**JSON** | Format the explanation output as a JSON object.
+{{% include-syntax file="examples/explain_timestamp" example="syntax" %}}
 
 ## Details
 
@@ -78,7 +67,7 @@ Field | Meaning | Example
 ## Examples
 
 ```mzsql
-EXPLAIN TIMESTAMP FOR MATERIALIZED VIEW users;
+EXPLAIN TIMESTAMP FOR SELECT * FROM users;
 ```
 ```
                                  Timestamp
@@ -178,4 +167,4 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations in the query are contained in.
+{{% include-headless "/headless/sql-command-privileges/explain-timestamp" %}}

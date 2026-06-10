@@ -44,12 +44,13 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% if not cluster_exists(cluster) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% if not cluster_exists(origin_cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " does not exist") }}
     {% endif %}
-    {% if cluster_contains_sinks(cluster) %}
+    {% if cluster_contains_sinks(origin_cluster) %}
         {{ exceptions.raise_compiler_error("""
-        Production cluster " ~ cluster ~ " contains sinks.
+        Production cluster " ~ origin_cluster ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated cluster.
         """) }}
     {% endif %}
@@ -107,18 +108,17 @@
 {% endfor %}
 
 {% for cluster in clusters %}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
     {% set cluster_configuration %}
         SELECT
             c.managed,
             c.size,
             c.replication_factor,
-            c.id AS cluster_id,
-            c.name AS cluster_name,
             cs.type AS schedule_type,
             cs.refresh_hydration_time_estimate
         FROM mz_clusters c
         LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
-        WHERE c.name = {{ dbt.string_literal(cluster) }}
+        WHERE c.name = {{ dbt.string_literal(origin_cluster) }}
     {% endset %}
 
     {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -129,22 +129,27 @@
         {% set managed = results[0] %}
         {% set size = results[1] %}
         {% set replication_factor = results[2] %}
-        {% set schedule_type = results[5] %}
-        {% set refresh_hydration_time_estimate = results[6] %}
+        {% set schedule_type = results[3] %}
+        {% set refresh_hydration_time_estimate = results[4] %}
 
-        {% if not managed %}
-            {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
+        {% if managed %}
+            {% set deploy_cluster = create_cluster(
+                cluster_name=cluster,
+                size=size,
+                replication_factor=replication_factor,
+                schedule_type=schedule_type,
+                refresh_hydration_time_estimate=refresh_hydration_time_estimate,
+                ignore_existing_objects=ignore_existing_objects,
+                force_deploy_suffix=True
+            ) %}
+        {% else %}
+            {% set deploy_cluster = create_unmanaged_cluster(
+                cluster_name=cluster,
+                origin_cluster=origin_cluster,
+                ignore_existing_objects=ignore_existing_objects,
+                force_deploy_suffix=True
+            ) %}
         {% endif %}
-
-        {% set deploy_cluster = create_cluster(
-            cluster_name=cluster,
-            size=size,
-            replication_factor=replication_factor,
-            schedule_type=schedule_type,
-            refresh_hydration_time_estimate=refresh_hydration_time_estimate,
-            ignore_existing_objects=ignore_existing_objects,
-            force_deploy_suffix=True
-        ) %}
 
         {{ internal_copy_cluster_grants(cluster, deploy_cluster) }}
     {% endif %}
@@ -163,7 +168,10 @@ SELECT
   'IN SCHEMA {{ to }} '         ||
   'GRANT '  || privilege_type   || ' ' ||
   'ON '     || object_type      || 's ' ||
-  'TO '     || quote_ident(grantee)
+  CASE
+    WHEN grantee = 'PUBLIC' THEN 'TO PUBLIC'
+    ELSE 'TO '     || quote_ident(grantee)
+  END
 FROM mz_internal.mz_show_default_privileges
 WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
     AND object_owner <> 'none' AND grantee <> 'none'

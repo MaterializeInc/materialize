@@ -19,16 +19,16 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
+    Mz(app_password=""),
     Materialized(),
     Testdrive(no_reset=True),
 ]
@@ -53,7 +53,7 @@ def start_deps(
     if args.redpanda:
         dependencies = ["redpanda"]
     else:
-        dependencies = ["zookeeper", "kafka", "schema-registry"]
+        dependencies = ["kafka", "schema-registry"]
 
     c.up(*dependencies)
 
@@ -175,9 +175,7 @@ def workflow_compaction(c: Composition) -> None:
 def workflow_inspect_shard(c: Composition) -> None:
     """Regression test for https://github.com/MaterializeInc/materialize/pull/21098"""
     c.up("materialized")
-    c.sql(
-        dedent(
-            """
+    c.sql(dedent("""
             CREATE TABLE foo (
                 big0 string, big1 string, big2 string, big3 string, big4 string, big5 string,
                 barTimestamp string,
@@ -189,9 +187,7 @@ def workflow_inspect_shard(c: Composition) -> None:
                 repeat('x', 1024), repeat('x', 1024)
             );
             SELECT * FROM foo;
-            """
-        )
-    )
+            """))
     json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
     parts = [
         part
@@ -216,14 +212,15 @@ def workflow_inspect_shard(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
 
         if name in ["failpoints", "compaction"]:
             # Legacy tests, not currently operational
-            continue
+            return
 
         with c.test_case(name):
-            c.down(destroy_volumes=True)
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)

@@ -22,12 +22,18 @@ use tracing_subscriber::filter::Directive;
 // continue startup even in that case.
 //
 // All configuration names should be prefixed with "balancerd_" to avoid name collisions.
+/// Duration to wait after listeners closed via SIGTERM for outstanding connections to complete.
+pub const SIGTERM_CONNECTION_WAIT: Config<Duration> = Config::new(
+    "balancerd_sigterm_connection_wait",
+    Duration::from_secs(60 * 9),
+    "Duration to wait after listeners closed via SIGTERM for outstanding connections to complete.",
+);
 
-/// Duration to wait after SIGTERM for outstanding connections to complete.
-pub const SIGTERM_WAIT: Config<Duration> = Config::new(
-    "balancerd_sigterm_wait",
-    Duration::from_secs(60 * 10),
-    "Duration to wait after SIGTERM for outstanding connections to complete.",
+/// Duration to wait after SIGTERM to begin shutdown of servers.
+pub const SIGTERM_LISTEN_WAIT: Config<Duration> = Config::new(
+    "balancerd_sigterm_listen_wait",
+    Duration::from_secs(60),
+    "Duration to wait after SIGTERM to begin shutdown of servers.",
 );
 
 /// Whether to inject tcp proxy protocol headers to downstream http servers.
@@ -89,7 +95,8 @@ pub const SENTRY_FILTERS: Config<fn() -> String> = Config::new(
 /// Adds the full set of all balancer `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&SIGTERM_WAIT)
+        .add(&SIGTERM_CONNECTION_WAIT)
+        .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)

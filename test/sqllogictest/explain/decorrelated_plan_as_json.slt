@@ -79,7 +79,9 @@ SELECT 1 / 0
             "scalars": [
               {
                 "CallBinary": {
-                  "func": "DivInt32",
+                  "func": {
+                    "DivInt32": null
+                  },
                   "expr1": {
                     "Literal": [
                       {
@@ -424,17 +426,26 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "predicates": [
                       {
                         "CallVariadic": {
-                          "func": "And",
+                          "func": {
+                            "And": null
+                          },
                           "exprs": [
                             {
                               "CallVariadic": {
-                                "func": "And",
+                                "func": {
+                                  "And": null
+                                },
                                 "exprs": [
                                   {
                                     "CallBinary": {
-                                      "func": "Gt",
+                                      "func": {
+                                        "Gt": null
+                                      },
                                       "expr1": {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -455,9 +466,14 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                   },
                                   {
                                     "CallBinary": {
-                                      "func": "Lt",
+                                      "func": {
+                                        "Lt": null
+                                      },
                                       "expr1": {
-                                        "Column": 1
+                                        "Column": [
+                                          1,
+                                          "b"
+                                        ]
                                       },
                                       "expr2": {
                                         "Literal": [
@@ -481,15 +497,25 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                             },
                             {
                               "CallBinary": {
-                                "func": "Gt",
+                                "func": {
+                                  "Gt": null
+                                },
                                 "expr1": {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        "b"
+                                      ]
                                     }
                                   }
                                 },
@@ -558,12 +584,20 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               },
               {
                 "CallBinary": {
-                  "func": "AddInt32",
+                  "func": {
+                    "AddInt32": null
+                  },
                   "expr1": {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   "expr2": {
-                    "Column": 1
+                    "Column": [
+                      1,
+                      "b"
+                    ]
                   }
                 }
               }
@@ -682,10 +716,16 @@ SELECT generate_series(a, b) from t
                 "func": "GenerateSeriesInt32",
                 "exprs": [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      "a"
+                    ]
                   },
                   {
-                    "Column": 1
+                    "Column": [
+                      1,
+                      "b"
+                    ]
                   },
                   {
                     "Literal": [
@@ -803,7 +843,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                 },
                 "group_key": [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      null
+                    ]
                   }
                 ],
                 "aggregates": [],
@@ -870,7 +913,10 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                       },
                       "group_key": [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            null
+                          ]
                         }
                       ],
                       "aggregates": [],
@@ -1200,14 +1246,20 @@ SELECT abs(min(a) - max(a)) FROM t
                           {
                             "func": "MinInt32",
                             "expr": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             },
                             "distinct": false
                           },
                           {
                             "func": "MaxInt32",
                             "expr": {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                "a"
+                              ]
                             },
                             "distinct": false
                           }
@@ -1406,12 +1458,20 @@ SELECT abs(min(a) - max(a)) FROM t
                   },
                   "expr": {
                     "CallBinary": {
-                      "func": "SubInt32",
+                      "func": {
+                        "SubInt32": null
+                      },
                       "expr1": {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          "?column?"
+                        ]
                       },
                       "expr2": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "?column?"
+                        ]
                       }
                     }
                   }
@@ -1541,7 +1601,10 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                             },
                             "scalars": [
                               {
-                                "Column": 1
+                                "Column": [
+                                  1,
+                                  "b"
+                                ]
                               }
                             ]
                           }
@@ -1555,21 +1618,30 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                     },
                     "group_key": [
                       {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          null
+                        ]
                       }
                     ],
                     "aggregates": [
                       {
                         "func": "MinInt32",
                         "expr": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         "distinct": false
                       },
                       {
                         "func": "MaxInt32",
                         "expr": {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            "a"
+                          ]
                         },
                         "distinct": false
                       }
@@ -1617,12 +1689,20 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                   },
                   "expr": {
                     "CallBinary": {
-                      "func": "SubInt32",
+                      "func": {
+                        "SubInt32": null
+                      },
                       "expr1": {
-                        "Column": 1
+                        "Column": [
+                          1,
+                          "?column?"
+                        ]
                       },
                       "expr2": {
-                        "Column": 2
+                        "Column": [
+                          2,
+                          "?column?"
+                        ]
                       }
                     }
                   }
@@ -1730,7 +1810,9 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 "predicates": [
                                   {
                                     "CallVariadic": {
-                                      "func": "And",
+                                      "func": {
+                                        "And": null
+                                      },
                                       "exprs": [
                                         {
                                           "Literal": [
@@ -1796,7 +1878,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                     },
                                     "group_key": [
                                       {
-                                        "Column": 0
+                                        "Column": [
+                                          0,
+                                          null
+                                        ]
                                       }
                                     ],
                                     "aggregates": [],
@@ -1894,12 +1979,20 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           "predicates": [
                                                             {
                                                               "CallBinary": {
-                                                                "func": "Lt",
+                                                                "func": {
+                                                                  "Lt": null
+                                                                },
                                                                 "expr1": {
-                                                                  "Column": 0
+                                                                  "Column": [
+                                                                    0,
+                                                                    "a"
+                                                                  ]
                                                                 },
                                                                 "expr2": {
-                                                                  "Column": 1
+                                                                  "Column": [
+                                                                    1,
+                                                                    "a"
+                                                                  ]
                                                                 }
                                                               }
                                                             }
@@ -1908,7 +2001,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                       },
                                                       "group_key": [
                                                         {
-                                                          "Column": 0
+                                                          "Column": [
+                                                            0,
+                                                            null
+                                                          ]
                                                         }
                                                       ],
                                                       "aggregates": [],
@@ -2004,7 +2100,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                                 },
                                                                                 "group_key": [
                                                                                   {
-                                                                                    "Column": 0
+                                                                                    "Column": [
+                                                                                      0,
+                                                                                      null
+                                                                                    ]
                                                                                   }
                                                                                 ],
                                                                                 "aggregates": [],
@@ -2040,7 +2139,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                               },
                                                                               "group_key": [
                                                                                 {
-                                                                                  "Column": 0
+                                                                                  "Column": [
+                                                                                    0,
+                                                                                    null
+                                                                                  ]
                                                                                 }
                                                                               ],
                                                                               "aggregates": [],
@@ -2076,10 +2178,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                   "equivalences": [
                                                                     [
                                                                       {
-                                                                        "Column": 0
+                                                                        "Column": [
+                                                                          0,
+                                                                          null
+                                                                        ]
                                                                       },
                                                                       {
-                                                                        "Column": 1
+                                                                        "Column": [
+                                                                          1,
+                                                                          null
+                                                                        ]
                                                                       }
                                                                     ]
                                                                   ],
@@ -2130,10 +2238,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                         "equivalences": [
                                           [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             },
                                             {
-                                              "Column": 2
+                                              "Column": [
+                                                2,
+                                                null
+                                              ]
                                             }
                                           ]
                                         ],
@@ -2153,7 +2267,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         },
                         "predicates": [
                           {
-                            "Column": 2
+                            "Column": [
+                              2,
+                              null
+                            ]
                           }
                         ]
                       }
@@ -2192,7 +2309,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         },
                         "group_key": [
                           {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              null
+                            ]
                           }
                         ],
                         "aggregates": [],
@@ -2290,12 +2410,20 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               "predicates": [
                                                 {
                                                   "CallBinary": {
-                                                    "func": "Gt",
+                                                    "func": {
+                                                      "Gt": null
+                                                    },
                                                     "expr1": {
-                                                      "Column": 0
+                                                      "Column": [
+                                                        0,
+                                                        "b"
+                                                      ]
                                                     },
                                                     "expr2": {
-                                                      "Column": 2
+                                                      "Column": [
+                                                        2,
+                                                        "b"
+                                                      ]
                                                     }
                                                   }
                                                 }
@@ -2304,7 +2432,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           },
                                           "group_key": [
                                             {
-                                              "Column": 0
+                                              "Column": [
+                                                0,
+                                                null
+                                              ]
                                             }
                                           ],
                                           "aggregates": [],
@@ -2400,7 +2531,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                     },
                                                                     "group_key": [
                                                                       {
-                                                                        "Column": 0
+                                                                        "Column": [
+                                                                          0,
+                                                                          null
+                                                                        ]
                                                                       }
                                                                     ],
                                                                     "aggregates": [],
@@ -2436,7 +2570,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                   },
                                                                   "group_key": [
                                                                     {
-                                                                      "Column": 0
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     }
                                                                   ],
                                                                   "aggregates": [],
@@ -2472,10 +2609,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                       "equivalences": [
                                                         [
                                                           {
-                                                            "Column": 0
+                                                            "Column": [
+                                                              0,
+                                                              null
+                                                            ]
                                                           },
                                                           {
-                                                            "Column": 1
+                                                            "Column": [
+                                                              1,
+                                                              null
+                                                            ]
                                                           }
                                                         ]
                                                       ],
@@ -2526,10 +2669,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             "equivalences": [
                               [
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    null
+                                  ]
                                 },
                                 {
-                                  "Column": 2
+                                  "Column": [
+                                    2,
+                                    null
+                                  ]
                                 }
                               ]
                             ],
@@ -2549,7 +2698,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             },
             "predicates": [
               {
-                "Column": 2
+                "Column": [
+                  2,
+                  null
+                ]
               }
             ]
           }
@@ -2694,10 +2846,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                               },
                               "group_key": [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    null
+                                  ]
                                 }
                               ],
                               "aggregates": [],
@@ -2738,7 +2896,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                   },
                                   "group_key": [
                                     {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        null
+                                      ]
                                     }
                                   ],
                                   "aggregates": [],
@@ -2844,12 +3005,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             "predicates": [
                                                               {
                                                                 "CallBinary": {
-                                                                  "func": "Eq",
+                                                                  "func": {
+                                                                    "Eq": null
+                                                                  },
                                                                   "expr1": {
-                                                                    "Column": 2
+                                                                    "Column": [
+                                                                      2,
+                                                                      "b"
+                                                                    ]
                                                                   },
                                                                   "expr2": {
-                                                                    "Column": 0
+                                                                    "Column": [
+                                                                      0,
+                                                                      "b"
+                                                                    ]
                                                                   }
                                                                 }
                                                               }
@@ -2916,113 +3085,87 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     },
                                                     "inputs": [
                                                       {
-                                                        "Map": {
+                                                        "Project": {
                                                           "input": {
-                                                            "Project": {
+                                                            "FlatMap": {
                                                               "input": {
-                                                                "Filter": {
+                                                                "Reduce": {
                                                                   "input": {
-                                                                    "Reduce": {
-                                                                      "input": {
-                                                                        "Get": {
-                                                                          "id": {
-                                                                            "Local": 4
-                                                                          },
-                                                                          "typ": {
-                                                                            "column_types": [
-                                                                              {
-                                                                                "scalar_type": "Int32",
-                                                                                "nullable": false
-                                                                              },
-                                                                              {
-                                                                                "scalar_type": "Int32",
-                                                                                "nullable": false
-                                                                              }
-                                                                            ],
-                                                                            "keys": [
-                                                                              [
-                                                                                0
-                                                                              ]
-                                                                            ]
-                                                                          },
-                                                                          "access_strategy": "UnknownOrLocal"
-                                                                        }
+                                                                    "Get": {
+                                                                      "id": {
+                                                                        "Local": 4
                                                                       },
-                                                                      "group_key": [
-                                                                        {
-                                                                          "Column": 0
-                                                                        }
-                                                                      ],
-                                                                      "aggregates": [
-                                                                        {
-                                                                          "func": "Count",
-                                                                          "expr": {
-                                                                            "Literal": [
-                                                                              {
-                                                                                "Ok": {
-                                                                                  "data": [
-                                                                                    2
-                                                                                  ]
-                                                                                }
-                                                                              },
-                                                                              {
-                                                                                "scalar_type": "Bool",
-                                                                                "nullable": false
-                                                                              }
-                                                                            ]
+                                                                      "typ": {
+                                                                        "column_types": [
+                                                                          {
+                                                                            "scalar_type": "Int32",
+                                                                            "nullable": false
                                                                           },
-                                                                          "distinct": false
-                                                                        }
-                                                                      ],
-                                                                      "monotonic": false,
-                                                                      "expected_group_size": null
+                                                                          {
+                                                                            "scalar_type": "Int32",
+                                                                            "nullable": false
+                                                                          }
+                                                                        ],
+                                                                        "keys": [
+                                                                          [
+                                                                            0
+                                                                          ]
+                                                                        ]
+                                                                      },
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
-                                                                  "predicates": [
+                                                                  "group_key": [
                                                                     {
-                                                                      "CallBinary": {
-                                                                        "func": "Gt",
-                                                                        "expr1": {
-                                                                          "Column": 1
-                                                                        },
-                                                                        "expr2": {
-                                                                          "Literal": [
-                                                                            {
-                                                                              "Ok": {
-                                                                                "data": [
-                                                                                  50,
-                                                                                  1
-                                                                                ]
-                                                                              }
-                                                                            },
-                                                                            {
-                                                                              "scalar_type": "Int64",
-                                                                              "nullable": false
-                                                                            }
-                                                                          ]
-                                                                        }
-                                                                      }
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     }
-                                                                  ]
+                                                                  ],
+                                                                  "aggregates": [
+                                                                    {
+                                                                      "func": "Count",
+                                                                      "expr": {
+                                                                        "Literal": [
+                                                                          {
+                                                                            "Ok": {
+                                                                              "data": [
+                                                                                2
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "scalar_type": "Bool",
+                                                                            "nullable": false
+                                                                          }
+                                                                        ]
+                                                                      },
+                                                                      "distinct": false
+                                                                    }
+                                                                  ],
+                                                                  "monotonic": false,
+                                                                  "expected_group_size": null
                                                                 }
                                                               },
-                                                              "outputs": [
-                                                                0
+                                                              "func": {
+                                                                "GuardSubquerySize": {
+                                                                  "column_type": "Int32"
+                                                                }
+                                                              },
+                                                              "exprs": [
+                                                                {
+                                                                  "Column": [
+                                                                    1,
+                                                                    null
+                                                                  ]
+                                                                }
                                                               ]
                                                             }
                                                           },
-                                                          "scalars": [
-                                                            {
-                                                              "Literal": [
-                                                                {
-                                                                  "Err": "MultipleRowsFromSubquery"
-                                                                },
-                                                                {
-                                                                  "scalar_type": "Int32",
-                                                                  "nullable": false
-                                                                }
-                                                              ]
-                                                            }
+                                                          "outputs": [
+                                                            0,
+                                                            2
                                                           ]
                                                         }
                                                       }
@@ -3092,7 +3235,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                               },
                                                                               "group_key": [
                                                                                 {
-                                                                                  "Column": 0
+                                                                                  "Column": [
+                                                                                    0,
+                                                                                    null
+                                                                                  ]
                                                                                 }
                                                                               ],
                                                                               "aggregates": [],
@@ -3128,7 +3274,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             },
                                                                             "group_key": [
                                                                               {
-                                                                                "Column": 0
+                                                                                "Column": [
+                                                                                  0,
+                                                                                  null
+                                                                                ]
                                                                               }
                                                                             ],
                                                                             "aggregates": [],
@@ -3164,10 +3313,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                 "equivalences": [
                                                                   [
                                                                     {
-                                                                      "Column": 0
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     },
                                                                     {
-                                                                      "Column": 1
+                                                                      "Column": [
+                                                                        1,
+                                                                        null
+                                                                      ]
                                                                     }
                                                                   ]
                                                                 ],
@@ -3218,10 +3373,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                       "equivalences": [
                                         [
                                           {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              null
+                                            ]
                                           },
                                           {
-                                            "Column": 2
+                                            "Column": [
+                                              2,
+                                              null
+                                            ]
                                           }
                                         ]
                                       ],
@@ -3267,10 +3428,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                               },
                               "group_key": [
                                 {
-                                  "Column": 0
+                                  "Column": [
+                                    0,
+                                    null
+                                  ]
                                 },
                                 {
-                                  "Column": 1
+                                  "Column": [
+                                    1,
+                                    null
+                                  ]
                                 }
                               ],
                               "aggregates": [],
@@ -3311,7 +3478,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                   },
                                   "group_key": [
                                     {
-                                      "Column": 1
+                                      "Column": [
+                                        1,
+                                        null
+                                      ]
                                     }
                                   ],
                                   "aggregates": [],
@@ -3417,12 +3587,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             "predicates": [
                                                               {
                                                                 "CallBinary": {
-                                                                  "func": "Eq",
+                                                                  "func": {
+                                                                    "Eq": null
+                                                                  },
                                                                   "expr1": {
-                                                                    "Column": 2
+                                                                    "Column": [
+                                                                      2,
+                                                                      "b"
+                                                                    ]
                                                                   },
                                                                   "expr2": {
-                                                                    "Column": 0
+                                                                    "Column": [
+                                                                      0,
+                                                                      "b"
+                                                                    ]
                                                                   }
                                                                 }
                                                               }
@@ -3489,113 +3667,87 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     },
                                                     "inputs": [
                                                       {
-                                                        "Map": {
+                                                        "Project": {
                                                           "input": {
-                                                            "Project": {
+                                                            "FlatMap": {
                                                               "input": {
-                                                                "Filter": {
+                                                                "Reduce": {
                                                                   "input": {
-                                                                    "Reduce": {
-                                                                      "input": {
-                                                                        "Get": {
-                                                                          "id": {
-                                                                            "Local": 8
-                                                                          },
-                                                                          "typ": {
-                                                                            "column_types": [
-                                                                              {
-                                                                                "scalar_type": "Int32",
-                                                                                "nullable": false
-                                                                              },
-                                                                              {
-                                                                                "scalar_type": "Int32",
-                                                                                "nullable": false
-                                                                              }
-                                                                            ],
-                                                                            "keys": [
-                                                                              [
-                                                                                0
-                                                                              ]
-                                                                            ]
-                                                                          },
-                                                                          "access_strategy": "UnknownOrLocal"
-                                                                        }
+                                                                    "Get": {
+                                                                      "id": {
+                                                                        "Local": 8
                                                                       },
-                                                                      "group_key": [
-                                                                        {
-                                                                          "Column": 0
-                                                                        }
-                                                                      ],
-                                                                      "aggregates": [
-                                                                        {
-                                                                          "func": "Count",
-                                                                          "expr": {
-                                                                            "Literal": [
-                                                                              {
-                                                                                "Ok": {
-                                                                                  "data": [
-                                                                                    2
-                                                                                  ]
-                                                                                }
-                                                                              },
-                                                                              {
-                                                                                "scalar_type": "Bool",
-                                                                                "nullable": false
-                                                                              }
-                                                                            ]
+                                                                      "typ": {
+                                                                        "column_types": [
+                                                                          {
+                                                                            "scalar_type": "Int32",
+                                                                            "nullable": false
                                                                           },
-                                                                          "distinct": false
-                                                                        }
-                                                                      ],
-                                                                      "monotonic": false,
-                                                                      "expected_group_size": null
+                                                                          {
+                                                                            "scalar_type": "Int32",
+                                                                            "nullable": false
+                                                                          }
+                                                                        ],
+                                                                        "keys": [
+                                                                          [
+                                                                            0
+                                                                          ]
+                                                                        ]
+                                                                      },
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
-                                                                  "predicates": [
+                                                                  "group_key": [
                                                                     {
-                                                                      "CallBinary": {
-                                                                        "func": "Gt",
-                                                                        "expr1": {
-                                                                          "Column": 1
-                                                                        },
-                                                                        "expr2": {
-                                                                          "Literal": [
-                                                                            {
-                                                                              "Ok": {
-                                                                                "data": [
-                                                                                  50,
-                                                                                  1
-                                                                                ]
-                                                                              }
-                                                                            },
-                                                                            {
-                                                                              "scalar_type": "Int64",
-                                                                              "nullable": false
-                                                                            }
-                                                                          ]
-                                                                        }
-                                                                      }
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     }
-                                                                  ]
+                                                                  ],
+                                                                  "aggregates": [
+                                                                    {
+                                                                      "func": "Count",
+                                                                      "expr": {
+                                                                        "Literal": [
+                                                                          {
+                                                                            "Ok": {
+                                                                              "data": [
+                                                                                2
+                                                                              ]
+                                                                            }
+                                                                          },
+                                                                          {
+                                                                            "scalar_type": "Bool",
+                                                                            "nullable": false
+                                                                          }
+                                                                        ]
+                                                                      },
+                                                                      "distinct": false
+                                                                    }
+                                                                  ],
+                                                                  "monotonic": false,
+                                                                  "expected_group_size": null
                                                                 }
                                                               },
-                                                              "outputs": [
-                                                                0
+                                                              "func": {
+                                                                "GuardSubquerySize": {
+                                                                  "column_type": "Int32"
+                                                                }
+                                                              },
+                                                              "exprs": [
+                                                                {
+                                                                  "Column": [
+                                                                    1,
+                                                                    null
+                                                                  ]
+                                                                }
                                                               ]
                                                             }
                                                           },
-                                                          "scalars": [
-                                                            {
-                                                              "Literal": [
-                                                                {
-                                                                  "Err": "MultipleRowsFromSubquery"
-                                                                },
-                                                                {
-                                                                  "scalar_type": "Int32",
-                                                                  "nullable": false
-                                                                }
-                                                              ]
-                                                            }
+                                                          "outputs": [
+                                                            0,
+                                                            2
                                                           ]
                                                         }
                                                       }
@@ -3665,7 +3817,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                               },
                                                                               "group_key": [
                                                                                 {
-                                                                                  "Column": 0
+                                                                                  "Column": [
+                                                                                    0,
+                                                                                    null
+                                                                                  ]
                                                                                 }
                                                                               ],
                                                                               "aggregates": [],
@@ -3701,7 +3856,10 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             },
                                                                             "group_key": [
                                                                               {
-                                                                                "Column": 0
+                                                                                "Column": [
+                                                                                  0,
+                                                                                  null
+                                                                                ]
                                                                               }
                                                                             ],
                                                                             "aggregates": [],
@@ -3737,10 +3895,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                 "equivalences": [
                                                                   [
                                                                     {
-                                                                      "Column": 0
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     },
                                                                     {
-                                                                      "Column": 1
+                                                                      "Column": [
+                                                                        1,
+                                                                        null
+                                                                      ]
                                                                     }
                                                                   ]
                                                                 ],
@@ -3791,10 +3955,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                       "equivalences": [
                                         [
                                           {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              null
+                                            ]
                                           },
                                           {
-                                            "Column": 2
+                                            "Column": [
+                                              2,
+                                              null
+                                            ]
                                           }
                                         ]
                                       ],
@@ -3816,24 +3986,42 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                     "equivalences": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            null
+                          ]
                         },
                         {
-                          "Column": 2
+                          "Column": [
+                            2,
+                            null
+                          ]
                         },
                         {
-                          "Column": 5
+                          "Column": [
+                            5,
+                            null
+                          ]
                         }
                       ],
                       [
                         {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            null
+                          ]
                         },
                         {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            null
+                          ]
                         },
                         {
-                          "Column": 6
+                          "Column": [
+                            6,
+                            null
+                          ]
                         }
                       ]
                     ],
@@ -3844,10 +4032,16 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
             },
             "scalars": [
               {
-                "Column": 4
+                "Column": [
+                  4,
+                  null
+                ]
               },
               {
-                "Column": 7
+                "Column": [
+                  7,
+                  null
+                ]
               }
             ]
           }
@@ -4725,27 +4919,45 @@ WHERE t1.b = t2.b AND t2.b = t3.b
             "predicates": [
               {
                 "CallVariadic": {
-                  "func": "And",
+                  "func": {
+                    "And": null
+                  },
                   "exprs": [
                     {
                       "CallBinary": {
-                        "func": "Eq",
+                        "func": {
+                          "Eq": null
+                        },
                         "expr1": {
-                          "Column": 1
+                          "Column": [
+                            1,
+                            "b"
+                          ]
                         },
                         "expr2": {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            "b"
+                          ]
                         }
                       }
                     },
                     {
                       "CallBinary": {
-                        "func": "Eq",
+                        "func": {
+                          "Eq": null
+                        },
                         "expr1": {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            "b"
+                          ]
                         },
                         "expr2": {
-                          "Column": 5
+                          "Column": [
+                            5,
+                            "b"
+                          ]
                         }
                       }
                     }
@@ -4963,12 +5175,20 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             "predicates": [
                               {
                                 "CallBinary": {
-                                  "func": "Eq",
+                                  "func": {
+                                    "Eq": null
+                                  },
                                   "expr1": {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "b"
+                                    ]
                                   },
                                   "expr2": {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      "b"
+                                    ]
                                   }
                                 }
                               }
@@ -5136,12 +5356,20 @@ INNER JOIN t as t3 ON t2.b = t3.b
                         "predicates": [
                           {
                             "CallBinary": {
-                              "func": "Eq",
+                              "func": {
+                                "Eq": null
+                              },
                               "expr1": {
-                                "Column": 3
+                                "Column": [
+                                  3,
+                                  "b"
+                                ]
                               },
                               "expr2": {
-                                "Column": 5
+                                "Column": [
+                                  5,
+                                  "b"
+                                ]
                               }
                             }
                           }
@@ -5399,12 +5627,20 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             "predicates": [
                               {
                                 "CallBinary": {
-                                  "func": "Eq",
+                                  "func": {
+                                    "Eq": null
+                                  },
                                   "expr1": {
-                                    "Column": 1
+                                    "Column": [
+                                      1,
+                                      "b"
+                                    ]
                                   },
                                   "expr2": {
-                                    "Column": 3
+                                    "Column": [
+                                      3,
+                                      "b"
+                                    ]
                                   }
                                 }
                               }
@@ -5454,7 +5690,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                 },
                                 "group_key": [
                                   {
-                                    "Column": 0
+                                    "Column": [
+                                      0,
+                                      null
+                                    ]
                                   }
                                 ],
                                 "aggregates": [],
@@ -5510,7 +5749,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                       "IsNull": null
                                                                     },
                                                                     "expr": {
-                                                                      "Column": 1
+                                                                      "Column": [
+                                                                        1,
+                                                                        "b"
+                                                                      ]
                                                                     }
                                                                   }
                                                                 }
@@ -5544,10 +5786,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "equivalences": [
                                                       [
                                                         {
-                                                          "Column": 1
+                                                          "Column": [
+                                                            1,
+                                                            "b"
+                                                          ]
                                                         },
                                                         {
-                                                          "Column": 2
+                                                          "Column": [
+                                                            2,
+                                                            null
+                                                          ]
                                                         }
                                                       ]
                                                     ],
@@ -5788,12 +6036,20 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                         "predicates": [
                           {
                             "CallBinary": {
-                              "func": "Eq",
+                              "func": {
+                                "Eq": null
+                              },
                               "expr1": {
-                                "Column": 3
+                                "Column": [
+                                  3,
+                                  "b"
+                                ]
                               },
                               "expr2": {
-                                "Column": 5
+                                "Column": [
+                                  5,
+                                  "b"
+                                ]
                               }
                             }
                           }
@@ -5851,7 +6107,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             },
                             "group_key": [
                               {
-                                "Column": 0
+                                "Column": [
+                                  0,
+                                  null
+                                ]
                               }
                             ],
                             "aggregates": [],
@@ -5909,7 +6168,10 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                       "IsNull": null
                                                                     },
                                                                     "expr": {
-                                                                      "Column": 1
+                                                                      "Column": [
+                                                                        1,
+                                                                        "b"
+                                                                      ]
                                                                     }
                                                                   }
                                                                 }
@@ -5943,10 +6205,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "equivalences": [
                                                       [
                                                         {
-                                                          "Column": 1
+                                                          "Column": [
+                                                            1,
+                                                            "b"
+                                                          ]
                                                         },
                                                         {
-                                                          "Column": 2
+                                                          "Column": [
+                                                            2,
+                                                            null
+                                                          ]
                                                         }
                                                       ]
                                                     ],
@@ -6228,12 +6496,20 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                     "scalars": [
                       {
                         "CallBinary": {
-                          "func": "MulInt32",
+                          "func": {
+                            "MulInt32": null
+                          },
                           "expr1": {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "a"
+                            ]
                           },
                           "expr2": {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "b"
+                            ]
                           }
                         }
                       }
@@ -6354,12 +6630,20 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                     "scalars": [
                       {
                         "CallBinary": {
-                          "func": "AddInt32",
+                          "func": {
+                            "AddInt32": null
+                          },
                           "expr1": {
-                            "Column": 0
+                            "Column": [
+                              0,
+                              "v"
+                            ]
                           },
                           "expr2": {
-                            "Column": 1
+                            "Column": [
+                              1,
+                              "v"
+                            ]
                           }
                         }
                       }
@@ -6507,7 +6791,10 @@ FROM
                     },
                     "group_key": [
                       {
-                        "Column": 0
+                        "Column": [
+                          0,
+                          null
+                        ]
                       }
                     ],
                     "aggregates": [],
@@ -6603,7 +6890,10 @@ FROM
                                       },
                                       "group_key": [
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ],
                                       "aggregates": [
@@ -6611,12 +6901,20 @@ FROM
                                           "func": "MaxInt32",
                                           "expr": {
                                             "CallBinary": {
-                                              "func": "MulInt32",
+                                              "func": {
+                                                "MulInt32": null
+                                              },
                                               "expr1": {
-                                                "Column": 0
+                                                "Column": [
+                                                  0,
+                                                  "a"
+                                                ]
                                               },
                                               "expr2": {
-                                                "Column": 1
+                                                "Column": [
+                                                  1,
+                                                  "a"
+                                                ]
                                               }
                                             }
                                           },
@@ -6696,7 +6994,10 @@ FROM
                                                                     },
                                                                     "group_key": [
                                                                       {
-                                                                        "Column": 0
+                                                                        "Column": [
+                                                                          0,
+                                                                          null
+                                                                        ]
                                                                       }
                                                                     ],
                                                                     "aggregates": [],
@@ -6732,7 +7033,10 @@ FROM
                                                                   },
                                                                   "group_key": [
                                                                     {
-                                                                      "Column": 0
+                                                                      "Column": [
+                                                                        0,
+                                                                        null
+                                                                      ]
                                                                     }
                                                                   ],
                                                                   "aggregates": [],
@@ -6768,10 +7072,16 @@ FROM
                                                       "equivalences": [
                                                         [
                                                           {
-                                                            "Column": 0
+                                                            "Column": [
+                                                              0,
+                                                              null
+                                                            ]
                                                           },
                                                           {
-                                                            "Column": 1
+                                                            "Column": [
+                                                              1,
+                                                              null
+                                                            ]
                                                           }
                                                         ]
                                                       ],
@@ -6844,12 +7154,20 @@ FROM
                                   "predicates": [
                                     {
                                       "CallBinary": {
-                                        "func": "NotEq",
+                                        "func": {
+                                          "NotEq": null
+                                        },
                                         "expr1": {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            "m"
+                                          ]
                                         },
                                         "expr2": {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
                                         }
                                       }
                                     }
@@ -6862,10 +7180,16 @@ FROM
                         "equivalences": [
                           [
                             {
-                              "Column": 0
+                              "Column": [
+                                0,
+                                null
+                              ]
                             },
                             {
-                              "Column": 2
+                              "Column": [
+                                2,
+                                null
+                              ]
                             }
                           ]
                         ],
@@ -6915,7 +7239,10 @@ FROM
                 },
                 "group_key": [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      null
+                    ]
                   }
                 ],
                 "aggregates": [],
@@ -7015,7 +7342,10 @@ FROM
                                   },
                                   "group_key": [
                                     {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        null
+                                      ]
                                     }
                                   ],
                                   "aggregates": [
@@ -7023,12 +7353,20 @@ FROM
                                       "func": "MaxInt32",
                                       "expr": {
                                         "CallBinary": {
-                                          "func": "MulInt32",
+                                          "func": {
+                                            "MulInt32": null
+                                          },
                                           "expr1": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           },
                                           "expr2": {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       },
@@ -7108,7 +7446,10 @@ FROM
                                                                 },
                                                                 "group_key": [
                                                                   {
-                                                                    "Column": 0
+                                                                    "Column": [
+                                                                      0,
+                                                                      null
+                                                                    ]
                                                                   }
                                                                 ],
                                                                 "aggregates": [],
@@ -7144,7 +7485,10 @@ FROM
                                                               },
                                                               "group_key": [
                                                                 {
-                                                                  "Column": 0
+                                                                  "Column": [
+                                                                    0,
+                                                                    null
+                                                                  ]
                                                                 }
                                                               ],
                                                               "aggregates": [],
@@ -7180,10 +7524,16 @@ FROM
                                                   "equivalences": [
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          null
+                                                        ]
                                                       },
                                                       {
-                                                        "Column": 1
+                                                        "Column": [
+                                                          1,
+                                                          null
+                                                        ]
                                                       }
                                                     ]
                                                   ],
@@ -7256,22 +7606,34 @@ FROM
                               "predicates": [
                                 {
                                   "CallVariadic": {
-                                    "func": "Or",
+                                    "func": {
+                                      "Or": null
+                                    },
                                     "exprs": [
                                       {
                                         "CallBinary": {
-                                          "func": "NotEq",
+                                          "func": {
+                                            "NotEq": null
+                                          },
                                           "expr1": {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              "m"
+                                            ]
                                           },
                                           "expr2": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       },
                                       {
                                         "CallVariadic": {
-                                          "func": "And",
+                                          "func": {
+                                            "And": null
+                                          },
                                           "exprs": [
                                             {
                                               "CallUnary": {
@@ -7284,7 +7646,10 @@ FROM
                                                       "IsNull": null
                                                     },
                                                     "expr": {
-                                                      "Column": 1
+                                                      "Column": [
+                                                        1,
+                                                        "m"
+                                                      ]
                                                     }
                                                   }
                                                 }
@@ -7296,7 +7661,10 @@ FROM
                                                   "IsNull": null
                                                 },
                                                 "expr": {
-                                                  "Column": 0
+                                                  "Column": [
+                                                    0,
+                                                    "a"
+                                                  ]
                                                 }
                                               }
                                             }
@@ -7315,10 +7683,16 @@ FROM
                     "equivalences": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            null
+                          ]
                         },
                         {
-                          "Column": 3
+                          "Column": [
+                            3,
+                            null
+                          ]
                         }
                       ]
                     ],
@@ -7465,7 +7839,10 @@ FROM
                 },
                 "group_key": [
                   {
-                    "Column": 0
+                    "Column": [
+                      0,
+                      null
+                    ]
                   }
                 ],
                 "aggregates": [],
@@ -7561,7 +7938,10 @@ FROM
                                   },
                                   "group_key": [
                                     {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        null
+                                      ]
                                     }
                                   ],
                                   "aggregates": [
@@ -7569,12 +7949,20 @@ FROM
                                       "func": "MaxInt32",
                                       "expr": {
                                         "CallBinary": {
-                                          "func": "MulInt32",
+                                          "func": {
+                                            "MulInt32": null
+                                          },
                                           "expr1": {
-                                            "Column": 0
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
                                           },
                                           "expr2": {
-                                            "Column": 1
+                                            "Column": [
+                                              1,
+                                              "a"
+                                            ]
                                           }
                                         }
                                       },
@@ -7654,7 +8042,10 @@ FROM
                                                                 },
                                                                 "group_key": [
                                                                   {
-                                                                    "Column": 0
+                                                                    "Column": [
+                                                                      0,
+                                                                      null
+                                                                    ]
                                                                   }
                                                                 ],
                                                                 "aggregates": [],
@@ -7690,7 +8081,10 @@ FROM
                                                               },
                                                               "group_key": [
                                                                 {
-                                                                  "Column": 0
+                                                                  "Column": [
+                                                                    0,
+                                                                    null
+                                                                  ]
                                                                 }
                                                               ],
                                                               "aggregates": [],
@@ -7726,10 +8120,16 @@ FROM
                                                   "equivalences": [
                                                     [
                                                       {
-                                                        "Column": 0
+                                                        "Column": [
+                                                          0,
+                                                          null
+                                                        ]
                                                       },
                                                       {
-                                                        "Column": 1
+                                                        "Column": [
+                                                          1,
+                                                          null
+                                                        ]
                                                       }
                                                     ]
                                                   ],
@@ -7806,10 +8206,16 @@ FROM
                                       },
                                       "group_key": [
                                         {
-                                          "Column": 1
+                                          "Column": [
+                                            1,
+                                            null
+                                          ]
                                         },
                                         {
-                                          "Column": 0
+                                          "Column": [
+                                            0,
+                                            null
+                                          ]
                                         }
                                       ],
                                       "aggregates": [],
@@ -7910,10 +8316,16 @@ FROM
                                                         },
                                                         "group_key": [
                                                           {
-                                                            "Column": 0
+                                                            "Column": [
+                                                              0,
+                                                              null
+                                                            ]
                                                           },
                                                           {
-                                                            "Column": 1
+                                                            "Column": [
+                                                              1,
+                                                              null
+                                                            ]
                                                           }
                                                         ],
                                                         "aggregates": [
@@ -7921,12 +8333,20 @@ FROM
                                                             "func": "MaxInt32",
                                                             "expr": {
                                                               "CallBinary": {
-                                                                "func": "MulInt32",
+                                                                "func": {
+                                                                  "MulInt32": null
+                                                                },
                                                                 "expr1": {
-                                                                  "Column": 1
+                                                                  "Column": [
+                                                                    1,
+                                                                    "a"
+                                                                  ]
                                                                 },
                                                                 "expr2": {
-                                                                  "Column": 2
+                                                                  "Column": [
+                                                                    2,
+                                                                    "a"
+                                                                  ]
                                                                 }
                                                               }
                                                             },
@@ -8016,10 +8436,16 @@ FROM
                                                                                       },
                                                                                       "group_key": [
                                                                                         {
-                                                                                          "Column": 0
+                                                                                          "Column": [
+                                                                                            0,
+                                                                                            null
+                                                                                          ]
                                                                                         },
                                                                                         {
-                                                                                          "Column": 1
+                                                                                          "Column": [
+                                                                                            1,
+                                                                                            null
+                                                                                          ]
                                                                                         }
                                                                                       ],
                                                                                       "aggregates": [],
@@ -8060,10 +8486,16 @@ FROM
                                                                                     },
                                                                                     "group_key": [
                                                                                       {
-                                                                                        "Column": 0
+                                                                                        "Column": [
+                                                                                          0,
+                                                                                          null
+                                                                                        ]
                                                                                       },
                                                                                       {
-                                                                                        "Column": 1
+                                                                                        "Column": [
+                                                                                          1,
+                                                                                          null
+                                                                                        ]
                                                                                       }
                                                                                     ],
                                                                                     "aggregates": [],
@@ -8104,18 +8536,30 @@ FROM
                                                                         "equivalences": [
                                                                           [
                                                                             {
-                                                                              "Column": 0
+                                                                              "Column": [
+                                                                                0,
+                                                                                null
+                                                                              ]
                                                                             },
                                                                             {
-                                                                              "Column": 2
+                                                                              "Column": [
+                                                                                2,
+                                                                                null
+                                                                              ]
                                                                             }
                                                                           ],
                                                                           [
                                                                             {
-                                                                              "Column": 1
+                                                                              "Column": [
+                                                                                1,
+                                                                                null
+                                                                              ]
                                                                             },
                                                                             {
-                                                                              "Column": 3
+                                                                              "Column": [
+                                                                                3,
+                                                                                null
+                                                                              ]
                                                                             }
                                                                           ]
                                                                         ],
@@ -8193,24 +8637,39 @@ FROM
                                                     "predicates": [
                                                       {
                                                         "CallVariadic": {
-                                                          "func": "And",
+                                                          "func": {
+                                                            "And": null
+                                                          },
                                                           "exprs": [
                                                             {
                                                               "CallBinary": {
-                                                                "func": "Eq",
+                                                                "func": {
+                                                                  "Eq": null
+                                                                },
                                                                 "expr1": {
-                                                                  "Column": 1
+                                                                  "Column": [
+                                                                    1,
+                                                                    "a"
+                                                                  ]
                                                                 },
                                                                 "expr2": {
-                                                                  "Column": 0
+                                                                  "Column": [
+                                                                    0,
+                                                                    "m"
+                                                                  ]
                                                                 }
                                                               }
                                                             },
                                                             {
                                                               "CallBinary": {
-                                                                "func": "Gt",
+                                                                "func": {
+                                                                  "Gt": null
+                                                                },
                                                                 "expr1": {
-                                                                  "Column": 2
+                                                                  "Column": [
+                                                                    2,
+                                                                    "m"
+                                                                  ]
                                                                 },
                                                                 "expr2": {
                                                                   "Literal": [
@@ -8242,18 +8701,30 @@ FROM
                                           "equivalences": [
                                             [
                                               {
-                                                "Column": 1
+                                                "Column": [
+                                                  1,
+                                                  null
+                                                ]
                                               },
                                               {
-                                                "Column": 2
+                                                "Column": [
+                                                  2,
+                                                  null
+                                                ]
                                               }
                                             ],
                                             [
                                               {
-                                                "Column": 0
+                                                "Column": [
+                                                  0,
+                                                  null
+                                                ]
                                               },
                                               {
-                                                "Column": 3
+                                                "Column": [
+                                                  3,
+                                                  null
+                                                ]
                                               }
                                             ]
                                           ],
@@ -8272,12 +8743,20 @@ FROM
                               "predicates": [
                                 {
                                   "CallBinary": {
-                                    "func": "NotEq",
+                                    "func": {
+                                      "NotEq": null
+                                    },
                                     "expr1": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     },
                                     "expr2": {
-                                      "Column": 0
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
                                     }
                                   }
                                 }
@@ -8290,10 +8769,16 @@ FROM
                     "equivalences": [
                       [
                         {
-                          "Column": 0
+                          "Column": [
+                            0,
+                            null
+                          ]
                         },
                         {
-                          "Column": 2
+                          "Column": [
+                            2,
+                            null
+                          ]
                         }
                       ]
                     ],

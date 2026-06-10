@@ -17,8 +17,19 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 . misc/buildkite/git.bash
 
+if git rev-parse --is-shallow-repository | grep -q true; then
+  git fetch --unshallow origin "$BUILDKITE_PIPELINE_DEFAULT_BRANCH"
+else
+  git fetch origin "$BUILDKITE_PIPELINE_DEFAULT_BRANCH"
+fi
 fetch_pr_target_branch
 merge_pr_target_branch
 
 ci_collapsed_heading "Conduct checks"
-bin/ci-builder run stable cargo check --all-targets
+RESULT=0
+{ stdbuf --output=L --error=L bin/ci-builder run stable cargo check --all-targets |& tee run.log; } || RESULT=$?
+
+if [[ $RESULT -ne 0 ]]; then
+  bin/clear-corrupted-cargo-target-dir run.log
+  exit $RESULT
+fi

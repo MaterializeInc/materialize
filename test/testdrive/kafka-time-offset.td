@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 ALTER SYSTEM SET max_clusters = 20
 
 # Tests for `START TIMESTAMP` configuration which resolves a start offset
@@ -68,6 +67,7 @@ $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE CLUSTER append_time_offset_0_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_0
   IN CLUSTER append_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t1-${testdrive.seed}')
@@ -75,12 +75,13 @@ grape:grape
 > CREATE TABLE append_time_offset_0_tbl FROM SOURCE append_time_offset_0 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER append_time_offset_1_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_1
   IN CLUSTER append_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=1,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -88,12 +89,13 @@ grape:grape
 > CREATE TABLE append_time_offset_1_tbl FROM SOURCE append_time_offset_1 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER append_time_offset_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_2
   IN CLUSTER append_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=2,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -101,12 +103,13 @@ grape:grape
 > CREATE TABLE append_time_offset_2_tbl FROM SOURCE append_time_offset_2 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER append_time_offset_3_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_3
   IN CLUSTER append_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=3,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -114,12 +117,13 @@ grape:grape
 > CREATE TABLE append_time_offset_3_tbl FROM SOURCE append_time_offset_3 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER append_time_offset_4_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_4
   IN CLUSTER append_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=4,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -127,12 +131,13 @@ grape:grape
 > CREATE TABLE append_time_offset_4_tbl FROM SOURCE append_time_offset_4 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER append_time_offset_5_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE append_time_offset_5
   IN CLUSTER append_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=5,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -140,6 +145,7 @@ grape:grape
 > CREATE TABLE append_time_offset_5_tbl FROM SOURCE append_time_offset_5 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > SELECT * FROM append_time_offset_0_tbl
 text      offset
@@ -225,88 +231,94 @@ $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE CLUSTER upsert_time_offset_0_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_0
   IN CLUSTER upsert_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP=0,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_0_tbl FROM SOURCE upsert_time_offset_0 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER upsert_time_offset_1_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_1
   IN CLUSTER upsert_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 1,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_1_tbl FROM SOURCE upsert_time_offset_1 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER upsert_time_offset_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_2
   IN CLUSTER upsert_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 2,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_2_tbl FROM SOURCE upsert_time_offset_2 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER upsert_time_offset_3_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_3
   IN CLUSTER upsert_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 3,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_3_tbl FROM SOURCE upsert_time_offset_3 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER upsert_time_offset_4_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_4
   IN CLUSTER upsert_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 4,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_4_tbl FROM SOURCE upsert_time_offset_4 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER upsert_time_offset_5_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_offset_5
   IN CLUSTER upsert_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 5,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_5_tbl FROM SOURCE upsert_time_offset_5 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM upsert_time_offset_0_tbl
 key       text      offset
@@ -383,6 +395,7 @@ $ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
 > CREATE CLUSTER relative_time_offset_30_years_ago_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE relative_time_offset_30_years_ago
   IN CLUSTER relative_time_offset_30_years_ago_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-946100000000, TOPIC 'testdrive-t3-${testdrive.seed}')
@@ -390,8 +403,10 @@ cherry
 > CREATE TABLE relative_time_offset_30_years_ago_tbl FROM SOURCE relative_time_offset_30_years_ago (REFERENCE "testdrive-t3-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER relative_time_offset_today_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE relative_time_offset_today
   IN CLUSTER relative_time_offset_today_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t3-${testdrive.seed}')
@@ -399,6 +414,7 @@ cherry
 > CREATE TABLE relative_time_offset_today_tbl FROM SOURCE relative_time_offset_today (REFERENCE "testdrive-t3-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
+> COMMIT
 
 > SELECT * FROM relative_time_offset_30_years_ago_tbl
 text      offset
@@ -422,6 +438,7 @@ pie
 # A time offset of -1 specifies that we want to start from the end of the topic
 # (negative offsets are relative from the end).
 > CREATE CLUSTER verify_no_fetch_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE verify_no_fetch
   IN CLUSTER verify_no_fetch_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t4-${testdrive.seed}')
@@ -430,6 +447,7 @@ pie
   FORMAT TEXT
   INCLUDE OFFSET
 
+> COMMIT
 
 #
 # UPSERT + AVRO
@@ -503,6 +521,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
 > CREATE CLUSTER upsert_time_skip_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_time_skip
   IN CLUSTER upsert_time_skip_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -510,6 +529,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_time_skip_tbl FROM SOURCE upsert_time_skip (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM upsert_time_skip_tbl
 id creature

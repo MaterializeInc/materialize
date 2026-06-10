@@ -110,8 +110,7 @@ class CreateSink(Action):
         )
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}', SECURITY PROTOCOL PLAINTEXT);
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
@@ -133,9 +132,7 @@ class CreateSink(Action):
                 > CREATE TABLE {self.sink.name}_source_tbl FROM SOURCE {self.sink.name}_source (REFERENCE "sink-{self.sink.name}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
-            """
-            )
-            + dest_view_sql,
+            """) + dest_view_sql,
             mz_service=state.mz_service,
         )
 

@@ -13,6 +13,8 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use itertools::Itertools;
+use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
@@ -21,11 +23,10 @@ use mz_sql_parser::ast::{
     Query, Select, SelectItem, TableAlias, TableFactor, TableWithJoins, Value, WindowSpec,
 };
 use mz_sql_parser::ident;
-use uuid::Uuid;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
-use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
+use crate::{ORDINALITY_COL_NAME, normalize};
 
 pub(crate) fn transform<N>(scx: &StatementContext, node: &mut N) -> Result<(), PlanError>
 where
@@ -455,9 +456,8 @@ impl<'a> FuncRewriter<'a> {
                 let ident = normalize::ident(ident[0].clone());
                 let fn_ident = match ident.as_str() {
                     "current_role" => Some("current_user"),
-                    "current_schema" | "current_timestamp" | "current_user" | "session_user" => {
-                        Some(ident.as_str())
-                    }
+                    "current_schema" | "current_timestamp" | "current_user" | "session_user"
+                    | "current_catalog" => Some(ident.as_str()),
                     _ => None,
                 };
                 match fn_ident {
@@ -516,7 +516,7 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
                     if *with_ordinality {
                         select = select.project(SelectItem::Expr {
                             expr: Expr::Value(Value::Number("1".into())),
-                            alias: Some(ident!("ordinality")),
+                            alias: Some(ident!(ORDINALITY_COL_NAME)),
                         });
                     }
 
@@ -553,6 +553,7 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 struct Desugarer<'a> {
     scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
+    id_gen: IdGen,
     recursion_guard: RecursionGuard,
 }
 
@@ -587,6 +588,7 @@ impl<'a> Desugarer<'a> {
         Desugarer {
             scx,
             status: Ok(()),
+            id_gen: Default::default(),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -745,14 +747,20 @@ impl<'a> Desugarer<'a> {
             let bindings: Vec<_> = (0..arity)
                 // Note: using unchecked is okay here because we know the value will be less than
                 // our maximum length.
-                .map(|_| Ident::new_unchecked(format!("right_{}", Uuid::new_v4())))
+                .map(|col| {
+                    let unique_id = self.id_gen.allocate_id();
+                    Ident::new_unchecked(format!("right_col{col}_{unique_id}"))
+                })
                 .collect();
 
+            let subquery_unique_id = self.id_gen.allocate_id();
+            // Note: kay to use unchecked here because we know the value will be small enough.
+            let subquery_name = Ident::new_unchecked(format!("subquery{subquery_unique_id}"));
             let select = Select::default()
                 .from(TableWithJoins::subquery(
                     right.take(),
                     TableAlias {
-                        name: ident!("subquery"),
+                        name: subquery_name,
                         columns: bindings.clone(),
                         strict: true,
                     },
@@ -814,7 +822,7 @@ impl<'a> Desugarer<'a> {
                 }
                 match normalize::op(op)? {
                     "=" | "<>" => {
-                        let mut pairs = left.iter_mut().zip(right);
+                        let mut pairs = left.iter_mut().zip_eq(right);
                         let mut new = pairs
                             .next()
                             .map(|(l, r)| l.take().equals(r.take()))
@@ -835,7 +843,12 @@ impl<'a> Desugarer<'a> {
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
                         let mut new = l.take().binop(op.clone(), r.take());
-                        for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
+                        for (l, r) in left
+                            .iter_mut()
+                            .rev()
+                            .zip_eq(right.into_iter().rev())
+                            .skip(1)
+                        {
                             new = l
                                 .clone()
                                 .binop(Op::bare(strict_op), r.clone())

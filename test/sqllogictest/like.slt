@@ -11,6 +11,14 @@ mode cockroach
 
 # We have some tests also in cockroach/like.slt, but those go through const folding. The below tests avoid const folding.
 
+# Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
+# only on multi-process clusters.
+statement ok
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE 'scale=2,workers=2'));
+
+statement ok
+SET cluster = 'multiprocess';
+
 statement ok
 CREATE TABLE t(s string, like_pat string, regex_pat string);
 
@@ -18,18 +26,18 @@ statement ok
 INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE 'a%';
 ----
 Explained Query:
-  Project (#0)
-    Filter like["a%"](#0)
+  Project (#0{s})
+    Filter like["a%"](#0{s})
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=(like["a%"](#0))
+  filter=(like["a%"](#0{s}))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -39,18 +47,18 @@ SELECT s FROM t WHERE s LIKE 'a%';
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE 'a%';
 ----
 Explained Query:
-  Project (#0)
-    Filter ilike["a%"](#0)
+  Project (#0{s})
+    Filter ilike["a%"](#0{s})
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=(ilike["a%"](#0))
+  filter=(ilike["a%"](#0{s}))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -61,18 +69,18 @@ ABC
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s NOT ILIKE 'a%';
 ----
 Explained Query:
-  Project (#0)
-    Filter NOT(ilike["a%"](#0))
+  Project (#0{s})
+    Filter NOT(ilike["a%"](#0{s}))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=(NOT(ilike["a%"](#0)))
+  filter=(NOT(ilike["a%"](#0{s})))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -83,36 +91,36 @@ ccc
 
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE NOT (s ILIKE 'a%');
 ----
 Explained Query:
-  Project (#0)
-    Filter NOT(ilike["a%"](#0))
+  Project (#0{s})
+    Filter NOT(ilike["a%"](#0{s}))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=(NOT(ilike["a%"](#0)))
+  filter=(NOT(ilike["a%"](#0{s})))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
 # Binary versions (MirScalarExpr::reduce changes them into unary when the pattern is a constant, which we prevent here.)
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE like_pat;
 ----
 Explained Query:
-  Project (#0)
-    Filter (#0 like #1)
+  Project (#0{s})
+    Filter (#0{s} like #1{like_pat})
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((#0 like #1))
+  filter=((#0{s} like #1{like_pat}))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -122,18 +130,18 @@ SELECT s FROM t WHERE s LIKE like_pat;
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE like_pat;
 ----
 Explained Query:
-  Project (#0)
-    Filter (#0 ilike #1)
+  Project (#0{s})
+    Filter (#0{s} ilike #1{like_pat})
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((#0 ilike #1))
+  filter=((#0{s} ilike #1{like_pat}))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -152,7 +160,7 @@ statement ok
 INSERT INTO t2 VALUES ('abc');
 
 statement ok
-CREATE CLUSTER test SIZE '2-1';
+CREATE CLUSTER test SIZE 'scale=2,workers=1';
 
 statement ok
 SET cluster = test;
@@ -206,3 +214,6 @@ SELECT text_val LIKE '%1%2%' FROM t2;
 ----
 false
 true
+
+statement ok
+DROP CLUSTER multiprocess;

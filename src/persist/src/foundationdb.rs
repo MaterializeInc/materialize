@@ -1,0 +1,513 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Implementation of [Consensus] backed by FoundationDB.
+//!
+//! We're storing the consensus data in a subspace. Each key maps to a subspace
+//! with the following structure:
+//! * `./keys/<key> -> ()` to track existing keys.
+//! * `./data/<key>/<seqno> -> <data>` mapping seqnos to data blobs.
+//!
+//! The current seqno for a key is determined by a reverse scan of the data
+//! entries, rather than a separate head pointer. This ensures locality between
+//! the latest data and any metadata lookups.
+
+use std::io::Write;
+
+use anyhow::anyhow;
+use async_stream::try_stream;
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures_util::future::FutureExt;
+use mz_foundationdb::FdbConfig;
+use mz_foundationdb::directory::{
+    Directory, DirectoryError, DirectoryLayer, DirectoryOutput, DirectorySubspace,
+};
+use mz_foundationdb::tuple::{
+    PackError, PackResult, Subspace, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset,
+};
+use mz_foundationdb::{
+    Database, FdbBindingError, FdbError, KeySelector, RangeOption, TransactError, TransactOption,
+    Transaction,
+};
+use mz_ore::url::SensitiveUrl;
+
+use crate::error::Error;
+use crate::location::{
+    CaSResult, Consensus, Determinate, ExternalError, Indeterminate, ResultStream, SeqNo,
+    VersionedData,
+};
+
+impl From<FdbError> for ExternalError {
+    fn from(x: FdbError) -> Self {
+        if x.is_retryable() {
+            ExternalError::Indeterminate(Indeterminate::new(x.into()))
+        } else {
+            ExternalError::Determinate(Determinate::new(x.into()))
+        }
+    }
+}
+
+impl From<FdbBindingError> for ExternalError {
+    fn from(x: FdbBindingError) -> Self {
+        ExternalError::Determinate(Determinate::new(x.into()))
+    }
+}
+
+/// Configuration to connect to a FoundationDB backed implementation of [Consensus].
+#[derive(Clone, Debug)]
+pub struct FdbConsensusConfig {
+    url: SensitiveUrl,
+}
+
+impl FdbConsensusConfig {
+    /// Returns a new [FdbConsensusConfig] for use in production.
+    pub fn new(url: SensitiveUrl) -> Result<Self, Error> {
+        Ok(FdbConsensusConfig { url })
+    }
+}
+
+/// Implementation of [Consensus] over a Foundation database.
+pub struct FdbConsensus {
+    /// Subspace for data.
+    keys: DirectorySubspace,
+    /// Subspace for data.
+    data: DirectorySubspace,
+    /// The FoundationDB database handle.
+    db: Database,
+}
+
+/// An error that can occur during a FoundationDB transaction.
+/// This is either a FoundationDB error or an external error.
+enum FdbTransactError {
+    FdbError(FdbError),
+    ExternalError(ExternalError),
+}
+
+impl From<FdbError> for FdbTransactError {
+    fn from(value: FdbError) -> Self {
+        Self::FdbError(value)
+    }
+}
+
+impl From<ExternalError> for FdbTransactError {
+    fn from(value: ExternalError) -> Self {
+        Self::ExternalError(value)
+    }
+}
+
+impl From<PackError> for FdbTransactError {
+    fn from(value: PackError) -> Self {
+        ExternalError::Determinate(anyhow::Error::new(value).into()).into()
+    }
+}
+
+impl From<FdbTransactError> for ExternalError {
+    fn from(value: FdbTransactError) -> Self {
+        match value {
+            FdbTransactError::FdbError(e) => e.into(),
+            FdbTransactError::ExternalError(e) => e,
+        }
+    }
+}
+
+impl From<DirectoryError> for ExternalError {
+    fn from(e: DirectoryError) -> Self {
+        ExternalError::Determinate(anyhow!("directory error: {e:?}").into())
+    }
+}
+
+impl TransactError for FdbTransactError {
+    fn try_into_fdb_error(self) -> Result<FdbError, Self> {
+        match self {
+            Self::FdbError(e) => Ok(e),
+            other => Err(other),
+        }
+    }
+}
+
+impl TuplePack for SeqNo {
+    fn pack<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<VersionstampOffset> {
+        self.0.pack(w, tuple_depth)
+    }
+}
+
+impl<'de> TupleUnpack<'de> for SeqNo {
+    fn unpack(input: &'de [u8], tuple_depth: TupleDepth) -> PackResult<(&'de [u8], Self)> {
+        u64::unpack(input, tuple_depth).map(|(rem, v)| (rem, SeqNo(v)))
+    }
+}
+
+impl std::fmt::Debug for FdbConsensus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FdbConsensus")
+            .field("keys", &self.keys)
+            .field("data", &self.data)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FdbConsensus {
+    /// Open a FoundationDB [Consensus] instance with `config`.
+    pub async fn open(config: FdbConsensusConfig) -> Result<Self, ExternalError> {
+        let fdb_config =
+            FdbConfig::parse(&config.url).map_err(|e| ExternalError::Determinate(e.into()))?;
+
+        mz_foundationdb::init_network();
+
+        let db = Database::new(None)?;
+        let directory = DirectoryLayer::default();
+        let keys_path: Vec<_> = fdb_config
+            .prefix
+            .iter()
+            .cloned()
+            .chain(std::iter::once("keys".to_owned()))
+            .collect();
+        let keys = Self::open_directory(&db, &directory, &keys_path).await?;
+        let data_path: Vec<_> = fdb_config
+            .prefix
+            .into_iter()
+            .chain(std::iter::once("data".to_owned()))
+            .collect();
+        let data = Self::open_directory(&db, &directory, &data_path).await?;
+        Ok(FdbConsensus { keys, data, db })
+    }
+
+    /// Opens (or creates) a directory at the specified path. Errors if the
+    /// directory is a partition, or cannot be opened for another reason..
+    async fn open_directory(
+        db: &Database,
+        directory: &DirectoryLayer,
+        path: &[String],
+    ) -> Result<DirectorySubspace, ExternalError> {
+        let directory = db
+            .run(async |trx, _maybe_commited| {
+                Ok(directory.create_or_open(&trx, path, None, None).await)
+            })
+            .await??;
+        match directory {
+            DirectoryOutput::DirectorySubspace(subspace) => Ok(subspace),
+            DirectoryOutput::DirectoryPartition(_partition) => Err(ExternalError::from(anyhow!(
+                "consensus data cannot be a partition"
+            ))),
+        }
+    }
+
+    /// Returns the latest entry for a key by reverse scanning the data entries.
+    ///
+    /// If `snapshot` is true, uses snapshot reads which don't create conflict
+    /// ranges. Use snapshot=true for read-only `head()` calls, and snapshot=false
+    /// for `compare_and_set()` where we need conflict detection.
+    async fn head_trx(
+        &self,
+        trx: &Transaction,
+        data_key: &Subspace,
+        snapshot: bool,
+    ) -> Result<Option<VersionedData>, FdbTransactError> {
+        let mut range = RangeOption::from(data_key).rev();
+        range.limit = Some(1);
+        range.mode = mz_foundationdb::options::StreamingMode::Exact;
+        let values = trx.get_range(&range, 1, snapshot).await?;
+        if let Some(kv) = values.first() {
+            let seqno = data_key.unpack(kv.key())?;
+            Ok(Some(VersionedData {
+                seqno,
+                data: Bytes::from(kv.value().to_vec()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+    async fn compare_and_set_trx(
+        &self,
+        trx: &Transaction,
+        data_key: &Subspace,
+        expected: &Option<SeqNo>,
+        new: &VersionedData,
+        key: &str,
+    ) -> Result<CaSResult, FdbTransactError> {
+        // Use non-snapshot read to create conflict ranges for concurrent writes.
+        let current = self.head_trx(trx, data_key, false).await?;
+        let current_seqno = current.map(|v| v.seqno);
+
+        if expected != &current_seqno {
+            return Ok(CaSResult::ExpectationMismatch);
+        }
+
+        if expected.is_none() {
+            // If expected is `None`, it's a new key which we need to register in the keys directory.
+            let key = self.keys.pack(&key);
+            trx.set(&key, &[]);
+        }
+
+        let data_seqno_key = data_key.pack(&new.seqno);
+        trx.set(&data_seqno_key, new.data.as_ref());
+        Ok(CaSResult::Committed)
+    }
+
+    async fn scan_trx(
+        &self,
+        trx: &Transaction,
+        data_key: &Subspace,
+        from: &SeqNo,
+        limit: &usize,
+        entries: &mut Vec<VersionedData>,
+    ) -> Result<(), FdbTransactError> {
+        let seqno_start = data_key.pack(&from);
+        let seqno_end = data_key.pack(&SeqNo::maximum());
+
+        let mut range = RangeOption::from(seqno_start..=seqno_end);
+        range.limit = Some(*limit);
+
+        entries.clear();
+
+        loop {
+            let output = trx.get_range(&range, 1, false).await?;
+            entries.reserve(output.len());
+            for key_value in &output {
+                let seqno = data_key.unpack(key_value.key())?;
+                entries.push(VersionedData {
+                    seqno,
+                    data: Bytes::from(key_value.value().to_vec()),
+                });
+            }
+
+            if let Some(next_range) = range.next_range(&output) {
+                range = next_range;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn truncate_trx(
+        &self,
+        trx: &Transaction,
+        data_key: &Subspace,
+        until: &SeqNo,
+    ) -> Result<(), FdbTransactError> {
+        // Snapshot read is fine here - truncate is idempotent and the validation
+        // only gets more permissive if a concurrent CaS increases the seqno.
+        let current = self.head_trx(trx, data_key, true).await?;
+        if let Some(current) = current {
+            if current.seqno < *until {
+                return Err(ExternalError::Determinate(
+                    anyhow!("upper bound too high for truncate: {until}").into(),
+                )
+                .into());
+            }
+        } else {
+            return Err(ExternalError::Determinate(anyhow!("no entries for key").into()).into());
+        }
+        let key_space_start = data_key.pack(&SeqNo::minimum());
+        let key_space_end = data_key.pack(&until);
+
+        trx.clear_range(&key_space_start, &key_space_end);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Consensus for FdbConsensus {
+    fn list_keys(&self) -> ResultStream<'_, String> {
+        Box::pin(try_stream! {
+            let keys: Vec<String> = self
+                .db
+                .run(async |trx, _maybe_commited| {
+                    let mut range = RangeOption::from(self.keys.range());
+                    let mut keys = Vec::new();
+                    loop {
+                        let values = trx.get_range(&range, 1, false).await?;
+                        for value in &values {
+                            let key: String = self.keys.unpack(value.key())
+                                .map_err(FdbBindingError::PackError)?;
+                            keys.push(key);
+                        }
+                        if let Some(last) = values.last() {
+                            range.begin = KeySelector::first_greater_than(last.key().to_vec());
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok(keys)
+                }).await?;
+
+            for shard in keys {
+                yield shard;
+            }
+        })
+    }
+
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let data_key = self.data.subspace(&key);
+
+        let ok = self
+            .db
+            .transact_boxed(
+                &data_key,
+                // Use snapshot read - we don't need strict consistency for head().
+                |trx, data_key| self.head_trx(trx, data_key, true).boxed(),
+                TransactOption::default(),
+            )
+            .await?;
+        Ok(ok)
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        new: VersionedData,
+    ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
+        if new.seqno.0 > i64::MAX.try_into().expect("i64::MAX known to fit in u64") {
+            return Err(ExternalError::from(anyhow!(
+                "sequence numbers must fit within [0, i64::MAX], received: {:?}",
+                new.seqno
+            )));
+        }
+
+        let data_key = self.data.subspace(&key);
+
+        let ok = self
+            .db
+            .transact_boxed(
+                (expected, &new, &*key),
+                |trx, (expected, new, key)| {
+                    self.compare_and_set_trx(trx, &data_key, expected, new, key)
+                        .boxed()
+                },
+                TransactOption::default(),
+            )
+            .await?;
+        Ok(ok)
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let data_key = self.data.subspace(&key);
+        let mut entries = Vec::new();
+        self.db
+            .transact_boxed(
+                (&data_key, from, limit, &mut entries),
+                |trx, (data_key, from, limit, entries)| {
+                    self.scan_trx(trx, data_key, from, limit, entries).boxed()
+                },
+                TransactOption::default(),
+            )
+            .await?;
+
+        entries.sort_by_key(|e| e.seqno);
+        Ok(entries)
+    }
+
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        let data_key = self.data.subspace(&key);
+
+        self.db
+            .transact_boxed(
+                (&data_key, seqno),
+                |trx, (data_key, seqno)| self.truncate_trx(trx, data_key, seqno).boxed(),
+                TransactOption::idempotent(),
+            )
+            .await?;
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use mz_foundationdb::directory::Directory;
+    use uuid::Uuid;
+
+    use crate::location::tests::consensus_impl_test;
+
+    /// Drops and recreates the `consensus` data in FoundationDB.
+    ///
+    /// ONLY FOR TESTING
+    async fn drop_and_recreate(consensus: &FdbConsensus) -> Result<(), ExternalError> {
+        consensus
+            .db
+            .run(async |trx, _maybe_commited| {
+                consensus.keys.remove(&trx, &[]).await?;
+                consensus.data.remove(&trx, &[]).await?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
+    async fn fdb_consensus() -> Result<(), ExternalError> {
+        let config = FdbConsensusConfig::new(
+            std::str::FromStr::from_str("foundationdb:?prefix=test/consensus").unwrap(),
+        )?;
+
+        {
+            let fdb = FdbConsensus::open(config.clone()).await?;
+            drop_and_recreate(&fdb).await?;
+        }
+
+        consensus_impl_test(|| FdbConsensus::open(config.clone())).await?;
+
+        // and now verify the implementation-specific `drop_and_recreate` works as intended
+        let consensus = FdbConsensus::open(config.clone()).await?;
+        let key = Uuid::new_v4().to_string();
+        let mut state = VersionedData {
+            seqno: SeqNo(0),
+            data: Bytes::from("abc"),
+        };
+
+        assert_eq!(
+            consensus.compare_and_set(&key, state.clone()).await,
+            Ok(CaSResult::Committed),
+        );
+        state.seqno = SeqNo(1);
+        assert_eq!(
+            consensus.compare_and_set(&key, state.clone()).await,
+            Ok(CaSResult::Committed),
+        );
+        state.seqno = SeqNo(2);
+        assert_eq!(
+            consensus.compare_and_set(&key, state.clone()).await,
+            Ok(CaSResult::Committed),
+        );
+
+        assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));
+
+        println!("--- SCANNING ---");
+
+        for data in consensus.scan(&key, SeqNo(2), 10).await? {
+            println!(
+                "scan data: seqno: {:?}, {} bytes",
+                data.seqno,
+                data.data.len()
+            );
+        }
+
+        drop_and_recreate(&consensus).await?;
+
+        assert_eq!(consensus.head(&key).await, Ok(None));
+
+        mz_foundationdb::shutdown_network();
+        Ok(())
+    }
+}

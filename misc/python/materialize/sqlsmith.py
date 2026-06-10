@@ -79,10 +79,11 @@ known_errors = [
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
+    "invalid selection: operation may only (transitively) refer to non-source, non-system tables",  # Seems expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
+    "Unsupported temporal operation: NotEq",
+    "Unsupported binary temporal operation: NotEq",
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
-    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/database-issues/issues/4083
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
@@ -100,6 +101,8 @@ known_errors = [
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
     "is out of range for type numeric: exceeds maximum precision",
+    "is out of range for type date",
+    "is out of range for type timestamp",
     "CAST does not support casting from ",  # TODO: Improve type system
     "SET clause does not support casting from ",  # TODO: Improve type system
     "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
@@ -135,4 +138,10 @@ known_errors = [
     "exceeded recursion limit of 2048",
     "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
+    "array_fill with arrays not yet supported",
+    "not yet supported",
+    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
+    "WITH ORDINALITY or ROWS FROM with ",
+    "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
+    "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object
 ]

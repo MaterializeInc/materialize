@@ -8,5 +8,5 @@
 -- by the Apache License, Version 2.0.
 
 {% macro create_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}');
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'qa_canary_{{ name.table }}');
 {% endmacro %}

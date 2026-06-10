@@ -19,22 +19,27 @@ use std::rc::Rc;
 
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{CapabilitySet, InspectCore};
-use timely::dataflow::{Scope, Stream, StreamCore};
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::Timestamp;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::scheduling::Activator;
 use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
 
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 /// Monitors progress at a `Stream`.
-pub trait ProbeNotify<G: Scope> {
+pub trait ProbeNotify<'scope, T: Timestamp> {
     /// Inserts a collection of progress probe in a stream.
-    fn probe_notify_with(&self, handles: Vec<Handle<G::Timestamp>>) -> Self;
+    fn probe_notify_with(self, handles: Vec<Handle<T>>) -> Self;
 }
 
-impl<G: Scope, C: Container> ProbeNotify<G> for StreamCore<G, C> {
-    fn probe_notify_with(&self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
+impl<'scope, T, C> ProbeNotify<'scope, T> for Stream<'scope, T, C>
+where
+    T: Timestamp,
+    C: Container + Clone + 'static,
+{
+    fn probe_notify_with(self, mut handles: Vec<Handle<T>>) -> Self {
         if handles.is_empty() {
             return self.clone();
         }
@@ -63,6 +68,8 @@ pub struct Handle<T: Timestamp> {
     /// The private frontier containing the changes produced by this handle only
     handle_frontier: Antichain<T>,
     notify: Rc<Notify>,
+    /// Activators to notify when the frontier progresses
+    activators: Rc<RefCell<Vec<Activator>>>,
 }
 
 impl<T: Timestamp> Default for Handle<T> {
@@ -74,6 +81,7 @@ impl<T: Timestamp> Default for Handle<T> {
             frontier: Rc::new(RefCell::new(MutableAntichain::new())),
             handle_frontier: Antichain::new(),
             notify: Rc::new(Notify::new()),
+            activators: Rc::default(),
         }
     }
 }
@@ -131,7 +139,15 @@ impl<T: Timestamp> Handle<T> {
         self.handle_frontier.extend(new_frontier.iter().cloned());
         if changes.count() > 0 {
             self.notify.notify_waiters();
+            for activator in self.activators.borrow().iter() {
+                activator.activate();
+            }
         }
+    }
+
+    /// Register an activator to be notified when the frontier progresses
+    pub fn activate(&self, activator: Activator) {
+        self.activators.borrow_mut().push(activator);
     }
 }
 
@@ -150,6 +166,7 @@ impl<T: Timestamp> Clone for Handle<T> {
             frontier: Rc::clone(&self.frontier),
             handle_frontier: Antichain::new(),
             notify: Rc::clone(&self.notify),
+            activators: Rc::clone(&self.activators),
         }
     }
 }
@@ -158,9 +175,12 @@ impl<T: Timestamp> Clone for Handle<T> {
 ///
 /// The returned stream is guaranteed to never yield any data updates, as is reflected by its type.
 // TODO: Replace `Infallible` with `!` once the latter stabilizes.
-pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> Stream<G, Infallible>
+pub fn source<'scope, T>(
+    scope: Scope<'scope, T>,
+    name: String,
+    handle: Handle<T>,
+) -> StreamVec<'scope, T, Infallible>
 where
-    G: Scope<Timestamp = T>,
     T: Timestamp,
 {
     let mut builder = AsyncOperatorBuilder::new(name, scope);

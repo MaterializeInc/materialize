@@ -43,15 +43,17 @@
 
 use std::collections::BTreeSet;
 use std::iter;
+use std::sync::Arc;
 
 use mz_ore::iter::IteratorExt;
-use mz_repr::ColumnName;
+use mz_repr::{ColumnName, UNKNOWN_COLUMN_NAME};
 
 use crate::ast::Expr;
 use crate::names::{Aug, PartialItemName};
 use crate::plan::error::PlanError;
-use crate::plan::expr::ColumnRef;
+use crate::plan::hir::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
+use crate::plan::query::NameManager;
 
 #[derive(Debug, Clone)]
 pub struct ScopeItem {
@@ -60,7 +62,7 @@ pub struct ScopeItem {
     /// The name of the column.
     pub column_name: ColumnName,
     /// The expressions from which this scope item is derived. Used by `GROUP
-    /// BY`.
+    /// BY` and window functions.
     pub exprs: BTreeSet<Expr<Aug>>,
     /// Whether the column is the return value of a function that produces only
     /// a single column. This accounts for a strange PostgreSQL special case
@@ -145,7 +147,7 @@ impl ScopeItem {
     pub fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
-            column_name: "?column?".into(),
+            column_name: UNKNOWN_COLUMN_NAME.into(),
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
@@ -305,7 +307,7 @@ impl Scope {
         Ok(items)
     }
 
-    /// Returns a matching [`ColumnRef`], if one exists.
+    /// Returns a matching [`ColumnRef`] and interned name, if one exists.
     ///
     /// Filters all visible items against the provided `matches` closure, and then matches this
     /// filtered set against the provided `column_name`.
@@ -315,7 +317,8 @@ impl Scope {
         mut matches: M,
         table_name: Option<&PartialItemName>,
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError>
+        name_manager: &mut NameManager,
+    ) -> Result<(ColumnRef, Arc<str>), PlanError>
     where
         M: FnMut(&ScopeCursor) -> bool,
     {
@@ -379,7 +382,7 @@ impl Scope {
                         if let Some(error_if_referenced) = item.error_if_referenced {
                             return Err(error_if_referenced(table_name, column_name));
                         }
-                        Ok(column)
+                        Ok((column, name_manager.intern_scope_item(item)))
                     }
                 }
             }
@@ -392,13 +395,15 @@ impl Scope {
         &'a self,
         outer_scopes: &[Scope],
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError> {
+        name_manager: &mut NameManager,
+    ) -> Result<(ColumnRef, Arc<str>), PlanError> {
         let table_name = None;
         self.resolve_internal(
             outer_scopes,
             |c| c.allow_unqualified_references(),
             table_name,
             column_name,
+            name_manager,
         )
     }
 
@@ -407,26 +412,31 @@ impl Scope {
         &self,
         column_name: &ColumnName,
         join_side: JoinSide,
-    ) -> Result<ColumnRef, PlanError> {
-        self.resolve_column(&[], column_name).map_err(|e| match e {
-            // Attach a bit more context to unknown and ambiguous column
-            // errors to match PostgreSQL.
-            PlanError::AmbiguousColumn(column) => {
-                PlanError::AmbiguousColumnInUsingClause { column, join_side }
-            }
-            PlanError::UnknownColumn { column, .. } => {
-                PlanError::UnknownColumnInUsingClause { column, join_side }
-            }
-            _ => e,
-        })
+        name_manager: &mut NameManager,
+    ) -> Result<(ColumnRef, Arc<str>), PlanError> {
+        self.resolve_column(&[], column_name, name_manager)
+            .map_err(|e| match e {
+                // Attach a bit more context to unknown and ambiguous column
+                // errors to match PostgreSQL.
+                PlanError::AmbiguousColumn(column) => {
+                    PlanError::AmbiguousColumnInUsingClause { column, join_side }
+                }
+                PlanError::UnknownColumn { column, .. } => {
+                    PlanError::UnknownColumnInUsingClause { column, join_side }
+                }
+                _ => e,
+            })
     }
 
+    /// Resolves a named column reference in a given scope.
+    /// Returns the interned name for tracking purposes.
     pub fn resolve_table_column<'a>(
         &'a self,
         outer_scopes: &[Scope],
         table_name: &PartialItemName,
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError> {
+        name_manager: &mut NameManager,
+    ) -> Result<(ColumnRef, Arc<str>), PlanError> {
         let mut seen_at_level = None;
         self.resolve_internal(
             outer_scopes,
@@ -448,30 +458,22 @@ impl Scope {
             },
             Some(table_name),
             column_name,
+            name_manager,
         )
     }
 
-    pub fn resolve<'a>(
-        &'a self,
-        outer_scopes: &[Scope],
-        table_name: Option<&PartialItemName>,
-        column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError> {
-        match table_name {
-            None => self.resolve_column(outer_scopes, column_name),
-            Some(table_name) => self.resolve_table_column(outer_scopes, table_name, column_name),
-        }
-    }
-
     /// Look to see if there is an already-calculated instance of this expr.
-    /// Failing to find one is not an error, so this just returns Option
-    pub fn resolve_expr<'a>(&'a self, expr: &Expr<Aug>) -> Option<ColumnRef> {
+    /// Failing to find one is not an error, so this just returns an Option.
+    ///
+    /// We do, however, return the `ScopeItem`, so that we can resolve and
+    /// intern the column name.
+    pub fn resolve_expr<'a>(&'a self, expr: &Expr<Aug>) -> Option<(ColumnRef, &'a ScopeItem)> {
         // Literal values should not be treated as "cached" because their types
         // in scope will have already been determined, but the type of the
         // reoccurence of the expr might want to have a different type.
         //
         // This is most evident in the case of literal `NULL` values. The first
-        // occurrence is likely to be cast as `ScalarType::String`, but
+        // occurrence is likely to be cast as `SqlScalarType::String`, but
         // subsequent `NULL` values should be untyped.
         if matches!(expr, Expr::Value(_)) {
             return None;
@@ -481,9 +483,14 @@ impl Scope {
             .iter()
             .enumerate()
             .find(|(_, item)| item.exprs.contains(expr))
-            .map(|(i, _)| ColumnRef {
-                level: 0,
-                column: i,
+            .map(|(i, item)| {
+                (
+                    ColumnRef {
+                        level: 0,
+                        column: i,
+                    },
+                    item,
+                )
             })
     }
 

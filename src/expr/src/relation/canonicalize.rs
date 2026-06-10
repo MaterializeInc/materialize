@@ -12,16 +12,18 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
+use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{ReprColumnType, ReprScalarType};
 
 use crate::visit::Visit;
-use crate::{func, MirScalarExpr, UnaryFunc, VariadicFunc};
+use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
-/// `input_types` can be the [ColumnType]s of the join or the [ColumnType]s of
+/// `input_types` can be the [ReprColumnType]s of the join or the [ReprColumnType]s of
 /// the individual inputs of the join in order.
 ///
 /// This function:
@@ -38,9 +40,9 @@ pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     input_column_types: I,
 ) where
-    I: Iterator<Item = &'a Vec<ColumnType>>,
+    I: Iterator<Item = &'a Vec<ReprColumnType>>,
 {
-    let column_types = input_column_types
+    let repr_column_types = input_column_types
         .flat_map(|f| f.clone())
         .collect::<Vec<_>>();
     // Calculate the number of non-leaves for each expression.
@@ -53,11 +55,7 @@ pub fn canonicalize_equivalences<'a, I>(
                 .collect::<Vec<_>>();
             result.sort();
             result.dedup();
-            if result.len() > 1 {
-                Some(result)
-            } else {
-                None
-            }
+            if result.len() > 1 { Some(result) } else { None }
         })
         .collect::<Vec<_>>();
 
@@ -71,8 +69,7 @@ pub fn canonicalize_equivalences<'a, I>(
             // which will then replace `to_reduce[i]`.
             let mut new_equivalence = Vec::with_capacity(to_reduce[i].len());
             while let Some((_, mut popped_expr)) = to_reduce[i].pop() {
-                #[allow(deprecated)]
-                popped_expr.visit_mut_post_nolimit(&mut |e: &mut MirScalarExpr| {
+                popped_expr.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     // If a simpler expression can be found that is equivalent
                     // to e,
                     if let Some(simpler_e) = to_reduce.iter().find_map(|cls| {
@@ -87,7 +84,7 @@ pub fn canonicalize_equivalences<'a, I>(
                         expressions_rewritten = true;
                     }
                 });
-                popped_expr.reduce(&column_types);
+                popped_expr.reduce(&repr_column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -115,37 +112,50 @@ pub fn canonicalize_equivalences<'a, I>(
 /// use mz_expr::canonicalize::canonicalize_equivalence_classes;
 ///
 /// let mut equivalences = vec![
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
-///     vec![MirScalarExpr::Column(3), MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(0), MirScalarExpr::Column(3)],
-///     vec![MirScalarExpr::Column(2), MirScalarExpr::Column(2)],
+///     vec![MirScalarExpr::column(1), MirScalarExpr::column(4)],
+///     vec![MirScalarExpr::column(3), MirScalarExpr::column(5)],
+///     vec![MirScalarExpr::column(0), MirScalarExpr::column(3)],
+///     vec![MirScalarExpr::column(2), MirScalarExpr::column(2)],
 /// ];
 /// let expected = vec![
-///     vec![MirScalarExpr::Column(0),
-///         MirScalarExpr::Column(3),
-///         MirScalarExpr::Column(5)],
-///     vec![MirScalarExpr::Column(1), MirScalarExpr::Column(4)],
+///     vec![MirScalarExpr::column(0),
+///         MirScalarExpr::column(3),
+///         MirScalarExpr::column(5)],
+///     vec![MirScalarExpr::column(1), MirScalarExpr::column(4)],
 /// ];
 /// canonicalize_equivalence_classes(&mut equivalences);
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
-    // Fuse equivalence classes containing the same expression.
-    for index in 1..equivalences.len() {
-        for inner in 0..index {
-            if equivalences[index]
-                .iter()
-                .any(|pair| equivalences[inner].contains(pair))
-            {
-                let to_extend = std::mem::replace(&mut equivalences[index], Vec::new());
-                equivalences[inner].extend(to_extend);
+    let mut uf = BTreeMap::new();
+    for class in equivalences.iter_mut() {
+        let mut iter = class.drain(..);
+        if let Some(first) = iter.next() {
+            let head = Rc::new(first);
+            for rest in iter {
+                uf.union(&head, &Rc::new(rest));
             }
         }
     }
-    for equivalence in equivalences.iter_mut() {
-        equivalence.sort();
-        equivalence.dedup();
+
+    let mut eqs: BTreeMap<Rc<MirScalarExpr>, BTreeSet<Rc<MirScalarExpr>>> = BTreeMap::new();
+    for (k, v) in uf {
+        eqs.entry(v).or_default().insert(Rc::clone(&k));
     }
+
+    let classes = eqs.into_values().collect::<Vec<_>>();
+    equivalences.resize(classes.len(), Vec::new());
+    equivalences
+        .iter_mut()
+        .zip_eq(classes)
+        .for_each(|(equivalence, class)| {
+            equivalence.extend(
+                class
+                    .into_iter()
+                    .map(|e| Rc::try_unwrap(e).expect("there to be only one strong ref")),
+            );
+        });
+
     equivalences.retain(|es| es.len() > 1);
     equivalences.sort();
 }
@@ -203,22 +213,27 @@ where
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
-pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types: &[ColumnType]) {
+pub fn canonicalize_predicates(
+    predicates: &mut Vec<MirScalarExpr>,
+    repr_column_types: &[ReprColumnType],
+) {
     soft_assert_or_log!(
         predicates
             .iter()
-            .all(|p| p.typ(column_types).scalar_type == ScalarType::Bool),
+            .all(|p| p.typ(repr_column_types).scalar_type == ReprScalarType::Bool),
         "cannot canonicalize predicates that are not of type bool"
     );
 
     // 1) Reduce each individual predicate.
-    predicates.iter_mut().for_each(|p| p.reduce(column_types));
+    predicates
+        .iter_mut()
+        .for_each(|p| p.reduce(repr_column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
     flat_map_modify(predicates, |p| {
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
+            func: VariadicFunc::And(_),
             exprs,
         } = p
         {
@@ -286,7 +301,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
                             other_predicate,
                             expr,
                             constant_bool,
-                            column_types,
+                            repr_column_types,
                         );
                     }
                     for other_idx in (0..completed.len()).rev() {
@@ -294,7 +309,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
                             &mut completed[other_idx],
                             expr,
                             constant_bool,
-                            column_types,
+                            repr_column_types,
                         ) {
                             // If a predicate in the `completed` list has
                             // been simplified, stick it back into the `todo` list.
@@ -355,7 +370,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
         (p.is_literal_false() || p.is_literal_null()) &&
         // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
-        p.typ(column_types).scalar_type == ScalarType::Bool
+        p.typ(repr_column_types).scalar_type == ReprScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_false()]
@@ -376,11 +391,10 @@ fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-    column_types: &[ColumnType],
+    repr_column_types: &[ReprColumnType],
 ) -> bool {
     let mut changed = false;
-    #[allow(deprecated)]
-    predicate.visit_mut_pre_post_nolimit(
+    predicate.visit_mut_pre_post(
         &mut |e| {
             // The `cond` of an if statement is not visited to prevent `then`
             // or `els` from being evaluated before `cond`, resulting in a
@@ -420,7 +434,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(column_types);
+        predicate.reduce(repr_column_types);
     }
     changed
 }
@@ -494,4 +508,54 @@ pub fn get_canonicalizer_map(
         }
     }
     canonicalizer_map
+}
+
+/// A trait for a union-find data structure.
+pub trait UnionFind<T> {
+    /// Sets `self[x]` to the root from `x`, and returns a reference to the root.
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T>;
+    /// Ensures that `x` and `y` have the same root.
+    fn union(&mut self, x: &T, y: &T);
+}
+
+impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T> {
+        if !self.contains_key(x) {
+            None
+        } else {
+            if self[x] != self[&self[x]] {
+                // Path halving
+                let mut y = self[x].clone();
+                while y != self[&y] {
+                    let grandparent = self[&self[&y]].clone();
+                    *self.get_mut(&y).unwrap() = grandparent;
+                    y.clone_from(&self[&y]);
+                }
+                *self.get_mut(x).unwrap() = y;
+            }
+            Some(&self[x])
+        }
+    }
+
+    fn union(&mut self, x: &T, y: &T) {
+        match (self.find(x).is_some(), self.find(y).is_some()) {
+            (true, true) => {
+                if self[x] != self[y] {
+                    let root_x = self[x].clone();
+                    let root_y = self[y].clone();
+                    self.insert(root_x, root_y);
+                }
+            }
+            (false, true) => {
+                self.insert(x.clone(), self[y].clone());
+            }
+            (true, false) => {
+                self.insert(y.clone(), self[x].clone());
+            }
+            (false, false) => {
+                self.insert(x.clone(), x.clone());
+                self.insert(y.clone(), x.clone());
+            }
+        }
+    }
 }

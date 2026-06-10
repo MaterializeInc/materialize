@@ -31,31 +31,30 @@
 //! not support this `$format`.
 
 use itertools::Itertools;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::Ordering;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{bracketed, separated, Indent};
+use mz_ore::str::{Indent, bracketed, separated};
 
-use crate::explain::dot::{dot_string, DisplayDot};
-use crate::explain::json::{json_string, DisplayJson};
-use crate::explain::text::{text_string, DisplayText};
+use crate::explain::dot::{DisplayDot, dot_string};
+use crate::explain::json::{DisplayJson, json_string};
+use crate::explain::text::{DisplayText, text_string};
 use crate::optimize::OptimizerFeatureOverrides;
-use crate::{ColumnType, GlobalId, ScalarType};
+use crate::{GlobalId, ReprColumnType, ReprScalarType, SqlColumnType, SqlScalarType};
 
 pub mod dot;
 pub mod json;
 pub mod text;
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub mod tracing;
 
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
@@ -154,22 +153,34 @@ impl From<serde_json::Error> for ExplainError {
 /// A set of options for controlling the output of [`Explain`] implementations.
 #[derive(Clone, Debug)]
 pub struct ExplainConfig {
-    /// Show the number of columns.
+    // Analyses:
+    // (These are shown only if the Analysis is supported by the backing IR.)
+    /// Show the `SubtreeSize` Analysis in the explanation.
+    pub subtree_size: bool,
+    /// Show the number of columns, i.e., the `Arity` Analysis.
     pub arity: bool,
-    /// Show cardinality information.
+    /// Show the types, i.e., the `SqlRelationType` Analysis.
+    pub types: bool,
+    /// Show the sets of unique keys, i.e., the `UniqueKeys` Analysis.
+    pub keys: bool,
+    /// Show the `NonNegative` Analysis.
+    pub non_negative: bool,
+    /// Show the `Cardinality` Analysis.
     pub cardinality: bool,
-    /// Show inferred column names.
+    /// Show the `ColumnNames` Analysis.
     pub column_names: bool,
+    /// Show the `Equivalences` Analysis.
+    pub equivalences: bool,
+    // TODO: add an option to show the `Monotonic` Analysis. This is non-trivial, because this
+    // Analysis needs the set of monotonic GlobalIds, which are cumbersome to pass around.
+
+    // Other display options:
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
     /// Use inferred column names when rendering scalar and aggregate expressions.
     pub humanized_exprs: bool,
-    /// Show the sets of unique keys.
-    pub keys: bool,
     /// Restrict output trees to linear chains. Ignored if `raw_plans` is set.
     pub linear_chains: bool,
-    /// Show the `non_negative` in the explanation if it is supported by the backing IR.
-    pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
@@ -181,16 +192,15 @@ pub struct ExplainConfig {
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
     pub raw_syntax: bool,
+    /// Use verbose syntax in the explanation.
+    pub verbose_syntax: bool,
     /// Anonymize literals in the plan.
     pub redacted: bool,
-    /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
-    pub subtree_size: bool,
     /// Print optimization timings.
     pub timing: bool,
-    /// Show the `type` attribute in the explanation.
-    pub types: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
+
     /// Optimizer feature flags.
     pub features: OptimizerFeatureOverrides,
 }
@@ -199,7 +209,7 @@ impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
             // Don't redact in debug builds and in CI.
-            redacted: !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+            redacted: !mz_ore::assert::soft_assertions_enabled(),
             arity: false,
             cardinality: false,
             column_names: false,
@@ -214,16 +224,18 @@ impl Default for ExplainConfig {
             non_negative: false,
             raw_plans: true,
             raw_syntax: false,
+            verbose_syntax: false,
             subtree_size: false,
             timing: false,
             types: false,
+            equivalences: false,
             features: Default::default(),
         }
     }
 }
 
 impl ExplainConfig {
-    pub fn requires_attributes(&self) -> bool {
+    pub fn requires_analyses(&self) -> bool {
         self.subtree_size
             || self.non_negative
             || self.arity
@@ -231,6 +243,7 @@ impl ExplainConfig {
             || self.keys
             || self.cardinality
             || self.column_names
+            || self.equivalences
     }
 }
 
@@ -319,7 +332,7 @@ pub trait Explain<'a>: 'a {
     ///
     /// # Errors
     ///
-    /// If the [`ExplainFormat::Text`] is not supported, the implementation
+    /// If the [`ExplainFormat::Json`] is not supported, the implementation
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
@@ -357,7 +370,7 @@ pub struct RenderingContext<'a> {
 }
 
 impl<'a> RenderingContext<'a> {
-    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext {
+    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext<'a> {
         RenderingContext { indent, humanizer }
     }
 }
@@ -378,22 +391,35 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
 pub struct PlanRenderingContext<'a, T> {
     pub indent: Indent,
     pub humanizer: &'a dyn ExprHumanizer,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: BTreeMap<&'a T, Analyses>,
     pub config: &'a ExplainConfig,
+    /// IDs that must be qualified in the output.
+    pub ambiguous_ids: BTreeSet<GlobalId>,
 }
 
 impl<'a, T> PlanRenderingContext<'a, T> {
     pub fn new(
         indent: Indent,
         humanizer: &'a dyn ExprHumanizer,
-        annotations: BTreeMap<&'a T, Attributes>,
+        annotations: BTreeMap<&'a T, Analyses>,
         config: &'a ExplainConfig,
+        ambiguous_ids: BTreeSet<GlobalId>,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {
             indent,
             humanizer,
             annotations,
             config,
+            ambiguous_ids,
+        }
+    }
+
+    /// Unqualified names where unambiguous. Qualified names otherwise.
+    pub fn humanize_id_maybe_unqualified(&self, id: GlobalId) -> Option<String> {
+        if self.ambiguous_ids.contains(&id) {
+            self.humanizer.humanize_id(id)
+        } else {
+            self.humanizer.humanize_id_unqualified(id)
         }
     }
 }
@@ -414,7 +440,7 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
 ///
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
-pub trait ExprHumanizer: fmt::Debug {
+pub trait ExprHumanizer: fmt::Debug + Sync {
     /// Attempts to return a human-readable string for the relation
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
@@ -427,15 +453,37 @@ pub trait ExprHumanizer: fmt::Debug {
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
 
     /// Returns a human-readable name for the specified scalar type.
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
+
+    /// Returns a human-readable name for the specified scalar type.
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_scalar_type(&self, typ: &ReprScalarType) -> String {
+        typ.to_string()
+    }
 
     /// Returns a human-readable name for the specified column type.
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_sql_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
         format!(
             "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
+            self.humanize_sql_scalar_type(&typ.scalar_type, postgres_compat),
             if typ.nullable { "?" } else { "" }
         )
+    }
+
+    /// Returns a human-readable name for the specified column type.
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_column_type(&self, typ: &ReprColumnType) -> String {
+        typ.to_string()
     }
 
     /// Returns a vector of column names for the relation identified by `id`.
@@ -494,8 +542,8 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        self.inner.humanize_scalar_type(ty)
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+        self.inner.humanize_sql_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
@@ -561,7 +609,7 @@ impl ExprHumanizer for DummyHumanizer {
         None
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, _postgres_compat: bool) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
@@ -601,73 +649,86 @@ where
     I: Iterator<Item = T> + Clone;
 
 pub trait ScalarOps {
+    /// If this expression is a column-reference, return the column referenced.
     fn match_col_ref(&self) -> Option<usize>;
 
+    /// Returns true if this expression is a reference to the given column.
     fn references(&self, col_ref: usize) -> bool;
 }
 
+impl ScalarOps for usize {
+    fn match_col_ref(&self) -> Option<usize> {
+        Some(*self)
+    }
+
+    fn references(&self, col_ref: usize) -> bool {
+        *self == col_ref
+    }
+}
+
 /// A somewhat ad-hoc way to keep carry a plan with a set
-/// of attributes derived for each node in that plan.
+/// of analyses derived for each node in that plan.
 #[allow(missing_debug_implementations)]
 pub struct AnnotatedPlan<'a, T> {
     pub plan: &'a T,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: BTreeMap<&'a T, Analyses>,
 }
 
-/// A container for derived attributes.
+/// A container for derived analyses.
 #[derive(Clone, Default, Debug)]
-pub struct Attributes {
+pub struct Analyses {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<Option<Vec<ColumnType>>>,
+    pub types: Option<Option<Vec<ReprColumnType>>>,
     pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,
+    pub equivalences: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct HumanizedAttributes<'a> {
-    attrs: &'a Attributes,
+pub struct HumanizedAnalyses<'a> {
+    analyses: &'a Analyses,
     humanizer: &'a dyn ExprHumanizer,
     config: &'a ExplainConfig,
 }
 
-impl<'a> HumanizedAttributes<'a> {
-    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+impl<'a> HumanizedAnalyses<'a> {
+    pub fn new<T>(analyses: &'a Analyses, ctx: &PlanRenderingContext<'a, T>) -> Self {
         Self {
-            attrs,
+            analyses,
             humanizer: ctx.humanizer,
             config: ctx.config,
         }
     }
 }
 
-impl<'a> fmt::Display for HumanizedAttributes<'a> {
-    // Attribute rendering is guarded by the ExplainConfig flag for each
-    // attribute. This is needed because we might have derived attributes that
+impl<'a> Display for HumanizedAnalyses<'a> {
+    // Analysis rendering is guarded by the ExplainConfig flag for each
+    // Analysis. This is needed because we might have derived Analysis that
     // are not explicitly requested (such as column_names), in which case we
     // don't want to display them.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
 
         if self.config.subtree_size {
-            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            let subtree_size = self.analyses.subtree_size.expect("subtree_size");
             builder.field("subtree_size", &subtree_size);
         }
 
         if self.config.non_negative {
-            let non_negative = self.attrs.non_negative.expect("non_negative");
+            let non_negative = self.analyses.non_negative.expect("non_negative");
             builder.field("non_negative", &non_negative);
         }
 
         if self.config.arity {
-            let arity = self.attrs.arity.expect("arity");
+            let arity = self.analyses.arity.expect("arity");
             builder.field("arity", &arity);
         }
 
         if self.config.types {
-            let types = match self.attrs.types.as_ref().expect("types") {
+            let types = match self.analyses.types.as_ref().expect("types") {
                 Some(types) => {
                     let types = types
                         .into_iter()
@@ -683,7 +744,7 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 
         if self.config.keys {
             let keys = self
-                .attrs
+                .analyses
                 .keys
                 .as_ref()
                 .expect("keys")
@@ -694,12 +755,12 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
         }
 
         if self.config.cardinality {
-            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
+            let cardinality = self.analyses.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
 
         if self.config.column_names {
-            let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = self.analyses.column_names.as_ref().expect("column_names");
             let column_names = column_names.into_iter().enumerate().map(|(i, c)| {
                 if c.is_empty() {
                     Cow::Owned(format!("#{i}"))
@@ -709,6 +770,11 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
             });
             let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
             builder.field("column_names", &column_names);
+        }
+
+        if self.config.equivalences {
+            let equivs = self.analyses.equivalences.as_ref().expect("equivalences");
+            builder.field("equivs", equivs);
         }
 
         builder.finish()
@@ -734,9 +800,40 @@ impl UsedIndexes {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Find all IDs with colliding (unqualified) humanizations.
+    pub fn ambiguous_ids(&self, humanizer: &dyn ExprHumanizer) -> BTreeSet<GlobalId> {
+        let humanized = self
+            .0
+            .iter()
+            .flat_map(|(id, _)| humanizer.humanize_id_unqualified(*id).map(|hum| (hum, *id)));
+
+        let mut by_humanization = BTreeMap::<String, BTreeSet<GlobalId>>::new();
+        for (hum, id) in humanized {
+            by_humanization.entry(hum).or_default().insert(id);
+        }
+
+        by_humanization
+            .values()
+            .filter(|ids| ids.len() > 1)
+            .flatten()
+            .cloned()
+            .collect()
+    }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -780,7 +877,18 @@ pub enum IndexUsageType {
 /// In a snapshot, one arrangement of the first input is scanned, all the other arrangements (of the
 /// first input, and of all other inputs) only get lookups.
 /// When later input batches are arriving, all inputs are fully read.
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DeltaJoinIndexUsageType {
     Unknown,
     Lookup,
@@ -932,7 +1040,9 @@ mod tests {
             non_negative: false,
             raw_plans: false,
             raw_syntax: false,
+            verbose_syntax: true,
             subtree_size: false,
+            equivalences: false,
             timing: true,
             types: false,
             features: Default::default(),

@@ -7,17 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use criterion::{black_box, Criterion, Throughput};
+use criterion::{Criterion, Throughput};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::task;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::Codec64;
+use mz_persist_types::codec_impls::VecU8Schema;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -148,7 +149,7 @@ async fn bench_write_to_listen_one_iter(
                         Ok(()) => {}
                         Err(mpsc::error::SendError(_)) => return,
                     },
-                    _ => {}
+                    ListenEvent::Updates(_) => {}
                 }
             }
         }
@@ -191,7 +192,7 @@ async fn bench_write_to_listen_one_iter(
 
     // Now wait for the listener task to clean up so it doesn't leak into other
     // benchmarks.
-    listen.await.expect("listener task failed");
+    listen.await;
 
     Ok(batch_count)
 }

@@ -8,14 +8,15 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > DROP CLUSTER IF EXISTS test_cluster CASCADE;
-> CREATE CLUSTER test_cluster (SIZE '1');
+> CREATE CLUSTER test_cluster (SIZE 'scale=1,workers=1');
 
 > CREATE SOURCE count IN CLUSTER test_cluster FROM LOAD GENERATOR COUNTER
+
+> CREATE TABLE count_tbl FROM SOURCE count;
 
 > SELECT
     u.rehydration_latency IS NOT NULL

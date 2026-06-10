@@ -19,7 +19,7 @@ use mz_repr::CatalogItemId;
 use crate::{CachingPolicy, SecretsReader};
 
 /// Default "time to live" for a single cache value, represented in __seconds__.
-pub const DEFAULT_TTL_SECS: AtomicU64 = AtomicU64::new(Duration::from_secs(300).as_secs());
+pub const DEFAULT_TTL_SECS: u64 = Duration::from_secs(300).as_secs();
 
 #[derive(Debug)]
 struct CachingParameters {
@@ -53,7 +53,7 @@ impl Default for CachingParameters {
     fn default() -> Self {
         CachingParameters {
             enabled: AtomicBool::new(true),
-            ttl_secs: DEFAULT_TTL_SECS,
+            ttl_secs: AtomicU64::new(DEFAULT_TTL_SECS),
         }
     }
 }
@@ -140,6 +140,15 @@ impl CachingSecretsReader {
     /// Sets a new "time to live" for cache values, returning the old TTL.
     fn set_ttl(&self, ttl: Duration) -> Duration {
         self.policy.set_ttl(ttl)
+    }
+
+    /// Invalidates a single cached secret, returning whether the cache contained it.
+    pub fn invalidate(&self, id: CatalogItemId) -> bool {
+        self.cache
+            .write()
+            .expect("CachingSecretsReader panicked!")
+            .remove(&id)
+            .is_some()
     }
 }
 
@@ -326,6 +335,32 @@ mod test {
         // Should only have one read since we updated the cache.
         let reads = testing_reader.drain();
         assert_eq!(reads.len(), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_invalidate() {
+        let controller = InMemorySecretsController::new();
+        let testing_reader = TestingSecretsReader::new(controller.reader());
+        let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
+
+        let secret = [42, 42, 42, 42];
+        let id = CatalogItemId::User(1);
+
+        controller.ensure(id, &secret).await.expect("success");
+        caching_reader.read(id).await.expect("success");
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+
+        assert!(caching_reader.invalidate(id));
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0], id);
+
+        assert!(!caching_reader.invalidate(CatalogItemId::User(999)));
     }
 
     /// A "secrets controller" that logs all of the actions it takes and allows us to inject

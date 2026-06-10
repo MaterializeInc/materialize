@@ -18,26 +18,29 @@ use differential_dataflow::trace::Description;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
-use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
+use mz_persist_types::schema::SchemaId;
 use mz_proto::TryFromProtoError;
-use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CriticalReaderState, EncodedSchemas, HollowBatch, HollowBlobRef, HollowRollup,
-    LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State,
-    StateCollections, WriterState,
+    LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, RunPart,
+    State, StateCollections, WriterState,
 };
+use crate::internal::trace::CompactionInput;
 use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId};
 
 use StateFieldValDiff::*;
+
+use super::state::{ActiveGc, ActiveRollup};
 
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
@@ -74,6 +77,8 @@ pub struct StateDiff<T> {
     pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, HollowRollup>>,
+    pub(crate) active_rollup: Vec<StateFieldDiff<(), ActiveRollup>>,
+    pub(crate) active_gc: Vec<StateFieldDiff<(), ActiveGc>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
@@ -102,6 +107,8 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             walltime_ms,
             latest_rollup_key,
             rollups: Vec::default(),
+            active_rollup: Vec::default(),
+            active_gc: Vec::default(),
             hostname: Vec::default(),
             last_gc_req: Vec::default(),
             leased_readers: Vec::default(),
@@ -139,15 +146,17 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         // Deconstruct from and to so we get a compile failure if new
         // fields are added.
         let State {
-            applier_version: _,
             shard_id: from_shard_id,
             seqno: from_seqno,
             hostname: from_hostname,
             walltime_ms: _, // Intentionally unused
             collections:
                 StateCollections {
+                    version: _,
                     last_gc_req: from_last_gc_req,
                     rollups: from_rollups,
+                    active_rollup: from_active_rollup,
+                    active_gc: from_active_gc,
                     leased_readers: from_leased_readers,
                     critical_readers: from_critical_readers,
                     writers: from_writers,
@@ -156,15 +165,17 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 },
         } = from;
         let State {
-            applier_version: to_applier_version,
             shard_id: to_shard_id,
             seqno: to_seqno,
             walltime_ms: to_walltime_ms,
             hostname: to_hostname,
             collections:
                 StateCollections {
+                    version: to_applier_version,
                     last_gc_req: to_last_gc_req,
                     rollups: to_rollups,
+                    active_rollup: to_active_rollup,
+                    active_gc: to_active_gc,
                     leased_readers: to_leased_readers,
                     critical_readers: to_critical_readers,
                     writers: to_writers,
@@ -184,6 +195,16 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
+        diff_field_sorted_iter(
+            from_active_rollup.iter().map(|r| (&(), r)),
+            to_active_rollup.iter().map(|r| (&(), r)),
+            &mut diffs.active_rollup,
+        );
+        diff_field_sorted_iter(
+            from_active_gc.iter().map(|g| (&(), g)),
+            to_active_gc.iter().map(|g| (&(), g)),
+            &mut diffs.active_gc,
+        );
         diff_field_sorted_iter(from_rollups.iter(), to_rollups, &mut diffs.rollups);
         diff_field_sorted_iter(
             from_leased_readers.iter(),
@@ -224,7 +245,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         diffs
     }
 
-    pub(crate) fn blob_inserts(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+    pub(crate) fn blob_inserts(&self) -> impl Iterator<Item = HollowBlobRef<'_, T>> {
         let batches = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {
@@ -243,21 +264,41 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         batches.chain(rollups)
     }
 
-    pub(crate) fn blob_deletes(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
-        let batches = self
+    pub(crate) fn part_deletes(&self) -> impl Iterator<Item = &RunPart<T>> {
+        // With the introduction of incremental compaction, we
+        // need to be more careful about what we consider "deleted".
+        // If there is a HollowBatch that we replace 2 out of the 4 runs of,
+        // we need to ensure that we only delete the runs that are actually
+        // no longer referenced.
+        let removed = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {
                 Insert(_) => None,
-                Update(a, _) | Delete(a) => Some(HollowBlobRef::Batch(a)),
+                Update(a, _) | Delete(a) => Some(a.parts.iter().collect::<Vec<_>>()),
             });
-        let rollups = self
-            .rollups
+
+        let added: std::collections::BTreeSet<_> = self
+            .referenced_batches()
+            .filter_map(|spine_diff| match spine_diff {
+                Insert(a) | Update(_, a) => Some(a.parts.iter().collect::<Vec<_>>()),
+                Delete(_) => None,
+            })
+            .flatten()
+            .collect();
+
+        removed
+            .into_iter()
+            .flat_map(|x| x)
+            .filter(move |part| !added.contains(part))
+    }
+
+    pub(crate) fn rollup_deletes(&self) -> impl Iterator<Item = &HollowRollup> {
+        self.rollups
             .iter()
             .filter_map(|rollups_diff| match &rollups_diff.val {
                 Insert(_) => None,
-                Update(a, _) | Delete(a) => Some(HollowBlobRef::Rollup(a)),
-            });
-        batches.chain(rollups)
+                Update(a, _) | Delete(a) => Some(a),
+            })
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -271,23 +312,23 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     where
         K: mz_persist_types::Codec + std::fmt::Debug,
         V: mz_persist_types::Codec + std::fmt::Debug,
-        D: differential_dataflow::difference::Semigroup + Codec64,
+        D: differential_dataflow::difference::Monoid + Codec64,
     {
         use mz_proto::RustType;
         use prost::Message;
 
         use crate::internal::state::ProtoStateDiff;
 
-        let mut roundtrip_state = from_state.clone(
-            from_state.applier_version.clone(),
-            from_state.hostname.clone(),
-        );
+        let mut roundtrip_state = from_state.clone(from_state.hostname.clone());
         roundtrip_state.apply_diff(metrics, diff.clone())?;
 
         if &roundtrip_state != to_state {
             // The weird spacing in this format string is so they all line up
             // when printed out.
-            return Err(format!("state didn't roundtrip\n  from_state {:?}\n  to_state   {:?}\n  rt_state   {:?}\n  diff       {:?}\n", from_state, to_state, roundtrip_state, diff));
+            return Err(format!(
+                "state didn't roundtrip\n  from_state {:?}\n  to_state   {:?}\n  rt_state   {:?}\n  diff       {:?}\n",
+                from_state, to_state, roundtrip_state, diff
+            ));
         }
 
         let encoded_diff = diff.into_proto().encode_to_vec();
@@ -353,7 +394,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                     // issues that may arise from diff application. We pass along the original
                     // Bytes it decoded from just so we can decode in this error path, while
                     // avoiding any extraneous clones in the expected Ok path.
-                    let diff = StateDiff::<T>::decode(&self.applier_version, data);
+                    // FIXME: this passes the state version but the method requires the build version.
+                    let diff = StateDiff::<T>::decode(&self.collections.version, data);
                     panic!(
                         "state diff should apply cleanly: {} diff {:?} state {:?}",
                         err, diff, self
@@ -378,6 +420,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             walltime_ms: diff_walltime_ms,
             latest_rollup_key: _,
             rollups: diff_rollups,
+            active_rollup: diff_active_rollup,
+            active_gc: diff_active_gc,
             hostname: diff_hostname,
             last_gc_req: diff_last_gc_req,
             leased_readers: diff_leased_readers,
@@ -400,7 +444,6 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             ));
         }
         self.seqno = diff_seqno_to;
-        self.applier_version = diff_applier_version;
         self.walltime_ms = diff_walltime_ms;
         force_apply_diffs_single(
             &self.shard_id,
@@ -414,8 +457,11 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
         let StateCollections {
+            version,
             last_gc_req,
             rollups,
+            active_rollup,
+            active_gc,
             leased_readers,
             critical_readers,
             writers,
@@ -423,8 +469,11 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             trace,
         } = &mut self.collections;
 
+        *version = diff_applier_version;
         apply_diffs_map("rollups", diff_rollups, rollups)?;
         apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
+        apply_diffs_single_option("active_rollup", diff_active_rollup, active_rollup)?;
+        apply_diffs_single_option("active_gc", diff_active_gc, active_gc)?;
         apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
@@ -516,6 +565,51 @@ fn diff_field_single<T: PartialEq + Clone>(
             val: Update(from.clone(), to.clone()),
         })
     }
+}
+
+fn apply_diffs_single_option<X: PartialEq + Debug>(
+    name: &str,
+    diffs: Vec<StateFieldDiff<(), X>>,
+    single: &mut Option<X>,
+) -> Result<(), String> {
+    for diff in diffs {
+        apply_diff_single_option(name, diff, single)?;
+    }
+    Ok(())
+}
+
+fn apply_diff_single_option<X: PartialEq + Debug>(
+    name: &str,
+    diff: StateFieldDiff<(), X>,
+    single: &mut Option<X>,
+) -> Result<(), String> {
+    match diff.val {
+        Update(from, to) => {
+            if single.as_ref() != Some(&from) {
+                return Err(format!(
+                    "{} update didn't match: {:?} vs {:?}",
+                    name, single, &from
+                ));
+            }
+            *single = Some(to)
+        }
+        Insert(to) => {
+            if single.is_some() {
+                return Err(format!("{} insert found existing value", name));
+            }
+            *single = Some(to)
+        }
+        Delete(from) => {
+            if single.as_ref() != Some(&from) {
+                return Err(format!(
+                    "{} delete didn't match: {:?} vs {:?}",
+                    name, single, &from
+                ));
+            }
+            *single = None
+        }
+    }
+    Ok(())
 }
 
 fn apply_diffs_single<X: PartialEq + Debug>(
@@ -720,7 +814,7 @@ fn apply_diff_map<K: Ord, V: PartialEq + Debug>(
 // This might leave state in an invalid (umm) state when returning an error. The
 // caller ultimately ends up panic'ing on error, but if that changes, we might
 // want to revisit this.
-fn apply_diffs_spine<T: Timestamp + Lattice>(
+fn apply_diffs_spine<T: Timestamp + Lattice + Codec64>(
     metrics: &Metrics,
     mut diffs: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
     trace: &mut Trace<T>,
@@ -748,13 +842,16 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // Fast-path: batch insert with both new and most recent batch empty.
         // Spine will happily merge these empty batches together without a call
         // out to compaction.
-        [StateFieldDiff {
-            key: del,
-            val: StateFieldValDiff::Delete(()),
-        }, StateFieldDiff {
-            key: ins,
-            val: StateFieldValDiff::Insert(()),
-        }] => {
+        [
+            StateFieldDiff {
+                key: del,
+                val: StateFieldValDiff::Delete(()),
+            },
+            StateFieldDiff {
+                key: ins,
+                val: StateFieldValDiff::Insert(()),
+            },
+        ] => {
             if del.is_empty()
                 && ins.is_empty()
                 && del.desc.lower() == ins.desc.lower()
@@ -780,7 +877,11 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
 
     // Fast-path: compaction
     if let Some((_inputs, output)) = sniff_compaction(&diffs) {
-        let res = FueledMergeRes { output };
+        let res = FueledMergeRes {
+            output,
+            input: CompactionInput::Legacy,
+            new_active_compaction: None,
+        };
         // We can't predict how spine will arrange the batches when it's
         // hydrated. This means that something that is maintaining a Spine
         // starting at some seqno may not exactly match something else
@@ -791,7 +892,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         // that was generated elsewhere. Most of the time we can, though, so
         // count the good ones and fall back to the slow path below when we
         // can't.
-        if trace.apply_merge_res(&res).applied() {
+        if trace.apply_merge_res_unchecked(&res).applied() {
             // Maybe return the replaced batches from apply_merge_res and verify
             // that they match _inputs?
             metrics.state.apply_spine_fast_path.inc();
@@ -820,7 +921,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                 return Err(format!(
                     "lenient compaction result apply unexpectedly failed: {}",
                     err
-                ))
+                ));
             }
         }
     }
@@ -956,9 +1057,6 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
 ///
 /// This can only happen when the batch needing to be split is empty, so error
 /// out if it isn't because that means something unexpected is going on.
-///
-/// TODO: This implementation is certainly not correct if T is actually only
-/// partially ordered.
 fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
     metrics: &Metrics,
     mut trace: Vec<HollowBatch<T>>,
@@ -1219,7 +1317,7 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
                 return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                     "ProtoStateField({})",
                     self.diffs.fields[self.diff_idx]
-                ))))
+                ))));
             }
         };
         let diff_type =
@@ -1229,7 +1327,7 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
                     return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
                         "ProtoStateFieldDiffType({})",
                         self.diffs.diff_types[self.diff_idx]
-                    ))))
+                    ))));
                 }
             };
         let key = next_data();
@@ -1257,8 +1355,8 @@ mod tests {
     use crate::internal::paths::{PartId, PartialBatchKey, RollupId, WriterKey};
     use mz_ore::metrics::MetricsRegistry;
 
-    use crate::internal::state::TypedState;
     use crate::ShardId;
+    use crate::internal::state::TypedState;
 
     use super::*;
 
@@ -1350,7 +1448,11 @@ mod tests {
                             leader
                                 .collections
                                 .trace
-                                .apply_merge_res(&FueledMergeRes { output });
+                                .apply_merge_res_unchecked(&FueledMergeRes {
+                                    output,
+                                    input: CompactionInput::Legacy,
+                                    new_active_compaction: None,
+                                });
                         }
                     }
                 }
@@ -1414,7 +1516,7 @@ mod tests {
         // apply_lenient handles splitting up [0,7094664) so we can apply the
         // [0,6805359)+[6805359,7083793)->[0,7083793) swap.
 
-        let batches_before = vec![hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
+        let batches_before = [hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
 
         let diffs = vec![
             StateFieldDiff {
@@ -1462,7 +1564,7 @@ mod tests {
         });
         let mut state = match state {
             Continue((_, x)) => x,
-            _ => unreachable!(),
+            std::ops::ControlFlow::Break(_) => unreachable!(),
         };
 
         let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
@@ -1534,7 +1636,9 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
+            Err(
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+            ),
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1562,7 +1666,9 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }")
+            Err(
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+            ),
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

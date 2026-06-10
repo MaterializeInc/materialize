@@ -9,10 +9,10 @@
 
 mod test {
     use mz_expr_test_util::*;
-    use mz_lowertest::{serialize, MzReflect, TestDeserializeContext};
+    use mz_lowertest::{MzReflect, TestDeserializeContext, serialize};
     use mz_ore::result::ResultExt;
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
 
     /// Build a object of type `T` from the test spec, turn it back into a
     /// test spec, construct an object from the new test spec, and see if the

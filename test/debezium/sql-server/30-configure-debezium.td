@@ -26,8 +26,7 @@
 # the data from the initial snapshot to be replicated twice.
 #
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
 $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
 {
@@ -47,7 +46,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "schema.history.internal.kafka.topic": "schemahistory.sql-server",
         "snapshot.isolation.mode": "exclusive",
         "provide.transaction.metadata": "true",
-        "topic.prefix": "sql-server"
+        "topic.prefix": "sql_server"
 #,
 #        "signal.data.collection": "test.dbo.debezium_signal"
     }
@@ -56,5 +55,4 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
 # Sleep for 10 seconds, as Debezium may fail to replicate any
 # statements that come immediately afterwards
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"

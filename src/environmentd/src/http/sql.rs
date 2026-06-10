@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
@@ -17,22 +16,23 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
-use futures::future::BoxFuture;
 use futures::Future;
+use futures::future::BoxFuture;
 
 use http::StatusCode;
-use itertools::izip;
+use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
-    ExecuteResponseKind, PeekResponseUnary, SessionClient,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecuteResponseKind,
+    PeekResponseUnary, SessionClient, verify_datum_desc,
 };
+use mz_auth::password::Password;
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
@@ -45,17 +45,21 @@ use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, Stat
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
-use prometheus::core::{AtomicF64, GenericGaugeVec};
 use prometheus::Opts;
+use prometheus::core::{AtomicF64, GenericGaugeVec};
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, info};
+use tower_sessions::Session as TowerSession;
+use tracing::{debug, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
-use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
+use crate::http::{
+    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, ensure_session_unexpired,
+    init_ws, maybe_get_authenticated_session,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -128,7 +132,12 @@ async fn execute_promsql_query(
     let result = match res.results.as_slice() {
         // Each query issued is preceded by several SET commands
         // to make sure it is routed to the right cluster replica.
-        [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        [
+            SqlResult::Ok { .. },
+            SqlResult::Ok { .. },
+            SqlResult::Ok { .. },
+            result,
+        ] => result,
         // Transient errors are fine, like if the cluster or replica
         // was dropped before the promsql query was executed. We
         // should not see errors in the steady state.
@@ -166,6 +175,7 @@ async fn execute_promsql_query(
             metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
                 opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
                 buckets: None,
+                rules: Vec::new(),
             })
         });
 
@@ -173,7 +183,7 @@ async fn execute_promsql_query(
         let mut label_values = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .filter(|(col, _)| col.name != query.value_column_name)
             .map(|(_, val)| val.as_str().expect("must be string"))
             .collect::<Vec<_>>();
@@ -181,7 +191,7 @@ async fn execute_promsql_query(
         let value = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .find(|(col, _)| col.name == query.value_column_name)
             .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);
@@ -222,7 +232,7 @@ async fn handle_promsql_query(
         return;
     }
 
-    let catalog = client.client.catalog_snapshot().await;
+    let catalog = client.client.catalog_snapshot("handle_promsql_query").await;
     let clusters: Vec<&Cluster> = catalog.clusters().collect();
 
     for cluster in clusters {
@@ -268,17 +278,42 @@ pub async fn handle_sql(
     }
 }
 
-pub async fn handle_sql_ws(
+#[derive(Debug)]
+pub enum ExistingUser {
+    /// An AuthedUser provided by the
+    /// `x_materialize_user_header_auth` middleware
+    XMaterializeUserHeader(AuthedUser),
+    /// An AuthedUser provided by an authenticated session
+    /// established via [`crate::http::handle_login`].
+    Session(AuthedUser),
+}
+
+pub(crate) async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> impl IntoResponse {
-    // An upstream middleware may have already provided the user for us
-    let user = existing_user.and_then(|Extension(user)| Some(user));
+    tower_session: Option<Extension<TowerSession>>,
+) -> Result<impl IntoResponse, AuthError> {
+    let session = tower_session.map(|Extension(session)| session);
+    // The `x_materialize_user_header_auth` middleware may have already provided the user for us
+    let user = match existing_user {
+        Some(Extension(user)) => Some(ExistingUser::XMaterializeUserHeader(user)),
+        None => {
+            let session = maybe_get_authenticated_session(session.as_ref()).await;
+            if let Some((session, session_data)) = session {
+                let user = ensure_session_unexpired(session, session_data).await?;
+                Some(ExistingUser::Session(user))
+            } else {
+                None
+            }
+        }
+    };
+
     let addr = Box::new(addr.ip());
-    ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await })
+    Ok(ws
+        .max_message_size(MAX_REQUEST_SIZE)
+        .on_upgrade(|ws| async move { run_ws(state, user, *addr, ws).await }))
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -286,7 +321,7 @@ pub async fn handle_sql_ws(
 pub enum WebSocketAuth {
     Basic {
         user: String,
-        password: String,
+        password: Password,
         #[serde(default)]
         options: BTreeMap<String, String>,
     },
@@ -301,7 +336,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
@@ -309,9 +344,9 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
             debug!("WS request failed init: {}", e);
-            let reason = match e.downcast_ref::<AdapterError>() {
-                Some(error) => Cow::Owned(error.to_string()),
-                None => "unauthorized".into(),
+            let reason: Utf8Bytes = match e.downcast_ref::<AdapterError>() {
+                Some(error) => error.to_string().into(),
+                None => "unauthorized".to_string().into(),
             };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
@@ -342,7 +377,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
     for msg in msgs {
         let _ = ws
             .send(Message::Text(
-                serde_json::to_string(&msg).expect("must serialize"),
+                serde_json::to_string(&msg).expect("must serialize").into(),
             ))
             .await;
     }
@@ -447,7 +482,7 @@ async fn run_ws_request(
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg);
+    let msg = Message::Text(msg.into());
     ws.send(msg).await?;
 
     Ok(())
@@ -506,16 +541,25 @@ pub struct ExtendedRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqlResponse {
     /// The results for each query in the request.
-    results: Vec<SqlResult>,
+    pub(in crate::http) results: Vec<SqlResult>,
 }
 
-enum StatementResult {
+impl SqlResponse {
+    /// Creates a new empty SqlResponse for collecting results.
+    pub(in crate::http) fn new() -> Self {
+        Self {
+            results: Vec::new(),
+        }
+    }
+}
+
+pub(in crate::http) enum StatementResult {
     SqlResult(SqlResult),
     Subscribe {
         desc: RelationDesc,
         tag: String,
         rx: RecordFirstRowStream,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
 }
 
@@ -563,43 +607,92 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
-    fn rows(
+    // TODO(aljoscha): Bail when max_result_size is exceeded.
+    async fn rows<S>(
+        sender: &mut S,
         client: &mut SessionClient,
-        mut sql_rows: Box<dyn RowIterator>,
+        mut rows_stream: RecordFirstRowStream,
+        max_query_result_size: usize,
         desc: &RelationDesc,
-    ) -> SqlResult {
-        if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
-            return SqlResult::Err {
-                error: err.into(),
-                notices: make_notices(client),
-            };
-        }
-
+    ) -> Result<SqlResult, Error>
+    where
+        S: ResultSender,
+    {
         let mut rows: Vec<Vec<serde_json::Value>> = vec![];
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
 
-        while let Some(row) = sql_rows.next() {
-            let datums = datum_vec.borrow_with(row);
-            rows.push(
-                datums
-                    .iter()
-                    .enumerate()
-                    .map(|(i, d)| {
-                        TypedDatum::new(*d, &types[i])
-                            .json(&JsonNumberPolicy::ConvertNumberToString)
-                    })
-                    .collect(),
-            );
+        let mut query_result_size = 0;
+
+        loop {
+            let peek_response = tokio::select! {
+                notice = client.session().recv_notice(), if S::SUPPORTS_STREAMING_NOTICES => {
+                    sender.emit_streaming_notices(vec![notice]).await?;
+                    continue;
+                }
+                e = sender.connection_error() => return Err(e),
+                r = rows_stream.recv() => {
+                    match r {
+                        Some(r) => r,
+                        None => break,
+                    }
+                },
+            };
+
+            let mut sql_rows = match peek_response {
+                PeekResponseUnary::Rows(rows) => rows,
+                PeekResponseUnary::Error(e) => {
+                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))));
+                }
+                PeekResponseUnary::DependencyDropped(dep) => {
+                    return Ok(SqlResult::err(client, dep.to_concurrent_dependency_drop()));
+                }
+                PeekResponseUnary::Canceled => {
+                    return Ok(SqlResult::err(client, AdapterError::Canceled));
+                }
+            };
+
+            if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
+                return Ok(SqlResult::Err {
+                    error: err.into(),
+                    notices: make_notices(client),
+                });
+            }
+
+            while let Some(row) = sql_rows.next() {
+                query_result_size += row.byte_len();
+                if query_result_size > max_query_result_size {
+                    use bytesize::ByteSize;
+                    return Ok(SqlResult::err(
+                        client,
+                        AdapterError::ResultSize(format!(
+                            "result exceeds max size of {}",
+                            ByteSize::b(u64::cast_from(max_query_result_size))
+                        )),
+                    ));
+                }
+
+                let datums = datum_vec.borrow_with(row);
+                rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
+            }
         }
 
         let tag = format!("SELECT {}", rows.len());
-        SqlResult::Rows {
+        Ok(SqlResult::Rows {
             tag,
             rows,
             desc: Description::from(desc),
             notices: make_notices(client),
-        }
+        })
     }
 
     fn err(client: &mut SessionClient, error: impl Into<SqlError>) -> SqlResult {
@@ -732,7 +825,7 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender: Send {
+pub(in crate::http) trait ResultSender: Send {
     const SUPPORTS_STREAMING_NOTICES: bool = false;
 
     /// Adds a result to the client. The first component of the return value is
@@ -748,11 +841,11 @@ trait ResultSender: Send {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     );
 
     /// Returns a future that resolves only when the client connection has gone away.
-    fn connection_error(&mut self) -> BoxFuture<Error>;
+    fn connection_error(&mut self) -> BoxFuture<'_, Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
 
@@ -779,7 +872,7 @@ impl ResultSender for SqlResponse {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
@@ -808,7 +901,7 @@ impl ResultSender for SqlResponse {
         (Ok(res), stmt_logging)
     }
 
-    fn connection_error(&mut self) -> BoxFuture<Error> {
+    fn connection_error(&mut self) -> BoxFuture<'_, Error> {
         Box::pin(futures::future::pending())
     }
 
@@ -832,7 +925,7 @@ impl ResultSender for WebSocket {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (has_rows, is_streaming) = match res {
             StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
@@ -859,9 +952,17 @@ impl ResultSender for WebSocket {
                 desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(desc)];
-                msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
-                msgs.push(WebSocketResponse::CommandComplete(tag));
+                // Stream rows directly to avoid buffering all rows as
+                // WebSocketResponse, which inflates memory due to enum sizing.
+                if let Err(e) = send_ws_response(self, WebSocketResponse::Rows(desc)).await {
+                    return (Err(e), None);
+                }
+                for row in rows {
+                    if let Err(e) = send_ws_response(self, WebSocketResponse::Row(row)).await {
+                        return (Err(e), None);
+                    }
+                }
+                let mut msgs = vec![WebSocketResponse::CommandComplete(tag)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (false, msgs, None)
             }
@@ -900,6 +1001,7 @@ impl ResultSender for WebSocket {
                 }
 
                 let mut datum_vec = mz_repr::DatumVec::new();
+                let mut result_size: usize = 0;
                 let mut rows_returned = 0;
                 loop {
                     let res = match await_rows(self, client, rx.recv()).await {
@@ -929,6 +1031,7 @@ impl ResultSender for WebSocket {
 
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
+                                result_size += row.byte_len();
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
@@ -962,14 +1065,23 @@ impl ResultSender for WebSocket {
                                     Error::Unstructured(anyhow!(error.clone())).into(),
                                 )],
                                 Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
-                            )
+                            );
+                        }
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            let err = dep.to_concurrent_dependency_drop();
+                            let error = err.to_string();
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(err.into())],
+                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                            );
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
                                 true,
                                 vec![WebSocketResponse::Error(AdapterError::Canceled.into())],
                                 Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
-                            )
+                            );
                         }
                         None => {
                             break (
@@ -977,6 +1089,7 @@ impl ResultSender for WebSocket {
                                 vec![WebSocketResponse::CommandComplete(tag)],
                                 Some((
                                     StatementEndedExecutionReason::Success {
+                                        result_size: Some(u64::cast_from(result_size)),
                                         rows_returned: Some(u64::cast_from(rows_returned)),
                                         execution_strategy: Some(
                                             StatementExecutionStrategy::Standard,
@@ -984,7 +1097,7 @@ impl ResultSender for WebSocket {
                                     },
                                     ctx_extra,
                                 )),
-                            )
+                            );
                         }
                     }
                 }
@@ -1005,13 +1118,13 @@ impl ResultSender for WebSocket {
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    fn connection_error(&mut self) -> BoxFuture<Error> {
+    fn connection_error(&mut self) -> BoxFuture<'_, Error> {
         Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
-                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
+                if let Err(err) = self.send(Message::Ping(Vec::new().into())).await {
                     return err.into();
                 }
             }
@@ -1064,7 +1177,8 @@ async fn execute_stmt_group<S: ResultSender>(
 ) -> Result<Result<(), ()>, Error> {
     let num_stmts = stmt_group.len();
     for (stmt, sql, params) in stmt_group {
-        assert!(num_stmts <= 1 || params.is_empty(),
+        assert!(
+            num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
 
@@ -1115,7 +1229,11 @@ async fn execute_stmt_group<S: ResultSender>(
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
-async fn execute_request<S: ResultSender>(
+/// Executes a SQL request and sends results to the provided sender.
+///
+/// Made visible to http submodules (like mcp) via `pub(in crate::http)` to allow
+/// reuse of SQL execution logic.
+pub(in crate::http) async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
@@ -1138,16 +1256,20 @@ async fn execute_request<S: ResultSender>(
         // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
         // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
         // but this specific statement should be allowed.
-        let is_valid_copy_to = matches!(
+        let is_valid_copy = matches!(
             stmt,
             Statement::Copy(CopyStatement {
                 direction: CopyDirection::To,
                 target: CopyTarget::Expr(_),
                 ..
+            }) | Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                target: CopyTarget::Expr(_),
+                ..
             })
         );
 
-        if !is_valid_copy_to
+        if !is_valid_copy
             && execute_responses.iter().any(|execute_response| {
                 // Returns true if a statement or execute response are unsupported.
                 match execute_response {
@@ -1166,7 +1288,7 @@ async fn execute_request<S: ResultSender>(
                 }
             })
         {
-            return Err(Error::Unsupported(stmt.to_ast_string()));
+            return Err(Error::Unsupported(stmt.to_ast_string_simple()));
         }
         Ok(())
     }
@@ -1277,7 +1399,7 @@ async fn execute_stmt<S: ResultSender>(
         let message = anyhow!(
             "request supplied {actual} parameters, \
                         but {statement} requires {expected}",
-            statement = stmt.to_ast_string(),
+            statement = stmt.to_ast_string_simple(),
             actual = raw_params.len(),
             expected = param_types.len()
         );
@@ -1286,7 +1408,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let buf = RowArena::new();
     let mut params = vec![];
-    for (raw_param, mz_typ) in izip!(raw_params, param_types) {
+    for (raw_param, mz_typ) in raw_params.into_iter().zip_eq(param_types) {
         let pg_typ = mz_pgrepr::Type::from(mz_typ);
         let datum = match raw_param {
             None => Datum::Null,
@@ -1296,7 +1418,14 @@ async fn execute_stmt<S: ResultSender>(
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return Ok(
+                                SqlResult::err(client, Error::Unstructured(anyhow!(msg))).into()
+                            );
+                        }
+                    },
                     Err(err) => {
                         let msg = anyhow!("unable to decode parameter: {}", err);
                         return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());
@@ -1318,17 +1447,17 @@ async fn execute_stmt<S: ResultSender>(
     ];
 
     let desc = prep_stmt.desc().clone();
-    let revision = prep_stmt.catalog_revision;
-    let stmt = prep_stmt.stmt().cloned();
     let logging = Arc::clone(prep_stmt.logging());
+    let stmt_ast = prep_stmt.stmt().cloned();
+    let state_revision = prep_stmt.state_revision;
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
-        stmt,
+        stmt_ast,
         logging,
         params,
         result_formats,
-        revision,
+        state_revision,
     ) {
         return Ok(SqlResult::err(client, err).into());
     }
@@ -1374,7 +1503,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
-        | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment
@@ -1408,7 +1536,7 @@ async fn execute_stmt<S: ResultSender>(
         .into(),
         ExecuteResponse::TransactionCommitted { params }
         | ExecuteResponse::TransactionRolledBack { params } => {
-            let notify_set: mz_ore::collections::HashSet<String> = client
+            let notify_set: mz_ore::collections::HashSet<_> = client
                 .session()
                 .vars()
                 .notify_set()
@@ -1449,41 +1577,50 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows {
-            future: mut rows,
+        ExecuteResponse::SendingRowsStreaming {
+            rows,
             instance_id,
             strategy,
         } => {
-            let rows = match await_rows(sender, client, &mut rows).await? {
-                PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(
-                        execute_started,
-                        client,
-                        Some(instance_id),
-                        Some(strategy),
-                    );
-                    rows
-                }
-                PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
-                }
-                PeekResponseUnary::Canceled => {
-                    return Ok(SqlResult::err(client, AdapterError::Canceled).into());
-                }
-            };
-            SqlResult::rows(
+            let max_query_result_size =
+                usize::cast_from(client.get_system_vars().await.max_result_size());
+
+            let rows_stream = RecordFirstRowStream::new(
+                Box::new(rows),
+                execute_started,
                 client,
-                rows,
+                Some(instance_id),
+                Some(strategy),
+            );
+
+            SqlResult::rows(
+                sender,
+                client,
+                rows_stream,
+                max_query_result_size,
                 &desc.relation_desc.expect("RelationDesc must exist"),
             )
+            .await?
             .into()
         }
-        ExecuteResponse::SendingRowsImmediate { rows } => SqlResult::rows(
-            client,
-            rows,
-            &desc.relation_desc.expect("RelationDesc must exist"),
-        )
-        .into(),
+        ExecuteResponse::SendingRowsImmediate { rows } => {
+            let max_query_result_size =
+                usize::cast_from(client.get_system_vars().await.max_result_size());
+
+            let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
+            let rows_stream =
+                RecordFirstRowStream::new(Box::new(rows), execute_started, client, None, None);
+
+            SqlResult::rows(
+                sender,
+                client,
+                rows_stream,
+                max_query_result_size,
+                &desc.relation_desc.expect("RelationDesc must exist"),
+            )
+            .await?
+            .into()
+        }
         ExecuteResponse::Subscribing {
             rx,
             ctx_extra,
@@ -1545,7 +1682,7 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::WebSocketAuth;
+    use super::{Password, WebSocketAuth};
 
     #[mz_ore::test]
     fn smoke_test_websocket_auth_parse() {
@@ -1559,7 +1696,7 @@ mod tests {
                 json: r#"{ "user": "mz", "password": "1234" }"#,
                 expected: WebSocketAuth::Basic {
                     user: "mz".to_string(),
-                    password: "1234".to_string(),
+                    password: Password("1234".to_string()),
                     options: BTreeMap::default(),
                 },
             },
@@ -1567,7 +1704,7 @@ mod tests {
                 json: r#"{ "user": "mz", "password": "1234", "options": {} }"#,
                 expected: WebSocketAuth::Basic {
                     user: "mz".to_string(),
-                    password: "1234".to_string(),
+                    password: Password("1234".to_string()),
                     options: BTreeMap::default(),
                 },
             },

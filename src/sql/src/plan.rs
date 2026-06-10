@@ -37,7 +37,7 @@ use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -47,23 +47,25 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, ReprColumnType, Row,
+    SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
-    WithOptionValue,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::gcp::GcpConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
-    AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
-    SshConnection,
+    AwsPrivatelinkConnection, CsrConnection, GlueSchemaRegistryConnection,
+    IcebergCatalogConnection, KafkaConnection, MySqlConnection, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
-use mz_storage_types::sinks::{
-    S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
-};
+use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     SourceDesc, SourceExportDataConfig, SourceExportDetails, Timeline,
 };
@@ -76,16 +78,16 @@ use crate::ast::{
 };
 use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
-    RoleAttributes,
+    RoleAttributesRaw,
 };
 use crate::names::{
     Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
 pub(crate) mod explain;
-pub(crate) mod expr;
+pub(crate) mod hir;
 pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
@@ -95,7 +97,7 @@ pub(crate) mod scope;
 pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
-pub(crate) mod transform_expr;
+pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
@@ -104,7 +106,7 @@ use crate::plan::statement::ddl::ClusterAlterUntilReadyOptionExtracted;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{
+pub use hir::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
@@ -115,11 +117,12 @@ pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleVariable,
+    PlannedAlterRoleOption, PlannedRoleAttributes, PlannedRoleVariable,
+    SqlServerConfigOptionExtracted,
 };
 pub use statement::{
-    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementClassification,
-    StatementContext, StatementDesc,
+    StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
+    resolve_cluster_for_materialized_view,
 };
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
@@ -142,7 +145,6 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
-    CreateContinualTask(CreateContinualTaskPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -191,6 +193,7 @@ pub enum Plan {
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
     AlterTableAddColumn(AlterTablePlan),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterNetworkPolicy(AlterNetworkPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
@@ -209,6 +212,7 @@ pub enum Plan {
     SideEffectingFunc(SideEffectingFunc),
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
+    AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
 }
 
 impl Plan {
@@ -241,6 +245,7 @@ impl Plan {
                 PlanKind::AlterNoop,
                 PlanKind::AlterSource,
                 PlanKind::AlterRetainHistory,
+                PlanKind::AlterSourceTimestampInterval,
             ],
             StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
@@ -251,6 +256,10 @@ impl Plan {
             StatementKind::AlterTableAddColumn => {
                 &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
             }
+            StatementKind::AlterMaterializedViewApplyReplacement => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterMaterializedViewApplyReplacement,
+            ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -267,14 +276,14 @@ impl Plan {
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
-            StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
-            StatementKind::CreateSource
-            | StatementKind::CreateSubsource
-            | StatementKind::CreateWebhookSource => &[PlanKind::CreateSource],
+            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+                &[PlanKind::CreateSource]
+            }
+            StatementKind::CreateWebhookSource => &[PlanKind::CreateSource, PlanKind::CreateTable],
             StatementKind::CreateTable => &[PlanKind::CreateTable],
             StatementKind::CreateTableFromSource => &[PlanKind::CreateTable],
             StatementKind::CreateType => &[PlanKind::CreateType],
@@ -288,6 +297,8 @@ impl Plan {
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
+            StatementKind::ExplainAnalyzeObject => &[PlanKind::Select],
+            StatementKind::ExplainAnalyzeCluster => &[PlanKind::Select],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => &[PlanKind::Fetch],
@@ -317,6 +328,7 @@ impl Plan {
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
             StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
+            StatementKind::ExecuteUnitTest => &[],
         }
     }
 
@@ -336,7 +348,6 @@ impl Plan {
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
-            Plan::CreateContinualTask(_) => "create continual task",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
@@ -359,7 +370,6 @@ impl Plan {
                 ObjectType::Database => "drop database",
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
-                ObjectType::ContinualTask => "drop continual task",
                 ObjectType::NetworkPolicy => "drop network policy",
             },
             Plan::DropOwned(_) => "drop owned",
@@ -400,7 +410,6 @@ impl Plan {
                 ObjectType::Database => "alter database",
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
-                ObjectType::ContinualTask => "alter continual task",
                 ObjectType::NetworkPolicy => "alter network policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
@@ -436,10 +445,12 @@ impl Plan {
                 ObjectType::Database => "alter database owner",
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
-                ObjectType::ContinualTask => "alter continual task owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
+            Plan::AlterMaterializedViewApplyReplacement(_) => {
+                "alter materialized view apply replacement"
+            }
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -461,6 +472,7 @@ impl Plan {
             Plan::SideEffectingFunc(_) => "side effecting func",
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
+            Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
         }
     }
 
@@ -546,7 +558,7 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
-    pub attributes: RoleAttributes,
+    pub attributes: RoleAttributesRaw,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -573,7 +585,6 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
-    pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
 }
@@ -586,7 +597,17 @@ pub struct CreateClusterReplicaPlan {
 }
 
 /// Configuration of introspection for a cluster replica.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq
+)]
 pub struct ComputeReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
@@ -603,17 +624,13 @@ pub struct ComputeReplicaConfig {
 pub enum ReplicaConfig {
     Unorchestrated {
         storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
         compute: ComputeReplicaConfig,
     },
     Orchestrated {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
-        disk: bool,
         internal: bool,
         billed_as: Option<String>,
     },
@@ -746,20 +763,6 @@ pub struct CreateMaterializedViewPlan {
 }
 
 #[derive(Debug, Clone)]
-pub struct CreateContinualTaskPlan {
-    pub name: QualifiedItemName,
-    /// During initial creation, the `LocalId` placeholder for this CT in `continual_task.expr`.
-    /// None on restart.
-    pub placeholder_id: Option<mz_expr::LocalId>,
-    pub desc: RelationDesc,
-    /// ID of the collection we read into this continual task.
-    pub input_id: GlobalId,
-    pub with_snapshot: bool,
-    /// Definition for the continual task.
-    pub continual_task: MaterializedView,
-}
-
-#[derive(Debug, Clone)]
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
@@ -855,11 +858,24 @@ pub struct SelectPlan {
     pub when: QueryWhen,
     /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
-    /// For `COPY TO`, the format to use.
+    /// For `COPY TO STDOUT`, the format to use.
     pub copy_to: Option<CopyFormat>,
 }
 
-#[derive(Debug)]
+impl SelectPlan {
+    pub fn immediate(rows: Vec<Row>, typ: SqlRelationType) -> Self {
+        let arity = typ.arity();
+        SelectPlan {
+            select: None,
+            source: HirRelationExpr::Constant { rows, typ },
+            when: QueryWhen::Immediately,
+            finishing: RowSetFinishing::trivial(arity),
+            copy_to: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum SubscribeOutput {
     Diffs,
     WithinTimestampOrderBy {
@@ -876,12 +892,24 @@ pub enum SubscribeOutput {
     },
 }
 
-#[derive(Debug)]
+impl SubscribeOutput {
+    pub fn row_order(&self) -> &[ColumnOrder] {
+        match self {
+            SubscribeOutput::Diffs => &[],
+            // This ordering prepends the diff, so its `order_by` field cannot be applied to rows.
+            SubscribeOutput::WithinTimestampOrderBy { .. } => &[],
+            SubscribeOutput::EnvelopeUpsert { order_by_keys } => order_by_keys,
+            SubscribeOutput::EnvelopeDebezium { order_by_keys } => order_by_keys,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SubscribePlan {
     pub from: SubscribeFrom,
     pub with_snapshot: bool,
     pub when: QueryWhen,
-    pub up_to: Option<MirScalarExpr>,
+    pub up_to: Option<Timestamp>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
     pub output: SubscribeOutput,
@@ -893,7 +921,7 @@ pub enum SubscribeFrom {
     Id(GlobalId),
     /// Query to subscribe to.
     Query {
-        expr: MirRelationExpr,
+        expr: HirRelationExpr,
         desc: RelationDesc,
     },
 }
@@ -929,11 +957,55 @@ pub struct ShowColumnsPlan {
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
-    pub id: CatalogItemId,
-    pub columns: Vec<usize>,
+    /// Table we're copying into.
+    pub target_id: CatalogItemId,
+    /// Human-readable full name of the target table.
+    pub target_name: String,
+    /// Source we're copying data from.
+    pub source: CopyFromSource,
+    /// How input columns map to those on the destination table.
+    ///
+    /// TODO(cf2): Remove this field in favor of the mfp.
+    pub columns: Vec<ColumnIndex>,
+    /// [`RelationDesc`] describing the input data.
+    pub source_desc: RelationDesc,
+    /// Changes the shape of the input data to match the destination table.
+    pub mfp: MapFilterProject,
+    /// Format specific params for copying the input data.
     pub params: CopyFormatParams<'static>,
+    /// Filter for the source files we're copying from, e.g. an S3 prefix.
+    pub filter: Option<CopyFromFilter>,
 }
 
+#[derive(Debug)]
+pub enum CopyFromSource {
+    /// Copying from a file local to the user, transmitted via pgwire.
+    Stdin,
+    /// A remote resource, e.g. HTTP file.
+    ///
+    /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
+    Url(HirScalarExpr),
+    /// A file in an S3 bucket.
+    AwsS3 {
+        /// Expression that evaluates to the file we want to copy.
+        uri: HirScalarExpr,
+        /// Details for how we connect to AWS S3.
+        connection: AwsConnection,
+        /// ID of the connection object.
+        connection_id: CatalogItemId,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFromFilter {
+    Files(Vec<String>),
+    Pattern(String),
+}
+
+/// `COPY TO S3`
+///
+/// (This is a completely different thing from `COPY TO STDOUT`. That is a `Plan::Select` with
+/// `copy_to` set.)
 #[derive(Debug, Clone)]
 pub struct CopyToPlan {
     /// The select query plan whose data will be copied to destination uri.
@@ -1004,6 +1076,12 @@ pub enum ExplaineeStatement {
         broken: bool,
         plan: plan::CreateIndexPlan,
     },
+    /// The object to be explained is a SUBSCRIBE statement.
+    Subscribe {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::SubscribePlan,
+    },
 }
 
 impl ExplaineeStatement {
@@ -1013,6 +1091,7 @@ impl ExplaineeStatement {
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
+            Self::Subscribe { plan, .. } => plan.from.depends_on(),
         }
     }
 
@@ -1032,6 +1111,7 @@ impl ExplaineeStatement {
             Self::CreateView { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
+            Self::Subscribe { broken, .. } => *broken,
         }
     }
 }
@@ -1044,6 +1124,9 @@ impl ExplaineeStatementKind {
             Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
+            // SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL stages because
+            // it takes MIR directly rather than going through HIR lowering.
+            Self::Subscribe => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
         }
     }
 }
@@ -1055,6 +1138,7 @@ impl std::fmt::Display for ExplaineeStatementKind {
             Self::CreateView => write!(f, "CREATE VIEW"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
+            Self::Subscribe => write!(f, "SUBSCRIBE"),
         }
     }
 }
@@ -1121,6 +1205,13 @@ pub struct AlterRetainHistoryPlan {
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSourceTimestampIntervalPlan {
+    pub id: CatalogItemId,
+    pub value: Option<Value>,
+    pub interval: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -1267,7 +1358,14 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
-    pub column_type: ResolvedDataType,
+    pub column_type: SqlColumnType,
+    pub raw_sql_type: RawDataType,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlterMaterializedViewApplyReplacementPlan {
+    pub id: CatalogItemId,
+    pub replacement_id: CatalogItemId,
 }
 
 #[derive(Debug)]
@@ -1407,7 +1505,7 @@ pub enum TableDataSource {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,
@@ -1424,7 +1522,16 @@ pub struct Source {
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
     /// Receives data from an external system.
-    Ingestion(Ingestion),
+    Ingestion(SourceDesc<ReferencedConnection>),
+    /// Receives data from an external system.
+    OldSyntaxIngestion {
+        desc: SourceDesc<ReferencedConnection>,
+        // If we're dealing with an old syntax ingestion the progress id will be some other collection
+        // and the ingestion itself will have the data from a default external reference
+        progress_subsource: CatalogItemId,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
+        details: SourceExportDetails,
+    },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
     IngestionExport {
@@ -1440,16 +1547,12 @@ pub enum DataSourceDesc {
         validate_using: Option<WebhookValidation>,
         body_format: WebhookBodyFormat,
         headers: WebhookHeaders,
+        /// Only `Some` when created via `CREATE TABLE ... FROM WEBHOOK`.
+        cluster_id: Option<StorageInstanceId>,
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Ingestion {
-    pub desc: SourceDesc<ReferencedConnection>,
-    pub progress_subsource: CatalogItemId,
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
@@ -1483,23 +1586,28 @@ impl WebhookValidation {
         let reduce_task = mz_ore::task::spawn_blocking(
             || "webhook-validation-reduce",
             move || {
-                expression_.reduce(&desc_.typ().column_types);
+                let repr_col_types: Vec<ReprColumnType> = desc_
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect();
+                expression_.reduce(&repr_col_types);
                 expression_
             },
         );
 
         match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
-            Ok(Ok(reduced_expr)) => {
+            Ok(reduced_expr) => {
                 *expression = reduced_expr;
                 Ok(())
             }
-            Ok(Err(_)) => Err("joining task"),
             Err(_) => Err("timeout"),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaders {
     /// Optionally include a column named `headers` whose content is possibly filtered.
     pub header_column: Option<WebhookHeaderFilters>,
@@ -1517,30 +1625,30 @@ impl WebhookHeaders {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaderFilters {
     pub block: BTreeSet<String>,
     pub allow: BTreeSet<String>,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Arbitrary)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Arbitrary)]
 pub enum WebhookBodyFormat {
     Json { array: bool },
     Bytes,
     Text,
 }
 
-impl From<WebhookBodyFormat> for ScalarType {
+impl From<WebhookBodyFormat> for SqlScalarType {
     fn from(value: WebhookBodyFormat) -> Self {
         match value {
-            WebhookBodyFormat::Json { .. } => ScalarType::Jsonb,
-            WebhookBodyFormat::Bytes => ScalarType::Bytes,
-            WebhookBodyFormat::Text => ScalarType::String,
+            WebhookBodyFormat::Json { .. } => SqlScalarType::Jsonb,
+            WebhookBodyFormat::Bytes => SqlScalarType::Bytes,
+            WebhookBodyFormat::Text => SqlScalarType::String,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`CatalogItemId`].
     pub id: CatalogItemId,
@@ -1560,6 +1668,7 @@ pub struct Connection {
 pub enum ConnectionDetails {
     Kafka(KafkaConnection<ReferencedConnection>),
     Csr(CsrConnection<ReferencedConnection>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>),
     Postgres(PostgresConnection<ReferencedConnection>),
     Ssh {
         connection: SshConnection,
@@ -1568,7 +1677,10 @@ pub enum ConnectionDetails {
     },
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(GcpConnection),
     MySql(MySqlConnection<ReferencedConnection>),
+    SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
+    IcebergCatalog(IcebergCatalogConnection<ReferencedConnection>),
 }
 
 impl ConnectionDetails {
@@ -1578,6 +1690,9 @@ impl ConnectionDetails {
                 mz_storage_types::connections::Connection::Kafka(c.clone())
             }
             ConnectionDetails::Csr(c) => mz_storage_types::connections::Connection::Csr(c.clone()),
+            ConnectionDetails::GlueSchemaRegistry(c) => {
+                mz_storage_types::connections::Connection::GlueSchemaRegistry(c.clone())
+            }
             ConnectionDetails::Postgres(c) => {
                 mz_storage_types::connections::Connection::Postgres(c.clone())
             }
@@ -1588,8 +1703,15 @@ impl ConnectionDetails {
             ConnectionDetails::AwsPrivatelink(c) => {
                 mz_storage_types::connections::Connection::AwsPrivatelink(c.clone())
             }
+            ConnectionDetails::Gcp(c) => mz_storage_types::connections::Connection::Gcp(c.clone()),
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
+            }
+            ConnectionDetails::SqlServer(c) => {
+                mz_storage_types::connections::Connection::SqlServer(c.clone())
+            }
+            ConnectionDetails::IcebergCatalog(c) => {
+                mz_storage_types::connections::Connection::IcebergCatalog(c.clone())
             }
         }
     }
@@ -1603,7 +1725,17 @@ pub struct NetworkPolicyRule {
     pub direction: NetworkPolicyRuleDirection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum NetworkPolicyRuleAction {
     Allow,
 }
@@ -1716,10 +1848,10 @@ pub struct Sink {
     pub from: GlobalId,
     /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,
+    pub commit_interval: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
@@ -1746,8 +1878,11 @@ pub struct MaterializedView {
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
+    /// If set, only install this materialized view's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
@@ -1784,18 +1919,29 @@ pub enum QueryWhen {
     /// expression.
     ///
     /// The expression may have any type.
-    AtTimestamp(MirScalarExpr),
+    AtTimestamp(Timestamp),
     /// Same as Immediately, but will also advance to at least the specified
     /// expression.
-    AtLeastTimestamp(MirScalarExpr),
+    AtLeastTimestamp(Timestamp),
 }
 
 impl QueryWhen {
     /// Returns a timestamp to which the candidate must be advanced.
-    pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
+    pub fn advance_to_timestamp(&self) -> Option<Timestamp> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
+        }
+    }
+    /// Returns whether the candidate's upper bound is constrained.
+    /// This is only true for `AtTimestamp` since it is the only variant that
+    /// specifies a timestamp.
+    pub fn constrains_upper(&self) -> bool {
+        match self {
+            QueryWhen::AtTimestamp(_) => true,
+            QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::Immediately
+            | QueryWhen::FreshestTableWrite => false,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
@@ -1885,7 +2031,6 @@ pub struct PlanClusterOption {
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
-    pub disk: AlterOptionParameter<bool>,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
 }
@@ -1900,7 +2045,6 @@ impl Default for PlanClusterOption {
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
-            disk: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
         }
@@ -1946,6 +2090,9 @@ impl AlterClusterPlanStrategy {
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
+    pub fn is_some(&self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
@@ -1980,8 +2127,12 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
 /// A vector of values to which parameter references should be bound.
 #[derive(Debug, Clone)]
 pub struct Params {
+    /// The datums that were provided in the EXECUTE statement.
     pub datums: Row,
-    pub types: Vec<ScalarType>,
+    /// The types of the datums provided in the EXECUTE statement.
+    pub execute_types: Vec<SqlScalarType>,
+    /// The types that the prepared statement expects based on its definition.
+    pub expected_types: Vec<SqlScalarType>,
 }
 
 impl Params {
@@ -1989,13 +2140,25 @@ impl Params {
     pub fn empty() -> Params {
         Params {
             datums: Row::pack_slice(&[]),
-            types: vec![],
+            execute_types: vec![],
+            expected_types: vec![],
         }
     }
 }
 
 /// Controls planning of a SQL query.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Copy
+)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
     pub ignore_if_exists_errors: bool,

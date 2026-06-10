@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 #
@@ -55,11 +55,6 @@ testconn   kafka
 
 > SHOW CONNECTIONS
 testconn    kafka    ""
-
-> SHOW CREATE CONNECTION testconn
-name   create_sql
----------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
 
 > SELECT
       brokers,

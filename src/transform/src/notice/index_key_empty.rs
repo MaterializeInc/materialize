@@ -12,8 +12,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
+use mz_repr::explain::ExprHumanizer;
 
 use crate::notice::{ActionKind, OptimizerNoticeApi};
 

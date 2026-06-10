@@ -1,0 +1,42 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_frontend_peek_sequencing TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_pushdown = true;
+----
+COMPLETE 0
+
+statement ok
+SET statement_timeout = '1s';
+
+query error canceling statement due to statement timeout
+SELECT mz_unsafe.mz_sleep(2);
+
+statement ok
+CREATE TABLE t (value int);
+
+statement ok
+SET statement_timeout = 0;
+
+query I
+SELECT count(*) FROM t;
+----
+0
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM t WHERE value > 10;
+----
+materialize.public.t  0  0  0  0

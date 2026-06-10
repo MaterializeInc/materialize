@@ -1,0 +1,43 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#8867.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_refresh_every_mvs = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (x int)
+
+statement ok
+INSERT INTO t VALUES (1)
+
+statement ok
+CREATE MATERIALIZED VIEW mv1
+WITH (REFRESH EVERY '10s' ALIGNED TO mz_now()::text::int8 + 3000)
+AS SELECT * FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv2
+WITH (REFRESH EVERY '10 s' ALIGNED TO mz_now()::text::int8 + 3000)
+AS SELECT * FROM mv1
+
+query I
+SELECT * FROM mv1;
+----
+1
+
+query I
+SELECT * FROM mv2;
+----
+1

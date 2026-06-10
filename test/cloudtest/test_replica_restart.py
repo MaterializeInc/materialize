@@ -53,9 +53,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
-            cur.execute(
-                dedent(
-                    """
+            cur.execute(dedent("""
                     SET CLUSTER=mz_catalog_server;
                     DECLARE c CURSOR FOR SUBSCRIBE TO (
                        SELECT status, reason
@@ -64,9 +62,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                        JOIN mz_clusters mc ON mcr.cluster_id = mc.id
                        WHERE mc.name = 'oom'
                     )
-                    """
-                )
-            )
+                    """))
             while True:
                 cur.execute("FETCH ALL c")
                 for _, diff, status, reason in cur.fetchall():
@@ -76,19 +72,15 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                         return
 
     # Once we create an index on this view in a cluster limited to 2Gb, it is practically guaranteed to OOM
-    mz.environmentd.sql(
-        dedent(
-            """
-            CREATE CLUSTER oom REPLICAS (oom (size 'mem-2'));
+    mz.environmentd.sql(dedent("""
+            CREATE CLUSTER oom REPLICAS (oom (size 'scale=1,workers=2,mem=2GiB'));
             SET cluster=oom;
             CREATE VIEW oom AS
               SELECT repeat('abc' || x || y, 1000000) FROM
               (SELECT * FROM generate_series(1, 1000000)) a(x),
               (SELECT * FROM generate_series(1, 1000000)) b(y);
             CREATE DEFAULT INDEX oom_idx ON oom
-            """
-        )
-    )
+            """))
 
     # Wait for the cluster pod to OOM
     verify_cluster_oomed()

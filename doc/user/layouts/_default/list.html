@@ -1,7 +1,14 @@
 {{ define "main"}}
 
 {{ if not (.Params.disable_h1) }}
-  <h1>{{.Title}}</h1>
+  <div class="title-row">
+    <h1>{{.Title}}</h1>
+    {{- $basePath := (urls.Parse site.BaseURL).Path -}}
+    {{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
+    {{- $pagePath := .RelPermalink | strings.TrimPrefix $basePath -}}
+    {{- $mdURL := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
+    <a class="btn-ghost" href="{{ $mdURL }}">View as Markdown</a>
+  </div>
 {{ end }}
 
 {{ .Content }}

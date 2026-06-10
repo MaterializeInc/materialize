@@ -11,10 +11,11 @@
 //!
 //! See [`render_source`] for more details.
 
+use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{collection, AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -32,51 +33,53 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
-use timely::dataflow::scopes::{Child, Scope};
-use timely::dataflow::Stream;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
+use timely::dataflow::scope::Scope;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
-use crate::upsert::UpsertKey;
+use crate::upsert::{UpsertKey, UpsertSourceTime, UpsertValue};
 
-/// The output index for health streams, used to handle multiplexed streams
-pub(crate) type OutputIndex = usize;
-
-/// _Renders_ complete _differential_ [`Collection`]s
+/// _Renders_ complete _differential_ collections
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
 /// encapsulated in the passed `SourceInstanceDesc`.
 ///
-/// The first element in the returned tuple is the pair of [`Collection`]s,
+/// The first element in the returned tuple is the pair of Collections,
 /// the second is a type-erased token that will keep the source
 /// alive as long as it is not dropped.
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<'g, G, C>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+pub fn render_source<'scope, 'root, C>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
+    root_scope: Scope<'root, ()>,
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
+    resume_stream: StreamVec<'scope, mz_repr::Timestamp, ()>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
-    Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
-    )>,
-    Stream<G, HealthStatusMessage>,
+    BTreeMap<
+        GlobalId,
+        (
+            VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
+            VecCollection<'scope, mz_repr::Timestamp, DataflowError, Diff>,
+        ),
+    >,
+    Vec<StreamVec<'root, (), HealthStatusMessage>>,
     Vec<PressOnDropButton>,
 )
 where
-    G: Scope<Timestamp = ()>,
     C: SourceConnection + SourceRender + 'static,
+    C::Time: UpsertSourceTime,
 {
     // Tokens that we should return from the method.
     let mut needed_tokens = Vec::new();
@@ -100,66 +103,83 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, mut health, source_tokens) = source::create_raw_source(
+    let (exports, health, source_tokens) = source::create_raw_source(
         scope,
+        root_scope,
         storage_state,
         resume_stream,
-        base_source_config.clone(),
+        &base_source_config,
         connection,
         start_signal,
     );
 
     needed_tokens.extend(source_tokens);
 
-    let mut outputs = vec![];
-    for (export_id, ok_source, err_source, data_config) in streams {
+    let mut health_streams = Vec::with_capacity(exports.len() + 1);
+    health_streams.push(health);
+
+    let mut outputs = BTreeMap::new();
+    for (export_id, export) in exports {
+        type CB<C> = CapacityContainerBuilder<C>;
+        let (ok_stream, err_stream) =
+            export.map_fallible::<CB<_>, CB<_>, _, _, _>("export-demux-ok-err", |r| r);
+
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
-        let error_collections = vec![err_source.map(DataflowError::from)];
+        let mut error_collections = Vec::new();
 
-        let (ok, err, extra_tokens, health_stream) = render_source_stream(
+        let data_config = base_source_config.source_exports[&export_id]
+            .data_config
+            .clone();
+        let (ok, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
             export_id,
-            ok_source,
+            ok_stream,
             data_config,
-            description.clone(),
-            error_collections,
+            &description,
+            &mut error_collections,
             storage_state,
-            base_source_config.clone(),
+            &base_source_config,
             starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
-        outputs.push((ok, err));
 
-        health = health.concat(&health_stream.leave());
+        // Flatten the error collections.
+        let err_collection = match error_collections.len() {
+            0 => err_stream,
+            _ => err_stream.concatenate(error_collections),
+        };
+
+        outputs.insert(export_id, (ok, err_collection));
+
+        health_streams.extend(health_stream.into_iter().map(|s| s.leave(root_scope)));
     }
-    (outputs, health, needed_tokens)
+    (outputs, health_streams, needed_tokens)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
 /// processing as necessary
-fn render_source_stream<G, FromTime>(
-    scope: &mut G,
+fn render_source_stream<'scope, FromTime>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     export_id: GlobalId,
-    ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
+    ok_source: VecCollection<'scope, mz_repr::Timestamp, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
-    description: IngestionDescription<CollectionMetadata>,
-    mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
+    description: &IngestionDescription<CollectionMetadata>,
+    error_collections: &mut Vec<VecCollection<'scope, mz_repr::Timestamp, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
-    base_source_config: RawSourceCreationConfig,
+    base_source_config: &RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (
-    Collection<G, Row, Diff>,
-    Collection<G, DataflowError, Diff>,
+    VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
     Vec<PressOnDropButton>,
-    Stream<G, HealthStatusMessage>,
+    Vec<StreamVec<'scope, mz_repr::Timestamp, HealthStatusMessage>>,
 )
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: Timestamp + Sync,
+    FromTime: UpsertSourceTime,
 {
     let mut needed_tokens = vec![];
 
@@ -169,7 +189,6 @@ where
     let SourceDesc {
         connection: _,
         timestamp_interval: _,
-        primary_export: _,
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {
@@ -187,20 +206,23 @@ where
                 metadata: r.metadata,
                 from_time: r.from_time,
             }),
-            empty(scope),
+            None,
         ),
-        Some(encoding) => render_decode_delimited(
-            &ok_source,
-            encoding.key,
-            encoding.value,
-            dataflow_debug_name.clone(),
-            storage_state.metrics.decode_defs.clone(),
-            storage_state.storage_configuration.clone(),
-        ),
+        Some(encoding) => {
+            let (decoded_stream, decode_health) = render_decode_delimited(
+                ok_source,
+                encoding.key,
+                encoding.value,
+                dataflow_debug_name.clone(),
+                storage_state.metrics.decode_defs.clone(),
+                storage_state.storage_configuration.clone(),
+            );
+            (decoded_stream, Some(decode_health))
+        }
     };
 
     // render envelopes
-    let (envelope_ok, envelope_err, envelope_health) = match &envelope {
+    let (envelope_ok, envelope_health) = match &envelope {
         SourceEnvelope::Upsert(upsert_envelope) => {
             let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
@@ -212,6 +234,7 @@ where
                 .as_option()
                 .expect("resuming an already finished ingestion")
                 .clone();
+            let outer_mz_scope = scope.clone();
             let (upsert, health_update) = scope.scoped(
                 &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
@@ -270,17 +293,20 @@ where
                                 (None, None, None)
                             };
 
-                        let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
-                            .get(storage_state.storage_configuration.config_set());
                         let storage_metadata = description.source_exports[&export_id]
                             .storage_metadata
                             .clone();
 
+                        let error_handler =
+                            storage_state.error_handler("upsert_rehydration", export_id);
+
                         let (stream, tok) = persist_source::persist_source_core(
+                            outer_mz_scope,
                             scope,
                             export_id,
                             persist_clients,
                             storage_metadata,
+                            None,
                             Some(as_of),
                             SnapshotMode::Include,
                             Antichain::new(),
@@ -288,12 +314,7 @@ where
                             flow_control,
                             false.then_some(|| unreachable!()),
                             async {},
-                            move |error| {
-                                Box::pin(async move {
-                                    tokio::time::sleep(grace_period).await;
-                                    panic!("upsert_rehydration: {error}")
-                                })
-                            },
+                            error_handler,
                         );
                         (
                             stream.as_collection(),
@@ -315,18 +336,32 @@ where
                         source_statistics: export_statistics,
                     };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
-                        crate::upsert::upsert(
-                            &upsert_input.enter(scope),
-                            upsert_envelope.clone(),
-                            refine_antichain(&resume_upper),
-                            previous,
-                            previous_token,
-                            export_config,
-                            &storage_state.instance_context,
-                            &storage_state.storage_configuration,
-                            &storage_state.dataflow_parameters,
-                            backpressure_metrics,
-                        );
+                        if dyncfgs::ENABLE_UPSERT_V2
+                            .get(storage_state.storage_configuration.config_set())
+                        {
+                            crate::upsert::upsert_v2(
+                                upsert_input.enter(scope),
+                                upsert_envelope.clone(),
+                                refine_antichain(&resume_upper),
+                                previous,
+                                previous_token,
+                                export_config,
+                                backpressure_metrics,
+                            )
+                        } else {
+                            crate::upsert::upsert(
+                                upsert_input.enter(scope),
+                                upsert_envelope.clone(),
+                                refine_antichain(&resume_upper),
+                                previous,
+                                previous_token,
+                                export_config,
+                                &storage_state.instance_context,
+                                &storage_state.storage_configuration,
+                                &storage_state.dataflow_parameters,
+                                backpressure_metrics,
+                            )
+                        };
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register
@@ -342,10 +377,10 @@ where
                     {
                         crate::upsert::rehydration_finished(
                             scope.clone(),
-                            &base_source_config,
+                            base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
-                            &snapshot_progress,
+                            snapshot_progress.clone(),
                         );
                     } else {
                         drop(rehydrated_token)
@@ -353,34 +388,27 @@ where
 
                     // If backpressure from persist is enabled, we connect the upsert operator's
                     // snapshot progress to the persist source feedback handle.
-                    let upsert = match feedback_handle {
-                        Some(feedback_handle) => {
-                            snapshot_progress.connect_loop(feedback_handle);
-                            upsert
-                        }
-                        None => upsert,
-                    };
+                    if let Some(feedback_handle) = feedback_handle {
+                        snapshot_progress.connect_loop(feedback_handle);
+                    }
 
                     (
-                        upsert.leave(),
+                        upsert.leave(outer_mz_scope),
                         health_update
-                            .map(|(index, update)| HealthStatusMessage {
-                                index,
+                            .map(|(id, update)| HealthStatusMessage {
+                                id,
                                 namespace: StatusNamespace::Upsert,
                                 update,
                             })
-                            .leave(),
+                            .leave(outer_mz_scope),
                     )
                 },
             );
 
             let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+            error_collections.push(upsert_err.as_collection());
 
-            (
-                upsert_ok.as_collection(),
-                Some(upsert_err.as_collection()),
-                health_update,
-            )
+            (upsert_ok.as_collection(), Some(health_update))
         }
         SourceEnvelope::None(none_envelope) => {
             let results = append_metadata_to_value(decoded_stream);
@@ -389,35 +417,19 @@ where
 
             let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
-            let errors = errors.as_collection();
-            (stream.as_collection(), Some(errors), empty(scope))
+            error_collections.push(errors.as_collection());
+            (stream.as_collection(), None)
         }
         SourceEnvelope::CdcV2 => {
             let (oks, token) = render_decode_cdcv2(&decoded_stream);
             needed_tokens.push(token);
-            (oks, None, empty(scope))
+            (oks, None)
         }
     };
 
-    let (collection, errors, health) = (
-        envelope_ok,
-        envelope_err,
-        decode_health.concat(&envelope_health),
-    );
-
-    if let Some(errors) = errors {
-        error_collections.push(errors);
-    }
-
-    // Flatten the error collections.
-    let err_collection = match error_collections.len() {
-        0 => Collection::empty(scope),
-        1 => error_collections.pop().unwrap(),
-        _ => collection::concatenate(scope, error_collections),
-    };
-
     // Return the collections and any needed tokens.
-    (collection, err_collection, needed_tokens, health)
+    let health = decode_health.into_iter().chain(envelope_health).collect();
+    (envelope_ok, needed_tokens, health)
 }
 
 // Returns the maximum limit of inflight bytes for backpressure based on given config
@@ -457,15 +469,25 @@ fn split_ok_err<O, E, T, D>(x: (Result<O, E>, T, D)) -> Result<(O, T, D), (E, T,
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 struct KV {
     key: Option<Result<Row, DecodeError>>,
     val: Option<Result<Row, DecodeError>>,
 }
 
-fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
-    results: Collection<G, DecodeResult<FromTime>, Diff>,
-) -> Collection<G, KV, Diff> {
+fn append_metadata_to_value<'scope, T: Timestamp, FromTime: Timestamp>(
+    results: VecCollection<'scope, T, DecodeResult<FromTime>, Diff>,
+) -> VecCollection<'scope, T, KV, Diff> {
     results.map(move |res| {
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
@@ -481,10 +503,10 @@ fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
 }
 
 /// Convert from streams of [`DecodeResult`] to UpsertCommands, inserting the Key according to [`KeyEnvelope`]
-fn upsert_commands<G: Scope, FromTime: Timestamp>(
-    input: Collection<G, DecodeResult<FromTime>, Diff>,
+fn upsert_commands<'scope, T: Timestamp, FromTime: Timestamp>(
+    input: VecCollection<'scope, T, DecodeResult<FromTime>, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, FromTime), Diff> {
+) -> VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
         let from_time = result.from_time;
@@ -498,9 +520,15 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
         // If we have a well-formed key we can continue, otherwise we're upserting an error
         let key = match key {
             Ok(key) => key,
-            err @ Err(_) => match result.value {
-                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
-                None => return (UpsertKey::from_key(err.as_ref()), None, from_time),
+            Err(err) => match result.value {
+                Some(_) => {
+                    return (
+                        UpsertKey::from_key(Err(&err)),
+                        Some(Err(Box::new(err))),
+                        from_time,
+                    );
+                }
+                None => return (UpsertKey::from_key(Err(&err)), None, from_time),
             },
         };
 
@@ -589,11 +617,10 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                         packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
-                    _ => Some(Err(UpsertError::Value(UpsertValueError {
+                    _ => Some(Err(Box::new(UpsertError::Value(UpsertValueError {
                         for_key: key_row,
                         inner,
-                        is_legacy_dont_touch_it: false,
-                    }))),
+                    })))),
                 }
             }
             None => None,
@@ -604,13 +631,10 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
-fn flatten_results_prepend_keys<G>(
+fn flatten_results_prepend_keys<'scope, T: Timestamp>(
     none_envelope: &NoneEnvelope,
-    results: Collection<G, KV, Diff>,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
-where
-    G: Scope,
-{
+    results: VecCollection<'scope, T, KV, Diff>,
+) -> VecCollection<'scope, T, Result<Row, DataflowError>, Diff> {
     let NoneEnvelope {
         key_envelope,
         key_arity,

@@ -13,54 +13,124 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
-use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use mz_timely_util::containers::stack::FueledBuilder;
+use rand_8::rngs::StdRng;
+use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::{Concat, ToStream};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::dataflow::operators::core::Partition;
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
-pub fn render<G: Scope<Timestamp = MzOffset>>(
+pub fn render<'scope>(
     key_value: KeyValueLoadGenerator,
-    scope: &mut G,
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
+    idx_to_exportid: BTreeMap<usize, GlobalId>,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Option<Stream<G, Infallible>>,
-    Stream<G, HealthStatusMessage>,
-    Stream<G, ProgressStatisticsUpdate>,
+    BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
-    let (steady_state_stats_stream, stats_button) =
-        render_statistics_operator(scope, config.clone(), committed_uppers);
+    // known and comitted offsets are recorded in the stats operator
+    // It's easier to have this operator record the metrics rather than trying to special case it below.
+    let stats_button = render_statistics_operator(scope, &config, committed_uppers);
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )>,
+        >,
+    >>();
+    let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
+    let partition_count = u64::cast_from(export_ids.len());
+    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+        partition_count,
+        |((output, data), time, diff): (
+            (usize, Result<SourceMessage, DataflowError>),
+            MzOffset,
+            Diff,
+        )| {
+            let output = u64::cast_from(output);
+            (output, (data, time, diff))
+        },
+    );
+    let mut data_collections = BTreeMap::new();
+    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
+        data_collections.insert(*id, data_stream.as_collection());
+    }
+
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
+
+    // The key-value load generator only has one 'output' stream, which is the default output
+    // that needs to be emitted to all output indexes.
+    // Contains the `SourceStatistics` entries for exports that require a snapshot.
+    let mut snapshot_export_stats = vec![];
+
+    // We can't just iterate over config.statistics (which came from StorageState.aggregated_statistics)
+    // AggregateStatistics will contain SourceStatistics for all exports of key-value load generator, not
+    // just the exports of the config.id.
+    let mut all_export_stats = vec![];
+    let output_indexes = output_map
+        .get(&LoadGeneratorOutput::Default)
+        .expect("default output")
+        .clone();
+    for export_id in output_indexes.iter().map(|idx| {
+        idx_to_exportid
+            .get(idx)
+            .expect("mapping of output index to export id")
+    }) {
+        let export_resume_upper = config
+            .source_resume_uppers
+            .get(export_id)
+            .map(|rows| Antichain::from_iter(rows.iter().map(MzOffset::decode_row)))
+            .expect("all source exports must be present in resume uppers");
+        tracing::warn!(
+            "source_id={} export_id={} worker_id={} resume_upper={:?}",
+            config.id,
+            export_id,
+            config.worker_id,
+            export_resume_upper
+        );
+        let export_stats = config
+            .statistics
+            .get(export_id)
+            .expect("statistics initialized for export")
+            .clone();
+        if export_resume_upper.as_ref() == &[MzOffset::minimum()] {
+            snapshot_export_stats.push(export_stats.clone());
+        }
+        all_export_stats.push(export_stats);
+    }
+
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
-
+            let [mut cap, mut progress_cap]: [_; 2] = caps.try_into().unwrap();
+            let stats_worker = config.responsible_for(0);
             let resume_upper = Antichain::from_iter(
                 config
                     .source_resume_uppers
@@ -71,12 +141,28 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             let Some(resume_offset) = resume_upper.into_option() else {
                 return;
             };
+            let snapshotting = resume_offset.offset == 0;
+            // A worker *must* emit a count even if not responsible for snapshotting a table
+            // as statistic summarization will return null if any worker hasn't set a value.
+            // This will also reset snapshot stats for any exports not snapshotting.
+            if snapshotting {
+                for stats in all_export_stats.iter() {
+                    stats.set_snapshot_records_known(0);
+                    stats.set_snapshot_records_staged(0);
+                }
+            }
+            let mut local_partitions: Vec<_> = (0..key_value.partitions)
+                .filter_map(|p| {
+                    config
+                        .responsible_for(p)
+                        .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
+                })
+                .collect();
 
-            // The key-value load generator only has one 'output' stream, which is the default output
-            // that needs to be emitted to all output indexes.
-            let output_indexes = output_map
-                .get(&LoadGeneratorOutput::Default)
-                .expect("default output");
+            // worker has no work to do
+            if local_partitions.is_empty() {
+                return;
+            }
 
             info!(
                 ?config.worker_id,
@@ -88,29 +174,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             start_signal.await;
             info!(?config.worker_id, "received key-value load generator start signal");
 
-            let snapshotting = resume_offset.offset == 0;
-
-            let mut local_partitions: Vec<_> = (0..key_value.partitions)
-                .filter_map(|p| {
-                    config
-                        .responsible_for(p)
-                        .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
-                })
-                .collect();
-
-            let stats_worker = config.responsible_for(0);
-
-            if local_partitions.is_empty() {
-                stats_output.give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: 0,
-                        records_staged: 0,
-                    },
-                );
-                return;
-            }
-
             let local_snapshot_size = (u64::cast_from(local_partitions.len()))
                 * key_value.keys
                 * key_value.transactional_snapshot_rounds()
@@ -119,47 +182,40 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             // Re-usable buffers.
             let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
 
-            // snapshotting
             let mut upper_offset = if snapshotting {
                 let snapshot_rounds = key_value.transactional_snapshot_rounds();
-
                 if stats_worker {
-                    stats_output.give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: snapshot_rounds,
-                            offset_committed: 0,
-                        },
-                    );
-                };
+                    for stats in all_export_stats.iter() {
+                        stats.set_offset_known(snapshot_rounds);
+                    }
+                }
 
                 // Downgrade to the snapshot frontier.
                 progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
 
                 let mut emitted = 0;
-                stats_output.give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: local_snapshot_size,
-                        records_staged: emitted,
-                    },
-                );
+                for stats in snapshot_export_stats.iter() {
+                    stats.set_snapshot_records_known(local_snapshot_size);
+                }
+                // output_map can contain no outputs, which would leave output_indexes empty
+                let num_outputs = u64::cast_from(output_indexes.len()).max(1);
                 while local_partitions.iter().any(|si| !si.finished()) {
                     for sp in local_partitions.iter_mut() {
-                        for u in sp.produce_batch(&mut value_buffer, output_indexes) {
-                            data_output.give_fueled(&cap, u).await;
-                            emitted += 1;
+                        let mut emitted_all_exports = 0;
+                        for u in sp.produce_batch(&mut value_buffer, &output_indexes) {
+                            let size = u.fuel_size();
+                            data_output.give_fueled(&cap, u, size).await;
+                            emitted_all_exports += 1;
                         }
-
-                        stats_output.give(
-                            &stats_cap,
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: local_snapshot_size,
-                                records_staged: emitted,
-                            },
-                        );
+                        // emitted_all_indexes is going to be some multiple of num_outputs;
+                        emitted += emitted_all_exports / num_outputs;
+                    }
+                    for stats in snapshot_export_stats.iter() {
+                        stats.set_snapshot_records_staged(emitted);
                     }
                 }
+                // snapshotting is completed
+                snapshot_export_stats.clear();
 
                 cap.downgrade(&MzOffset::from(snapshot_rounds));
                 snapshot_rounds
@@ -191,34 +247,37 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     }
 
                     for up in local_partitions.iter_mut() {
-                        let (new_upper, iter) = up.produce_batch(&mut value_buffer, output_indexes);
+                        let (new_upper, iter) =
+                            up.produce_batch(&mut value_buffer, &output_indexes);
                         upper_offset = new_upper;
                         for u in iter {
-                            data_output.give_fueled(&cap, u).await;
+                            let size = u.fuel_size();
+                            data_output.give_fueled(&cap, u, size).await;
                         }
                     }
                     cap.downgrade(&MzOffset::from(upper_offset));
                     progress_cap.downgrade(&MzOffset::from(upper_offset));
                 }
             }
-
             std::future::pending::<()>().await;
         })
     });
 
-    let status = [HealthStatusMessage {
-        index: 0,
-        namespace: StatusNamespace::Generator,
-        update: HealthStatusUpdate::running(),
-    }]
-    .to_stream(scope);
-    let stats_stream = stats_stream.concat(&steady_state_stats_stream);
-
+    let status = export_ids
+        .into_iter()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .map(|id| HealthStatusMessage {
+            id,
+            namespace: StatusNamespace::Generator,
+            update: HealthStatusUpdate::running(),
+        })
+        .collect::<Vec<_>>()
+        .to_stream(scope);
     (
-        stream.as_collection(),
-        Some(progress_stream),
+        data_collections,
+        progress_stream,
         status,
-        stats_stream,
         vec![button.press_on_drop(), stats_button],
     )
 }
@@ -370,7 +429,7 @@ impl TransactionalSnapshotProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), Diff::ONE))
             });
 
         if !finished {
@@ -456,12 +515,12 @@ impl UpdateProducer {
     ) -> (
         u64,
         impl Iterator<
-                Item = (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                ),
-            > + 'a,
+            Item = (
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            ),
+        > + 'a,
     ) {
         let mut rng = create_consistent_rng(self.seed, self.next_offset, self.pi.partition);
 
@@ -485,7 +544,7 @@ impl UpdateProducer {
                 output_indexes
                     .iter()
                     .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), 1))
+                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), Diff::ONE))
             });
 
         // Advance to the next offset.
@@ -494,54 +553,42 @@ impl UpdateProducer {
     }
 }
 
-pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
-    scope: &G,
-    config: RawSourceCreationConfig,
+pub fn render_statistics_operator<'scope>(
+    scope: Scope<'scope, MzOffset>,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
+) -> PressOnDropButton {
     let id = config.id;
-    let mut builder =
+    let builder =
         AsyncOperatorBuilder::new(format!("key_value_loadgen_statistics:{id}"), scope.clone());
-
-    let (stats_output, stats_stream) = builder.new_output();
-
+    let offset_worker = config.responsible_for(0);
+    let source_statistics = config.statistics.clone();
     let button = builder.build(move |caps| async move {
-        let [stats_cap]: [_; 1] = caps.try_into().unwrap();
-
-        let offset_worker = config.responsible_for(0);
-
+        drop(caps);
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.
-            stats_output.give(
-                &stats_cap,
-                ProgressStatisticsUpdate::SteadyState {
-                    offset_known: 0,
-                    offset_committed: 0,
-                },
-            );
+            for stat in source_statistics.values() {
+                stat.set_offset_committed(0);
+                stat.set_offset_known(0);
+            }
             return;
         }
-
         tokio::pin!(committed_uppers);
         loop {
             match committed_uppers.next().await {
                 Some(frontier) => {
                     if let Some(offset) = frontier.as_option() {
-                        stats_output.give(
-                            &stats_cap,
-                            ProgressStatisticsUpdate::SteadyState {
-                                offset_known: offset.offset,
-                                offset_committed: offset.offset,
-                            },
-                        );
+                        for stat in source_statistics.values() {
+                            stat.set_offset_committed(offset.offset);
+                            stat.set_offset_known(offset.offset);
+                        }
                     }
                 }
                 None => return,
             }
         }
     });
-
-    (stats_stream, button.press_on_drop())
+    button.press_on_drop()
 }
 
 #[cfg(test)]

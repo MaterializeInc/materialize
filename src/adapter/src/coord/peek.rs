@@ -15,38 +15,52 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use futures::TryFutureExt;
-use mz_adapter_types::compaction::CompactionWindow;
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_controller_types::ClusterId;
-use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
+use mz_expr::row::RowCollection;
 use mz_expr::{
-    permutation_for_arrangement, EvalError, Id, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::{separated, StrExt};
+use mz_ore::collections::CollectionExt;
+use mz_ore::soft_assert_eq_or_log;
+use mz_ore::str::{StrExt, separated};
+use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::Schemas;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
+use mz_repr::{
+    Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, SqlRelationType,
+    preserves_order,
+};
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
+use timely::progress::Antichain;
+use tokio::sync::oneshot;
+use tracing::{Instrument, Span};
 use uuid::Uuid;
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
+use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
-use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
+use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
 
 /// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
@@ -59,7 +73,7 @@ pub(crate) struct PendingPeek {
     pub(crate) depends_on: BTreeSet<GlobalId>,
     /// Context about the execute that produced this peek,
     /// needed by the coordinator for retiring it.
-    pub(crate) ctx_extra: ExecuteContextExtra,
+    pub(crate) ctx_extra: ExecuteContextGuard,
     /// Is this a fast-path peek, i.e. one that doesn't require a dataflow?
     pub(crate) is_fast_path: bool,
 }
@@ -73,28 +87,74 @@ pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
     Error(String),
     Canceled,
+    /// A dependency was dropped during execution.
+    ///
+    /// N.B. This is a bit of a workaround for the fact that our Error variant
+    /// is unstructured and right now we specifically care about this error and
+    /// need to render differently based on context.
+    DependencyDropped(DroppedDependency),
+}
+
+/// A dependency that was dropped while a peek or subscribe was in flight.
+///
+/// The `name` fields hold the bare name (e.g. `db.schema.t` or `c`); `Display`
+/// applies SQL identifier quoting to produce `relation "db.schema.t"` or
+/// `cluster "c"` for direct use in error wording.
+#[derive(Clone, Debug)]
+pub enum DroppedDependency {
+    Relation { name: String },
+    Cluster { name: String },
+}
+
+impl fmt::Display for DroppedDependency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Relation { name } => write!(f, "relation {}", name.quoted()),
+            Self::Cluster { name } => write!(f, "cluster {}", name.quoted()),
+        }
+    }
+}
+
+impl DroppedDependency {
+    /// User-facing error for a query (peek or subscribe) that could not finish
+    /// because this dependency was dropped mid-flight.
+    pub fn query_terminated_error(&self) -> String {
+        format!("query could not complete because {self} was dropped")
+    }
+
+    /// Convert this dropped dependency into an [`AdapterError::ConcurrentDependencyDrop`].
+    pub fn to_concurrent_dependency_drop(&self) -> AdapterError {
+        let (kind, name) = match self {
+            Self::Relation { name } => ("relation", name.clone()),
+            Self::Cluster { name } => ("cluster", name.clone()),
+        };
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: kind,
+            dependency_id: name,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+pub struct PeekDataflowPlan {
+    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
-    permutation: BTreeMap<usize, usize>,
+    permutation: Vec<usize>,
     thinned_arity: usize,
 }
 
-impl<T> PeekDataflowPlan<T> {
+impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
         id: GlobalId,
-        typ: &RelationType,
+        typ: &SqlRelationType,
     ) -> Self {
         let arity = typ.arity();
         let key = typ
             .default_key()
             .into_iter()
-            .map(MirScalarExpr::Column)
+            .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         Self {
@@ -111,14 +171,14 @@ impl<T> PeekDataflowPlan<T> {
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
-    /// The [RelationType] is unnecessary for evaluating the constant result but
+    /// The [SqlRelationType] is unnecessary for evaluating the constant result but
     /// may be helpful when printing out an explanation.
-    Constant(Result<Vec<(Row, Diff)>, EvalError>, RelationType),
+    Constant(Result<Vec<(Row, Diff)>, EvalError>, SqlRelationType),
     /// The view can be read out of an existing arrangement.
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
     /// The view can be read directly out of Persist.
-    PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
+    PeekPersist(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
@@ -127,8 +187,107 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'a, T>,
     ) -> fmt::Result {
-        let redacted = ctx.config.redacted;
+        if ctx.config.verbose_syntax {
+            self.fmt_verbose_text(f, ctx)
+        } else {
+            self.fmt_default_text(f, ctx)
+        }
+    }
+}
+
+impl FastPathPlan {
+    pub fn fmt_default_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
+
+        match self {
+            FastPathPlan::Constant(rows, _) => {
+                write!(f, "{}→Constant ", ctx.indent)?;
+
+                match rows {
+                    Ok(rows) => writeln!(f, "({} rows)", rows.len())?,
+                    Err(err) => {
+                        if mode.redacted() {
+                            writeln!(f, "(error: █)")?;
+                        } else {
+                            writeln!(f, "(error: {})", err.to_string().quoted(),)?;
+                        }
+                    }
+                }
+            }
+            FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*coll_id)
+                    .unwrap_or_else(|| coll_id.to_string());
+                let idx = ctx
+                    .humanizer
+                    .humanize_id(*idx_id)
+                    .unwrap_or_else(|| idx_id.to_string());
+                writeln!(f, "{}→Map/Filter/Project", ctx.indent)?;
+                ctx.indent.set();
+
+                ctx.indent += 1;
+
+                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
+
+                if printed {
+                    ctx.indent += 1;
+                }
+                if let Some(literal_constraints) = literal_constraints {
+                    writeln!(f, "{}→Index Lookup on {coll} (using {idx})", ctx.indent)?;
+                    ctx.indent += 1;
+                    let values = separated("; ", mode.seq(literal_constraints, None));
+                    writeln!(f, "{}Lookup values: {values}", ctx.indent)?;
+                } else {
+                    writeln!(f, "{}→Indexed {coll} (using {idx})", ctx.indent)?;
+                }
+
+                ctx.indent.reset();
+            }
+            FastPathPlan::PeekPersist(global_id, literal_constraint, mfp) => {
+                let coll = ctx
+                    .humanizer
+                    .humanize_id(*global_id)
+                    .unwrap_or_else(|| global_id.to_string());
+                writeln!(f, "{}→Map/Filter/Project", ctx.indent)?;
+                ctx.indent.set();
+
+                ctx.indent += 1;
+
+                mode.expr(mfp.deref(), None).fmt_default_text(f, ctx)?;
+                let printed = !mfp.expressions.is_empty() || !mfp.predicates.is_empty();
+
+                if printed {
+                    ctx.indent += 1;
+                }
+                if let Some(literal_constraint) = literal_constraint {
+                    writeln!(f, "{}→ReadStorage Lookup on {coll}", ctx.indent)?;
+                    ctx.indent += 1;
+                    let value = mode.expr(literal_constraint, None);
+                    writeln!(f, "{}Lookup value: {value}", ctx.indent)?;
+                } else {
+                    writeln!(f, "{}→ReadStorage {coll}", ctx.indent)?;
+                }
+
+                ctx.indent.reset();
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn fmt_verbose_text<'a, T>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
+        let redacted = ctx.config.redacted;
+        let mode = HumanizedExplain::new(redacted);
 
         // TODO(aalexandrov): factor out common PeekExisting and PeekPersist
         // code.
@@ -207,7 +366,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 ctx.as_mut().reset();
                 Ok(())
             }
-            FastPathPlan::PeekPersist(gid, mfp) => {
+            FastPathPlan::PeekPersist(gid, literal_constraint, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
 
@@ -247,7 +406,13 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                     .humanizer
                     .humanize_id(*gid)
                     .unwrap_or_else(|| gid.to_string());
-                writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                write!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                if let Some(literal) = literal_constraint {
+                    let value = mode.expr(literal, None);
+                    writeln!(f, " [value={}]", value)?;
+                } else {
+                    writeln!(f, "")?;
+                }
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -259,39 +424,49 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub determination: TimestampDetermination<mz_repr::Timestamp>,
+    pub determination: TimestampDetermination,
     pub conn_id: ConnectionId,
+    /// The result type _after_ reading out of the "source" and applying any
+    /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
+    /// [RowSetFinishing].
+    ///
+    /// This is _the_ `result_type` as far as compute is concerned and further
+    /// changes through projections happen purely in the adapter.
+    pub intermediate_result_type: SqlRelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Clone, Debug)]
-pub enum PeekPlan<T = mz_repr::Timestamp> {
+pub enum PeekPlan {
     FastPath(FastPathPlan),
     /// The view must be installed as a dataflow and then read.
-    SlowPath(PeekDataflowPlan<T>),
+    SlowPath(PeekDataflowPlan),
 }
 
 /// Convert `mfp` to an executable, non-temporal plan.
 /// It should be non-temporal, as OneShot preparation populates `mz_now`.
+///
+/// If the `mfp` can't be converted into a non-temporal plan, this returns an _internal_ error.
 fn mfp_to_safe_plan(
     mfp: mz_expr::MapFilterProject,
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     mfp.into_plan()
-        .map_err(OptimizerError::Internal)?
+        .map_err(OptimizerError::InternalUnsafeMfpPlan)?
         .into_nontemporal()
-        .map_err(|_e| OptimizerError::UnsafeMfpPlan)
+        .map_err(|e| OptimizerError::InternalUnsafeMfpPlan(format!("{:?}", e)))
 }
 
+/// If it can't convert `mfp` into a `SafeMfpPlan`, this returns an _internal_ error.
 fn permute_oneshot_mfp_around_index(
     mfp: mz_expr::MapFilterProject,
     key: &[MirScalarExpr],
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     let input_arity = mfp.input_arity;
     let mut safe_mfp = mfp_to_safe_plan(mfp)?;
-    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
-    safe_mfp.permute(permute, key.len() + thinning.len());
+    let (permute, thinning) = permutation_for_arrangement(key, input_arity);
+    safe_mfp.permute_fn(|c| permute[c], key.len() + thinning.len());
     Ok(safe_mfp)
 }
 
@@ -300,11 +475,12 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: Timestamp>(
-    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
+    persist_fast_path_order: bool,
 ) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -314,14 +490,13 @@ pub fn create_fast_path_plan<T: Timestamp>(
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
         let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
-        if let Some((rows, ..)) = mir.as_const() {
+        if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
-            return Ok(Some(FastPathPlan::Constant(
-                rows.clone()
-                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
-                // For best accuracy, we need to recalculate typ.
-                mir.typ(),
-            )));
+            let plan = FastPathPlan::Constant(
+                rows.clone(),
+                mz_repr::SqlRelationType::from_repr(found_typ),
+            );
+            return Ok(Some(plan));
         } else {
             // If there is a TopK that would be completely covered by the finishing, then jump
             // through the TopK.
@@ -337,13 +512,16 @@ pub fn create_fast_path_plan<T: Timestamp>(
             {
                 if let Some(finishing) = finishing {
                     if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
-                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        // The following is roughly `limit >= finishing.limit + finishing.offset`,
+                        // but with Options.
                         let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
                             (None, _) => true,
                             (Some(..), None) => false,
                             (Some(topk_limit), Some(finishing_limit)) => {
                                 if let Some(l) = topk_limit.as_literal_int64() {
-                                    l >= *finishing_limit
+                                    i128::cast_from(l)
+                                        >= i128::cast_from(*finishing_limit)
+                                            + i128::cast_from(finishing.offset)
                                 } else {
                                     false
                                 }
@@ -362,6 +540,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
             match mir {
                 MirRelationExpr::Get {
                     id: Id::Global(get_id),
+                    typ: repr_typ,
                     ..
                 } => {
                     // Just grab any arrangement if an arrangement exists
@@ -375,10 +554,52 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
-                    // If there is no arrangement, consider peeking the persist shard directly
+
+                    // If there is no arrangement, consider peeking the persist shard directly.
+                    // Generally, we consider a persist peek when the query can definitely be satisfied
+                    // by scanning through a small, constant number of Persist key-values.
                     let safe_mfp = mfp_to_safe_plan(mfp)?;
-                    let (_m, filters, _p) = safe_mfp.as_map_filter_project();
-                    let small_finish = match &finishing {
+                    let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
+
+                    let persist_fast_path_order_relation_typ = if persist_fast_path_order {
+                        Some(
+                            dataflow_plan
+                                .source_imports
+                                .get(get_id)
+                                .expect("Get's ID is also imported")
+                                .desc
+                                .typ
+                                .clone(),
+                        )
+                    } else {
+                        None
+                    };
+
+                    let literal_constraint =
+                        if let Some(relation_typ) = &persist_fast_path_order_relation_typ {
+                            let mut row = Row::default();
+                            let mut packer = row.packer();
+                            for (idx, col) in relation_typ.column_types.iter().enumerate() {
+                                if !preserves_order(&col.scalar_type) {
+                                    break;
+                                }
+                                let col_expr = MirScalarExpr::column(idx);
+
+                                let Some((literal, _)) = filters
+                                    .iter()
+                                    .filter_map(|f| f.expr_eq_literal(&col_expr))
+                                    .next()
+                                else {
+                                    break;
+                                };
+                                packer.extend_by_row(&literal);
+                            }
+                            if row.is_empty() { None } else { Some(row) }
+                        } else {
+                            None
+                        };
+
+                    let finish_ok = match &finishing {
                         None => false,
                         Some(RowSetFinishing {
                             order_by,
@@ -386,14 +607,51 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             offset,
                             ..
                         }) => {
-                            order_by.is_empty()
-                                && limit.iter().any(|l| {
-                                    usize::cast_from(*l) + *offset < persist_fast_path_limit
-                                })
+                            let order_ok =
+                                if let Some(relation_typ) = &persist_fast_path_order_relation_typ {
+                                    order_by.iter().enumerate().all(|(idx, order)| {
+                                        // Map the ordering column back to the column in the source data.
+                                        // (If it's not one of the input columns, we can't make any guarantees.)
+                                        let column_idx = projection[order.column];
+                                        if column_idx >= safe_mfp.input_arity {
+                                            return false;
+                                        }
+                                        let column_type = &relation_typ.column_types[column_idx];
+                                        let index_ok = idx == column_idx;
+                                        let nulls_ok = !column_type.nullable || order.nulls_last;
+                                        let asc_ok = !order.desc;
+                                        let type_ok = preserves_order(&column_type.scalar_type);
+                                        index_ok && nulls_ok && asc_ok && type_ok
+                                    })
+                                } else {
+                                    order_by.is_empty()
+                                };
+                            let limit_ok = limit.map_or(false, |l| {
+                                usize::cast_from(l) + *offset < persist_fast_path_limit
+                            });
+                            order_ok && limit_ok
                         }
                     };
-                    if filters.is_empty() && small_finish {
-                        return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
+
+                    let key_constraint = if let Some(literal) = &literal_constraint {
+                        let prefix_len = literal.iter().count();
+                        repr_typ
+                            .keys
+                            .iter()
+                            .any(|k| k.iter().all(|idx| *idx < prefix_len))
+                    } else {
+                        false
+                    };
+
+                    // We can generate a persist peek when:
+                    // - We have a literal constraint that includes an entire key (so we'll return at most one value)
+                    // - We can return the first N key values (no filters, small limit, consistent order)
+                    if key_constraint || (filters.is_empty() && finish_ok) {
+                        return Ok(Some(FastPathPlan::PeekPersist(
+                            *get_id,
+                            literal_constraint,
+                            safe_mfp,
+                        )));
                     }
                 }
                 MirRelationExpr::Join { implementation, .. } => {
@@ -439,18 +697,19 @@ impl crate::coord::Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
-        ctx_extra: &mut ExecuteContextExtra,
+        ctx_extra: &mut ExecuteContextGuard,
         plan: PlannedPeek,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<crate::ExecuteResponse, AdapterError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
             determination,
             conn_id,
+            intermediate_result_type,
             source_arity,
             source_ids,
         } = plan;
@@ -466,14 +725,15 @@ impl crate::coord::Coordinator {
 
             let mut results = Vec::new();
             for (row, count) in rows {
-                if count < 0 {
+                if count.is_negative() {
                     Err(EvalError::InvalidParameterValue(
                         format!("Negative multiplicity in constant result: {}", count).into(),
                     ))?
                 };
-                if count > 0 {
+                if count.is_positive() {
                     let count = usize::cast_from(
-                        u64::try_from(count).expect("known to be positive from check above"),
+                        u64::try_from(count.into_inner())
+                            .expect("known to be positive from check above"),
                     );
                     results.push((
                         row,
@@ -481,7 +741,7 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collection = RowCollection::new(&results);
+            let row_collection = RowCollection::new(results, &finishing.order_by);
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 
             let (ret, reason) = match finishing.finish(
@@ -490,11 +750,13 @@ impl crate::coord::Coordinator {
                 max_returned_query_size,
                 &duration_histogram,
             ) {
-                Ok(rows) => {
+                Ok((rows, row_size_bytes)) => {
+                    let result_size = u64::cast_from(row_size_bytes);
                     let rows_returned = u64::cast_from(rows.count());
                     (
                         Ok(Self::send_immediate_rows(rows)),
                         StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
                             rows_returned: Some(rows_returned),
                             execution_strategy: Some(StatementExecutionStrategy::Constant),
                         },
@@ -505,7 +767,7 @@ impl crate::coord::Coordinator {
                     StatementEndedExecutionReason::Errored { error },
                 ),
             };
-            self.retire_execution(reason, std::mem::take(ctx_extra));
+            self.retire_execution(reason, std::mem::take(ctx_extra).defuse());
             return ret;
         }
 
@@ -519,81 +781,144 @@ impl crate::coord::Coordinator {
         // build a dataflow and drop it once the peek is issued. The peeks are also constructed
         // differently.
 
-        // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy) = match fast_path {
-            PeekPlan::FastPath(FastPathPlan::PeekExisting(
-                _coll_id,
-                idx_id,
-                literal_constraints,
-                map_filter_project,
-            )) => (
-                (literal_constraints, timestamp, map_filter_project),
-                None,
-                true,
-                PeekTarget::Index { id: idx_id },
-                StatementExecutionStrategy::FastPath,
-            ),
-            PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (None, timestamp, map_filter_project);
-                let metadata = self
-                    .controller
-                    .storage
-                    .collection_metadata(coll_id)
-                    .expect("storage collection for fast-path peek")
-                    .clone();
-                (
-                    peek_command,
-                    None,
-                    true,
-                    PeekTarget::Persist {
-                        id: coll_id,
-                        metadata,
-                    },
-                    StatementExecutionStrategy::PersistFastPath,
-                )
-            }
-            PeekPlan::SlowPath(PeekDataflowPlan {
-                desc: dataflow,
-                // n.b. this index_id identifies a transient index the
-                // caller created, so it is guaranteed to be on
-                // `compute_instance`.
-                id: index_id,
-                key: index_key,
-                permutation: index_permutation,
-                thinned_arity: index_thinned_arity,
-            }) => {
-                let output_ids = dataflow.export_ids().collect();
+        // Acquire a read hold for the peek target so its `since` cannot advance past
+        // `timestamp` before `compute.peek()` runs. On the slow path we ship the dataflow
+        // first: the implied hold from `create_dataflow` pins the new collection's `since`
+        // at `as_of`, so the subsequent `acquire_read_hold` lands at `as_of <= timestamp`.
+        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy, read_hold) =
+            match fast_path {
+                PeekPlan::FastPath(FastPathPlan::PeekExisting(
+                    _coll_id,
+                    idx_id,
+                    literal_constraints,
+                    map_filter_project,
+                )) => {
+                    let read_hold = self
+                        .controller
+                        .compute
+                        .acquire_read_hold(compute_instance, idx_id)
+                        .map_err(
+                            AdapterError::concurrent_dependency_drop_from_collection_update_error,
+                        )?;
+                    (
+                        (literal_constraints, timestamp, map_filter_project),
+                        None,
+                        true,
+                        PeekTarget::Index { id: idx_id },
+                        StatementExecutionStrategy::FastPath,
+                        read_hold,
+                    )
+                }
+                PeekPlan::FastPath(FastPathPlan::PeekPersist(
+                    coll_id,
+                    literal_constraint,
+                    map_filter_project,
+                )) => {
+                    let peek_command = (
+                        literal_constraint.map(|r| vec![r]),
+                        timestamp,
+                        map_filter_project,
+                    );
+                    let metadata = self
+                        .controller
+                        .storage
+                        .collection_metadata(coll_id)
+                        .expect("storage collection for fast-path peek")
+                        .clone();
+                    let read_hold = self
+                        .controller
+                        .storage_collections
+                        .acquire_read_holds(vec![coll_id])
+                        .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
+                        .into_element();
+                    (
+                        peek_command,
+                        None,
+                        true,
+                        PeekTarget::Persist {
+                            id: coll_id,
+                            metadata,
+                        },
+                        StatementExecutionStrategy::PersistFastPath,
+                        read_hold,
+                    )
+                }
+                PeekPlan::SlowPath(PeekDataflowPlan {
+                    desc: dataflow,
+                    // n.b. this index_id identifies a transient index the
+                    // caller created, so it is guaranteed to be on
+                    // `compute_instance`.
+                    id: index_id,
+                    key: index_key,
+                    permutation: index_permutation,
+                    thinned_arity: index_thinned_arity,
+                }) => {
+                    // The slow-path peek read-hold strategy below acquires a hold for
+                    // `index_id` only. That is sufficient today because slow-path peek
+                    // dataflows have a single export equal to `index_id`. If we ever
+                    // ship multi-output dataflows on this path, the hold acquisition
+                    // needs to be revisited.
+                    let exports: Vec<GlobalId> = dataflow.export_ids().collect();
+                    soft_assert_eq_or_log!(
+                        exports.as_slice(),
+                        &[index_id],
+                        "slow-path peek dataflow must export exactly [index_id]",
+                    );
+                    if exports.as_slice() != [index_id] {
+                        return Err(AdapterError::internal(
+                            "peek error",
+                            format!(
+                                "slow-path peek dataflow exports {exports:?}, expected [{index_id}]",
+                            ),
+                        ));
+                    }
 
-                // Very important: actually create the dataflow (here, so we can destructure).
-                self.controller
-                    .compute
-                    .create_dataflow(compute_instance, dataflow, None)
-                    .unwrap_or_terminate("cannot fail to create dataflows");
-                self.initialize_compute_read_policies(
-                    output_ids,
-                    compute_instance,
-                    // Disable compaction so that nothing can compact before the peek occurs below.
-                    CompactionWindow::DisableCompaction,
-                )
-                .await;
+                    // Very important: actually create the dataflow (here, so we can destructure).
+                    self.controller
+                        .compute
+                        .create_dataflow(compute_instance, dataflow, None)
+                        .map_err(
+                            AdapterError::concurrent_dependency_drop_from_dataflow_creation_error,
+                        )?;
 
-                // Create an identity MFP operator.
-                let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-                map_filter_project
-                    .permute(index_permutation, index_key.len() + index_thinned_arity);
-                let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
-                (
-                    (None, timestamp, map_filter_project),
-                    Some(index_id),
-                    false,
-                    PeekTarget::Index { id: index_id },
-                    StatementExecutionStrategy::Standard,
-                )
-            }
-            _ => {
-                unreachable!()
-            }
-        };
+                    // Acquire a bare hold on the freshly-shipped index. On failure we must
+                    // drop the dataflow ourselves, otherwise it leaks.
+                    let acquire_result = self
+                        .controller
+                        .compute
+                        .acquire_read_hold(compute_instance, index_id)
+                        .map_err(
+                            AdapterError::concurrent_dependency_drop_from_collection_update_error,
+                        );
+                    let read_hold = match acquire_result {
+                        Ok(hold) => hold,
+                        Err(e) => {
+                            self.drop_compute_collections(vec![(compute_instance, index_id)]);
+                            return Err(e);
+                        }
+                    };
+
+                    // Create an identity MFP operator.
+                    let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
+                    map_filter_project.permute_fn(
+                        |c| index_permutation[c],
+                        index_key.len() + index_thinned_arity,
+                    );
+                    let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+
+                    (
+                        (None, timestamp, map_filter_project),
+                        Some(index_id),
+                        false,
+                        PeekTarget::Index { id: index_id },
+                        StatementExecutionStrategy::Standard,
+                        read_hold,
+                    )
+                }
+                PeekPlan::FastPath(_) => {
+                    unreachable!()
+                }
+            };
 
         // Endpoints for sending and receiving peek responses.
         let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
@@ -605,8 +930,43 @@ impl crate::coord::Coordinator {
             uuid = Uuid::new_v4();
         }
 
-        // The peek is ready to go for both cases, fast and non-fast.
-        // Stash the response mechanism, and broadcast dataflow construction.
+        let (literal_constraints, timestamp, map_filter_project) = peek_command;
+
+        // At this stage we don't know column names for the result because we
+        // only know the peek's result type as a bare SqlRelationType.
+        let peek_result_column_names =
+            (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+        let peek_result_desc =
+            RelationDesc::new(intermediate_result_type, peek_result_column_names);
+
+        let peek_result = self
+            .controller
+            .compute
+            .peek(
+                compute_instance,
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                peek_result_desc,
+                finishing.clone(),
+                map_filter_project,
+                read_hold,
+                target_replica,
+                rows_tx,
+            )
+            .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
+        if let Err(e) = peek_result {
+            // If we shipped a transient dataflow above, drop it now to avoid leaking it.
+            if let Some(index_id) = drop_dataflow {
+                self.drop_compute_collections(vec![(compute_instance, index_id)]);
+            }
+            return Err(e);
+        }
+
+        // Register the pending peek only after compute.peek() succeeds. If it
+        // fails (e.g. concurrent replica/cluster drop), inserting first would
+        // leak entries in these maps and misattribute statement execution reasons.
         self.pending_peeks.insert(
             uuid,
             PendingPeek {
@@ -621,54 +981,255 @@ impl crate::coord::Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
-        self.controller
-            .compute
-            .peek(
-                compute_instance,
-                peek_target,
-                literal_constraints,
-                uuid,
-                timestamp,
-                finishing.clone(),
-                map_filter_project,
-                target_replica,
-                rows_tx,
-            )
-            .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 
-        // Prepare the receiver to return as a response.
-        let rows_rx = rows_rx.map_ok_or_else(
-            |e| PeekResponseUnary::Error(e.to_string()),
-            move |resp| match resp {
+        // If a dataflow was created, drop it now that the peek is queued. This is
+        // required: `add_collection` installs implied/warmup holds owned by the
+        // controller and only released via `drop_collections`, so without this call
+        // the transient dataflow's `since` would stay pinned at `as_of` forever. The
+        // peek's own read hold keeps the collection alive on the cluster until the
+        // response arrives.
+        if let Some(index_id) = drop_dataflow {
+            self.drop_compute_collections(vec![(compute_instance, index_id)]);
+        }
+
+        let persist_client = self.persist_client.clone();
+        let peek_stash_read_batch_size_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                .get(self.catalog().system_config().dyncfgs());
+        let peek_stash_read_memory_budget_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                .get(self.catalog().system_config().dyncfgs());
+
+        let peek_response_stream = Self::create_peek_response_stream(
+            rows_rx,
+            finishing,
+            max_result_size,
+            max_returned_query_size,
+            duration_histogram,
+            persist_client,
+            peek_stash_read_batch_size_bytes,
+            peek_stash_read_memory_budget_bytes,
+        );
+
+        Ok(crate::ExecuteResponse::SendingRowsStreaming {
+            rows: Box::pin(peek_response_stream),
+            instance_id: compute_instance,
+            strategy,
+        })
+    }
+
+    /// Creates an async stream that processes peek responses and yields rows.
+    ///
+    /// TODO(peek-seq): Move this out of `coord` once we delete the old peek sequencing.
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) fn create_peek_response_stream(
+        rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
+        finishing: RowSetFinishing,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+        duration_histogram: prometheus::Histogram,
+        mut persist_client: mz_persist_client::PersistClient,
+        peek_stash_read_batch_size_bytes: usize,
+        peek_stash_read_memory_budget_bytes: usize,
+    ) -> impl futures::Stream<Item = PeekResponseUnary> {
+        async_stream::stream!({
+            let result = rows_rx.await;
+
+            let rows = match result {
+                Ok(rows) => rows,
+                Err(e) => {
+                    yield PeekResponseUnary::Error(e.to_string());
+                    return;
+                }
+            };
+
+            match rows {
                 PeekResponse::Rows(rows) => {
+                    let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
                     match finishing.finish(
                         rows,
                         max_result_size,
                         max_returned_query_size,
                         &duration_histogram,
                     ) {
-                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => PeekResponseUnary::Error(e),
+                        Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => yield PeekResponseUnary::Error(e),
                     }
                 }
-                PeekResponse::Canceled => PeekResponseUnary::Canceled,
-                PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            },
-        );
+                PeekResponse::Stashed(response) => {
+                    let response = *response;
 
-        // If it was created, drop the dataflow once the peek command is sent.
-        if let Some(index_id) = drop_dataflow {
-            self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]);
-        }
+                    let shard_id = response.shard_id;
 
-        Ok(crate::ExecuteResponse::SendingRows {
-            future: Box::pin(rows_rx),
-            instance_id: compute_instance,
-            strategy,
+                    let mut batches = Vec::new();
+                    for proto_batch in response.batches.into_iter() {
+                        let batch =
+                            persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+
+                        batches.push(batch);
+                    }
+                    tracing::trace!(?batches, "stashed peek response");
+
+                    let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                    let read_schemas: Schemas<SourceData, ()> = Schemas {
+                        id: None,
+                        key: Arc::new(response.relation_desc.clone()),
+                        val: Arc::new(UnitSchema),
+                    };
+
+                    let mut row_cursor = persist_client
+                        .read_batches_consolidated::<_, _, _, i64>(
+                            response.shard_id,
+                            as_of,
+                            read_schemas,
+                            batches,
+                            |_stats| true,
+                            peek_stash_read_memory_budget_bytes,
+                        )
+                        .await
+                        .expect("invalid usage");
+
+                    // NOTE: Using the cursor creates Futures that are not Sync,
+                    // so we can't drive them on the main Coordinator loop.
+                    // Spawning a task has the additional benefit that we get to
+                    // delete batches once we're done.
+                    //
+                    // Batch deletion is best-effort, though, and there are
+                    // multiple known ways in which they can leak, among them:
+                    //
+                    // - ProtoBatch is lost in flight
+                    // - ProtoBatch is lost because when combining PeekResponse
+                    // from workers a cancellation or error "overrides" other
+                    // results, meaning we drop them
+                    // - This task here is not run to completion before it can
+                    // delete all batches
+                    //
+                    // This is semi-ok, because persist needs a reaper of leaked
+                    // batches already, and so we piggy-back on that, even if it
+                    // might not exist as of today.
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    mz_ore::task::spawn(|| "read_peek_batches", async move {
+                        // We always send our inline rows first. Ordering
+                        // doesn't matter because we can only be in this case
+                        // when there is no ORDER BY.
+                        //
+                        // We _could_ write these out as a Batch, and include it
+                        // in the batches we read via the Consolidator. If we
+                        // wanted to get a consistent ordering. That's not
+                        // needed for correctness! But might be nice for more
+                        // aesthetic reasons.
+                        for rows in response.inline_rows {
+                            let result = tx.send(rows).await;
+                            if result.is_err() {
+                                tracing::debug!("receiver went away");
+                            }
+                        }
+
+                        let mut current_batch = Vec::new();
+                        let mut current_batch_size: usize = 0;
+
+                        'outer: while let Some(rows) = row_cursor.next().await {
+                            for ((source_data, _val), _ts, diff) in rows {
+                                let row = source_data
+                                    .0
+                                    .expect("we are not sending errors on this code path");
+
+                                let diff = usize::try_from(diff)
+                                    .expect("peek responses cannot have negative diffs");
+
+                                if diff > 0 {
+                                    let diff =
+                                        NonZeroUsize::new(diff).expect("checked to be non-zero");
+                                    current_batch_size =
+                                        current_batch_size.saturating_add(row.byte_len());
+                                    current_batch.push((row, diff));
+                                }
+
+                                if current_batch_size > peek_stash_read_batch_size_bytes {
+                                    // We're re-encoding the rows as a RowCollection
+                                    // here, for which we pay in CPU time. We're in a
+                                    // slow path already, since we're returning a big
+                                    // stashed result so this is worth the convenience
+                                    // of that for now.
+                                    let result = tx
+                                        .send(RowCollection::new(
+                                            current_batch.drain(..).collect_vec(),
+                                            &[],
+                                        ))
+                                        .await;
+                                    if result.is_err() {
+                                        tracing::debug!("receiver went away");
+                                        // Don't return but break so we fall out to the
+                                        // batch delete logic below.
+                                        break 'outer;
+                                    }
+
+                                    current_batch_size = 0;
+                                }
+                            }
+                        }
+
+                        if current_batch.len() > 0 {
+                            let result = tx.send(RowCollection::new(current_batch, &[])).await;
+                            if result.is_err() {
+                                tracing::debug!("receiver went away");
+                            }
+                        }
+
+                        let batches = row_cursor.into_lease();
+                        tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                        for batch in batches {
+                            batch.delete().await;
+                        }
+                    });
+
+                    assert!(
+                        finishing.is_streamable(response.relation_desc.arity()),
+                        "can only get stashed responses when the finishing is streamable"
+                    );
+
+                    tracing::trace!("query result is streamable!");
+
+                    assert!(finishing.is_streamable(response.relation_desc.arity()));
+                    let mut incremental_finishing = RowSetFinishingIncremental::new(
+                        finishing.offset,
+                        finishing.limit,
+                        finishing.project,
+                        max_returned_query_size,
+                    );
+
+                    let mut got_zero_rows = true;
+                    while let Some(rows) = rx.recv().await {
+                        got_zero_rows = false;
+
+                        let result_rows = incremental_finishing.finish_incremental(
+                            rows,
+                            max_result_size,
+                            &duration_histogram,
+                        );
+
+                        match result_rows {
+                            Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
+                            Err(e) => yield PeekResponseUnary::Error(e),
+                        }
+                    }
+
+                    // Even when there's zero rows, clients still expect an
+                    // empty PeekResponse.
+                    if got_zero_rows {
+                        let row_iter = vec![].into_row_iter();
+                        yield PeekResponseUnary::Rows(Box::new(row_iter));
+                    }
+                }
+                PeekResponse::Canceled => {
+                    yield PeekResponseUnary::Canceled;
+                }
+                PeekResponse::Error(e) => {
+                    yield PeekResponseUnary::Error(e);
+                }
+            }
         })
     }
 
@@ -678,7 +1239,6 @@ impl crate::coord::Coordinator {
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics
                 .canceled_peeks
-                .with_label_values(&[])
                 .inc_by(u64::cast_from(uuids.len()));
 
             let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
@@ -704,7 +1264,10 @@ impl crate::coord::Coordinator {
                 .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
                 .collect::<Vec<_>>();
             for peek in peeks {
-                self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
+                self.retire_execution(
+                    StatementEndedExecutionReason::Canceled,
+                    peek.ctx_extra.defuse(),
+                );
             }
         }
     }
@@ -728,13 +1291,17 @@ impl crate::coord::Coordinator {
         }) = self.remove_pending_peek(&uuid)
         {
             let reason = match notification {
-                PeekNotification::Success { rows: num_rows } => {
+                PeekNotification::Success {
+                    rows: num_rows,
+                    result_size,
+                } => {
                     let strategy = if is_fast_path {
                         StatementExecutionStrategy::FastPath
                     } else {
                         StatementExecutionStrategy::Standard
                     };
                     StatementEndedExecutionReason::Success {
+                        result_size: Some(result_size),
                         rows_returned: Some(num_rows),
                         execution_strategy: Some(strategy),
                     }
@@ -743,7 +1310,7 @@ impl crate::coord::Coordinator {
                 PeekNotification::Canceled => StatementEndedExecutionReason::Canceled,
             };
             otel_ctx.attach_as_parent();
-            self.retire_execution(reason, ctx_extra);
+            self.retire_execution(reason, ctx_extra.defuse());
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.
@@ -763,6 +1330,160 @@ impl crate::coord::Coordinator {
             }
         }
         pending_peek
+    }
+
+    /// Implements a slow-path peek by creating a transient dataflow.
+    /// This is called from the command handler for ExecuteSlowPathPeek.
+    ///
+    /// (For now, this method simply delegates to implement_peek_plan by constructing
+    /// the necessary PlannedPeek structure.)
+    pub(crate) async fn implement_slow_path_peek(
+        &mut self,
+        dataflow_plan: PeekDataflowPlan,
+        determination: TimestampDetermination,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+        watch_set: Option<WatchSetCreation>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // Install watch sets for statement lifecycle logging if enabled.
+        // This must happen _before_ creating ExecuteContextExtra, so that if it fails,
+        // we don't have an ExecuteContextExtra that needs to be retired (the frontend
+        // will handle logging for the error case).
+        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
+        if let Some(ws) = watch_set {
+            self.install_peek_watch_sets(conn_id.clone(), ws)
+                .map_err(|e| {
+                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
+                })?;
+        }
+
+        let source_arity = intermediate_result_type.arity();
+
+        let planned_peek = PlannedPeek {
+            plan: PeekPlan::SlowPath(dataflow_plan),
+            determination,
+            conn_id,
+            intermediate_result_type,
+            source_arity,
+            source_ids,
+        };
+
+        // Call the old peek sequencing's implement_peek_plan for now.
+        // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
+        // relevant parts of the old `implement_peek_plan` into this method, and remove the old
+        // `implement_peek_plan`.
+        self.implement_peek_plan(
+            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
+            planned_peek,
+            finishing,
+            compute_instance,
+            target_replica,
+            max_result_size,
+            max_query_result_size,
+        )
+        .await
+    }
+
+    /// Implements a `COPY TO` command by installing peek watch sets,
+    /// shipping the dataflow, and spawning a background task to wait for completion.
+    /// This is called from the command handler for ExecuteCopyTo.
+    ///
+    /// (The S3 preflight check must be completed successfully via the
+    /// `CopyToPreflight` command _before_ calling this method. The preflight is
+    /// handled separately to avoid blocking the coordinator's main task with
+    /// slow S3 network operations.)
+    ///
+    /// This method does NOT block waiting for completion. Instead, it spawns a background task that
+    /// will send the response through the provided tx channel when the COPY TO completes.
+    /// All errors (setup or execution) are sent through tx.
+    pub(crate) async fn implement_copy_to(
+        &mut self,
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        watch_set: Option<WatchSetCreation>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    ) {
+        // Helper to send error and return early
+        let send_err = |tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+                        e: AdapterError| {
+            let _ = tx.send(Err(e));
+        };
+
+        // Install watch sets for statement lifecycle logging if enabled.
+        // If this fails, we just send the error back. The frontend will handle logging
+        // for the error case (no ExecuteContextExtra is created here).
+        if let Some(ws) = watch_set {
+            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
+                let err = AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e);
+                send_err(tx, err);
+                return;
+            }
+        }
+
+        // Note: We don't create an ExecuteContextExtra here because the frontend handles
+        // all statement logging for COPY TO operations.
+
+        let sink_id = df_desc.sink_id();
+
+        // Create and register ActiveCopyTo.
+        // Note: sink_tx/sink_rx is the channel for the compute sink to notify completion
+        // This is different from the command's tx which sends the response to the client
+        let (sink_tx, sink_rx) = oneshot::channel();
+        let active_copy_to = ActiveCopyTo {
+            conn_id: conn_id.clone(),
+            tx: sink_tx,
+            cluster_id: compute_instance,
+            depends_on: source_ids,
+        };
+
+        // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
+        drop(
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+                .await,
+        );
+
+        // Try to ship the dataflow. We handle errors gracefully because dependencies might have
+        // disappeared during sequencing.
+        if let Err(e) = self
+            .try_ship_dataflow(df_desc, compute_instance, target_replica)
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
+        {
+            // Clean up the active compute sink that was added above, since the dataflow was never
+            // created. If we don't do this, the sink_id remains in drop_sinks but no collection
+            // exists in the compute controller, causing a panic when the connection terminates.
+            self.remove_active_compute_sink(sink_id).await;
+            send_err(tx, e);
+            return;
+        }
+
+        // Spawn background task to wait for completion
+        // We must NOT await sink_rx here directly, as that would block the coordinator's main task
+        // from processing the completion message. Instead, we spawn a background task that will
+        // send the result through tx when the COPY TO completes.
+        let span = Span::current();
+        task::spawn(
+            || "copy to completion",
+            async move {
+                let res = sink_rx.await;
+                let result = match res {
+                    Ok(res) => res,
+                    Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
+                };
+
+                let _ = tx.send(result);
+            }
+            .instrument(span),
+        );
     }
 
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the
@@ -785,15 +1506,15 @@ mod tests {
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
     use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
-    use mz_repr::{ColumnType, Datum, ScalarType};
+    use mz_repr::{Datum, SqlColumnType, SqlScalarType};
 
     use super::*;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_fast_path_plan_as_text() {
-        let typ = RelationType::new(vec![ColumnType {
-            scalar_type: ScalarType::String,
+        let typ = SqlRelationType::new(vec![SqlColumnType {
+            scalar_type: SqlScalarType::String,
             nullable: false,
         }]);
         let constant_err = FastPathPlan::Constant(Err(EvalError::DivisionByZero), typ.clone());
@@ -826,17 +1547,23 @@ mod tests {
         let humanizer = DummyHumanizer;
         let config = ExplainConfig {
             redacted: false,
+            verbose_syntax: true,
             ..Default::default()
         };
         let ctx_gen = || {
             let indent = Indent::default();
             let annotations = BTreeMap::new();
-            PlanRenderingContext::<FastPathPlan>::new(indent, &humanizer, annotations, &config)
+            PlanRenderingContext::<FastPathPlan>::new(
+                indent,
+                &humanizer,
+                annotations,
+                &config,
+                BTreeSet::default(),
+            )
         };
 
         let constant_err_exp = "Error \"division by zero\"\n";
-        let no_lookup_exp =
-            "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
+        let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
         let lookup_exp =
             "Filter (#0) IS NULL\n  ReadIndex on=u9 [DELETED INDEX]=[lookup value=(5)]\n";
 
@@ -845,9 +1572,9 @@ mod tests {
         assert_eq!(text_string_at(&lookup, ctx_gen), lookup_exp);
 
         let mut constant_rows = vec![
-            (Row::pack(Some(Datum::String("hello"))), 1),
-            (Row::pack(Some(Datum::String("world"))), 2),
-            (Row::pack(Some(Datum::String("star"))), 500),
+            (Row::pack(Some(Datum::String("hello"))), Diff::ONE),
+            (Row::pack(Some(Datum::String("world"))), 2.into()),
+            (Row::pack(Some(Datum::String("star"))), 500.into()),
         ];
         let constant_exp1 =
             "Constant\n  - (\"hello\")\n  - ((\"world\") x 2)\n  - ((\"star\") x 500)\n";
@@ -858,9 +1585,9 @@ mod tests {
             ),
             constant_exp1
         );
-        constant_rows.extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 1)));
-        let constant_exp2 =
-            "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
+        constant_rows
+            .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), Diff::ONE)));
+        let constant_exp2 = "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
         \n    - (\"2\")\n    - (\"3\")\n    - (\"4\")\n    - (\"5\")\n    - (\"6\")\
         \n    - (\"7\")\n    - (\"8\")\n    - (\"9\")\n    - (\"10\")\n    - (\"11\")\

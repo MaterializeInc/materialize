@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Metrics Visualization{% endblock %}
+
+{% block head %}
+<script src="/static/js/vendor/react.js"></script>
+<script src="/static/js/vendor/react-dom.js"></script>
+<script src="/static/js/vendor/@babel/standalone.js"></script>
+<script src="/static/js/vendor/d3.js"></script>
+<script src="/static/js/fetch.js"></script>
+<script src="/static/js/prometheus.js"></script>
+<script src="/static/js/metrics.jsx" type="text/babel"></script>
+{% endblock %}
+
+{% block content %}
+<div id="content"></div>
+{% endblock %}

@@ -30,6 +30,7 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE decode_1to2_nodefault
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}')
@@ -37,6 +38,7 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
 > CREATE TABLE decode_1to2_nodefault_tbl FROM SOURCE decode_1to2_nodefault (REFERENCE "testdrive-decode-1to2-nodefault-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${2columns-nodefault}'
   ENVELOPE NONE
+> COMMIT
 
 ! SELECT * FROM decode_1to2_nodefault_tbl
 contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
@@ -50,6 +52,7 @@ $ kafka-create-topic topic=decode-1to2-default
 $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp=1
 {"f1": 123}
 
+> BEGIN
 > CREATE SOURCE decode_1to2_default
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-default-${testdrive.seed}')
@@ -57,6 +60,7 @@ $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp
 > CREATE TABLE decode_1to2_default_tbl FROM SOURCE decode_1to2_default (REFERENCE "testdrive-decode-1to2-default-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${2columns-default}'
   ENVELOPE NONE
+> COMMIT
 
 ! SELECT * FROM decode_1to2_default_tbl
 contains:Decode error: avro deserialization error: unable to decode row : IO error: UnexpectedEof
@@ -71,6 +75,7 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
 {"f1": 123, "f2": 234}
 {"f2": 345, "f1": 456}
 
+> BEGIN
 > CREATE SOURCE decode_2to1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-2to1-${testdrive.seed}')
@@ -78,6 +83,7 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
 > CREATE TABLE decode_2to1_tbl FROM SOURCE decode_2to1 (REFERENCE "testdrive-decode-2to1-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${1column}'
   ENVELOPE NONE
+> COMMIT
 
 ! SELECT * FROM decode_2to1_tbl
 contains:Unexpected bytes remaining

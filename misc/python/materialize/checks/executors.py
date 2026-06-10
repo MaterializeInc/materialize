@@ -9,12 +9,14 @@
 
 import random
 import threading
+from collections.abc import Callable
 from inspect import Traceback
 from typing import Any
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.sql_server import SqlServer
 
 
 class Executor:
@@ -31,6 +33,13 @@ class Executor:
 
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> None:
+        raise NotImplementedError
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -54,7 +63,24 @@ class MzcomposeExecutor(Executor):
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> None:
-        self.composition.testdrive(input, caller=caller, mz_service=mz_service)
+        self.composition.testdrive(
+            input,
+            caller=caller,
+            mz_service=mz_service,
+            args=[
+                f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+                f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            ],
+        )
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        conn = self.composition.sql_connection(mz_service)
+        conn.autocommit = True
+        method(conn)
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
@@ -65,7 +91,9 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> Any:
-        thread = threading.Thread(target=self._testdrive, args=[input, caller])
+        thread = threading.Thread(
+            target=self._testdrive, args=[input, caller, mz_service]
+        )
         thread.start()
         return thread
 
@@ -73,7 +101,41 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> None:
         try:
-            self.composition.testdrive(input, caller=caller, mz_service=mz_service)
+            self.composition.testdrive(
+                input,
+                caller=caller,
+                mz_service=mz_service,
+                args=[
+                    f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+                    f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+                ],
+                print_prefix=(
+                    f"{caller.filename.split('/')[-1]}:{caller.lineno} "
+                    if caller
+                    else None
+                ),
+            )
+        except BaseException as e:
+            self.exception = e
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> Any:
+        thread = threading.Thread(target=self._run_pyaction, args=[method, mz_service])
+        thread.start()
+        return thread
+
+    def _run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        try:
+            conn = self.composition.sql_connection(mz_service)
+            conn.autocommit = True
+            method(conn)
         except BaseException as e:
             self.exception = e
 
@@ -100,5 +162,19 @@ class CloudtestExecutor(Executor):
             mz_service is None
         ), "CloudtestExecutor not yet compatible with custom mz_service names"
         self.application.testdrive.run(
-            input=input, no_reset=True, seed=self.seed, caller=caller
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            input=input,
+            no_reset=True,
+            seed=self.seed,
+            caller=caller,
         )
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        conn = self.application.environmentd.sql_conn()
+        conn.autocommit = True
+        method(conn)

@@ -9,11 +9,13 @@
 
 use crate::models::*;
 use crate::server::Context;
-use crate::utils::{generate_access_token, generate_refresh_token, RefreshTokenTarget};
-use axum::{extract::State, http::StatusCode, Json};
+use crate::utils::{
+    RefreshTokenTarget, generate_access_token, generate_refresh_token, get_user_groups,
+};
+use axum::{Json, extract::State, http::StatusCode};
 use mz_frontegg_auth::{ApiTokenResponse, ClaimTokenType};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 pub async fn handle_post_auth_api_token(
     State(context): State<Arc<Context>>,
@@ -35,6 +37,7 @@ pub async fn handle_post_auth_api_token(
             let user = users
                 .get(email)
                 .expect("API tokens are only created by logged in valid users.");
+            let groups = get_user_groups(&context, &user.id);
             generate_access_token(
                 &context,
                 ClaimTokenType::UserApiToken,
@@ -43,6 +46,7 @@ pub async fn handle_post_auth_api_token(
                 Some(user.id),
                 user.tenant_id,
                 user.roles.clone(),
+                groups,
                 None,
             )
         }
@@ -59,6 +63,7 @@ pub async fn handle_post_auth_api_token(
                     None,
                     config.tenant_id,
                     config.roles.clone(),
+                    Vec::new(),
                     config.metadata.clone(),
                 ),
                 None => return Err(StatusCode::UNAUTHORIZED),
@@ -89,6 +94,7 @@ pub async fn handle_post_auth_user(
         Some(user) if request.password == user.password => user.to_owned(),
         _ => return Err(StatusCode::UNAUTHORIZED),
     };
+    let groups = get_user_groups(&context, &user.id);
     let access_token = generate_access_token(
         &context,
         ClaimTokenType::UserToken,
@@ -97,6 +103,7 @@ pub async fn handle_post_auth_user(
         Some(user.id),
         user.tenant_id,
         user.roles.clone(),
+        groups,
         None,
     );
     let refresh_token = generate_refresh_token(&context, RefreshTokenTarget::User(request));

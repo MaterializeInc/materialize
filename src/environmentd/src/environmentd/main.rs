@@ -13,31 +13,36 @@
 //! on port 6876.
 
 use std::ffi::CStr;
+use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
-use anyhow::{bail, Context};
-use clap::{ArgEnum, Parser};
+use anyhow::{Context, bail};
+use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter::ResultExt;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR, BootstrapBuiltinClusterConfig,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, DEFAULT_REPLICATION_FACTOR,
+    PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR, SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+use mz_auth::password::Password;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{
-    UnsafeBuiltinTableFingerprintWhitespace,
-    UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
-};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
-use mz_controller::ControllerConfig;
-use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
+use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
+use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -49,16 +54,16 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrches
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_ore::url::SensitiveUrl;
+use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
-use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
@@ -67,12 +72,12 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
-use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
+use crate::{BUILD_INFO, CatalogConfig, ListenerConfig, Listeners, ListenersConfig};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -101,55 +106,22 @@ pub struct Args {
     all_features: bool,
 
     // === Connection options. ===
-    /// The address on which to listen for untrusted SQL connections.
-    ///
-    /// Connections on this address are subject to encryption, authentication,
-    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
-    /// options.
+    /// Path to a file containing the json-formatted configuration of our
+    /// metrics, HTTP, and sql listeners.
     #[clap(
         long,
-        env = "SQL_LISTEN_ADDR",
-        value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6875"
+        env = "LISTENERS_CONFIG_PATH",
+        value_name = "PATH",
+        action = ArgAction::Set,
     )]
-    sql_listen_addr: SocketAddr,
-    /// The address on which to listen for untrusted HTTP connections.
-    ///
-    /// Connections on this address are subject to encryption, authentication,
-    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
-    /// options.
+    listeners_config_path: PathBuf,
+    /// Password for the mz_system user.
     #[clap(
         long,
-        env = "HTTP_LISTEN_ADDR",
-        value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6876"
+        env = "EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM",
+        action = ArgAction::Set,
     )]
-    http_listen_addr: SocketAddr,
-    /// The address on which to listen for trusted SQL connections.
-    ///
-    /// Connections to this address are not subject to encryption, authentication,
-    /// or access control. Care should be taken to not expose this address to the
-    /// public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "INTERNAL_SQL_LISTEN_ADDR",
-        default_value = "127.0.0.1:6877"
-    )]
-    internal_sql_listen_addr: SocketAddr,
-    /// The address on which to listen for trusted HTTP connections.
-    ///
-    /// Connections to this address are not subject to encryption, authentication,
-    /// or access control. Care should be taken to not expose the listen address
-    /// to the public internet or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "INTERNAL_HTTP_LISTEN_ADDR",
-        default_value = "127.0.0.1:6878"
-    )]
-    internal_http_listen_addr: SocketAddr,
+    external_login_password_mz_system: Option<Password>,
     /// The address on which to listen for Persist PubSub connections.
     ///
     /// Connections to this address are not subject to encryption, authentication,
@@ -159,33 +131,10 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR",
-        default_value = "127.0.0.1:6879"
+        default_value = "127.0.0.1:6879",
+        action = ArgAction::Set,
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
-    /// The address on which to listen for SQL connections from the balancers.
-    ///
-    /// Connections to this address are not subject to encryption.
-    /// Care should be taken to not expose this address to the public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "BALANCER_SQL_LISTEN_ADDR",
-        default_value = "127.0.0.1:6880"
-    )]
-    balancer_sql_listen_addr: SocketAddr,
-    /// The address on which to listen for trusted HTTP connections.
-    ///
-    /// Connections to this address are not subject to encryption.
-    /// Care should be taken to not expose this address to the public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "BALANCER_HTTP_LISTEN_ADDR",
-        default_value = "127.0.0.1:6881"
-    )]
-    balancer_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -201,15 +150,18 @@ pub struct Args {
     #[clap(
         long,
         env = "ANNOUNCE_EGRESS_ADDRESS",
-        multiple = true,
-        use_delimiter = true
+        action = ArgAction::Append,
+        use_value_delimiter = true
     )]
     announce_egress_address: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
-    /// Presently used to render webhook URLs for end users in notices and the
-    /// system catalog. Not used to establish connections directly.
+    /// Used to render absolute URLs the server publishes: webhook URLs in
+    /// notices and the system catalog, and the OAuth Protected Resource
+    /// Metadata `resource`/`resource_metadata` URLs (RFC 9728). Not used to
+    /// establish connections directly. When unset, those URLs fall back to
+    /// the request's `Host` header.
     #[clap(long, env = "HTTP_HOST_NAME")]
     http_host_name: Option<String>,
     /// The URL of the Materialize console to proxy from the /internal-console
@@ -222,14 +174,17 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
-
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
-    #[structopt(long, arg_enum, env = "ORCHESTRATOR")]
+    #[structopt(long, value_enum, env = "ORCHESTRATOR")]
     orchestrator: OrchestratorKind,
     /// Name of a non-default Kubernetes scheduler, if any.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
     orchestrator_kubernetes_scheduler_name: Option<String>,
+    /// Annotations to apply to all services created by the Kubernetes orchestrator
+    /// in the form `KEY=VALUE`.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ANNOTATION")]
+    orchestrator_kubernetes_service_annotation: Vec<KeyValueArg<String, String>>,
     /// Labels to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_LABEL")]
@@ -238,6 +193,14 @@ pub struct Args {
     /// orchestrator in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_NODE_SELECTOR")]
     orchestrator_kubernetes_service_node_selector: Vec<KeyValueArg<String, String>>,
+    /// Affinity to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_AFFINITY")]
+    orchestrator_kubernetes_service_affinity: Option<String>,
+    /// Tolerations to apply to all services created by the Kubernetes
+    /// orchestrator as a JSON string.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_TOLERATIONS")]
+    orchestrator_kubernetes_service_tolerations: Option<String>,
     /// The name of a service account to apply to all services created by the
     /// Kubernetes orchestrator.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ACCOUNT")]
@@ -258,7 +221,7 @@ pub struct Args {
         long,
         env = "ORCHESTRATOR_KUBERNETES_IMAGE_PULL_POLICY",
         default_value = "always",
-        arg_enum
+        value_enum
     )]
     orchestrator_kubernetes_image_pull_policy: KubernetesImagePullPolicy,
     /// The init container for services created by the Kubernetes orchestrator.
@@ -277,6 +240,18 @@ pub struct Args {
     /// The prefix to prepend to all kubernetes object names.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
     orchestrator_kubernetes_name_prefix: Option<String>,
+    /// Whether to enable pod metrics collection.
+    ///
+    /// Required for resource usage graphs in the console.
+    /// Requires metrics-server to be installed.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
+    orchestrator_kubernetes_disable_pod_metrics_collection: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
+    )]
+    orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -335,11 +310,11 @@ pub struct Args {
     /// The secrets controller implementation to use.
     #[structopt(
         long,
-        arg_enum,
+        value_enum,
         env = "SECRETS_CONTROLLER",
-        default_value_ifs(&[
-            ("orchestrator", Some("kubernetes"), Some("kubernetes")),
-            ("orchestrator", Some("process"), Some("local-file"))
+        default_value_ifs([
+            ("orchestrator", "kubernetes", Some("kubernetes")),
+            ("orchestrator", "process", Some("local-file"))
         ]),
         default_value("kubernetes"), // This shouldn't be possible, but it makes clap happy.
     )]
@@ -349,9 +324,9 @@ pub struct Args {
     #[clap(
         long,
         env = "AWS_SECRETS_CONTROLLER_TAGS",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';',
-        required_if_eq("secrets-controller", "aws-secrets-manager")
+        required_if_eq("secrets_controller", "aws-secrets-manager")
     )]
     aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
     /// The clusterd image reference to use.
@@ -359,7 +334,7 @@ pub struct Args {
         long,
         env = "CLUSTERD_IMAGE",
         required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("clusterd"))
+        default_value_if("orchestrator", "process", Some("clusterd"))
     )]
     clusterd_image: Option<String>,
     /// A number representing the environment's generation.
@@ -375,16 +350,16 @@ pub struct Args {
         long,
         env = "METADATA_BACKEND_URL",
         conflicts_with_all = &[
-            "persist-consensus-url",
-            "timestamp-oracle-url",
+            "persist_consensus_url",
+            "timestamp_oracle_url",
         ],
     )]
     metadata_backend_url: Option<SensitiveUrl>,
 
-    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
-    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
-    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
-    /// is displayed in addition in `SELECT mz_version()` if set.
+    /// Helm chart version for self-hosted Materialize. This version is supposed to correspond to
+    /// the Materialize (core) version. This version is displayed in addition in `SELECT
+    /// mz_version()` if set and if it differs from the Materialize (core) version (which it should
+    /// not!).
     #[clap(long, env = "HELM_CHART_VERSION")]
     helm_chart_version: Option<String>,
 
@@ -413,14 +388,14 @@ pub struct Args {
     #[clap(
         long,
         env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
     /// The period for which to retain usage records. Note that the retention
     /// period is only evaluated at server start time, so rebooting the server
     /// is required to discard old records.
-    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
+    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", value_parser = humantime::parse_duration)]
     storage_usage_retention_period: Option<Duration>,
 
     // === Adapter options. ===
@@ -435,7 +410,7 @@ pub struct Args {
     #[clap(
         long,
         env = "CLUSTER_REPLICA_SIZES",
-        requires = "bootstrap-default-cluster-replica-size"
+        requires = "bootstrap_default_cluster_replica_size"
     )]
     cluster_replica_sizes: String,
     /// An API key for Segment. Enables export of audit events to Segment.
@@ -448,6 +423,10 @@ pub struct Args {
     /// which the event was sent.
     #[clap(long, env = "SEGMENT_CLIENT_SIDE")]
     segment_client_side: bool,
+    /// Only create a dummy segment client when no segment api key is provided, only to get more
+    /// testing coverage.
+    #[clap(long, env = "TEST_ONLY_DUMMY_SEGMENT_CLIENT")]
+    test_only_dummy_segment_client: bool,
     /// An SDK key for LaunchDarkly.
     ///
     /// Setting this in combination with [`Self::config_sync_loop_interval`]
@@ -464,7 +443,7 @@ pub struct Args {
     #[clap(
         long,
         env = "LAUNCHDARKLY_KEY_MAP",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
@@ -472,7 +451,7 @@ pub struct Args {
     #[clap(
         long,
         env = "CONFIG_SYNC_TIMEOUT",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "30s"
     )]
     config_sync_timeout: Duration,
@@ -484,16 +463,13 @@ pub struct Args {
     #[clap(
         long,
         env = "CONFIG_SYNC_LOOP_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
     )]
     config_sync_loop_interval: Option<Duration>,
-    /// A scratch directory that can be used for ephemeral storage.
-    //
-    // NOTE(jkosh44): this argument is intentionally unused at present. It is
-    // future proofing for a world where `environmentd` needs to spill
-    // ephemeral state to disk.
-    #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
-    scratch_directory: Option<PathBuf>,
+    /// Path to a JSON file containing system parameter values.
+    /// If specified, this file will be used instead of LaunchDarkly for configuration.
+    #[clap(long, env = "CONFIG_SYNC_FILE_PATH", value_name = "PATH")]
+    config_sync_file_path: Option<PathBuf>,
 
     // === Bootstrap options. ===
     #[clap(
@@ -516,53 +492,103 @@ pub struct Args {
     #[clap(
         long,
         env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin system cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_system_cluster_replica_size: String,
     /// The size of the builtin catalog server cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_catalog_server_cluster_replica_size: String,
     /// The size of the builtin probe cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_probe_cluster_replica_size: String,
     /// The size of the builtin support cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_support_cluster_replica_size: String,
     /// The size of the builtin analytics cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_analytics_cluster_replica_size: String,
+    #[clap(
+        long,
+        env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR",
+        default_value = DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_default_cluster_replication_factor: u32,
+    /// The replication factor of the builtin system cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR",
+        default_value = SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_system_cluster_replication_factor: u32,
+    /// The replication factor of the builtin catalog server cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICATION_FACTOR",
+        default_value = CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_catalog_server_cluster_replication_factor: u32,
+    /// The replication factor of the builtin probe cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR",
+        default_value = PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_probe_cluster_replication_factor: u32,
+    /// The replication factor of the builtin support cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICATION_FACTOR",
+        default_value = SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_support_cluster_replication_factor: u32,
+    /// The replication factor of the builtin analytics cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICATION_FACTOR",
+        default_value = ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_analytics_cluster_replication_factor: u32,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
         long,
         env = "SYSTEM_PARAMETER_DEFAULT",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
+    /// File containing a valid Materialize license key.
+    #[clap(long, env = "LICENSE_KEY")]
+    license_key: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -576,15 +602,15 @@ pub struct Args {
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", value_parser = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable)]
     aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
     #[clap(
         long,
         env = "AWS_PRIVATELINK_AVAILABILITY_ZONES",
-        multiple = true,
-        use_delimiter = true
+        action = ArgAction::Append,
+        use_value_delimiter = true
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
@@ -593,24 +619,16 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     // === Testing options. ===
-    /// Injects arbitrary whitespace into builtin table fingerprints, which can
-    /// trigger builtin item migrations. The amount of whitespace is determined
-    /// by
-    /// `unsafe_builtin_table_fingerprint_whitespace_version`.
+    /// Forces the migration of all builtin storage collections using the
+    /// specified migration mechanism (either "evolution" or "replacement").
+    ///
     /// This argument is meant for testing only and as the names suggests
     /// should not be set in production.
-    #[clap(long, arg_enum, requires = "unsafe-mode")]
-    unsafe_builtin_table_fingerprint_whitespace: Option<UnsafeBuiltinTableFingerprintWhitespace>,
-    /// Controls the amount of whitespace injected by
-    /// `unsafe_builtin_table_fingerprint_whitespace`.
-    /// Incrementing this value can allow triggering multiple builtin
-    /// migrations from a single test. This argument is meant for testing only
-    /// and as the names suggests should not be set in production.
-    #[clap(long, requires = "unsafe-mode", default_value = "1")]
-    unsafe_builtin_table_fingerprint_whitespace_version: usize,
+    #[clap(long, value_enum, requires = "unsafe_mode")]
+    unsafe_force_builtin_schema_migration: Option<String>,
 }
 
-#[derive(ArgEnum, Debug, Clone)]
+#[derive(ValueEnum, Debug, Clone)]
 enum OrchestratorKind {
     Kubernetes,
     Process,
@@ -646,14 +664,34 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
+    let license_key = if let Some(license_key_file) = args.license_key {
+        let license_key_text = std::fs::read_to_string(&license_key_file)
+            .context("failed to open license key file")?;
+        let license_key = mz_license_keys::validate(license_key_text.trim())
+            .context("failed to validate license key file")?;
+        if license_key.expired {
+            let message = format!(
+                "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
+            );
+            match license_key.expiration_behavior {
+                ExpirationBehavior::Warn | ExpirationBehavior::DisableClusterCreation => {
+                    warn!("{message}");
+                }
+                ExpirationBehavior::Disable => bail!("{message}"),
+            }
+        }
+        license_key
+    } else if matches!(args.orchestrator, OrchestratorKind::Kubernetes) {
+        bail!("--license-key is required when running in Kubernetes");
+    } else {
+        // license key checks are optional for the emulator
+        ValidatedLicenseKey::disabled()
+    };
+
     // Configure testing options.
-    if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
-        assert!(args.unsafe_mode);
-        let whitespace = "\n".repeat(args.unsafe_builtin_table_fingerprint_whitespace_version);
-        *UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
-            .lock()
-            .expect("lock poisoned") = Some((fingerprint_whitespace, whitespace));
-    }
+    let force_builtin_schema_migration = args
+        .unsafe_force_builtin_schema_migration
+        .inspect(|_mechanism| assert!(args.unsafe_mode));
 
     // Start Tokio runtime.
 
@@ -661,11 +699,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(ncpus_useful)
+            .thread_stack_size(3 * 1024 * 1024) // 3 MiB
             // The default thread name exceeds the Linux limit on thread name
             // length, so pick something shorter.
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
                 format!("tokio:work-{}", id)
             })
             .enable_all()
@@ -682,13 +721,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+    let tracing_handle = runtime.block_on(args.tracing.configure_tracing(
         StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         },
         metrics_registry.clone(),
     ))?;
+    register_runtime_metrics("main", runtime.metrics(), &metrics_registry);
 
     let span = tracing::info_span!("environmentd::run").entered();
 
@@ -698,30 +738,54 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
-    runtime.block_on(mz_metrics::rusage::register_metrics_into(&metrics_registry));
+    runtime.block_on(mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+    ));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
 
     // Configure connections.
     let tls = args.tls.into_config()?;
-    let frontegg = Authenticator::from_args(args.frontegg, &metrics_registry)?;
+    let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
+    let listeners_config: ListenersConfig = {
+        let f = File::open(args.listeners_config_path)?;
+        serde_json::from_reader(f)?
+    };
+
+    for (_, listener) in &listeners_config.sql {
+        listener
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid SQL listener: {}", e))?;
+    }
+
+    for (_, listener) in &listeners_config.http {
+        listener
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid HTTP listener: {}", e))?;
+    }
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
         args.cors_allowed_origin
     } else {
-        let port = args.http_listen_addr.port();
-        vec![
-            HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
-            HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
-            HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
-            HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
-            HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
-            HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
-        ]
+        let mut allowed_origins = Vec::with_capacity(listeners_config.http.len() * 6);
+        for (_, listener) in &listeners_config.http {
+            let port = listener.addr().port();
+            allowed_origins.extend([
+                HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
+                HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
+            ])
+        }
+        allowed_origins
     };
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
+    let cors_allowed_origin_list = allowed_origins.clone();
 
     // Configure controller.
     let entered = info_span!("environmentd::configure_controller").entered();
@@ -743,6 +807,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
                         context: args.orchestrator_kubernetes_context.clone(),
                         scheduler_name: args.orchestrator_kubernetes_scheduler_name,
+                        service_annotations: args
+                            .orchestrator_kubernetes_service_annotation
+                            .into_iter()
+                            .map(|l| (l.key, l.value))
+                            .collect(),
                         service_labels: args
                             .orchestrator_kubernetes_service_label
                             .into_iter()
@@ -753,6 +822,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .into_iter()
                             .map(|l| (l.key, l.value))
                             .collect(),
+                        service_affinity: args.orchestrator_kubernetes_service_affinity,
+                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
@@ -762,6 +833,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .clone(),
                         service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
                         name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
+                        collect_pod_metrics: !args
+                            .orchestrator_kubernetes_disable_pod_metrics_collection,
+                        enable_prometheus_scrape_annotations: args
+                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -842,18 +917,16 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 SecretsControllerKind::Kubernetes => bail!(
                     "SecretsControllerKind::Kubernetes is not compatible with Orchestrator::Process."
                 ),
-                SecretsControllerKind::AwsSecretsManager => {
-                    Arc::new(
-                        runtime.block_on(AwsSecretsController::new(
-                            &aws_secrets_controller_prefix(&args.environment_id),
-                            &aws_secrets_controller_key_alias(&args.environment_id),
-                            args.aws_secrets_controller_tags
-                                .into_iter()
-                                .map(|tag| (tag.key, tag.value))
-                                .collect(),
-                        )),
-                    )
-                }
+                SecretsControllerKind::AwsSecretsManager => Arc::new(
+                    runtime.block_on(AwsSecretsController::new(
+                        &aws_secrets_controller_prefix(&args.environment_id),
+                        &aws_secrets_controller_key_alias(&args.environment_id),
+                        args.aws_secrets_controller_tags
+                            .into_iter()
+                            .map(|tag| (tag.key, tag.value))
+                            .collect(),
+                    )),
+                ),
                 SecretsControllerKind::LocalFile => {
                     let sc = Arc::clone(&orchestrator);
                     let sc: Arc<dyn SecretsController> = sc;
@@ -870,6 +943,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let mut persist_config =
         PersistConfig::new(&BUILD_INFO, now.clone(), mz_dyncfgs::all_dyncfgs());
+    // Start with compaction disabled, later enable it if we're not in read-only mode.
+    persist_config.disable_compaction();
+
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
@@ -954,6 +1030,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         cloud_resource_reader,
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,
@@ -978,10 +1055,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
+        replica_http_locator: Arc::clone(&replica_http_locator),
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
-        serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
+    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
+        &args.cluster_replica_sizes,
+        !license_key.allow_credit_consumption_override,
+    )
+    .context("parsing replica size map")?;
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
@@ -994,15 +1075,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(ListenersConfig {
-            sql_listen_addr: args.sql_listen_addr,
-            http_listen_addr: args.http_listen_addr,
-            balancer_sql_listen_addr: args.balancer_sql_listen_addr,
-            balancer_http_listen_addr: args.balancer_http_listen_addr,
-            internal_sql_listen_addr: args.internal_sql_listen_addr,
-            internal_http_listen_addr: args.internal_http_listen_addr,
-        })
-        .await?;
+        let listeners = Listeners::bind(listeners_config).await?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
@@ -1015,8 +1088,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
+                external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
                 cors_allowed_origin,
+                cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
@@ -1034,6 +1109,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 timestamp_oracle_url,
                 segment_api_key: args.segment_api_key,
                 segment_client_side: args.segment_client_side,
+                test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
@@ -1042,26 +1118,42 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .collect(),
                 config_sync_timeout: args.config_sync_timeout,
                 config_sync_loop_interval: args.config_sync_loop_interval,
+                config_sync_file_path: args.config_sync_file_path,
+
                 // Bootstrap options.
                 environment_id: args.environment_id,
                 bootstrap_role: args.bootstrap_role,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: args
-                    .bootstrap_builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: args
-                    .bootstrap_builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: args
-                    .bootstrap_builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: args
-                    .bootstrap_builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: args
-                    .bootstrap_builtin_analytics_cluster_replica_size,
+                bootstrap_default_cluster_replication_factor: args
+                    .bootstrap_default_cluster_replication_factor,
+                bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_system_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,
+                },
+                bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_catalog_server_cluster_replica_size,
+                    replication_factor: args
+                        .bootstrap_builtin_catalog_server_cluster_replication_factor,
+                },
+                bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_probe_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_probe_cluster_replication_factor,
+                },
+                bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_support_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_support_cluster_replication_factor,
+                },
+                bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_analytics_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_analytics_cluster_replication_factor,
+                },
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
+                license_key,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
@@ -1070,6 +1162,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tracing_handle,
                 // Testing options.
                 now,
+                force_builtin_schema_migration,
             })
             .await
             .maybe_terminate("booting server")?;
@@ -1094,24 +1187,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         "environmentd {} listening...",
         BUILD_INFO.human_version(args.helm_chart_version)
     );
-    println!(" SQL address: {}", server.sql_local_addr());
-    println!(" HTTP address: {}", server.http_local_addr());
-    println!(
-        " Internal SQL address: {}",
-        server.internal_sql_local_addr()
-    );
-    println!(
-        " Internal HTTP address: {}",
-        server.internal_http_local_addr()
-    );
-    println!(
-        " Balancerd SQL address: {}",
-        server.balancer_sql_local_addr()
-    );
-    println!(
-        " Balancerd HTTP address: {}",
-        server.balancer_http_local_addr()
-    );
+    for (name, handle) in &server.sql_listener_handles {
+        println!("{} SQL address: {}", name, handle.local_addr);
+    }
+    for (name, handle) in &server.http_listener_handles {
+        println!("{} HTTP address: {}", name, handle.local_addr);
+    }
+    // TODO move persist pubsub address like metrics address?
     println!(
         " Internal Persist PubSub address: {}",
         args.internal_persist_pubsub_listen_addr

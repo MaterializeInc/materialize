@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    EXECUTE <name> [ ( <parameter> [, ...] ) ]
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the prepared statement to execute.
+    - name: "`<parameter>`"
+      description: |
+        The actual value of a parameter to the prepared statement.

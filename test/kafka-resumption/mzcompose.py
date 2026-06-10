@@ -19,18 +19,18 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
-    Materialized(),
+    Mz(app_password=""),
+    Materialized(default_replication_factor=2, support_external_clusterd=True),
     Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),
@@ -48,15 +48,17 @@ def parse_args(parser: WorkflowArgumentParser) -> argparse.Namespace:
 
 
 def get_kafka_services(redpanda: bool) -> list[str]:
-    return ["redpanda"] if redpanda else ["zookeeper", "kafka", "schema-registry"]
+    return ["redpanda"] if redpanda else ["kafka", "schema-registry"]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
             c.workflow(name, *parser.args)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 #
@@ -101,7 +103,9 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
     # producer ID are properly aborted after a broker restart.
     with c.override(
         Materialized(
-            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"]
+            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"],
+            default_replication_factor=2,
+            support_external_clusterd=True,
         )
     ):
         c.up(*(["materialized"] + get_kafka_services(args.redpanda)))
@@ -134,20 +138,12 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
+        Clusterd(workers=4),
     ):
         c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
 
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
-
-        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == None
-        # )
 
         c.kill("clusterd")
         c.up("clusterd")
@@ -156,35 +152,6 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         # Verify the same data is query-able, and that we can make forward progress
         c.run_testdrive_files("source-resumption/verify.td")
         c.run_testdrive_files("source-resumption/re-ingest-and-verify.td")
-
-        # the first clusterd instance ingested 3 messages, so our
-        # upper is at the 4th offset (0-indexed)
-
-        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == 3
-        # )
-
-
-def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
-    metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
-
-    if metrics is None:
-        return None
-
-    for metric in metrics.splitlines():
-        if metric.startswith("mz_source_resume_upper"):
-            labels, value = metric[len("mz_source_resume_upper") :].split(" ", 2)
-
-            # prometheus doesn't use real json, so we do some hacky nonsense here :(
-            if labels[len("{partition_id=") :].startswith(f'"{partition_id}"'):
-                return int(value)
-
-    return None
 
 
 def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:

@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -57,7 +57,7 @@ goofus,gallant
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of PARTITION or SNAPSHOT or VERSION
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT
 
 ! CREATE SINK invalid_with_option
   IN CLUSTER ${arg.single-replica-cluster}
@@ -102,7 +102,7 @@ name               type   cluster   comment
 #   FROM v1
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v1 is a view, which cannot be exported as a sink
+# contains:view v1 cannot be exported as a sink
 #
 # # ...Even if that view is based on a materialized source
 # ! CREATE SINK bad_view2
@@ -111,7 +111,7 @@ name               type   cluster   comment
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   WITH (retention_ms=1000000)
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v2 is a view, which cannot be exported as a sink
+# contains:view v2 cannot be exported as a sink
 #
 # > SHOW SINKS
 # name               type   size  cluster
@@ -283,8 +283,8 @@ $ kafka-create-topic topic=snk9 partitions=4
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-  WITH (SIZE = '2')
-contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
+  WITH (SIZE = 'scale=1,workers=2')
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT, found SIZE
 
 # create sink with SNAPSHOT set
 > CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';
@@ -296,7 +296,7 @@ contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
   ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
-> CREATE CLUSTER c SIZE '4'
+> CREATE CLUSTER c SIZE 'scale=1,workers=4'
 
 > CREATE SINK cluster_c_sink
   IN CLUSTER c

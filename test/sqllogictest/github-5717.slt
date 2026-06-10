@@ -40,6 +40,9 @@ statement ok
 CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 statement ok
+SET cluster_replica = r1
+
+statement ok
 select
   subq_0."c2" as c0,
   (select "id" from mz_introspection.mz_records_per_dataflow limit 1 offset 62)

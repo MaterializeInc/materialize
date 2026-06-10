@@ -6,9 +6,8 @@ menu:
     parent: "mysql"
     name: "Self-hosted"
     identifier: "mysql-self-hosted"
+    weight: 50
 ---
-
-{{< public-preview />}}
 
 This page shows you how to stream data from a self-hosted MySQL database to
 Materialize using the [MySQL source](/sql/create-source/mysql/).
@@ -26,17 +25,10 @@ Materialize using the [MySQL source](/sql/create-source/mysql/).
 ### 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure your MySQL
-database for GTID-based binlog replication. This requires the following
-configuration changes:
+database for GTID-based binlog replication. Ensure the upstream MySQL database
+has been configured for GTID-based binlog replication:
 
-Configuration parameter          | Value  | Details
----------------------------------|--------| -------------------------------
-`log_bin`                        | `ON`   |
-`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
-`binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   |
-`enforce_gtid_consistency`       | `ON`   |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
+{{% mysql-direct/ingesting-data/mysql-configs %}}
 
 For guidance on enabling GTID-based binlog replication, see the
 [MySQL documentation](https://dev.mysql.com/blog-archive/enabling-gtids-without-downtime-in-mysql-5-7-6/).
@@ -52,6 +44,10 @@ If you are prototyping and your MySQL instance is publicly accessible, **you can
 skip this step**. For production scenarios, we recommend configuring one of the
 network security options below.
 {{< /note >}}
+
+{{< tabs >}}
+
+{{< tab "Cloud">}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -69,7 +65,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -100,7 +96,7 @@ traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
+    1. In the [SQL Shell](/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -118,6 +114,50 @@ traffic from the bastion host.
 
 {{< /tabs >}}
 
+{{< /tab >}}
+
+{{< tab "Self-Managed">}}
+
+{{% include-md
+file="shared-content/self-managed/configure-network-security-intro.md" %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your database firewall rules to allow traffic from Materialize IPs.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an VM to
+serve as an SSH bastion host, configure the bastion host to allow traffic only
+from Materialize, and then configure your database's private network to allow
+traffic from the bastion host.
+
+1. Launch a VM to serve as your SSH bastion host.
+
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your database firewall rules to allow traffic from the SSH bastion
+   host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
 ## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
@@ -126,16 +166,15 @@ traffic from the bastion host.
 If you are prototyping and already have a cluster to host your MySQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 {{% mysql-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-Now that you've configured your database network, you can connect Materialize to
-your MySQL database and start ingesting data. The exact steps depend on your
-networking configuration, so start by selecting the relevant option.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 {{< tabs >}}
 
@@ -149,19 +188,22 @@ networking configuration, so start by selecting the relevant option.
 
 {{< /tabs >}}
 
+### 3. Start ingesting data
 
-[//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
-new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="ingest-data-step" %}}
 
-### 3. Monitor the ingestion status
+### 4. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 
-## Next steps
+## D. Explore your data
 
 {{% mysql-direct/next-steps %}}
+
+## Considerations
+
+{{% include-headless "/headless/mysql-considerations" %}}

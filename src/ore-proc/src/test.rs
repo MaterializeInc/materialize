@@ -18,21 +18,25 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType};
+use syn::punctuated::Punctuated;
+use syn::{ItemFn, Meta, ReturnType, Token, parse_macro_input, parse_quote};
 
 /// Based on <https://github.com/d-e-s-o/test-log>
 /// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>
 /// SPDX-License-Identifier: (Apache-2.0 OR MIT)
-
+///
 /// Implementation for the `test` macro.
 pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(attr as AttributeArgs);
+    let args: Vec<_> =
+        parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated)
+            .into_iter()
+            .collect();
     let input = parse_macro_input!(item as ItemFn);
 
     let inner_test = match args.as_slice() {
         [] => parse_quote! { ::core::prelude::v1::test },
-        [NestedMeta::Meta(Meta::Path(path))] => quote! { #path },
-        [NestedMeta::Meta(Meta::List(list))] => quote! { #list },
+        [Meta::Path(path)] => quote! { #path },
+        [Meta::List(list)] => quote! { #list },
         _ => panic!("unsupported attributes supplied: {:?}", args),
     };
 
@@ -41,7 +45,14 @@ pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_logging_init() -> TokenStream2 {
     let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
-    if crate_name == "mz-ore" {
+    // Only the `mz-ore` *library* target can (and must) reach the logging
+    // helpers via `crate::`. Integration tests live in their own binary crates
+    // within the same package, so `crate` there is the test binary, not the
+    // library; they must go through `::mz_ore` like every other crate.
+    // `CARGO_CRATE_NAME` is `mz_ore` for the library (and its unit tests) but
+    // the test/bench name for separate binaries, so it distinguishes the two.
+    let crate_target = std::env::var("CARGO_CRATE_NAME").unwrap_or_default();
+    if crate_name == "mz-ore" && crate_target == "mz_ore" {
         quote! {
           {
             use crate::test;

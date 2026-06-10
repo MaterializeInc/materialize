@@ -12,12 +12,6 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
-# Enable comments.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_comment TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 
@@ -35,12 +29,12 @@ statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL  foo_table
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  foo_table
 
@@ -58,14 +52,14 @@ foo_table  NULL
 statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL  foo_table
 table  2  load_bearing
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  foo_table
 2  load_bearing
@@ -85,7 +79,7 @@ SHOW TABLES;
 ----
 a foo_table
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW COLUMNS FROM a);
 ----
 x (empty)
@@ -98,15 +92,15 @@ CREATE TABLE b ( ts timestamptz );
 statement ok
 COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL  foo_table
 table  2  load_bearing
 table  1  utc_timestamp
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  foo_table
 2  load_bearing
@@ -124,14 +118,14 @@ b foo_table
 statement ok
 DROP TABLE a;
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 table  NULL foo_table
 table  1  utc_timestamp
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  foo_table
 1  utc_timestamp
@@ -148,11 +142,11 @@ statement ok
 COMMENT ON COLUMN b.ts IS NULL
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement error unknown catalog item 'c'
@@ -167,6 +161,9 @@ CREATE INDEX b_idx ON b (ts);
 statement ok
 COMMENT ON INDEX b_idx IS 'speed_up';
 
+statement error index "materialize.public.b_idx" does not have columns
+COMMENT ON COLUMN b_idx.foo IS 'no columns'
+
 query TT
 SELECT name, comment FROM (SHOW INDEXES);
 ----
@@ -179,13 +176,13 @@ statement ok
 COMMENT ON VIEW c IS 'this_is_a_view';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 index NULL  speed_up
 view  NULL  this_is_a_view
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  speed_up
 0  this_is_a_view
@@ -206,20 +203,20 @@ SELECT name, comment FROM (SHOW VIEWS);
 ----
 c this_is_a_view
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW COLUMNS FROM c);
 ----
 col_2 (empty)
 col_1 this_works
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 view  1  this_works
 view  NULL  this_is_a_view
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1  this_works
 0  this_is_a_view
@@ -243,23 +240,23 @@ SELECT name, comment FROM (SHOW COLUMNS FROM mv);
 ----
 x comment_mat_view_col
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 view  1  this_works
 view  NULL  this_is_a_view
 materialized-view  NULL  mat_foo
 materialized-view  1  comment_mat_view_col
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  mat_foo
 1  this_works
 0  this_is_a_view
 1  comment_mat_view_col
 
-query TTT
+query TTT rowsort
 SHOW OBJECTS
 ----
 c  view  this_is_a_view
@@ -291,20 +288,20 @@ statement ok
 DROP MATERIALIZED VIEW mv;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement ok
-CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'));
 
 statement ok
 COMMENT ON CLUSTER comment_cluster IS 'careful_now';
 
-query TT
+query TT rowsort
 SELECT name, comment FROM (SHOW CLUSTERS);
 ----
 mz_probe  (empty)
@@ -319,13 +316,13 @@ statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 cluster NULL careful_now
 cluster-replica NULL second_replicator
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement ok
@@ -340,8 +337,8 @@ COMMENT ON SOURCE my_webhook IS 'all_the_data';
 statement ok
 COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source  1  json_blob
 source  NULL  all_the_data
@@ -353,8 +350,8 @@ SELECT obj_description((SELECT oid FROM mz_sources WHERE name = 'my_webhook'), '
 ----
 all_the_data  json_blob
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1  json_blob
 0  all_the_data
@@ -384,10 +381,10 @@ CREATE TYPE custom_map_type AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 
-statement error cannot be depended upon
+statement error type "materialize.public.custom_map_type" does not have columns
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
-query TT
+query TT rowsort
 SHOW TYPES;
 ----
 custom_map_type  custom_map_type_comment
@@ -400,17 +397,14 @@ CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_list_type IS 'custom_list_type_comment';
 
-statement error cannot be depended upon
+statement error type "materialize.public.custom_list_type" does not have columns
 COMMENT ON COLUMN custom_list_type.element IS 'comment_on_element';
-
-statement error cannot be depended upon
-COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
 statement ok
 COMMENT ON TYPE custom_type IS 'custom_type_comment';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source   1      json_blob
 type     NULL   supercool_list
@@ -441,8 +435,8 @@ COMMENT ON COLUMN custom_type.x IS 'custom_type_x_comment';
 statement ok
 COMMENT ON COLUMN custom_type.y IS 'custom_type_y_comment';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 source   1      json_blob
 type     NULL   supercool_list
@@ -452,8 +446,8 @@ type     NULL   custom_type_comment
 type     1      custom_type_x_comment
 type     2      custom_type_y_comment
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 1 json_blob
 0 all_the_data
@@ -462,7 +456,7 @@ SELECT objsubid, description FROM pg_description;
 1 custom_type_x_comment
 2 custom_type_y_comment
 
-query TTT
+query TTT rowsort
 SHOW OBJECTS
 ----
 custom_type  type  custom_type_comment
@@ -484,8 +478,8 @@ CREATE SECRET my_secret AS 'foobar';
 statement ok
 COMMENT ON SECRET my_secret IS 'supersecret';
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 secret NULL supersecret
 type NULL supercool_list
@@ -493,8 +487,8 @@ type     NULL   custom_type_comment
 type     1      custom_type_x_comment
 type     2      custom_type_y_comment
 
-query IT
-SELECT objsubid, description FROM pg_description;
+query IT rowsort
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  supercool_list
 0 custom_type_comment
@@ -535,13 +529,13 @@ statement ok
 DROP TYPE int4_list;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 database NULL this_is_my_db
 schema NULL this_is_my_schema
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 0  this_is_my_schema
 
@@ -559,6 +553,17 @@ DROP DATABASE comment_on_db;
 statement ok
 DROP SCHEMA comment_on_schema;
 
+# Temporary schema comment should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+statement error cannot comment on schema mz_temp because it is a temporary schema
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+
+simple conn=mz_system,user=mz_system
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+----
+db error: ERROR: cannot comment on schema mz_temp because it is a temporary schema
+
 # Test RBAC.
 
 statement ok
@@ -568,12 +573,12 @@ statement ok
 COMMENT ON ROLE student IS 'limited_role';
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 role NULL limited_role
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement ok
@@ -597,14 +602,14 @@ COMMENT ON ROLE teacher IS 'foo';
 ----
 COMPLETE 0
 
-query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+query TTT rowsort
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 role NULL foo
 role NULL limited_role
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 simple conn=mz_system,user=mz_system
@@ -626,11 +631,11 @@ statement ok
 DROP ROLE teacher;
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement error must be owner of DATABASE materialize
@@ -645,10 +650,10 @@ COMMENT ON DATABASE materialize IS 'main_db';
 COMPLETE 0
 
 query TTT
-SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id NOT LIKE 's%';
 ----
 database  NULL  main_db
 
 query IT
-SELECT objsubid, description FROM pg_description;
+SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----

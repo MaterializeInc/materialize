@@ -7,17 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::rc::Rc;
 
 use anyhow::{Context, Error};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
-    define_unexpected, give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess,
-    AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
-    ValueOrReader,
+    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
+    GeneralDeserializer, ValueDecoder, ValueOrReader, give_value,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
@@ -26,15 +22,16 @@ use mz_repr::adt::numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker};
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::avro::ConfluentAvroResolver;
+use crate::avro::AvroSchemaResolver;
 
 /// Manages decoding of Avro-encoded bytes.
 #[derive(Debug)]
 pub struct Decoder {
-    csr_avro: ConfluentAvroResolver,
+    csr_avro: AvroSchemaResolver,
     debug_name: String,
     buf1: Vec<u8>,
     row_buf: Row,
@@ -54,7 +51,7 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder = Decoder::new(schema, &[], None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
@@ -74,14 +71,23 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    ///
+    /// The `reader_reference_schemas` parameter provides schemas for types that
+    /// are referenced by the reader schema but defined in separate schemas.
+    /// These should be provided in dependency order (dependencies first).
     pub fn new(
         reader_schema: &str,
+        reader_reference_schemas: &[String],
         ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        let csr_avro =
-            ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
+        let csr_avro = AvroSchemaResolver::new(
+            reader_schema,
+            reader_reference_schemas,
+            ccsr_client,
+            confluent_wire_format,
+        )?;
 
         Ok(Decoder {
             csr_avro,
@@ -127,114 +133,10 @@ impl Decoder {
         if result.is_ok() {
             trace!(
                 "[customer-data] Decoded row {:?} in {}",
-                self.row_buf,
-                self.debug_name
+                self.row_buf, self.debug_name
             );
         }
         Ok(result)
-    }
-}
-
-pub struct AvroStringDecoder<'a> {
-    pub buf: &'a mut Vec<u8>,
-}
-
-impl<'a> AvroDecode for AvroStringDecoder<'a> {
-    type Out = ();
-    fn string<'b, R: AvroRead>(
-        self,
-        r: ValueOrReader<'b, &'b str, R>,
-    ) -> Result<Self::Out, AvroError> {
-        match r {
-            ValueOrReader::Value(val) => {
-                self.buf.resize_with(val.len(), Default::default);
-                val.as_bytes().read_exact(self.buf)?;
-            }
-            ValueOrReader::Reader { len, r } => {
-                self.buf.resize_with(len, Default::default);
-                r.read_exact(self.buf)?;
-            }
-        }
-        Ok(())
-    }
-    define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
-    }
-}
-
-// TODO(parkmycar): Should we just delete this?
-#[allow(dead_code)]
-pub(super) struct OptionalRecordDecoder<'a, 'row> {
-    pub packer: &'a mut RowPacker<'row>,
-    pub buf: &'a mut Vec<u8>,
-}
-
-impl<'a, 'row> AvroDecode for OptionalRecordDecoder<'a, 'row> {
-    type Out = bool;
-    fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
-        self,
-        idx: usize,
-        _n_variants: usize,
-        null_variant: Option<usize>,
-        deserializer: D,
-        reader: &'b mut R,
-    ) -> Result<Self::Out, AvroError> {
-        if Some(idx) == null_variant {
-            // we are done, the row is null!
-            Ok(false)
-        } else {
-            let d = AvroFlatDecoder {
-                packer: self.packer,
-                buf: self.buf,
-                is_top: false,
-            };
-            deserializer.deserialize(reader, d)?;
-            Ok(true)
-        }
-    }
-    define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
-    }
-}
-
-pub(super) struct RowDecoder {
-    state: (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>),
-}
-
-impl AvroDecode for RowDecoder {
-    type Out = RowWrapper;
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(
-        self,
-        a: &mut A,
-    ) -> Result<Self::Out, AvroError> {
-        let mut row_borrow = self.state.0.borrow_mut();
-        let mut buf_borrow = self.state.1.borrow_mut();
-        let mut packer = row_borrow.packer();
-        let inner = AvroFlatDecoder {
-            packer: &mut packer,
-            buf: &mut buf_borrow,
-            is_top: true,
-        };
-        inner.record(a)?;
-        Ok(RowWrapper(row_borrow.clone()))
-    }
-    define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
-    }
-}
-
-// Get around orphan rule
-#[derive(Debug)]
-pub(super) struct RowWrapper(#[allow(dead_code)] pub Row);
-
-impl StatefulAvroDecodable for RowWrapper {
-    type Decoder = RowDecoder;
-    // TODO - can we make this some sort of &'a mut (Row, Vec<u8>) without
-    // running into lifetime crap?
-    type State = (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>);
-
-    fn new_decoder(state: Self::State) -> Self::Decoder {
-        Self::Decoder { state }
     }
 }
 
@@ -553,7 +455,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiffPair<T> {
     pub before: Option<T>,
     pub after: Option<T>,

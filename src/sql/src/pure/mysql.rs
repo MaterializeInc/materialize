@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_mysql_util::{
-    validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS,
+    MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS, validate_source_privileges,
 };
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -41,7 +41,7 @@ pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 /// Convert an unresolved item name to a qualified table reference.
 pub(super) fn external_reference_to_table(
     name: &UnresolvedItemName,
-) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
+) -> Result<QualifiedTableRef<'_>, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
         Err(MySqlSourcePurificationError::InvalidTableReference(
             name.to_string(),
@@ -130,9 +130,10 @@ pub(super) fn generate_source_export_statement_values(
         text_columns,
         exclude_columns,
         initial_gtid_set,
+        binlog_full_metadata,
     } = purified_export.details
     else {
-        unreachable!("purified export details must be mysql")
+        bail_internal!("purified export details must be mysql");
     };
 
     // Figure out the schema of the subsource
@@ -188,6 +189,7 @@ pub(super) fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::MySql {
         table,
         initial_gtid_set,
+        binlog_full_metadata,
     };
 
     let text_columns = text_columns.map(|mut columns| {
@@ -234,13 +236,13 @@ pub(super) fn map_column_refs<'a>(
                 .insert(name.0[2].as_str());
             if !new {
                 return Err(PlanError::InvalidOptionValue {
-                    option_name: option_type.to_ast_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
                 });
             }
         } else {
             return Err(PlanError::InvalidOptionValue {
-                option_name: option_type.to_ast_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnderqualifiedColumnName(name.to_string())),
             });
         }
@@ -339,6 +341,7 @@ pub(super) async fn purify_source_exports(
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
+    binlog_full_metadata: bool,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
         Some(requested) if matches!(reference_policy, SourceReferencePolicy::NotAllowed) => {
@@ -379,7 +382,10 @@ pub(super) async fn purify_source_exports(
     if requested_exports.is_empty() {
         sql_bail!(
             "MySQL source must ingest at least one table, but {} matched none",
-            requested_references.as_ref().unwrap().to_ast_string()
+            requested_references
+                .as_ref()
+                .unwrap()
+                .to_ast_string_simple()
         );
     }
 
@@ -474,6 +480,7 @@ pub(super) async fn purify_source_exports(
                                 .collect()
                         }),
                         initial_gtid_set: initial_gtid_set.clone(),
+                        binlog_full_metadata,
                     },
                 },
             )
@@ -506,5 +513,54 @@ pub(super) fn references_system_schemas(requested_references: &Option<ExternalRe
             }),
         },
         None => false,
+    }
+}
+
+pub async fn ensure_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<(), MySqlSourcePurificationError> {
+    let version = mz_mysql_util::query_sys_var(conn, "version")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    if version_compare::compare_to(&version, "8.0.1", version_compare::Cmp::Lt).map_err(|_| {
+        MySqlSourcePurificationError::UnsupportedMySqlVersion {
+            version: version.clone(),
+        }
+    })? {
+        Err(MySqlSourcePurificationError::UnsupportedMySqlVersion { version })?;
+    }
+    let binlog_metadata_setting = mz_mysql_util::query_sys_var(conn, "binlog_row_metadata")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    let binlog_full_metadata = binlog_metadata_setting.eq_ignore_ascii_case("FULL");
+    if !binlog_full_metadata {
+        Err(
+            MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                setting: binlog_metadata_setting,
+            },
+        )
+    } else {
+        Ok(())
+    }
+}
+
+pub async fn is_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<bool, MySqlSourcePurificationError> {
+    match ensure_binlog_full_metadata(conn).await {
+        Ok(_) => Ok(true),
+        // If we get an InvalidConnection error, we have failed to query the upstream for
+        // version or binlog format information, which is fatal to purification.
+        // Other types of errors simply indicate that binlow_row_metadata is not full for some reason.
+        Err(MySqlSourcePurificationError::InvalidConnection(err)) => {
+            Err(MySqlSourcePurificationError::InvalidConnection(err))
+        }
+        Err(err) => {
+            tracing::info!(
+                error = ?err,
+                "unable to verify MySQL binlog format, proceeding without full metadata"
+            );
+            Ok(false)
+        }
     }
 }

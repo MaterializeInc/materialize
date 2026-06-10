@@ -18,6 +18,7 @@ SELECT true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_primary_key (f1 INTEGER);
 INSERT INTO alter_add_primary_key VALUES (123), (234);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -25,12 +26,14 @@ INSERT INTO alter_add_primary_key VALUES (123), (234);
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE alter_add_primary_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_primary_key');
 
 > CREATE TABLE alter_add_primary_key_tbl FROM SOURCE alter_add_primary_key (REFERENCE "postgres.public.alter_add_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM alter_add_primary_key_tbl;
 123

@@ -18,13 +18,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 
 use mz_adapter::catalog::{Catalog, Op};
-use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
-use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
+use mz_adapter::session::{DEFAULT_DATABASE_NAME, Session};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_repr::{RelationDesc, RelationVersion};
+use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
+use mz_repr::{RelationDesc, RelationVersion, VersionedRelationDesc};
+use mz_sql::DEFAULT_SCHEMA;
 use mz_sql::ast::Statement;
 use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{
@@ -32,7 +35,6 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::DEFAULT_SCHEMA;
 use tokio::sync::Mutex;
 
 // This morally tests the name resolution stuff, but we need access to a
@@ -58,7 +60,8 @@ async fn datadriven() {
                     let mut catalog = catalog.lock().await;
                     match test_case.directive.as_str() {
                         "add-table" => {
-                            let (id, global_id) = catalog.allocate_user_id().await.unwrap();
+                            let (id, global_id) =
+                                catalog.allocate_user_id_for_test().await.unwrap();
                             let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
                             let database_name = database.name.clone();
                             let database_id = database.id();
@@ -72,10 +75,11 @@ async fn datadriven() {
                                 .unwrap();
                             let schema_name = schema.name.schema.clone();
                             let schema_spec = schema.id.clone();
+                            let commit_ts = catalog.current_upper().await;
                             catalog
                                 .transact(
                                     None,
-                                    mz_repr::Timestamp::MIN,
+                                    commit_ts,
                                     None,
                                     vec![Op::CreateItem {
                                         id,
@@ -93,7 +97,7 @@ async fn datadriven() {
                                                 schema_name,
                                                 test_case.input.trim_end()
                                             )),
-                                            desc: RelationDesc::empty(),
+                                            desc: VersionedRelationDesc::new(RelationDesc::empty()),
                                             collections: [(RelationVersion::root(), global_id)]
                                                 .into_iter()
                                                 .collect(),

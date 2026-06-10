@@ -11,4 +11,4 @@
 # CREATE a view containing subqueries/derived tables of various types
 
 > SHOW CREATE MATERIALIZED VIEW subquery_view;
-"materialize.public.subquery_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"subquery_view\" IN CLUSTER \"${arg.created-cluster}\" WITH (REFRESH = ON COMMIT) AS SELECT (SELECT 1) FROM (SELECT 2) AS \"derived\" WHERE 2 NOT IN (SELECT 3) AND NOT EXISTS (SELECT 4) AND 5 >= ALL (SELECT 6) AND 7 < ANY (SELECT 8)"
+materialize.public.subquery_view "CREATE MATERIALIZED VIEW materialize.public.subquery_view\n    IN CLUSTER quickstart\n    WITH (REFRESH = ON COMMIT)\n    AS\n        SELECT (SELECT 1)\n        FROM (SELECT 2) AS derived\n        WHERE\n            2 NOT IN ( SELECT 3 ) AND NOT EXISTS (SELECT 4) AND 5 >= ALL (SELECT 6)\n                AND\n            7 < ANY (SELECT 8);"

@@ -51,10 +51,10 @@ For details on how we upgrade Rust see [here](/doc/developer/upgrade-rust.md).
 
 ### Docker
 
-Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop:
+Materialize's tests mostly require Docker and Docker Compose to be installed. On macOS it is part of Docker Desktop or Orbstack:
 
 ```shell
-brew install docker
+brew install --cask orbstack
 ```
 
 On Debian-based Linux both Docker and the Docker Compose plugin have to be installed:
@@ -64,15 +64,9 @@ sudo apt update
 sudo apt install docker docker-compose-plugin
 ```
 
-### Bazel
+### Metadata store
 
-Materialize can also optionally be built with [Bazel](https://bazel.build/). To
-learn more about Bazel and how it's setup at Materialize, checkout our
-[Bazel documentation](../../misc/bazel/README.md).
-
-### CockroachDB
-
-Running Materialize locally requires a running CockroachDB server.
+Running Materialize locally requires a running Postgres / CockroachDB server.
 
 On macOS, when using Homebrew, CockroachDB can be installed and started via:
 
@@ -95,6 +89,49 @@ If you can successfully connect to CockroachDB with either
 `psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
 all set.
 
+### Eatmydata
+
+If you are just testing Materialize locally and don't care about data loss you can run environmentd with `eatmydata environmentd`, which will disable fsync calls.
+
+Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/18/main/environment`, and then restarting it.
+
+On my Linux system without `eatmydata` for both Materialize and Postgres, running with `bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`:
+```
+DROP TABLE
+Time: 105.810 ms
+CREATE TABLE
+Time: 163.484 ms
+```
+
+After enabling `eatmydata` in Materialize and Postgres:
+```
+DROP TABLE
+Time: 7.951 ms
+CREATE TABLE
+Time: 10.459 ms
+```
+
+Or in mzcompose:
+```bash
+docker pull --no-cache materialize/materialized:latest
+docker run -it --env MZ_EAT_MY_DATA=1 -p 127.0.0.1:6875:6875 materialize/materialized:latest
+```
+
+Before:
+```
+DROP TABLE
+Time: 133.021 ms
+CREATE TABLE
+Time: 111.492 ms
+```
+After:
+```
+DROP TABLE
+Time: 6.504 ms
+CREATE TABLE
+Time: 8.773 ms
+```
+
 ### Python
 
 Materialize's build and test infrastructure is largely written in [Python];
@@ -104,11 +141,13 @@ script, which constructs a local virtual environment and keeps necessary
 dependencies up to date.
 
 We support, as a minimum version, the default Python provided in the [most
-recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of October 2023
-this is Python 3.10, provided in Ubuntu "Jammy Jellyfish". Earlier versions may
+recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of January 2026
+this is Python 3.12, provided in Ubuntu 24.04 "Noble Numbat". Earlier versions may
 work but are not supported. Our recommended installation methods are:
 
-- macOS: [Homebrew](https://brew.sh)
+- macOS: [Homebrew](https://brew.sh) + [uv](https://docs.astral.sh/uv/)
+  1. `brew install uv`
+  2. `uv python install 3.13`
 - Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
 - Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
 
@@ -149,30 +188,10 @@ documentation. Then please update this guide with the new instructions!
 
 #### macOS
 
-You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
+The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/temurin11
-```
-
-Then, download and extract the Confluent Platform tarball (when using bash, replace `~/.zshrc` with `~/.bashrc`):
-
-```shell
-INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
-mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xzC $INSTALL_DIR --strip-components=1
-echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.zshrc
-source ~/.zshrc
-confluent local services start
-```
-When using bash, note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
-the above works with the Terminal app.
-
-If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
-you can explicitly run confluent with JDK 8 or 11:
-
-```
-JAVA_HOME=$(/usr/libexec/java_home -v 1.11) confluent local services start
+brew install confluentinc/tap/cli
 ```
 
 #### Linux
@@ -181,10 +200,10 @@ On Debian-based Linux variants, you can use APT to install Java and the
 Confluent Platform:
 
 ```shell
-curl http://packages.confluent.io/deb/6.0/archive.key | sudo apt-key add -
-sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/6.0 stable main"
+curl http://packages.confluent.io/deb/8.2/archive.key | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/8.2 stable main"
 sudo apt update
-sudo apt install openjdk-11-jre-headless confluent-community-2.13
+sudo apt install openjdk-21-jre-headless confluent-community-2.13
 echo export CONFLUENT_HOME=/ >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
@@ -192,7 +211,7 @@ confluent local services start
 
 On other Linux variants, you'll need to make your own way through [Confluent's
 installation instructions][confluent-install]. Note that, at the time of
-writing, only Java 8 and 11 are supported.
+writing (last update March 2026), Java LTS 11, 17, and 21 are supported.
 
 Alternatively, it is possible to get an all-in-one tarball from
 [here](https://packages.confluent.io/archive/). Then untar this to a
@@ -239,12 +258,6 @@ Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
 
-Optionally, you may need to also clone the associated submodules:
-
-```shell
-git submodule update --init --recursive
-```
-
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
 individually via Cargo, but we recommend using the `bin/environmentd` script to
@@ -252,7 +265,7 @@ drive the process:
 
 ```shell
 cd materialize
-bin/environmentd [--release] [<environmentd arg>...]
+bin/environmentd [--release] [--optimized] [<environmentd arg>...]
 ```
 
 ### WebAssembly / WASM
@@ -334,6 +347,8 @@ you can use the internal port with the `mz_system` user:
 psql -U mz_system -h localhost -p 6877 materialize
 ```
 
+In order to run Materialize with large clusters and more memory available, you have to set a license key. Set `export MZ_LICENSE_KEY=$HOME/license-key` and write the `materialize dev license key` from 1Password into that file. In order to have `mzcompose` based tests pick up the license key, set `export MZ_CI_LICENSE_KEY=$(cat $MZ_LICENSE_KEY)`.
+
 ## Console UI
 
 Console can point at your local environmentd. To use this feature, pass the
@@ -399,8 +414,10 @@ See the [style guide](style.md) for additional recommendations on code style.
 Linting requires the following tools and Cargo packages to be installed:
 * buf ([installation guide](https://buf.build/docs/installation))
 * shellcheck ([installation guide](https://hackage.haskell.org/package/ShellCheck#installing))
+* npx (`brew install node`)
+* helm-docs (`brew install norwoodj/tap/helm-docs`)
+* trufflehog (`brew install trufflehog`)
 * cargo-about (`cargo install cargo-about`)
-* cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
 * cargo-deny (`cargo install cargo-deny`)
 
@@ -461,25 +478,6 @@ specifying the `--roots` flag with a comma separated list of crates:
 bin/crate-diagram --roots mz-sql,mz-dataflow
 ```
 
-#### `workspace-hack`
-
-The [`workspace-hack`](../../src/workspace-hack/) crate speeds up rebuilds by
-ensuring that all crates use the same features of all transitive dependencies in
-the graph. This prevents Cargo from recompiling huge chunks of the dependency
-graph when you move between crates in the workspace. For details, see the
-[hakari documentation].
-
-If you add or remove dependencies on crates, you will likely need to regenerate
-the `workspace-hack` crate. You can do this by running:
-
-```
-cargo install --locked cargo-hakari
-cargo hakari generate
-cargo hakari manage-deps
-```
-
-CI will enforce that the `workspace-hack` crate is kept up to date.
-
 ## Other repositories
 
 Where possible, we prefer to keep things in the main repository (a "monorepo"
@@ -508,37 +506,6 @@ acceptable for:
     to clone the entire Materialize repository would be a large barrier to
     entry. Changes to Materialize very rarely require changes in rust-dec, so
     maintaining the two separately does not introduce much overhead.
-
-## Dependency management and auditing
-
-We use the Mozilla-developed native Rust cargo-vet tool for dependency auditing
-to help ensure the security and reliability of external dependencies. Cargo-vet
-allows developers to audit their dependencies by checking for known security
-vulnerabilities, licensing issues, and overall health of the dependencies, which
-include factors like maintenance status, version stability, and community trust.
-
-For a developer, the basic workflow with cargo-vet starts with integrating it
-into their Rust development process. After installing cargo-vet locally, the
-developer runs it against their project’s Cargo.toml and Cargo.lock files.
-Cargo-vet will then analyze the list of dependencies and output a report
-detailing the status of each dependency.
-
-All crates currently in use have been added to the audited list, but CI will
-fail on PRs with new unaudited dependencies (or after 'cargo update'). Complete
-information on using cargo-vet are available in the book at
-https://mozilla.github.io/cargo-vet/how-it-works.html but in summary:
-
-  * cargo vet inspect some-crate
-  * cargo vet certify some-crate
-
-The 'certify' step will record an entry in the audits.toml file certifying the crate has been reviewed and is appropriate to use. Example:
-
-```toml
-[[audits.aws-sdk-s3]]
-who = "Matt Arthur <matthewleearthur@gmail.com>"
-criteria = "safe-to-deploy"
-version = "0.26.0"
-```
 
 ## Developer tools
 
@@ -631,10 +598,10 @@ To add the completions to bash, add the following to your `~/.bashrc`:
 source /path/to/materialize/misc/completions/bash/*
 ```
 
-For zsh, add the follow to your `~/.zshrc`:
+For zsh, add the following to your `~/.zshrc` **before** `compinit`:
 
 ```shell
-source /path/to/materialize/misc/completions/zsh/*
+fpath=(/path/to/materialize/misc/completions/zsh $fpath)
 ```
 
 [Apache Kafka]: https://kafka.apache.org
@@ -656,7 +623,6 @@ source /path/to/materialize/misc/completions/zsh/*
 [Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [graphviz]: https://graphviz.org/
-[hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io

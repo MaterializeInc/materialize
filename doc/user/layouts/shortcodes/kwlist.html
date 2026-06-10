@@ -1,7 +1,15 @@
-<ul>
-{{range split (readFile ("sql-grammar/keywords.txt")) "\n"}}
-  {{if and (not (hasPrefix . "#")) .}}
-    <li><code>{{.|upper}}</code></li>
+
+<table border="0" style="width:100%; border-collapse: collapse;">
+  <tr>
+{{range $index, $keyword := split (readFile ("sql-grammar/keywords.txt")) "\n"}}
+  {{if and (not (hasPrefix $keyword "#")) $keyword}}
+    {{ if eq (mod $index 4) 0 }}
+      </tr><tr>
+    {{ end }}
+      <td style="padding: 2px; vertical-align: top;">
+        <code>{{$keyword|upper}}</code>
+      </td>
   {{end}}
 {{end}}
-</ul>
+</tr>
+</table>

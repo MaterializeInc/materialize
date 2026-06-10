@@ -22,7 +22,7 @@ contains:unknown catalog item 't'
 > SHOW CREATE TABLE t;
 name   create_sql
 ------------------------
-materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\" NOT NULL)"
+materialize.public.t  "CREATE TABLE materialize.public.t (a pg_catalog.int4, b pg_catalog.text NOT NULL);"
 
 > CREATE TABLE s (a int DEFAULT 1)
 > DROP TABLE s;
@@ -107,12 +107,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > SELECT * FROM t CROSS JOIN data_tbl
 1  a  valid1  2  1

@@ -12,12 +12,12 @@ are returned.
 ## Syntax
 
 ```mzsql
-SHOW TYPES [FROM <schema_name>]
+SHOW TYPES [FROM <schema_name>];
 ```
 
-Option                 | Description
------------------------|------------
-**FROM** <schema_name> | If specified, only show types from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Syntax element                | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show types from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Examples
 

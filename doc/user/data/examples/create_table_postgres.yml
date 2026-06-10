@@ -1,0 +1,188 @@
+- name: "syntax"
+  description: |
+    To create a read-only table from a [source](/sql/create-source/) connected
+    (via native connector) to an external PostgreSQL:
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)
+    [WITH (
+        TEXT COLUMNS (<column_name> [, ...])
+      | EXCLUDE COLUMNS (<column_name> [, ...])
+      | PARTITION BY (<column_name> [, ...])
+      [, ...]
+    )]
+    ;
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if the table with the same
+        name already exists. Instead, issue a notice and skip the table creation.
+
+        {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+    - name: "`<table_name>`"
+      description: |
+
+        The name of the table to create. Names for tables must follow the [naming
+        guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "`<source_name>`"
+      description: |
+
+        The name of the [source](/sql/create-source/) associated with the
+        reference object from which to create the table.
+
+    - name: "**(REFERENCE <upstream_table>)**"
+      description: |
+
+        The name of the upstream table from which to create the
+        table. You can create multiple tables from the same upstream table.
+
+        To find the upstream tables available in your
+        [source](/sql/create-source/), you can use the following query,
+        substituting your source name for `<source_name>`:
+
+        <br>
+
+        ```mzsql
+        SELECT refs.*
+        FROM mz_internal.mz_source_references refs, mz_sources s
+        WHERE s.name = '<source_name>' -- substitute with your source name
+        AND refs.source_id = s.id;
+        ```
+
+    - name: "**WITH (<with_option>[,...])**"
+      description: |
+        The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `TEXT COLUMNS (<column_name> [, ...])` |*Optional.* If specified, decode data as `text` for the listed column(s),such as for unsupported data types. See also [supported types](#supported-data-types). |
+        | `EXCLUDE COLUMNS (<column_name> [, ...])`| *Optional.* If specified,exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types).|
+        | `PARTITION BY (<column_name> [, ...])` | {{< include-md file="shared-content/partition-by-option-description.md" >}} |
+  results: |
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md"
+    >}}
+
+- name: "syntax-version-requirement"
+  description: |
+    You must be on **v26+** to use the new syntax.
+
+- name: "create-table"
+  description: |
+
+    To create new **read-only** tables from a source table, use the `CREATE
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement in a [DDL
+    transaction block](/sql/begin/#ddl-only-transactions). The following example
+    creates **read-only** tables `items` and `orders` from the PostgreSQL
+    source's `public.items` and `public.orders` tables (the schema is `public`).
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same names as the
+    upstream tables, the tables in Materialize can have names that differ from
+    the referenced table names.
+
+    - For supported PostgreSQL data types, refer to [supported
+    types](/sql/create-table/#supported-data-types).
+
+    {{< /note >}}
+
+  test_setup: |
+    > CREATE SECRET pgpass AS 'postgres'
+    > CREATE CONNECTION pg_connection TO POSTGRES(HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass);
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    ALTER USER postgres WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE TABLE orders (a INT);
+    ALTER TABLE orders REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+    > CREATE SOURCE pg_source FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source');
+
+  code: |
+    /* This example assumes:
+      - In the upstream PostgreSQL, you have defined:
+        - replication user and password with the appropriate access.
+        - a publication named `mz_source` for the `items` and `orders` tables.
+      - In Materialize:
+        - You have created a secret for the PostgreSQL password.
+        - You have defined the connection to the upstream PostgreSQL.
+        - You have used the connection to create a source.
+
+       For example (substitute with your configuration):
+          CREATE SECRET pgpass AS '<replication user password>'; -- substitute
+          CREATE CONNECTION pg_connection TO POSTGRES (
+            HOST '<hostname>',          -- substitute
+            DATABASE <db>,              -- substitute
+            USER <replication user>,    -- substitute
+            PASSWORD SECRET pgpass
+            -- [, <network security configuration> ]
+          );
+
+          CREATE SOURCE pg_source
+          FROM POSTGRES CONNECTION pg_connection (
+            PUBLICATION 'mz_source'       -- substitute
+          );
+    */
+
+    BEGIN;
+    CREATE TABLE items
+    FROM SOURCE pg_source(REFERENCE public.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE pg_source(REFERENCE public.orders)
+    ;
+    COMMIT;
+  results: |
+
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
+    {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+
+  testable_results: false
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the tables `items` and `orders`:
+
+    ```hc {hl_lines="3-4"}
+    | name        | comment |
+    | ----------- | ------- |
+    | items       |         |
+    | orders      |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM items;
+    SHOW COLUMNS FROM orders;
+  results: |
+    The results should display information on the table columns. The types
+    should match those from the upstream table as the example assumes the
+    upstream table only contains columns with data types that are supported in
+    Materialize.
+
+    For the list of supported PostgreSQL data types, refer to [supported
+    types](/sql/create-table/postgres/#supported-data-types).
+  test_results:
+    - a true integer ""
+    - a true integer ""
+
+- name: "read-from-table"
+  description: |
+    Once the snapshotting process completes and the table is in the running state, you can query the table:
+  code: |
+    SELECT * FROM items;

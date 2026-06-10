@@ -16,7 +16,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use tracing::{error, event, info, Level};
+use tracing::{Level, error, event, info};
 use tracing_subscriber::filter::EnvFilter;
 
 /// Generate meaningless data in S3 to test download speeds
@@ -30,7 +30,7 @@ struct Args {
     #[clap(
         short = 's',
         long,
-        parse(try_from_str = parse_object_size)
+        value_parser = parse_object_size,
     )]
     object_size: usize,
 
@@ -58,7 +58,7 @@ struct Args {
     ///
     /// See environmentd's `--log-filter` option for details.
     #[clap(long, value_name = "FILTER", default_value = "off")]
-    log_filter: EnvFilter,
+    log_filter: String,
 }
 
 #[tokio::main]
@@ -73,7 +73,7 @@ async fn run() -> anyhow::Result<()> {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
+        .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stderr)
         .init();
 

@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use axum::{body::Body, routing::get, Extension, Router};
+use axum::{Extension, Router, body::Body, routing::get};
 use http::{Method, Request, Response, StatusCode};
 use prometheus::{Encoder, TextEncoder};
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
@@ -20,15 +20,15 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
 #[derive(Debug)]
 pub struct Metrics {
-    pub needs_update: UIntGauge,
+    pub environmentd_needs_update: UIntGauge,
 }
 
 impl Metrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
-            needs_update: registry.register(
+            environmentd_needs_update: registry.register(
                 metric! {
-                    name: "needs_update",
+                    name: "environmentd_needs_update",
                     help: "Count of organizations in this cluster which are running outdated pod templates",
                 }),
         }
@@ -114,7 +114,8 @@ where
                     // Emit an event at the same level as the span. For the same reason as noted in the comment
                     // above we can't use `tracing::event!(dynamic_level, ...)` since the level argument
                     // needs to be static
-                    if span.metadata().and_then(|m| Some(m.level())).unwrap_or(&Level::DEBUG) == &Level::DEBUG {
+                    let level = span.metadata().map(|m| m.level()).unwrap_or(&Level::DEBUG);
+                    if level == &Level::DEBUG {
                         tracing::debug!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());
                     } else {
                         tracing::info!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());

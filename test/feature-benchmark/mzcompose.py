@@ -21,7 +21,7 @@ import uuid
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import is_image_tag_of_release_version
+from materialize.docker import image_registry, is_image_tag_of_release_version
 from materialize.feature_benchmark.benchmark_result_evaluator import (
     BenchmarkResultEvaluator,
 )
@@ -36,6 +36,10 @@ from materialize.feature_benchmark.report import (
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -77,26 +81,33 @@ from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F40
 from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.temporal import *  # noqa: F401 F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
 #
@@ -104,15 +115,16 @@ from materialize.util import all_subclasses
 #
 
 
-FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.4.0"
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.5.0"
 
 
 def make_filter(args: argparse.Namespace) -> Filter:
-    # Discard the first run unless a small --max-runs limit is explicitly set
+    # Discard the first few runs to allow for JVM/cache warmup (Kafka, Schema Registry)
+    # unless a small --max-runs limit is explicitly set
     if args.max_measurements <= 5:
         return NoFilter()
     else:
-        return FilterFirst()
+        return FilterFirst(count=3)
 
 
 def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCondition]:
@@ -130,16 +142,20 @@ def make_aggregation_class() -> type[Aggregation]:
 default_timeout = "1800s"
 
 SERVICES = [
-    Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True),
-    Minio(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     KgenService(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Balancerd(),
+    PolarisBootstrap(),
+    Polaris(),
+    Mc(),
     # Overridden below
     Materialized(),
     Clusterd(),
@@ -148,8 +164,14 @@ SERVICES = [
 ]
 
 
+iceberg_credentials: tuple[str, str] | None = None
+
+
 def run_one_scenario(
-    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
+    c: Composition,
+    scenario_class: type[Scenario],
+    args: argparse.Namespace,
+    first_run: bool,
 ) -> BenchmarkScenarioResult:
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
@@ -165,9 +187,15 @@ def run_one_scenario(
 
     early_abort = False
 
-    for mz_id, instance in enumerate(["this", "other"]):
+    instances = ["this"] if args.skip_other else ["this", "other"]
+    for mz_id, instance in enumerate(instances):
         balancerd, tag, size, params = (
-            (args.this_balancerd, args.this_tag, args.this_size, args.this_params)
+            (
+                args.this_balancerd,
+                args.this_tag,
+                args.this_size,
+                args.this_params,
+            )
             if instance == "this"
             else (
                 args.other_balancerd,
@@ -181,10 +209,15 @@ def run_one_scenario(
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
-        c.up("testdrive", persistent=True)
+        c.up(Service("testdrive", idle=True))
 
         additional_system_parameter_defaults = (
-            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_clusters": "15"}
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
+            | {
+                "max_clusters": "15",
+                "enable_unorchestrated_cluster_replicas": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            }
         )
 
         if params is not None:
@@ -192,27 +225,53 @@ def run_one_scenario(
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
-        mz_image = f"materialize/materialized:{tag}" if tag else None
-        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+        mz_image = f"{image_registry()}/materialized:{tag}" if tag else None
+        # TODO: Better azurite support detection
+        mz = create_mz_service(
+            mz_image,
+            size,
+            additional_system_parameter_defaults,
+            args.azurite and instance == "this",
+        )
         clusterd_image = f"materialize/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
-            clusterd_image, size, additional_system_parameter_defaults
+            clusterd_image,
+            size,
+            additional_system_parameter_defaults,
         )
 
         if tag is not None and not c.try_pull_service_image(mz):
             print(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
-            mz_image = "materialize/materialized:latest"
-            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+            mz_image = f"{image_registry()}/materialized:latest"
+            # TODO: Better azurite support detection
+            mz = create_mz_service(
+                mz_image,
+                size,
+                additional_system_parameter_defaults,
+                args.azurite and instance == "this",
+            )
             clusterd_image = f"materialize/clusterd:{tag}" if tag else None
             clusterd = create_clusterd_service(
-                clusterd_image, size, additional_system_parameter_defaults
+                clusterd_image,
+                size,
+                additional_system_parameter_defaults,
             )
 
-        start_overridden_mz_clusterd_and_cockroach(c, mz, clusterd, instance)
-        if balancerd:
-            c.up("balancerd")
+        start_overridden_mz_clusterd_and_cockroach(
+            c, mz, clusterd, instance, balancerd, first_run
+        )
+        first_run = False
+
+        testdrive_entrypoint_extra = []
+        if iceberg_credentials:
+            user, key = iceberg_credentials
+            testdrive_entrypoint_extra = [
+                f"--var=s3-access-user={user}",
+                f"--var=s3-access-key={key}",
+                "--var=aws-iceberg-endpoint=minio:9000",
+            ]
 
         with c.override(
             Testdrive(
@@ -220,22 +279,20 @@ def run_one_scenario(
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
                 metadata_store="cockroach",
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
+                entrypoint_extra=testdrive_entrypoint_extra,
             )
         ):
             c.testdrive(
-                dedent(
-                    """
-                    $[version>=9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                    ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
-
+                dedent("""
                     $[version<9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], STORAGE ADDRESSES ['clusterd:2103'], COMPUTECTL ADDRESSES ['clusterd:2101'], COMPUTE ADDRESSES ['clusterd:2102'], WORKERS 1));
                     ALTER SYSTEM SET cluster = cluster_default;
-                    GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""
-                ),
+                    GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""),
             )
 
             executor = Docker(
@@ -288,10 +345,12 @@ def run_one_scenario(
     return result
 
 
-resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str] = {}
+resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str | None] = {}
 
 
-def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
+def resolve_tag(
+    tag: str, scenario_class: type[Scenario], scale: str | None
+) -> str | None:
     if tag == "common-ancestor":
         overrides = get_ancestor_overrides_for_performance_regressions(
             scenario_class, scale
@@ -308,6 +367,7 @@ def create_mz_service(
     mz_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
+    azurite: bool,
 ) -> Materialized:
     return Materialized(
         image=mz_image,
@@ -318,8 +378,10 @@ def create_mz_service(
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         external_metadata_store=True,
         metadata_store="cockroach",
-        external_minio=True,
+        external_blob_store=True,
+        blob_store_is_azure=azurite,
         sanity_restart=False,
+        support_external_clusterd=True,
     )
 
 
@@ -332,9 +394,23 @@ def create_clusterd_service(
 
 
 def start_overridden_mz_clusterd_and_cockroach(
-    c: Composition, mz: Materialized, clusterd: Clusterd, instance: str
+    c: Composition,
+    mz: Materialized,
+    clusterd: Clusterd,
+    instance: str,
+    balancerd: bool,
+    first_run: bool,
 ) -> None:
     with c.override(mz, clusterd):
+        c.up(
+            "cockroach",
+            "materialized",
+            "clusterd",
+            *(["balancerd"] if balancerd else []),
+        )
+        if first_run:
+            setup_sql_server_testing(c)
+
         version_request_command = c.run(
             "materialized",
             "-c",
@@ -345,8 +421,7 @@ def start_overridden_mz_clusterd_and_cockroach(
         )
         version = version_request_command.stdout.strip()
         print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
-
-        c.up("cockroach", "materialized", "clusterd")
+        c.verify_build_profile()
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -453,6 +528,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--skip-other",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run only the 'THIS' side; skip the comparison against 'OTHER'. "
+        "Useful for iterating on a new scenario without re-running the "
+        "baseline tag every time.",
+    )
+
+    parser.add_argument(
         "--ignore-other-tag-missing",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -462,12 +546,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
 
     args = parser.parse_args()
 
-    print(
-        dedent(
-            f"""
+    print(dedent(f"""
             this_tag: {args.this_tag}
             this_size: {args.this_size}
             this_balancerd: {args.this_balancerd}
@@ -476,9 +561,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             other_size: {args.other_size}
             other_balancerd: {args.other_balancerd}
 
-            root_scenario: {args.root_scenario}"""
-        )
-    )
+            root_scenario: {args.root_scenario}"""))
 
     specified_root_scenario = globals()[args.root_scenario]
 
@@ -496,18 +579,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # specified root scenario is a leaf
         selected_scenarios = [specified_root_scenario]
 
-    dependencies = ["postgres", "mysql"]
+    dependencies = ["postgres", "mysql", "sql-server"]
 
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
 
-    c.up(*dependencies)
+    iceberg_scenarios = [s for s in selected_scenarios if "Iceberg" in s.__name__]
+    global iceberg_credentials
+
+    c.up(
+        *dependencies,
+        *(
+            [
+                Service("polaris-bootstrap", idle=True),
+                Service("polaris", idle=True),
+            ]
+            if iceberg_scenarios
+            else []
+        ),
+    )
+
+    if iceberg_scenarios:
+        iceberg_credentials = setup_polaris_for_iceberg(c)
 
     scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
+    scenario_classes_remaining = list(scenario_classes_scheduled_to_run)
 
     if (
         len(scenario_classes_scheduled_to_run) == 0
@@ -519,19 +619,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     reports = []
+    first_run = True
 
     for run_index in range(0, args.runs_per_scenario):
         run_number = run_index + 1
         print(
-            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_scheduled_to_run])}"
+            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_remaining])}"
         )
 
         report = Report(cycle_number=run_number)
         reports.append(report)
 
-        for scenario_class in scenario_classes_scheduled_to_run:
+        for scenario_class in scenario_classes_remaining:
             try:
-                scenario_result = run_one_scenario(c, scenario_class, args)
+                scenario_result = run_one_scenario(c, scenario_class, args, first_run)
             except RuntimeError as e:
                 if (
                     "No image found for commit hash" in str(e)
@@ -542,6 +643,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     return
                 raise e
+            finally:
+                first_run = False
 
             if scenario_result.is_empty():
                 continue
@@ -550,6 +653,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         print(f"+++ Benchmark Report for run {run_number}:")
         print(report)
+        scenario_classes_remaining = [
+            scenario_class
+            for scenario_class in scenario_classes_remaining
+            if report.has_scenario_result(scenario_class.__name__)
+            and report.has_scenario_regression(scenario_class.__name__)
+        ]
+        if not scenario_classes_remaining:
+            if run_number < args.runs_per_scenario:
+                print(
+                    "No regressions detected in this run; skipping remaining reruns for all scenarios."
+                )
+            break
 
     benchmark_result_selector = BestBenchmarkResultSelector()
     selected_report_by_scenario_name = (
@@ -755,6 +870,8 @@ def upload_results_to_test_analytics(
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
+        if scenario_name not in latest_report_by_scenario_name:
+            continue
         report = latest_report_by_scenario_name[scenario_name]
 
         result_entries.append(

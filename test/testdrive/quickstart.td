@@ -10,14 +10,16 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
-# TODO: Reenable when database-issues#8581 is fixed
-$ skip-if
-SELECT true
+$ set-sql-timeout duration=60s
 
-> CREATE CLUSTER quickstart_tutorial REPLICAS (r1 (SIZE '4-4'));
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+
+> CREATE CLUSTER quickstart_tutorial REPLICAS (r1 (SIZE 'scale=1,workers=4'));
 
 > SET CLUSTER = quickstart_tutorial
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
@@ -28,12 +30,12 @@ SELECT true
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES
 name                   type            cluster                comment
 --------------------------------------------------------------------------
 auction_house          load-generator  quickstart_tutorial    ""
-auction_house_progress progress        <null>                 ""
 
 > SHOW TABLES
 name                   comment
@@ -69,7 +71,7 @@ users                  ""
 > CREATE INDEX wins_by_bidder ON winning_bids (buyer)
 > CREATE INDEX wins_by_seller ON winning_bids (seller)
 
-? EXPLAIN SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
 Explained Query (fast path):
   Finish order_by=[#4 desc nulls_first] output=[#0..=#6]
     Project (#1..=#5, #0, #6)

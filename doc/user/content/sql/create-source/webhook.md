@@ -16,27 +16,7 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 ## Syntax
 
-{{< diagram "create-source-webhook.svg" >}}
-
-### `webhook_check_option`
-
-{{< diagram "webhook-check-option.svg" >}}
-
-Field                            | Use
----------------------------------|--------------------------
-  _src_name_                     | The name for the source.
- **IN CLUSTER** _cluster_name_   | The [cluster](/sql/create-cluster) to maintain this source.
- **INCLUDE HEADER**              | Map a header value from a request into a column.
- **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
- **CHECK**                       | Specify a boolean expression that is used to validate each request received by the source.
-
-### `CHECK WITH` options
-
-Field                  | Type                | Description
------------------------|---------------------|--------------
-`BODY`                 | `text` or `bytea`   | Provide a `body` column to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `bytea` with the optional **BYTES** keyword.
-`HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
-`SECRET` _secret_name_ | `text` or `bytea`    | Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** _alias_ statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.
+{{% include-syntax file="examples/create_source_webhook" example="syntax" %}}
 
 ## Supported formats
 
@@ -61,7 +41,7 @@ Column     | Type                        | Optional?                            
 ### Webhook URL
 
 After source creation, the unique URL that allows you to **POST** events to the
-source can be looked up in the [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
+source can be looked up in the [`mz_internal.mz_webhook_sources`](/reference/system-catalog/mz_internal/#mz_webhook_sources)
 system catalog table. The URL will have the following format:
 
 ```
@@ -70,7 +50,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 
 A breakdown of each component is as follows:
 
-- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](https://console.materialize.com/).
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/console/).
 - `<database>`: The name of the database where the source is created (default is `materialize`).
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.
@@ -338,7 +318,7 @@ Webhook sources apply the following limits to received requests:
 
 * The maximum size of the request body is **`2MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
-* The rate of concurrent requests/second across **all** webhook sources
+* The maximum number of concurrent requests across **all** webhook sources
   is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.
 * Requests that contain a header name specified more than once will be rejected
@@ -353,7 +333,7 @@ enables a simple and rudimentary way to grant authorization to your webhook
 source.
 
 To store the sensitive credentials and make them reusable across multiple
-`CREATE SOURCE` statements, use [secrets](https://materialize.com/docs/sql/create-secret/).
+`CREATE SOURCE` statements, use [secrets](/sql/create-secret/).
 
 ```mzsql
 CREATE SECRET basic_hook_auth AS 'Basic <base64_auth>';

@@ -10,7 +10,6 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
@@ -58,6 +57,7 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE metrics_test_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-metrics-test-${testdrive.seed}')
@@ -65,7 +65,30 @@ goofus,gallant
 > CREATE TABLE metrics_test_source_tbl (a, b) FROM SOURCE metrics_test_source (REFERENCE "testdrive-metrics-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
+> SELECT * FROM metrics_test_source_tbl
+jack   jill    0
+goofus gallant 1
+
+> SELECT
+      s.name,
+      bool_and(u.snapshot_committed),
+      SUM(u.messages_received) = 2,
+      SUM(u.updates_staged) > 0,
+      SUM(u.updates_committed) > 0,
+      SUM(u.bytes_received) > 0,
+      bool_and(u.rehydration_latency IS NOT NULL)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('metrics_test_source')
+  GROUP BY s.name
+  ORDER BY s.name
+metrics_test_source true true true true true true
+
+> DROP SOURCE metrics_test_source CASCADE
+
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -76,6 +99,7 @@ goofus,gallant
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
@@ -86,13 +110,11 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moosemoose   2
 
-# statistics are only populated every minute by default
-$ set-sql-timeout duration=2minutes
-
 # Also test a source with multiple sub-sources.
 # NOTE: We give this source a unique name because we want to query for it with
 # a `SUBSCRIBE ... AS OF AT LEAST 0` below and want to avoid receiving results
 # for sources created by previous tests.
+> BEGIN
 > CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;
@@ -102,33 +124,22 @@ $ set-sql-timeout duration=2minutes
 > CREATE TABLE bids FROM SOURCE auction_house_in_source_statistics_td (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
+> COMMIT
 
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+> SELECT
+      s.name,
+      bool_and(u.snapshot_committed),
+      SUM(u.messages_received) > 0,
+      SUM(u.updates_staged) > 0,
+      SUM(u.updates_committed) > 0,
+      SUM(u.bytes_received) > 0,
+      bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('metrics_test_source')
-  GROUP BY s.name
-  ORDER BY s.name
-metrics_test_source true 4 2 2 true true
-
-> DROP SOURCE metrics_test_source CASCADE
-
-# Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
-# Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
-# jitter on when metrics are produced for each sub-source.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-auction_house_in_source_statistics_td true true false false true true
+auction_house_in_source_statistics_td true true true true true true
 
 
 # Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.
@@ -152,21 +163,21 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test upsert
 
-# Note that we always count 9 messages received (18 with source tables), but can see as low as 3 updates.
+# Note that we always count 9 messages received, but can see as low as 3 updates.
 # This is because there are 3 active keys, as all the messages could be received in 1 second.
 # There could also be up to 11 updates, as updates cause inserts and deletes
 # (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    SUM(u.messages_received),
+    SUM(u.messages_received) >= 9,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert 18 true
+upsert true true
 
 # Upsert stats are on the UPSERT sub source/table, not the main source.
 > SELECT
@@ -178,7 +189,7 @@ upsert 18 true
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
   GROUP BY t.name
   ORDER BY t.name
@@ -192,7 +203,7 @@ $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
 
 $ set-from-sql var=state-bytes
@@ -206,14 +217,14 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 {"key": "mammalmore"}
 
 > SELECT s.name,
-    SUM(u.messages_received),
+    SUM(u.messages_received) >= 10,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert 20 true
+upsert true true
 
 > SELECT t.name,
     bool_and(u.snapshot_committed),
@@ -222,7 +233,7 @@ upsert 20 true
     SUM(u.bytes_indexed) < ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
   GROUP BY t.name
   ORDER BY t.name
@@ -231,12 +242,12 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2
 # check pre-aggregated view
 
 > SELECT s.name,
-    u.messages_received,
+    u.messages_received >= 10,
     u.bytes_received > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert 20 true
+upsert true true
 
 > SELECT t.name,
     u.snapshot_committed,

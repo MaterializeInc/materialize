@@ -11,4 +11,3 @@ name: orchestratord
 pre-image:
   - type: cargo-build
     bin: orchestratord
-    bazel-bin: "@//src/orchestratord:orchestratord"

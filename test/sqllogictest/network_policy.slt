@@ -15,7 +15,7 @@ mode standard
 reset-server
 
 # Verify initial Network Policies.
-query TTT
+query TTT rowsort
 select * from (SHOW NETWORK POLICIES)
 ----
 default
@@ -44,7 +44,7 @@ np
 r1,r2
 (empty)
 
-query TTT
+query TTT valuesort
 SELECT id, name, owner_id FROM mz_internal.mz_network_policies
 ----
 u2
@@ -55,7 +55,7 @@ default
 s1
 
 
-query TTTTT colnames
+query TTTTT colnames,valuesort
 SELECT * FROM mz_internal.mz_network_policy_rules
 ----
 name policy_id action address direction
@@ -81,7 +81,7 @@ ALTER NETWORK POLICY np SET (RULES (r1 (address='1.1.1.1/32', action='allow', di
 ----
 COMPLETE 0
 
-query TTTTT colnames
+query TTTTT colnames,valuesort
 SELECT * FROM mz_internal.mz_network_policy_rules
 ----
 name policy_id action address direction

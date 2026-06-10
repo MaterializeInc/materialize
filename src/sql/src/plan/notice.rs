@@ -18,7 +18,7 @@
 
 use std::fmt;
 
-use mz_ore::str::{separated, StrExt};
+use mz_ore::str::{StrExt, separated};
 use mz_repr::ColumnName;
 
 use crate::catalog::ObjectType;
@@ -41,6 +41,7 @@ pub enum PlanNotice {
         key: Vec<ColumnName>,
         name: String,
     },
+    ReplicaDiskOptionDeprecated,
 }
 
 impl PlanNotice {
@@ -53,7 +54,7 @@ impl PlanNotice {
                     was a unique key of the underlying relation {}. If this key is not unique, \
                     the sink might produce multiple updates for the same key at the same time, \
                     which may confuse downstream consumers.",
-                    separated(", ", key.iter().map(|c| c.as_str().quoted())),
+                    separated(", ", key.iter().map(|c| c.quoted())),
                     name.quoted()
                 );
                 Some(details)
@@ -97,6 +98,9 @@ impl fmt::Display for PlanNotice {
             }
             PlanNotice::UpsertSinkKeyNotEnforced { .. } => {
                 write!(f, "upsert key not validated to be unique")
+            }
+            PlanNotice::ReplicaDiskOptionDeprecated => {
+                write!(f, "the DISK option is deprecated and has no effect")
             }
         }
     }

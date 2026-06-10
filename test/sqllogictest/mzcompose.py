@@ -16,35 +16,54 @@ MySQL/Kafka, see Testdrive for that.
 from __future__ import annotations
 
 import argparse
+import os
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from queue import Queue
 
-from materialize import MZ_ROOT, buildkite, ci_util, file_util
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
+from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
+from materialize.cli.run import update_sqlite_repo
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
+from materialize.ui import CommandFailureCausedUIError
 
-SERVICES = [CockroachOrPostgresMetadata(), SqlLogicTest()]
+MAX_SLTS = 8
+SLTS = [f"slt_{i+1}" for i in range(MAX_SLTS)]
+
+SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
+    SqlLogicTest(name=slt) for slt in SLTS
+]
 
 COCKROACH_DEFAULT_PORT = 26257
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
 
         with c.test_case(name):
             c.workflow(name)
 
+    c.test_parts(list(c.workflows.keys()), process)
+
 
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
+    update_sqlite_repo()
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
 def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run slow SQL logic tests"""
+    update_sqlite_repo()
     run_sqllogictest(
         c,
         parser,
@@ -54,6 +73,7 @@ def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run specific SQL logic tests using pattern"""
+    update_sqlite_repo()
     parser.add_argument(
         "--pattern",
         type=str,
@@ -78,31 +98,107 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replicas", default=2, type=int)
+    parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
+    parser.add_argument("--replicas", default=1, type=int)
+    parser.add_argument("--parallelism", default=MAX_SLTS, type=int)
     args = parser.parse_args()
 
-    c.up(c.metadata_store())
+    assert (
+        1 <= args.parallelism <= MAX_SLTS
+    ), f"Parallelism has to be between 1 and {MAX_SLTS}"
 
-    container_name = "sqllogictest"
+    work_queue = Queue()
 
-    exceptions = []
+    for step in run_config.steps:
+        step.configure(args)
+        sharded_files: list[str] = sorted(
+            buildkite.shard_list(step.file_list, lambda file: file)
+        )
+        for file in sharded_files:
+            work_queue.put((step, file, False))
 
-    for command, junit_report_path in create_slt_execution_commands(
-        args.replicas, run_config, args, c.name, c.metadata_store()
-    ):
-        try:
-            c.run(container_name, *command)
-        except Exception as e:
-            # Don't fail here so that we can keep running the remaining
-            # commands. We want to run through all SLT files to catch all
-            # current errors before failing the test.
-            exceptions.append(e)
-        finally:
-            ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
+    # Hacky way to make sure we have downloaded the image
+    c.up(Service("slt_1", idle=True))
+    # Keep them all up to prevent container startups from taking a long time
+    c.up(
+        c.metadata_store(),
+        *[Service(f"slt_{i+1}", idle=True) for i in range(args.parallelism)],
+    )
 
-    if exceptions:
-        print(f"Further exceptions were raised:\n{exceptions[1:]}")
-        raise exceptions[0]
+    failed_files = []
+
+    def worker(container_name: str):
+        exception: Exception | None = None
+        while True:
+            try:
+                step, file, rewrite_results = work_queue.get_nowait()
+            except Exception:
+                break  # Queue is empty
+
+            if "singlereplica_" in file and args.replicas > 1:
+                continue
+
+            junit_report_path = (
+                None
+                if rewrite_results
+                else ci_util.junit_report_filename(
+                    f"{c.name}-{file.replace('.', '_').replace('/', '_')}"
+                )
+            )
+            cmd = step.to_command(
+                container_name,
+                file,
+                args.replicas,
+                args.replica_size,
+                junit_report_path,
+                c.metadata_store(),
+                rewrite_results=rewrite_results,
+            )
+            try:
+                c.exec(container_name, *cmd, capture=True, capture_stderr=True)
+                # Uploading successful junit files wastes time and contains no useful information
+                if junit_report_path:
+                    os.remove(junit_report_path)
+            except CommandFailureCausedUIError as e:
+                print(f"STDERR:\n{e.stderr}")
+                if not rewrite_results:
+                    failed_files.append((step, file))
+                    if ui.env_is_truthy("CI"):
+                        work_queue.put((step, file, True))
+                exception = e
+            finally:
+                work_queue.task_done()
+        if exception:
+            raise exception
+
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=args.parallelism) as executor:
+        futures = [
+            executor.submit(worker, container_name)
+            for container_name in SLTS[: args.parallelism]
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                errors.append(e)
+        if failed_files:
+            if ui.env_is_truthy("CI"):
+                diff = spawn.capture(["git", "diff", "-C", MZ_ROOT])
+                if diff.strip():
+                    with open(
+                        MZ_ROOT / f"slt{buildkite.get_parallelism_index() + 1}.diff",
+                        "w",
+                    ) as f:
+                        f.write(diff)
+                else:
+                    print("Rewriting results did not result in a diff")
+                print(
+                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={args.replicas} {' '.join([file for step, file in failed_files])}"
+                )
+                print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
+        if errors:
+            raise errors[0]
 
 
 class SltRunConfig:
@@ -122,26 +218,29 @@ class SltRunStepConfig:
 
     def to_command(
         self,
-        shard: int,
-        shard_count: int,
+        container_name: str,
+        file: str,
         replicas: int,
-        junit_report_path: Path,
+        replica_size: int,
+        junit_report_path: Path | None,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,
+        rewrite_results: bool = False,
     ) -> list[str]:
+        assert not (junit_report_path and rewrite_results)
         sqllogictest_config = [
-            f"--junit-report={junit_report_path}",
+            *([f"--junit-report={junit_report_path}"] if junit_report_path else []),
+            *(["--rewrite-results"] if rewrite_results else []),
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
+            f"--prefix={container_name}",
+            f"--replica-size={replica_size}",
             f"--replicas={replicas}",
-            f"--shard={shard}",
-            f"--shard-count={shard_count}",
         ]
         command = [
             "sqllogictest",
-            "-v",
-            *self.flags,
+            *([] if rewrite_results else self.flags),
             *sqllogictest_config,
-            *self.file_list,
+            file,
         ]
 
         return command
@@ -180,35 +279,12 @@ class DefaultSltRunStepConfig(SltRunStepConfig):
         )
 
 
-def create_slt_execution_commands(
-    replicas: int,
-    run_config: SltRunConfig,
-    args: Namespace,
-    composition_name: str,
-    metadata_store: str,
-) -> list[tuple[list[str], Path]]:
-    shard = buildkite.get_parallelism_index()
-    shard_count = buildkite.get_parallelism_count()
-
-    commands_and_junit_paths = []
-
-    for i, step in enumerate(run_config.steps):
-        step.configure(args)
-        # Since we run multiple commands, generate a unique junit report for each
-        junit_report_path = ci_util.junit_report_filename(f"{composition_name}-{i}")
-        cmd = step.to_command(
-            shard, shard_count, replicas, junit_report_path, metadata_store
-        )
-        commands_and_junit_paths.append((cmd, junit_report_path))
-
-    return commands_and_junit_paths
-
-
 def compileFastSltConfig() -> SltRunConfig:
     tests = {
         "test/sqllogictest/*.slt",
         "test/sqllogictest/attributes/*.slt",
         "test/sqllogictest/explain/*.slt",
+        "test/sqllogictest/introspection/*.slt",
         "test/sqllogictest/autogenerated/*.slt",
         "test/sqllogictest/transform/*.slt",
         "test/sqllogictest/cockroach/aggregate.slt",
@@ -218,6 +294,14 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/advent-of-code/2023/*.slt",
     }
 
+    # Too slow
+    tests_exclude = {
+        "test/sqllogictest/default_privileges.slt",
+        "test/sqllogictest/distinct_arrangements.slt",
+        "test/sqllogictest/privilege_grants.slt",
+        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
+    }
+
     tests_without_views = {
         "test/sqllogictest/alter.slt",
         "test/sqllogictest/ambiguous_rename.slt",
@@ -225,7 +309,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/array_fill.slt",
         "test/sqllogictest/arrays.slt",
         "test/sqllogictest/as_of.slt",
-        "test/sqllogictest/audit_log.slt",
+        "test/sqllogictest/singlereplica_audit_log.slt",
         "test/sqllogictest/boolean.slt",
         "test/sqllogictest/bytea.slt",
         "test/sqllogictest/cast.slt",
@@ -242,7 +326,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cursor.slt",
         "test/sqllogictest/datediff.slt",
         "test/sqllogictest/dates-times.slt",
-        "test/sqllogictest/default_privileges.slt",
         "test/sqllogictest/degenerate.slt",
         "test/sqllogictest/disambiguate_columns.slt",
         "test/sqllogictest/distinct_from.slt",
@@ -276,6 +359,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/github-5536.slt",
         "test/sqllogictest/github-5717.slt",
         "test/sqllogictest/github-7585.slt",
+        "test/sqllogictest/github-31878.slt",
         "test/sqllogictest/id.slt",
         "test/sqllogictest/id_reuse.slt",
         "test/sqllogictest/information_schema_columns.slt",
@@ -318,7 +402,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres-incompatibility.slt",
         "test/sqllogictest/pretty.slt",
         "test/sqllogictest/privilege_checks.slt",
-        "test/sqllogictest/privilege_grants.slt",
         "test/sqllogictest/privileges_pg.slt",
         "test/sqllogictest/quote_ident.slt",
         "test/sqllogictest/quoting.slt",
@@ -332,6 +415,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
         "test/sqllogictest/returning.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
         "test/sqllogictest/role_create.slt",
         "test/sqllogictest/role_membership.slt",
@@ -394,7 +478,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/transform/is_null_propagation.slt",
         "test/sqllogictest/transform/join_fusion.slt",
         "test/sqllogictest/transform/join_index.slt",
-        "test/sqllogictest/transform/lifting.slt",
         "test/sqllogictest/transform/literal_constraints.slt",
         "test/sqllogictest/transform/literal_lifting.slt",
         "test/sqllogictest/transform/monotonic.slt",
@@ -485,7 +568,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cockroach/information_schema.slt",
         "test/sqllogictest/cockroach/insert.slt",
         "test/sqllogictest/cockroach/int_size.slt",
-        # "test/sqllogictest/cockroach/join.slt",
+        "test/sqllogictest/cockroach/join.slt",
         # "test/sqllogictest/cockroach/json_builtins.slt",
         # "test/sqllogictest/cockroach/json.slt",
         "test/sqllogictest/cockroach/like.slt",
@@ -523,7 +606,7 @@ def compileFastSltConfig() -> SltRunConfig:
         # "test/sqllogictest/cockroach/statement_source.slt",
         # "test/sqllogictest/cockroach/suboperators.slt",
         # "test/sqllogictest/cockroach/subquery-opt.slt",
-        # "test/sqllogictest/cockroach/subquery.slt",
+        "test/sqllogictest/cockroach/subquery.slt",
         "test/sqllogictest/cockroach/table.slt",
         # "test/sqllogictest/cockroach/target_names.slt",
         # "test/sqllogictest/cockroach/time.slt",
@@ -538,7 +621,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cockroach/uuid.slt",
         "test/sqllogictest/cockroach/values.slt",
         # "test/sqllogictest/cockroach/views.slt",
-        # "test/sqllogictest/cockroach/where.slt",
+        "test/sqllogictest/cockroach/where.slt",
         "test/sqllogictest/cockroach/window.slt",
         "test/sqllogictest/cockroach/with.slt",
         # "test/sqllogictest/cockroach/zero.slt",
@@ -548,11 +631,14 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres/regex.slt",
         "test/sqllogictest/postgres/subselect.slt",
         "test/sqllogictest/postgres/pgcrypto/*.slt",
+        "test/sqllogictest/introspection/cluster_log_compaction.slt",
+        # Depends on unstable dependencies.
+        "test/sqllogictest/introspection/relations.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
     tests_without_views = file_util.resolve_paths_with_wildcard(tests_without_views)
-    tests_with_views = tests - tests_without_views
+    tests_with_views = tests - tests_without_views - tests_exclude
 
     config = SltRunConfig()
     config.steps.append(DefaultSltRunStepConfig(tests_without_views))
@@ -592,18 +678,21 @@ def compileSlowSltConfig() -> SltRunConfig:
         # https://github.com/MaterializeInc/database-issues/issues/6181
         "test/sqllogictest/list.slt",
         # transactions:
+        "test/sqllogictest/distinct_arrangements.slt",
         "test/sqllogictest/github-3374.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
-        "test/sqllogictest/introspection/attribution_sources.slt",
+        "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
+        # depends on log sources
+        "test/sqllogictest/github-10045-10046-10052.slt",
         # depends on unmaterializable functions
         "test/sqllogictest/regclass.slt",
         "test/sqllogictest/regproc.slt",
         "test/sqllogictest/regtype.slt",
         # different outputs:
         # seems expected for audit log to be different
-        "test/sqllogictest/audit_log.slt",
+        "test/sqllogictest/singlereplica_audit_log.slt",
         # different indexes auto-created
         "test/sqllogictest/cluster.slt",
         # different indexes auto-created
@@ -616,6 +705,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
         # pg_typeof contains public schema name in views
@@ -623,6 +713,10 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/map.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/typeof.slt",
+        # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
+        "test/sqllogictest/temporal.slt",
+        # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
+        "test/sqllogictest/materialized_views.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)

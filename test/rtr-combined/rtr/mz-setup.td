@@ -24,9 +24,11 @@ CREATE TABLE table_mysql (a int);
     PASSWORD SECRET mysqlpass
   )
 
+> BEGIN
 > CREATE SOURCE mysql_source
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE table_mysql FROM SOURCE mysql_source (REFERENCE public.table_mysql);
+> COMMIT
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -52,9 +54,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     PASSWORD SECRET pgpass
   )
 
+> BEGIN
 > CREATE SOURCE pg_source
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
 > CREATE TABLE table_pg FROM SOURCE pg_source (REFERENCE table_pg);
+> COMMIT
 
 $ kafka-create-topic topic=input
 
@@ -63,11 +67,13 @@ $ kafka-ingest topic=input format=bytes repeat=1
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE input_kafka
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
 
 > CREATE TABLE input_kafka_tbl (a) FROM SOURCE input_kafka (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT CSV WITH 1 COLUMNS
+> COMMIT
 
 > CREATE MATERIALIZED VIEW sum AS
   SELECT sum(count)

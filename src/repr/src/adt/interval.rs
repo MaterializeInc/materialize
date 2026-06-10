@@ -17,7 +17,8 @@ use anyhow::{anyhow, bail};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -28,7 +29,18 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 /// An interval of time meant to express SQL intervals.
 ///
 /// Obtained by parsing an `INTERVAL '<value>' <unit> [TO <precision>]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i32,
@@ -161,6 +173,19 @@ impl Interval {
             months: 0,
             days: 0,
             micros: duration.as_micros().try_into()?,
+        })
+    }
+
+    /// Converts a `chrono::Duration` to an `Interval`. The resulting `Interval` will only have
+    /// microseconds, with the nanoseconds truncated.
+    pub fn from_chrono_duration(duration: chrono::Duration) -> Result<Self, anyhow::Error> {
+        let Some(micros) = duration.num_microseconds() else {
+            bail!("cannot convert Duration to Interval due to overflowed microseconds");
+        };
+        Ok(Self {
+            months: 0,
+            days: 0,
+            micros,
         })
     }
 
@@ -813,6 +838,7 @@ impl fmt::Display for Interval {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Interval {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1260,9 +1286,9 @@ mod test {
 
             if i != j {
                 panic!(
-                "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
-                test.0, i, j
-            );
+                    "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
+                    test.0, i, j
+                );
             }
         }
     }

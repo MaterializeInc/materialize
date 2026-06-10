@@ -1,5 +1,87 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+## 1.9.10 - 2026-05-20
+
+* Support unmanaged clusters in `deploy_init`. The deployment cluster
+  is now created by cloning the production cluster's replicas (including
+  `SIZE` and `AVAILABILITY ZONE`).
+
+## 1.9.9 - 2026-05-18
+
+* Add support for the `partition_by` configuration in materialized views,
+  which declares the internal storage order Materialize uses to sort the
+  underlying data into parts, enabling [filter pushdown](https://materialize.com/docs/transform-data/patterns/partition-by/#filter-pushdown)
+  for queries with selective filters on the listed columns (e.g.
+  `partition_by: ['col_a']`). See [`PARTITION BY`](https://materialize.com/docs/transform-data/patterns/partition-by/)
+  for the requirements and supported column types.
+
+* Fix a bug in the `materialized_view` materialization where combining
+  `refresh_interval`, `retain_history`, and contract constraints would emit
+  multiple `WITH (...)` blocks, producing invalid SQL. The macro now collects
+  all options and emits a single `WITH (...)` block, matching Materialize's
+  `CREATE MATERIALIZED VIEW` grammar.
+
+## 1.9.8 - 2026-05-12
+
+* Automatically retry the atomic swap transaction in `deploy_promote` when
+  it is aborted by a concurrent-DDL conflict (Materialize SQLSTATE 40001).
+  Retries are capped by the new `max_retries` argument (default: 3) and
+  each retry waits `retry_backoff` seconds (default: 1.0). Errors that are
+  not concurrent-DDL conflicts, for example, permission, syntax, or
+  missing-object errors, are raised immediately and are not retried.
+
+* Support overriding the `options` PostgreSQL connection parameter
+
+## 1.9.7 - 2026-03-16
+
+* Reduce catalog server load during
+  [blue/green deployments](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  by consolidating per-cluster readiness polling into a single query. Previously,
+  `deploy_await` issued one complex query per cluster per poll iteration; it now
+  checks all deployment clusters in a single round-trip.
+
+## 1.9.6 - 2026-03-10
+
+* Add `strict_mode` to enforce production-ready cluster and schema isolation
+  rules, and improve cluster health monitoring
+  ([#34538](https://github.com/MaterializeInc/materialize/pull/34538)).
+
+* Fix unit test failures in dbt-core by adding support for the `column_name_to_quoted`
+  parameter in the unit test materialization. This parameter is required for handling
+  of quoted column identifiers in unit tests
+  ([dbt-adapters#292d173](https://github.com/dbt-labs/dbt-adapters/commit/292d17301eff3c8a972fcd57f7deb3aac4c8a3cb)).
+
+## 1.9.5 - 2025-05-01
+
+* Add support for `retain_history` configuration in materialized views, allowing users to specify how long to retain historical data (e.g. `retain_history: '1hr'`).
+
+## 1.9.4 - 2025-04-04
+
+* Fix copying default privileges in blue/green deployments when the
+  grantee is `PUBLIC`.
+
+## 1.9.3 - 2025-01-22
+
+* Fix a bug in the `truncate_relation_sql` macro where specifying a cluster for
+  seeds wasn't respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
+
+## 1.9.2 - 2025-01-21
+
+* Fix schema tagging to work with current transaction limitations.
+
+## 1.9.1 - 2025-01-17
+
+* Fix a bug in the `deploy_init` macro where source cluster validation wasn't
+  respecting custom cluster naming logic from user-defined
+  `generate_cluster_name` macros.
+
+## 1.9.0 - 2024-12-17
+
+* Upgrade to `dbt-postgres` v1.9.0.
+
 ## 1.8.6 - 2024-09-25
 
 * Enable the `cluster` configuration for seeds, which allows specifying a target
@@ -67,7 +149,10 @@
 
 ## 1.8.3 - 2024-07-19
 
-* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
+* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)).
+  Although cross-database references are not supported in `dbt-postgres`,
+  databases in Materialize are purely used for namespacing, and therefore do not
+  present the same constraint.
 
 * Add the `create_cluster` and `drop_cluster` macros, which allow managing the
   creation and deletion of clusters in workflows requiring transient

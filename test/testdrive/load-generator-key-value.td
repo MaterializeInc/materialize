@@ -9,7 +9,7 @@
 
 # Tests `LOAD GENERATOR KEY VALUE`
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
@@ -17,6 +17,37 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 ALTER SYSTEM SET enable_load_generator_key_value = true
 
 > CREATE CLUSTER lg_cluster SIZE '${arg.default-replica-size}'
+
+# Error if trying to create with subsources
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR ALL TABLES;
+contains:FOR ALL TABLES
+
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR TABLES ("foo");
+contains:FOR TABLES
+
+! CREATE SOURCE g FROM LOAD GENERATOR KEY VALUE(
+    KEYS 8,
+    PARTITIONS 1,
+    SNAPSHOT ROUNDS 1,
+    VALUE SIZE 1,
+    SEED 42,
+    BATCH SIZE 4
+    )  FOR SCHEMAS ("foo");
+contains:FOR SCHEMAS
 
 # A loadgen that only snapshots.
 > CREATE SOURCE up_no_update
@@ -52,7 +83,6 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 2   4
 3   4
 
-
 > SELECT MAX(key) FROM up_no_update;
 15
 
@@ -68,19 +98,25 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 # 48 values produced (3 snapshot rounds with 16 keys).
 # For the `TRANSACTIONAL SNAPSHOT = false` source, we produce 48 updates from the 3 rounds.
 # We expect and 6 quick round offsets (based on the batch size)
+#
+# NOTE: For these statistics queries, we take the MAX, because we will have
+# statistics per replica that is (or was) running the source.
 > SELECT
     s.name,
-    u.offset_known,
-    u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
-    u.records_indexed
+    MAX(u.offset_known),
+    MAX(u.offset_committed),
+    MAX(u.snapshot_records_known),
+    MAX(u.snapshot_records_staged),
+    MAX(u.messages_received),
+    MAX(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
+  GROUP BY s.name
+  ORDER BY s.name;
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
+
 
 $ set-from-sql var=pre-rehydration
 SELECT
@@ -117,15 +153,17 @@ true
 
 > SELECT
     s.name,
-    u.offset_known,
-    u.offset_committed,
-    u.snapshot_records_known,
-    u.snapshot_records_staged,
-    u.messages_received,
-    u.records_indexed
+    MAX(u.offset_known),
+    MAX(u.offset_committed),
+    MAX(u.snapshot_records_known),
+    MAX(u.snapshot_records_staged),
+    MAX(u.messages_received),
+    MAX(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
+  GROUP BY s.name
+  ORDER BY s.name;
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
 
@@ -157,15 +195,16 @@ up_quick     6 6  0  0 48 16
 # Higher offsets than before, as we produce more values.
 # > SELECT
 #     s.name,
-#     u.offset_known > 3,
-#     u.offset_committed = u.offset_known,
-#     u.snapshot_records_known,
-#     u.snapshot_records_staged,
-#     u.messages_received > 48,
-#     u.records_indexed
+#     MAX(u.offset_known) > 3,
+#     MAX(u.offset_committed) = MAX(u.offset_known),
+#     MAX(u.snapshot_records_known),
+#     MAX(u.snapshot_records_staged),
+#     MAX(u.messages_received) > 48,
+#     MAX(u.records_indexed)
 #   FROM mz_sources s
 #   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
 #   WHERE s.name IN ('up_with_update')
+#   GROUP BY s.name
 # up_with_update true true 48 48 true 16
 
 # Also, despite the same seed, values should be different than the snapshot-only source.
@@ -195,6 +234,8 @@ SELECT
     key = 14
 true
 
+> DROP SOURCE up_with_update;
+
 # Test NONE-envelope
 > CREATE SOURCE kv_none
   IN CLUSTER lg_cluster
@@ -214,6 +255,8 @@ true
 1   12
 2   12
 3   12
+
+> DROP SOURCE kv_none;
 
 # Test INCLUDE OFFSET
 > CREATE SOURCE kv_offset
@@ -260,3 +303,129 @@ true
 
 > SELECT MAX(whatever) FROM kv_offset2;
 15
+
+> DROP SOURCE kv_offset;
+> DROP SOURCE kv_offset2;
+
+
+# Verify statistics for load generator and source tables created from it.
+# NOTE: statistics are not reported reliably for the load generator, so we avoid using exact count
+# matches in some places, instead opting for ensuring the results fall in a range.
+> CREATE SOURCE kv
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 4,
+    BATCH SIZE 2
+  );
+
+> CREATE TABLE kv_up FROM SOURCE kv INCLUDE KEY ENVELOPE UPSERT;
+
+> SELECT count(*) FROM kv_up;
+16
+
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 144,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv 3 3 true true false 16
+kv_up 3 3 true true false 16
+
+> CREATE TABLE kv_none FROM SOURCE kv INCLUDE KEY ENVELOPE NONE;
+
+> SELECT count(*) FROM kv_none;
+48
+
+# snapshot metrics for kv_up were cleared
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known >= 48,
+    u.snapshot_records_staged >= 48,
+    u.messages_received >= 288,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv_none 3 3 true true false 0
+kv 3 3 true true false 16
+kv_up 3 3 false false false 16
+
+> DROP SOURCE kv CASCADE;
+
+
+# Verify statistics for tables created from non-snapshot source
+> CREATE SOURCE kv
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 4,
+    BATCH SIZE 2,
+    TRANSACTIONAL SNAPSHOT false
+  );
+
+> CREATE TABLE kv_up FROM SOURCE kv INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_none FROM SOURCE kv INCLUDE KEY ENVELOPE NONE;
+
+> SELECT count(*) FROM kv_up;
+16
+
+> SELECT count(*) FROM kv_none;
+48
+
+# the snapshot metrics here should definitely all be zero
+> SELECT
+    s.name,
+    u.offset_known,
+    u.offset_committed,
+    u.snapshot_records_known,
+    u.snapshot_records_staged,
+    u.messages_received >= 288,
+    u.records_indexed
+  FROM mz_internal.mz_source_statuses s
+  LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('kv', 'kv_up', 'kv_none')
+  ORDER BY s.name;
+kv_none 6 6 0 0 false 0
+kv 6 6 0 0 false 16
+kv_up 6 6 0 0 false 16
+
+> DROP SOURCE kv CASCADE;
+
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_upsert_v2 = true
+
+> CREATE CLUSTER lg_v2_cluster SIZE '${arg.default-replica-size}'
+
+> CREATE SOURCE up_v2
+  IN CLUSTER lg_v2_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16, PARTITIONS 4, SNAPSHOT ROUNDS 3, SEED 123, VALUE SIZE 10, BATCH SIZE 2
+  )
+  ENVELOPE UPSERT
+
+> SELECT count(*), MAX(key) FROM up_v2;
+16 15
+
+> DROP CLUSTER lg_v2_cluster CASCADE;
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_upsert_v2 = false

@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -58,8 +58,7 @@ pub async fn run_verify_commit(
                     )
                 },
             )
-            .await
-            .unwrap()?;
+            .await?;
 
             let found_offset = committed_tpl.elements_for_topic(&topic)[0].offset();
             if found_offset != expected_offset {

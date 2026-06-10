@@ -1,24 +1,28 @@
 ---
-title: "CREATE SOURCE: MySQL"
+title: "CREATE SOURCE: MySQL (Legacy syntax)"
 description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
-  main:
-    parent: 'create-source'
-    identifier: cs_mysql
-    name: MySQL
-    weight: 20
+    main:
+        parent: "create-source"
+        identifier: cs_mysql
+        name: MySQL (Legacy Syntax)
+        weight: 16
 ---
 
-{{< public-preview />}}
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/mysql-v2)"
+include_blurb=true >}}
 
-{{% create-source/intro %}}
-Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
-MySQL database, you first need to tweak its configuration to enable
-[GTID-based binary log (binlog) replication](#change-data-capture), and then
-[create a connection](#creating-a-connection) in Materialize that specifies
+Creates a new source from MySQL. Materialize supports creating sources from
+MySQL (8.0.1+).
+
+To connect to a MySQL database, you first need to update its configuration to
+enable [GTID-based binary log (binlog) replication](#change-data-capture), and
+then [create a connection](#creating-a-connection) in Materialize that specifies
 access and authentication parameters.
-{{% /create-source/intro %}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ## Syntax
 
@@ -28,30 +32,14 @@ the MySQL source documentation and syntax **standardize on `schema`** as the
 preferred keyword.
 {{< /note >}}
 
-{{< diagram "create-source-mysql.svg" >}}
-
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the MySQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables in all schemas upstream. The [`mysql` system schema](https://dev.mysql.com/doc/refman/8.3/en/system-schema.html) is ignored.
-**FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas upstream.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/create_source_mysql_legacy" example="syntax" %}}
 
 ### `CONNECTION` options
 
-Field             | Value                           | Description
-------------------|---------------------------------|-------------------------------------
-`EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
-`TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
+| Field             | Value                           | Description                                                                                                                  |
+| ----------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.          |
+| `TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types). |
 
 ## Features
 
@@ -78,23 +66,14 @@ source will never show partial results based on partially replicated
 transactions.
 
 Before creating a source in Materialize, you **must** configure the upstream
-MySQL database for GTID-based binlog replication. This requires the following
-configuration changes:
+MySQL database for GTID-based binlog replication. Ensure the upstream MySQL
+database has been configured for GTID-based binlog replication:
 
-<br>
+{{% mysql-direct/ingesting-data/mysql-configs %}}
 
-Configuration parameter          | Value  | Details
----------------------------------|--------| -------------------------------
-`log_bin`                        | `ON`   |
-`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
-`binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   |
-`enforce_gtid_consistency`       | `ON`   |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
-
-If you're running MySQL using a managed service, further configuration changes
-might be required. For step-by-step instructions on enabling GTID-based binlog
-replication for your MySQL service, see the integration guides.
+If you're running MySQL using a managed service, additional configuration
+changes might be required. For step-by-step instructions on enabling GTID-based
+binlog replication for your MySQL service, see the integration guides.
 
 #### Binlog retention
 
@@ -154,11 +133,6 @@ When you define a source, Materialize will automatically:
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
    `DELETE` operations in the upstream MySQL database.
 
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a MySQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-
 ##### MySQL schemas
 
 `CREATE SOURCE` will attempt to create each upstream table in the same schema as
@@ -186,11 +160,11 @@ AS` clause; otherwise, it will be named `<src_name>_progress`.
 
 The following metadata is available for each source as a progress subsource:
 
-Field              | Type                                                    | Details
--------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
-`source_id_upper`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
-`transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
+| Field             | Type                                   | Details                                                                                          |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `source_id_lower` | [`uuid`](/sql/types/uuid/)             | The lower-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `source_id_upper` | [`uuid`](/sql/types/uuid/)             | The upper-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `transaction_id`  | [`uint8`](/sql/types/uint/#uint8-info) | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range. |
 
 And can be queried using:
 
@@ -208,72 +182,11 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-##### Schema changes
-
-{{% schema-changes %}}
-
-##### Supported types
-
-Materialize natively supports the following MySQL types:
-
-<ul style="column-count: 3">
-<li><code>bigint</code></li>
-<li><code>binary</code></li>
-<li><code>blob</code></li>
-<li><code>boolean</code></li>
-<li><code>char</code></li>
-<li><code>date</code></li>
-<li><code>datetime</code></li>
-<li><code>decimal</code></li>
-<li><code>double</code></li>
-<li><code>float</code></li>
-<li><code>int</code></li>
-<li><code>json</code></li>
-<li><code>longblob</code></li>
-<li><code>longtext</code></li>
-<li><code>mediumblob</code></li>
-<li><code>mediumint</code></li>
-<li><code>mediumtext</code></li>
-<li><code>numeric</code></li>
-<li><code>real</code></li>
-<li><code>smallint</code></li>
-<li><code>text</code></li>
-<li><code>time</code></li>
-<li><code>timestamp</code></li>
-<li><code>tinyblob</code></li>
-<li><code>tinyint</code></li>
-<li><code>tinytext</code></li>
-<li><code>varbinary</code></li>
-<li><code>varchar</code></li>
-</ul>
-
-Replicating tables that contain **unsupported [data types](/sql/types/)** is
-possible via the [`TEXT COLUMNS` option](#handling-unsupported-types) for the
-following types:
-
-<ul style="column-count: 1">
-<li><code>enum</code></li>
-<li><code>year</code></li>
-</ul>
-
-The specified columns will be treated as `text`, and will thus not offer the
-expected MySQL type features. For any unsupported data types not listed above,
-use the [`EXCLUDE COLUMNS`](#excluding-columns) option.
-
-##### Truncation
-
-Tables replicated into Materialize should not be truncated. If a table is
-truncated while replicated, the whole source becomes inaccessible and will not
-produce any data until it is recreated. Instead, remove all rows from a table
-using an unqualified `DELETE`.
-
-```mzsql
-DELETE FROM t;
-```
+{{% include-headless "/headless/mysql-considerations" %}}
 
 ## Examples
 
-{{< warning >}}
+{{< important >}}
 Before creating a MySQL source, you must enable GTID-based binlog replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
@@ -281,7 +194,7 @@ your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
-{{< /warning >}}
+{{< /important >}}
 
 ### Creating a connection
 
@@ -303,12 +216,14 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-If your MySQL server is not exposed to the public internet, you can
-[tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
+If your MySQL server is not exposed to the public internet, you can [tunnel the
+connection](/sql/create-connection/#network-security-connections) through an AWS
+PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -331,6 +246,7 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
+
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
@@ -410,6 +326,8 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
+{{% include-headless "/headless/schema-changes-in-progress" %}}
+
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
@@ -432,8 +350,8 @@ ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - MySQL integration guides:
-  - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
-  - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
-  - [Azure DB](/ingest-data/mysql/azure-db/)
-  - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
-  - [Self-hosted](/ingest-data/mysql/self-hosted/)
+    - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
+    - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
+    - [Azure DB](/ingest-data/mysql/azure-db/)
+    - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
+    - [Self-hosted](/ingest-data/mysql/self-hosted/)

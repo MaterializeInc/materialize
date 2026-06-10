@@ -64,7 +64,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use flate2::read::GzDecoder;
 use hex_literal::hex;
 use sha2::{Digest, Sha256};
@@ -196,8 +196,9 @@ impl NpmPackage {
     }
 }
 
-pub fn ensure() -> Result<(), anyhow::Error> {
+pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
     println!("ensuring all npm packages are up-to-date...");
+    let attempts = 3;
 
     let client = reqwest::blocking::Client::new();
     for pkg in NPM_PACKAGES {
@@ -208,50 +209,72 @@ pub fn ensure() -> Result<(), anyhow::Error> {
             println!("{} needs updating...", pkg.name);
         }
 
-        let url = format!(
-            "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-            pkg.name,
-            pkg.name.split('/').last().unwrap(),
-            pkg.version,
-        );
-        let res = client
-            .get(url)
-            .send()
-            .and_then(|res| res.error_for_status())
-            .with_context(|| format!("downloading {}", pkg.name))?;
-        let mut archive = tar::Archive::new(GzDecoder::new(res));
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let path = entry.path()?.strip_prefix("package")?.to_owned();
-            if let Some(css_file) = &pkg.css_file {
-                if path == Path::new(css_file) {
-                    unpack_entry(&mut entry, &pkg.css_path())?;
+        let mut success = false;
+        for attempt in 1..=attempts {
+            println!(
+                "downloading {} (attempt {}/{})...",
+                pkg.name, attempt, attempts
+            );
+
+            let url = format!(
+                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                pkg.name,
+                pkg.name.split('/').next_back().unwrap(),
+                pkg.version,
+            );
+
+            let res = client
+                .get(&url)
+                .send()
+                .and_then(|res| res.error_for_status())
+                .with_context(|| format!("downloading {}", pkg.name))?;
+
+            let mut archive = tar::Archive::new(GzDecoder::new(res));
+            for entry in archive.entries()? {
+                let mut entry = entry?;
+                let path = entry.path()?.strip_prefix("package")?.to_owned();
+                if let Some(css_file) = &pkg.css_file {
+                    if path == Path::new(css_file) {
+                        unpack_entry(&mut entry, &pkg.css_path())?;
+                    }
+                }
+                if path == Path::new(pkg.js_prod_file) {
+                    unpack_entry(&mut entry, &pkg.js_prod_path())?;
+                }
+                if path == Path::new(pkg.js_dev_file) {
+                    unpack_entry(&mut entry, &pkg.js_dev_path())?;
+                }
+                if let Some((extra_src, _extra_dst)) = &pkg.extra_file {
+                    if path == Path::new(extra_src) {
+                        unpack_entry(&mut entry, &pkg.extra_path())?;
+                    }
                 }
             }
-            if path == Path::new(pkg.js_prod_file) {
-                unpack_entry(&mut entry, &pkg.js_prod_path())?;
-            }
-            if path == Path::new(pkg.js_dev_file) {
-                unpack_entry(&mut entry, &pkg.js_dev_path())?;
-            }
-            if let Some((extra_src, _extra_dst)) = &pkg.extra_file {
-                if path == Path::new(extra_src) {
-                    unpack_entry(&mut entry, &pkg.extra_path())?;
-                }
+
+            let digest = pkg
+                .compute_digest()
+                .with_context(|| format!("computing digest for {}", pkg.name))?;
+            if digest == pkg.digest {
+                success = true;
+                println!("{} verified successfully.", pkg.name);
+                break;
+            } else {
+                eprintln!(
+                    "digest mismatch for {} (attempt {}/{})\n  expected: {}\n  actual:   {}",
+                    pkg.name,
+                    attempt,
+                    attempts,
+                    hex::encode(pkg.digest),
+                    hex::encode(digest)
+                );
             }
         }
 
-        let digest = pkg
-            .compute_digest()
-            .with_context(|| format!("computing digest for {}", pkg.name))?;
-        if digest != pkg.digest {
+        if !success {
             bail!(
-                "npm package {} did not match expected digest
-expected: {}
-  actual: {}",
+                "npm package {} did not match expected digest after {} attempts",
                 pkg.name,
-                hex::encode(pkg.digest),
-                hex::encode(digest),
+                attempts
             );
         }
     }
@@ -273,9 +296,22 @@ expected: {}
     for dir in &[CSS_VENDOR, JS_PROD_VENDOR, JS_DEV_VENDOR] {
         for entry in WalkDir::new(dir) {
             let entry = entry?;
-            if entry.file_type().is_file() && !known_paths.contains(entry.path()) {
-                println!("removing stray vendor file {}", entry.path().display());
-                fs::remove_file(entry.path())?;
+            if entry.file_type().is_file() {
+                if !known_paths.contains(entry.path()) {
+                    println!("removing stray vendor file {}", entry.path().display());
+                    fs::remove_file(entry.path())?;
+                } else if let Some(out_dir) = &out_dir {
+                    let dst_path = out_dir.join(entry.path());
+                    println!(
+                        "copying path to OUT_DIR, src {}, dst {}",
+                        entry.path().display(),
+                        dst_path.display(),
+                    );
+                    if let Some(parent) = dst_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(entry.path(), dst_path)?;
+                }
             }
         }
     }

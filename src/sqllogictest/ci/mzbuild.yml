@@ -11,6 +11,3 @@ name: sqllogictest
 pre-image:
   - type: cargo-build
     bin: [clusterd, sqllogictest]
-    bazel-bin:
-      clusterd: "@//src/clusterd:clusterd"
-      sqllogictest: "@//src/sqllogictest:sqllogictest"

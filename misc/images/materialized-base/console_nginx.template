@@ -1,0 +1,73 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This is a separate mzimage so that we don't have to re-install the apt things
+# every time we get a CI builder with a cold cache.
+
+# Package a pinned version of the console into the image, for ease of getting
+# started with Materialize. It's okay if this console lags a bit behind what's
+# deployed to production, but the version needs to be bumped whenever features
+# that the console depends upon are removed (to a version of the console that
+# doesn't depend on those features).
+
+server {
+${MZ_NGINX_LISTENER_CONFIG}
+    server_name _;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        client_max_body_size 100M;
+        proxy_connect_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+
+        # WebSocket support
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_http_version 1.1;
+
+        proxy_request_buffering on;
+        proxy_buffers 16 32k;
+        proxy_buffer_size 64k;
+        proxy_busy_buffers_size 128k;
+        proxy_temp_file_write_size 128k;
+
+        proxy_pass ${MZ_ENDPOINT};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_set_header X-Webhook-Event $http_x_webhook_event;
+    }
+
+    # Cache policy for static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|svg|woff|woff2)$ {
+        root /usr/share/nginx/html;
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript application/x-javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
+    gzip_min_length 256;
+    gzip_comp_level 6;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_buffers 16 8k;
+
+    error_page 404 /404.html;
+}

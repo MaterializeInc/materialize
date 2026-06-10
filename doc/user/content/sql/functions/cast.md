@@ -10,18 +10,13 @@ The `cast` function and operator return a value converted to the specified [type
 
 ## Signatures
 
-{{< diagram "func-cast.svg" >}}
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-function" %}}
 
-{{< diagram "op-cast.svg" >}}
-
-Parameter | Type | Description
-----------|------|------------
-_val_ | [Any](../../types) | The value you want to convert.
-_type_ | [Typename](../../types) | The return value's type.
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-operator" %}}
 
 The following special syntax is permitted if _val_ is a string literal:
 
-{{< diagram "lit-cast.svg" >}}
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-literal" %}}
 
 ### Return value
 
@@ -80,7 +75,6 @@ Source type                                | Return type                        
 [`interval`](../../types/interval/)        | [`text`](../../types/text/)                   | Assignment
 [`interval`](../../types/interval/)        | [`time`](../../types/time/)                   | Assignment
 [`jsonb`](../../types/jsonb/)              | [`bigint`](../../types/integer/)              | Explicit
-[`jsonb`](../../types/jsonb/)              | [`bool`](../../types/boolean/)                | Explicit
 [`jsonb`](../../types/jsonb/)              | [`float`](../../types/float/)                 | Explicit
 [`jsonb`](../../types/jsonb/)              | [`int`](../../types/integer/)                 | Explicit
 [`jsonb`](../../types/jsonb/)              | [`real`](../../types/real/)                   | Explicit

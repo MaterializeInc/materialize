@@ -22,7 +22,7 @@ function.
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
+{{% include-headless "/headless/materialize-window-functions" %}}
 
 {{</ callout >}}
 
@@ -56,29 +56,7 @@ row.
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a self join that specifies an **equality match** on the lag's order by field
-(e.g., `fieldA`). The order by field must increment in a regular pattern in
-order to be represented by an equality condition (e.g., `WHERE t1.fieldA =
-t2.fieldA + ...`). The
-query *excludes* the first row in the results since it does not have a previous
-row.
-
-{{< important >}}
-
-The idiomatic Materialize SQL applies only to those "lag over" queries whose
-ordering can be represented by some **equality condition**.
-
-{{</ important >}}
-
-<br>
-
-```mzsql
--- Excludes the first row in the results --
-SELECT t1.fieldA, t2.fieldB as previous_row_value
-FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA + ... -- or some other operand
-ORDER BY fieldA;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="extra_syntax_idiomatic_exclude" %}}
 
 </td>
 </tr>
@@ -87,25 +65,7 @@ ORDER BY fieldA;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>
-
-Avoid the use of [`LAG(fieldZ) OVER (ORDER BY ...)`](/sql/functions/#lag) window
-function when the order by field increases in a regular pattern.
-
-</red>
-
-<br>
-
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT fieldA, ...
-    LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
-FROM tableA;
-```
-
-</div>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="syntax_anti_pattern" %}}
 
 </td>
 </tr>
@@ -135,31 +95,7 @@ lag value.
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a self [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
-(e.g., `FROM tableA t1 LEFT JOIN tableA t2`) that specifies an **equality
-match** on the lag's order by field (e.g., `fieldA`). The order by field must
-increment in a regular pattern in order to be represented by an equality
-condition (e.g., `ON t1.fieldA = t2.fieldA + ...`). The
-query *includes* the first row, returning `null` as its lag value.
-
-{{< important >}}
-
-The idiomatic Materialize SQL applies only to those "lag over" queries whose
-ordering can be represented by some **equality condition**.
-
-{{</ important >}}
-
-
-<br>
-
-```mzsql
--- Includes the first row in the results --
-SELECT t1.fieldA, t2.fieldB as previous_row_value
-FROM tableA t1
-LEFT JOIN tableA t2
-ON t1.fieldA = t2.fieldA + ... -- or some other operand
-ORDER BY fieldA;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="extra_syntax_idiomatic_include" %}}
 
 </td>
 </tr>
@@ -168,25 +104,8 @@ ORDER BY fieldA;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="syntax_anti_pattern" %}}
 
-Avoid the use of [`LAG(fieldZ) OVER (ORDER BY ...) window
-function`](/sql/functions/#lag) when the order by field increases in a regular
-pattern.
-
-</red>
-
-<br>
-
-<div style="background-color: var(--code-block)">
-
-```nofmt
-SELECT fieldA, ...
-    LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
-FROM tableA;
-```
-
-</div>
 </td>
 </tr>
 
@@ -209,7 +128,7 @@ Using idiomatic Materialize SQL, the following example finds the previous day's
 order total. That is, the example uses a self join on `orders_daily_totals`. The
 row ordering on the `order_date` field is represented by an **equality
 condition** using an [interval of `1
-DAY`](https://materialize.com/docs/sql/types/interval/#valid-operations). The
+DAY`](/sql/types/interval/#valid-operations). The
 query excludes the first row in the results since the first row does not have a
 previous row.
 
@@ -226,21 +145,7 @@ previous row.
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-```mzsql
--- Excludes the first row in results --
-SELECT o1.order_date, o1.daily_total,
-    o2.daily_total as previous_daily_total
-FROM orders_daily_totals o1, orders_daily_totals o2
-WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
-ORDER BY order_date;
-```
-
-{{< important >}}
-
-The idiomatic Materialize SQL applies only to those "lag over" queries whose
-ordering can be represented by some **equality condition**.
-
-{{</ important >}}
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="extra_example_idiomatic_exclude" %}}
 
 </td>
 </tr>
@@ -249,19 +154,7 @@ ordering can be represented by some **equality condition**.
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`LAG() OVER (ORDER BY ...)` window
-function](/sql/functions/#lag) to access previous row's value if the order by
-field increases in a regular pattern.</red>
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Includes the first row's value. --
-SELECT order_date, daily_total,
-    LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
-FROM orders_daily_totals;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="example_anti_pattern" %}}
 
 </td>
 </tr>
@@ -275,7 +168,7 @@ order total. The example uses a self [`LEFT JOIN/LEFT OUTER
 JOIN`](/sql/select/join/#left-outer-join) on `orders_daily_totals`. The
 row ordering on the `order_date` field is represented by an **equality
 condition** using an [interval of `1
-DAY`](https://materialize.com/docs/sql/types/interval/#valid-operations). The
+DAY`](/sql/types/interval/#valid-operations). The
 query includes the first row in the results, using `null` as the previous value.
 
 <table>
@@ -291,22 +184,7 @@ query includes the first row in the results, using `null` as the previous value.
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-```mzsql
--- Include the first row in results --
-SELECT o1.order_date, o1.daily_total,
-    o2.daily_total as previous_daily_total
-FROM orders_daily_totals o1
-LEFT JOIN orders_daily_totals o2
-ON o1.order_date = o2.order_date + INTERVAL '1' DAY
-ORDER BY order_date;
-```
-
-{{< important >}}
-
-The idiomatic Materialize SQL applies only to those "lag over" queries whose
-ordering can be represented by some **equality condition**.
-
-{{</ important >}}
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="extra_example_idiomatic_include" %}}
 
 </td>
 </tr>
@@ -315,19 +193,7 @@ ordering can be represented by some **equality condition**.
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`LAG() OVER (ORDER BY ...)`
-window function](/sql/functions/#lag) to access previous row's value if the
-order by field increases in a regular pattern.</red>
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Includes the first row's value. --
-SELECT order_date, daily_total,
-    LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
-FROM orders_daily_totals;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="lag" field="example_anti_pattern" %}}
 
 </td>
 </tr>
@@ -338,7 +204,7 @@ FROM orders_daily_totals;
 ## See also
 
 - [Lead over](/transform-data/idiomatic-materialize-sql/lead)
-- [`INTERVAL`](https://materialize.com/docs/sql/types/interval/)
+- [`INTERVAL`](/sql/types/interval/)
 - [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
 - [`LAG()`](/sql/functions/#lag)
 - [Window functions](/sql/functions/#window-functions)

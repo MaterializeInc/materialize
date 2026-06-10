@@ -21,15 +21,15 @@ pub use column_names::{ColumnName, ColumnNames};
 pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
+pub use repr_types::ReprRelationType;
 pub use subtree::SubtreeSize;
-pub use types::RelationType;
 pub use unique_keys::UniqueKeys;
 
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
 pub trait Analysis: 'static {
     /// The type of value this analysis associates with an expression.
     type Value: std::fmt::Debug;
-    /// Announce any depencies this analysis has on other analyses.
+    /// Announce any dependencies this analysis has on other analyses.
     ///
     /// The method should invoke `builder.require::<Foo>()` for each other
     /// analysis `Foo` this analysis depends upon.
@@ -49,7 +49,7 @@ pub trait Analysis: 'static {
     /// The `index` indicates the post-order index for the expression, for use in finding
     /// the corresponding information in `results` and `depends`.
     ///
-    /// The return result will be associated with this expression for this analysis,
+    /// The returned result will be associated with this expression for this analysis,
     /// and the analyses will continue.
     fn derive(
         &self,
@@ -81,13 +81,14 @@ pub mod common {
     use std::any::{Any, TypeId};
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
     use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
-    use super::subtree::SubtreeSize;
     use super::Analysis;
+    use super::subtree::SubtreeSize;
 
     /// Container for analysis state and binding context.
     #[derive(Default)]
@@ -103,14 +104,18 @@ pub mod common {
 
     impl Derived {
         /// Return the analysis results derived so far.
-        pub fn results<A: Analysis>(&self) -> Option<&[A::Value]> {
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &[A::Value] {
             let type_id = TypeId::of::<Bundle<A>>();
             if let Some(bundle) = self.analyses.get(&type_id) {
                 if let Some(bundle) = bundle.as_any().downcast_ref::<Bundle<A>>() {
-                    return Some(&bundle.results[..]);
+                    return &bundle.results[..];
                 }
             }
-            None
+            panic!("Analysis {:?} missing", std::any::type_name::<A>());
         }
         /// Bindings from local identifiers to result offsets for analysis values.
         pub fn bindings(&self) -> &BTreeMap<LocalId, usize> {
@@ -128,7 +133,7 @@ pub mod common {
             start: usize,
             count: usize,
         ) -> impl Iterator<Item = usize> + 'a {
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let offset = 1;
             (0..count).scan(offset, move |offset, _| {
                 let result = start - *offset;
@@ -142,10 +147,7 @@ pub mod common {
             DerivedView {
                 derived: self,
                 lower: 0,
-                upper: self
-                    .results::<SubtreeSize>()
-                    .expect("SubtreeSize missing")
-                    .len(),
+                upper: self.results::<SubtreeSize>().len(),
             }
         }
     }
@@ -167,7 +169,7 @@ pub mod common {
     impl<'a> DerivedView<'a> {
         /// The value associated with the expression.
         pub fn value<A: Analysis>(&self) -> Option<&'a A::Value> {
-            self.results::<A>().and_then(|slice| slice.last())
+            self.results::<A>().last()
         }
 
         /// The post-order traversal index for the expression.
@@ -186,16 +188,18 @@ pub mod common {
             self.derived
                 .bindings
                 .get(&id)
-                .and_then(|index| self.derived.results::<A>().and_then(|r| r.get(*index)))
+                .and_then(|index| self.derived.results::<A>().get(*index))
         }
 
         /// The results for expression and its children.
         ///
         /// The results for the expression itself will be the last element.
-        pub fn results<A: Analysis>(&self) -> Option<&'a [A::Value]> {
-            self.derived
-                .results::<A>()
-                .map(|slice| &slice[self.lower..self.upper])
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &'a [A::Value] {
+            &self.derived.results::<A>()[self.lower..self.upper]
         }
 
         /// Bindings from local identifiers to result offsets for analysis values.
@@ -222,7 +226,7 @@ pub mod common {
             // Repeatedly read out the last element, then peel off that many elements.
             // Each extracted slice corresponds to a child of the current expression.
             // We should end cleanly with an empty slice, otherwise there is an issue.
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let sizes = &sizes[..sizes.len() - 1];
 
             let offset = self.lower;
@@ -288,8 +292,7 @@ pub mod common {
                 // If we have not sequenced `type_id` but have a bundle, it means
                 // we are in the process of fulfilling its requirements: a cycle.
                 if self.result.analyses.contains_key(&type_id) {
-                    // TODO: Find a better way to identify `A`.
-                    panic!("Cyclic dependency detected: {:?}", type_id);
+                    panic!("Cyclic dependency detected: {}", std::any::type_name::<A>());
                 }
                 // Insert the analysis bundle first, so that we can detect cycles.
                 self.result.analyses.insert(
@@ -326,7 +329,7 @@ pub mod common {
                             MirRelationExpr::LetRec {
                                 ids, values, body, ..
                             } => {
-                                for (id, value) in ids.iter().zip(values) {
+                                for (id, value) in ids.iter().zip_eq(values) {
                                     todo.push(Ok(value));
                                     todo.push(Err(*id));
                                 }
@@ -420,6 +423,7 @@ pub mod common {
         /// Analysis that starts optimistically but is only correct at a fixed point.
         ///
         /// Will fail out to `analyse_pessimistic` if the lattice is missing, or `self.fuel` is exhausted.
+        /// When successful, the result indicates whether new information was produced for `exprs.last()`.
         fn analyse_optimistic(
             &mut self,
             exprs: &[&MirRelationExpr],
@@ -459,6 +463,8 @@ pub mod common {
         }
 
         /// Analysis that starts conservatively and can be stopped at any point.
+        ///
+        /// Result indicates whether new information was produced for `exprs.last()`.
         fn analyse_pessimistic(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool {
             // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
             self.results.clear();
@@ -544,11 +550,12 @@ mod arity {
 }
 
 /// Expression types
-mod types {
+mod repr_types {
 
     use super::{Analysis, Derived, Lattice};
+    use itertools::Itertools;
     use mz_expr::MirRelationExpr;
-    use mz_repr::ColumnType;
+    use mz_repr::ReprColumnType;
 
     /// Analysis that determines the type of relation expressions.
     ///
@@ -561,10 +568,10 @@ mod types {
     /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
     /// returns an error).
     #[derive(Debug)]
-    pub struct RelationType;
+    pub struct ReprRelationType;
 
-    impl Analysis for RelationType {
-        type Value = Option<Vec<ColumnType>>;
+    impl Analysis for ReprRelationType {
+        type Value = Option<Vec<ReprColumnType>>;
 
         fn derive(
             &self,
@@ -586,7 +593,7 @@ mod types {
                     typ,
                     ..
                 } => {
-                    let mut result = typ.column_types.clone();
+                    let mut result = typ.column_types.iter().cloned().collect_vec();
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(t) = results.get(*o) {
                             if let Some(rec_typ) = t {
@@ -594,7 +601,8 @@ mod types {
                                 // Unclear if we should trust `typ`.
                                 assert_eq!(result.len(), rec_typ.len());
                                 result.clone_from(rec_typ);
-                                for (res, col) in result.iter_mut().zip(typ.column_types.iter()) {
+                                for (res, col) in result.iter_mut().zip_eq(typ.column_types.iter())
+                                {
                                     if !col.nullable {
                                         res.nullable = false;
                                     }
@@ -616,9 +624,11 @@ mod types {
                     // Every expression with inputs should have non-`None` inputs at this point.
                     let input_cols = offsets.into_iter().rev().map(|o| {
                         o.as_ref()
-                            .expect("RelationType analysis discovered type-less expression")
+                            .expect("ReprRelationType analysis discovered type-less expression")
                     });
-                    Some(expr.try_col_with_input_cols(input_cols).unwrap())
+
+                    let repr_typ = expr.try_col_with_input_cols(input_cols).unwrap();
+                    Some(repr_typ)
                 }
             }
         }
@@ -630,17 +640,21 @@ mod types {
 
     struct RTLattice;
 
-    impl Lattice<Option<Vec<ColumnType>>> for RTLattice {
-        fn top(&self) -> Option<Vec<ColumnType>> {
+    impl Lattice<Option<Vec<ReprColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ReprColumnType>> {
             None
         }
-        fn meet_assign(&self, a: &mut Option<Vec<ColumnType>>, b: Option<Vec<ColumnType>>) -> bool {
+        fn meet_assign(
+            &self,
+            a: &mut Option<Vec<ReprColumnType>>,
+            b: Option<Vec<ReprColumnType>>,
+        ) -> bool {
             match (a, b) {
                 (_, None) => false,
                 (Some(a), Some(b)) => {
                     let mut changed = false;
                     assert_eq!(a.len(), b.len());
-                    for (at, bt) in a.iter_mut().zip(b.iter()) {
+                    for (at, bt) in a.iter_mut().zip_eq(b.iter()) {
                         assert_eq!(at.scalar_type, bt.scalar_type);
                         if !at.nullable && bt.nullable {
                             at.nullable = true;
@@ -717,7 +731,7 @@ mod unique_keys {
                     keys
                 }
                 _ => {
-                    let arity = depends.results::<Arity>().unwrap();
+                    let arity = depends.results::<Arity>();
                     expr.keys_with_input_keys(
                         offsets.iter().map(|o| arity[*o]),
                         offsets.iter().map(|o| &results[*o]),
@@ -801,7 +815,7 @@ mod non_negative {
             match expr {
                 MirRelationExpr::Constant { rows, .. } => rows
                     .as_ref()
-                    .map(|r| r.iter().all(|(_, diff)| diff >= &0))
+                    .map(|r| r.iter().all(|(_, diff)| *diff >= mz_repr::Diff::ZERO))
                     .unwrap_or(true),
                 MirRelationExpr::Get { id, .. } => match id {
                     Id::Local(id) => {
@@ -845,7 +859,8 @@ mod non_negative {
                             let mut children = depends.children_of_rev(index, 2);
                             let _negate = children.next().unwrap();
                             let base_id = children.next().unwrap();
-                            debug_assert_eq!(children.next(), None);
+                            let extra = children.next();
+                            debug_assert_eq!(extra, None);
                             if results[base_id] && is_superset_of(&*base, &*input) {
                                 return true;
                             }
@@ -934,11 +949,13 @@ mod non_negative {
 
 mod column_names {
     use std::ops::Range;
+    use std::sync::Arc;
 
     use super::Analysis;
-    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{AggregateFunc, Columns, Id, MirRelationExpr, MirScalarExpr, TableFunc};
     use mz_repr::explain::ExprHumanizer;
-    use mz_repr::GlobalId;
+    use mz_repr::{GlobalId, UNKNOWN_COLUMN_NAME};
+    use mz_sql::ORDINALITY_COL_NAME;
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]
@@ -947,18 +964,25 @@ mod column_names {
         Global(GlobalId, usize),
         /// An anonymous expression named after the top-level function name.
         Aggregate(AggregateFunc, Box<ColumnName>),
+        /// A column with a name that has been saved from the original SQL query.
+        Annotated(Arc<str>),
         /// An column with an unknown name.
         Unknown,
     }
 
     impl ColumnName {
-        /// Return `true` iff this the variant is not unknown.
+        /// Return `true` iff the variant has an inferred name.
         pub fn is_known(&self) -> bool {
-            matches!(self, Self::Global(..) | Self::Aggregate(..))
+            match self {
+                Self::Global(..) | Self::Aggregate(..) => true,
+                // We treat annotated columns as unknown because we would rather
+                // override them with inferred names, if we can.
+                Self::Annotated(..) | Self::Unknown => false,
+            }
         }
 
         /// Humanize the column to a [`String`], returns an empty [`String`] for
-        /// unknown columns.
+        /// unknown columns (or columns named `UNKNOWN_COLUMN_NAME`).
         pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
             match self {
                 Self::Global(id, c) => humanizer.humanize_column(*id, *c).unwrap_or_default(),
@@ -971,7 +995,20 @@ mod column_names {
                         format!("{func}_{expr}")
                     }
                 }
+                Self::Annotated(name) => name.to_string(),
                 Self::Unknown => String::new(),
+            }
+        }
+
+        /// Clone this column name if it is known, otherwise try to use the provided
+        /// name if it is available.
+        pub fn cloned_or_annotated(&self, name: &Option<Arc<str>>) -> Self {
+            match self {
+                Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..) => self.clone(),
+                Self::Unknown => name
+                    .as_ref()
+                    .filter(|name| name.as_ref() != UNKNOWN_COLUMN_NAME)
+                    .map_or_else(|| Self::Unknown, |name| Self::Annotated(Arc::clone(name))),
             }
         }
     }
@@ -991,7 +1028,7 @@ mod column_names {
         fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
             for scalar in scalars {
                 column_names.push(match scalar {
-                    MirScalarExpr::Column(c) => column_names[*c].clone(),
+                    MirScalarExpr::Column(c, name) => column_names[*c].cloned_or_annotated(&name.0),
                     _ => ColumnName::Unknown,
                 });
             }
@@ -1020,7 +1057,7 @@ mod column_names {
                     typ,
                     access_strategy: _,
                 } => {
-                    // Emit ColumnName::Global instanceds for each column in the
+                    // Emit ColumnName::Global instances for each column in the
                     // `Get` type. Those can be resolved to real names later when an
                     // ExpressionHumanizer is available.
                     (0..typ.columns().len())
@@ -1084,6 +1121,13 @@ mod column_names {
                     let func_output_start = column_names.len();
                     let func_output_end = column_names.len() + func.output_arity();
                     column_names.extend(Self::anonymous(func_output_start..func_output_end));
+                    if let TableFunc::WithOrdinality { .. } = func {
+                        // We know the name of the last column
+                        // TODO(ggevay): generalize this to meaningful col names for all table functions
+                        **column_names.last_mut().as_mut().expect(
+                            "there is at least one output column, from the WITH ORDINALITY",
+                        ) = ColumnName::Annotated(ORDINALITY_COL_NAME.into());
+                    }
                     column_names
                 }
                 Filter {
@@ -1195,16 +1239,18 @@ mod column_names {
 }
 
 mod explain {
-    //! Derived attributes framework and definitions.
+    //! Derived Analysis framework and definitions.
 
     use std::collections::BTreeMap;
 
-    use mz_expr::explain::ExplainContext;
     use mz_expr::MirRelationExpr;
+    use mz_expr::explain::{ExplainContext, HumanizedExplain, HumanizerMode};
     use mz_ore::stack::RecursionLimitError;
-    use mz_repr::explain::{AnnotatedPlan, Attributes};
+    use mz_repr::explain::{Analyses, AnnotatedPlan};
 
-    // Attributes should have shortened paths when exported.
+    use crate::analysis::equivalences::{Equivalences, HumanizedEquivalenceClasses};
+
+    // Analyses should have shortened paths when exported.
     use super::DerivedBuilder;
 
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
@@ -1217,7 +1263,7 @@ mod explain {
                 builder.require(super::NonNegative);
             }
             if context.config.types {
-                builder.require(super::RelationType);
+                builder.require(super::ReprRelationType);
             }
             if context.config.arity {
                 builder.require(super::Arity);
@@ -1233,24 +1279,27 @@ mod explain {
             if context.config.column_names || context.config.humanized_exprs {
                 builder.require(super::ColumnNames);
             }
+            if context.config.equivalences {
+                builder.require(Equivalences);
+            }
             builder
         }
     }
 
     /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
-    /// with [`Attributes`] derived from the given context configuration.
+    /// with [`Analyses`] derived from the given context configuration.
     pub fn annotate_plan<'a>(
         plan: &'a MirRelationExpr,
         context: &'a ExplainContext,
     ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = BTreeMap::<&MirRelationExpr, Analyses>::default();
         let config = context.config;
 
-        // We want to annotate the plan with attributes in the following cases:
-        // 1. An attribute was explicitly requested in the ExplainConfig.
+        // We want to annotate the plan with analyses in the following cases:
+        // 1. An Analysis was explicitly requested in the ExplainConfig.
         // 2. Humanized expressions were requested in the ExplainConfig (in which
-        //    case we need to derive the ColumnNames attribute).
-        if config.requires_attributes() || config.humanized_exprs {
+        //    case we need to derive the ColumnNames Analysis).
+        if config.requires_analyses() || config.humanized_exprs {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
@@ -1260,76 +1309,89 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().unwrap().into_iter(),
+                    &*derived.results::<super::SubtreeSize>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.subtree_size = Some(*subtree_size);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.subtree_size = Some(*subtree_size);
                 }
             }
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().unwrap().into_iter(),
+                    &*derived.results::<super::NonNegative>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.non_negative = Some(*non_negative);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.non_negative = Some(*non_negative);
                 }
             }
 
             if config.arity {
-                for (expr, arity) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<super::Arity>().unwrap().into_iter(),
-                ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.arity = Some(*arity);
+                for (expr, arity) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<super::Arity>())
+                {
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.arity = Some(*arity);
                 }
             }
 
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived
-                        .results::<super::RelationType>()
-                        .unwrap()
-                        .into_iter(),
+                    &*derived.results::<super::ReprRelationType>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.types = Some(types.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.types = Some(types.clone());
                 }
             }
 
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().unwrap().into_iter(),
+                    &*derived.results::<super::UniqueKeys>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.keys = Some(keys.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.keys = Some(keys.clone());
                 }
             }
 
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().unwrap().into_iter(),
+                    &*derived.results::<super::Cardinality>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.cardinality = Some(card.to_string());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.cardinality = Some(card.to_string());
                 }
             }
 
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().unwrap().into_iter(),
+                    &*derived.results::<super::ColumnNames>(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let analyses = annotations.entry(expr).or_default();
                     let value = column_names
                         .iter()
                         .map(|column_name| column_name.humanize(context.humanizer))
                         .collect();
-                    attrs.column_names = Some(value);
+                    analyses.column_names = Some(value);
+                }
+            }
+
+            if config.equivalences {
+                for (expr, equivs) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<Equivalences>())
+                {
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.equivalences = Some(match equivs.as_ref() {
+                        Some(equivs) => HumanizedEquivalenceClasses {
+                            equivalence_classes: equivs,
+                            cols: analyses.column_names.as_ref(),
+                            mode: HumanizedExplain::new(config.redacted),
+                        }
+                        .to_string(),
+                        None => "<empty collection>".to_string(),
+                    });
                 }
             }
         }
@@ -1338,7 +1400,7 @@ mod explain {
     }
 }
 
-/// Definition and helper structs for the [`Cardinality`] attribute.
+/// Definition and helper structs for the [`Cardinality`] Analysis.
 mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1350,6 +1412,7 @@ mod cardinality {
     use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
+    use tracing::{error, warn};
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
 
@@ -1395,12 +1458,15 @@ mod cardinality {
             match self {
                 CardinalityEstimate::Estimate(OrderedFloat(f)) => {
                     let rounded = f.ceil();
-                    let flattened = usize::cast_from(
-                        u64::try_cast_from(rounded)
-                            .expect("positive and representable cardinality estimate"),
-                    );
 
-                    Some(flattened)
+                    if !rounded.is_normal() || rounded < 0.0 {
+                        warn!(
+                            "ignoring denormalized or negative cardinality estimate {f} rounded to {rounded}"
+                        );
+                    }
+
+                    // if we can't cast, the value is unknown
+                    u64::try_cast_from(rounded).map(usize::cast_from)
                 }
                 CardinalityEstimate::Unknown => None,
             }
@@ -1485,6 +1551,7 @@ mod cardinality {
 
         fn div(self, rhs: f64) -> Self::Output {
             use CardinalityEstimate::*;
+
             if let Estimate(lhs) = self {
                 Estimate(lhs / OrderedFloat(rhs))
             } else {
@@ -1529,6 +1596,11 @@ mod cardinality {
         fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
+                    // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
+                    if *width == 0 {
+                        error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                    }
+
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }
                 _ => {
@@ -1545,7 +1617,7 @@ mod cardinality {
         ) -> OrderedFloat<f64> {
             let index_selectivity = |expr: &MirScalarExpr| -> Option<OrderedFloat<f64>> {
                 match expr {
-                    MirScalarExpr::Column(col) => {
+                    MirScalarExpr::Column(col, _) => {
                         if unique_columns.contains(col) {
                             // TODO(mgree): when we have index cardinality statistics, they should go here when `expr` is a `MirScalarExpr::Column` that's in `unique_columns`
                             None
@@ -1558,7 +1630,7 @@ mod cardinality {
             };
 
             match predicate_expr {
-                MirScalarExpr::Column(_)
+                MirScalarExpr::Column(_, _)
                 | MirScalarExpr::Literal(_, _)
                 | MirScalarExpr::CallUnmaterializable(_) => OrderedFloat(1.0),
                 MirScalarExpr::CallUnary { func, expr } => match func {
@@ -1575,7 +1647,7 @@ mod cardinality {
                 },
                 MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                     match func {
-                        BinaryFunc::Eq => {
+                        BinaryFunc::Eq(_) => {
                             match (index_selectivity(expr1), index_selectivity(expr2)) {
                                 (Some(isel1), Some(isel2)) => std::cmp::max(isel1, isel2),
                                 (Some(isel), None) | (None, Some(isel)) => isel,
@@ -1583,7 +1655,7 @@ mod cardinality {
                             }
                         }
                         // 1.0 - the Eq case
-                        BinaryFunc::NotEq => {
+                        BinaryFunc::NotEq(_) => {
                             match (index_selectivity(expr1), index_selectivity(expr2)) {
                                 (Some(isel1), Some(isel2)) => {
                                     OrderedFloat(1.0) - std::cmp::max(isel1, isel2)
@@ -1592,7 +1664,10 @@ mod cardinality {
                                 (None, None) => OrderedFloat(1.0) - WORST_CASE_SELECTIVITY,
                             }
                         }
-                        BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
+                        BinaryFunc::Lt(_)
+                        | BinaryFunc::Lte(_)
+                        | BinaryFunc::Gt(_)
+                        | BinaryFunc::Gte(_) => {
                             // TODO(mgree) if we have high/low key values and one of the columns is an index, we can do better
                             OrderedFloat(0.33)
                         }
@@ -1600,11 +1675,11 @@ mod cardinality {
                     }
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => match func {
-                    VariadicFunc::And => exprs
+                    VariadicFunc::And(_) => exprs
                         .iter()
                         .map(|expr| self.predicate(expr, unique_columns))
                         .product(),
-                    VariadicFunc::Or => {
+                    VariadicFunc::Or(_) => {
                         // TODO(mgree): BETWEEN will get compiled down to an AND of appropriate bounds---we could try to detect it and be clever
 
                         // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized
@@ -1677,7 +1752,7 @@ mod cardinality {
                 let mut all_unique = true;
 
                 for expr in equiv {
-                    if let MirScalarExpr::Column(col) = expr {
+                    if let MirScalarExpr::Column(col, _) = expr {
                         if let Some(idx) = unique_columns.get(col) {
                             unique_sources.insert(*idx);
                         } else {
@@ -1736,8 +1811,10 @@ mod cardinality {
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(group_size) = expected_group_size {
-                input / f64::cast_lossy(*group_size)
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
             } else {
@@ -1759,8 +1836,10 @@ mod cardinality {
                 .and_then(|l| l.as_literal_int64())
                 .map_or(1, |l| std::cmp::max(0, l));
 
-            if let Some(group_size) = expected_group_size {
-                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input * (f64::cast_lossy(k) / f64::cast_lossy(group_size))
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(f64::cast_lossy(k))
             } else {
@@ -1792,18 +1871,9 @@ mod cardinality {
         ) -> Self::Value {
             use MirRelationExpr::*;
 
-            let sizes = depends
-                .as_view()
-                .results::<SubtreeSize>()
-                .expect("SubtreeSize analysis results missing");
-            let arity = depends
-                .as_view()
-                .results::<Arity>()
-                .expect("Arity analysis results missing");
-            let keys = depends
-                .as_view()
-                .results::<UniqueKeys>()
-                .expect("UniqueKeys analysis results missing");
+            let sizes = depends.as_view().results::<SubtreeSize>();
+            let arity = depends.as_view().results::<Arity>();
+            let keys = depends.as_view().results::<UniqueKeys>();
 
             match expr {
                 Constant { rows, .. } => {
@@ -1841,7 +1911,7 @@ mod cardinality {
                 }
                 Filter { predicates, .. } => {
                     let input = results[index - 1];
-                    let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
+                    let keys = depends.results::<UniqueKeys>();
                     let keys = &keys[index - 1];
                     self.filter(predicates, keys, input)
                 }

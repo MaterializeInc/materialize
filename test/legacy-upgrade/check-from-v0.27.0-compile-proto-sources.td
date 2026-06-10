@@ -24,5 +24,3 @@ c
 h
 a
 e
-
-> DROP SOURCE kafka_proto_source CASCADE;

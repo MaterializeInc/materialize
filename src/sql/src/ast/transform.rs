@@ -199,17 +199,28 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
+        Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {
+            maybe_update_item_name(source.name_mut());
+        }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
-        })
-        | Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
+        }) => {
+            rewrite_query(from_name, to_item_name, query)?;
+        }
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+            replacement_for,
+            query,
+            ..
+        }) => {
+            if let Some(target) = replacement_for {
+                maybe_update_item_name(target.name_mut());
+            }
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
-        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
@@ -357,7 +368,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) {
-        self.check_failure(&[ident.clone()]);
+        self.check_failure(std::slice::from_ref(ident));
         // This is an unqualified item using `self.name`, e.g. an alias, which
         // we cannot unambiguously resolve.
         if ident == self.name {
@@ -481,7 +492,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
             RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
-                    Err(_) => panic!("invalid persisted global id {id}"),
+                    Err(e) => panic!("invalid persisted global id {id}: {e}"),
                 };
                 if let Some(new_id) = self.ids.get(&old_id) {
                     *id = new_id.to_string();

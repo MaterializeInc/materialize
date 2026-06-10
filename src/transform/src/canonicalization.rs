@@ -14,36 +14,41 @@
 //! 2. Converting / peeling off part of the enclosing relation expression into
 //!    another relation expression that can represent the same concept.
 
-mod flatmap_to_map;
+mod flat_map_elimination;
 mod projection_extraction;
 mod topk_elision;
 
-pub use flatmap_to_map::FlatMapToMap;
+pub use flat_map_elimination::FlatMapElimination;
+use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
-use mz_expr::MirRelationExpr;
-
-use crate::analysis::{DerivedBuilder, RelationType};
 use crate::TransformCtx;
+use crate::analysis::{DerivedBuilder, ReprRelationType};
+use mz_expr::MirRelationExpr;
+use mz_repr::ReprColumnType;
 
 /// A transform that visits each AST node and reduces scalar expressions.
 #[derive(Debug)]
 pub struct ReduceScalars;
 
 impl crate::Transform for ReduceScalars {
+    fn name(&self) -> &'static str {
+        "ReduceScalars"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_scalars")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require(RelationType);
+        builder.require(ReprRelationType);
         let derived = builder.visit(&*relation);
 
         // Descend the AST, reducing scalar expressions.
@@ -64,10 +69,10 @@ impl crate::Transform for ReduceScalars {
                     // Has expressions, but we aren't brave enough to reduce these yet.
                 }
                 MirRelationExpr::Filter { predicates, .. } => {
-                    let input_type = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     for predicate in predicates.iter_mut() {
@@ -76,10 +81,10 @@ impl crate::Transform for ReduceScalars {
                     predicates.retain(|p| !p.is_literal_true());
                 }
                 MirRelationExpr::FlatMap { exprs, .. } => {
-                    let input_type = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     for expr in exprs.iter_mut() {
@@ -88,9 +93,9 @@ impl crate::Transform for ReduceScalars {
                 }
                 MirRelationExpr::Map { scalars, .. } => {
                     // Use the output type, to incorporate the types of `scalars` as they land.
-                    let output_type = view
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                    let output_type: &Vec<ReprColumnType> = view
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     let input_arity = output_type.len() - scalars.len();
@@ -101,18 +106,17 @@ impl crate::Transform for ReduceScalars {
                 MirRelationExpr::Join { equivalences, .. } => {
                     let mut children: Vec<_> = view.children_rev().collect::<Vec<_>>();
                     children.reverse();
-                    let input_types = children
+                    let input_types: Vec<ReprColumnType> = children
                         .iter()
                         .flat_map(|c| {
-                            c.value::<RelationType>()
-                                .expect("RelationType required")
+                            c.value::<ReprRelationType>()
+                                .expect("ReprRelationType required")
                                 .as_ref()
                                 .unwrap()
                                 .iter()
                                 .cloned()
                         })
-                        .collect::<Vec<_>>();
-
+                        .collect();
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
                             expr.reduce(&input_types[..]);
@@ -129,10 +133,10 @@ impl crate::Transform for ReduceScalars {
                     aggregates,
                     ..
                 } => {
-                    let input_type = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     for key in group_key.iter_mut() {
@@ -143,10 +147,10 @@ impl crate::Transform for ReduceScalars {
                     }
                 }
                 MirRelationExpr::TopK { limit, .. } => {
-                    let input_type = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<ReprRelationType>()
+                        .expect("ReprRelationType required")
                         .as_ref()
                         .unwrap();
                     if let Some(limit) = limit {
@@ -154,7 +158,7 @@ impl crate::Transform for ReduceScalars {
                     }
                 }
             }
-            todo.extend(expr.children_mut().rev().zip(view.children_rev()))
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()))
         }
 
         mz_repr::explain::trace_plan(&*relation);

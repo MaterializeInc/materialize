@@ -52,11 +52,13 @@ fn main() {
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
         .bytes([
+            ".mz_persist_client.batch.ProtoBatch",
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
-            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
-            ".mz_persist_client.internal.state.ProtoVersionedData",
-            ".mz_persist_client.internal.state.ProtoEncodedSchemas",
             ".mz_persist_client.internal.service.ProtoPushDiff",
+            ".mz_persist_client.internal.state.ProtoEncodedSchemas",
+            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
+            ".mz_persist_client.internal.state.ProtoRunMeta",
+            ".mz_persist_client.internal.state.ProtoVersionedData",
         ]);
 
     // Setting `emit_rerun_if_changed(false)` below causes tonic to entirely
@@ -67,7 +69,7 @@ fn main() {
     // only rerunning this build script if something changes in src/ because all
     // mz_persist_client protos are in there.
     println!("cargo:rerun-if-changed=src/");
-    tonic_build::configure()
+    tonic_prost_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
         // anything in the include directory (..) changes. This causes quite a
         // bit of spurious recompilation, so we disable it. The default behavior
@@ -75,15 +77,16 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .extern_path(".mz_persist", "::mz_persist")
+        .extern_path(".mz_persist.gen", "::mz_persist::generated")
         .extern_path(".mz_persist_types", "::mz_persist_types")
         .extern_path(".mz_proto", "::mz_proto")
         .compile_with_config(
             config,
             &[
-                "persist-client/src/batch.proto",
-                "persist-client/src/internal/service.proto",
-                "persist-client/src/internal/state.proto",
-                "persist-client/src/internal/diff.proto",
+                PathBuf::from("persist-client/src/batch.proto"),
+                PathBuf::from("persist-client/src/internal/service.proto"),
+                PathBuf::from("persist-client/src/internal/state.proto"),
+                PathBuf::from("persist-client/src/internal/diff.proto"),
             ],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )

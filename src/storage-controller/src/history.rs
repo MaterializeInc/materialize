@@ -11,14 +11,14 @@
 
 use std::collections::BTreeMap;
 
-use mz_ore::cast::{CastFrom, CastInto};
+use mz_ore::cast::CastFrom;
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
 
 /// A history of storage commands.
 #[derive(Debug)]
-pub(crate) struct CommandHistory<T> {
+pub(crate) struct CommandHistory {
     /// The number of commands at the last time we compacted the history.
     reduced_count: usize,
     /// The sequence of commands that should be applied.
@@ -26,12 +26,12 @@ pub(crate) struct CommandHistory<T> {
     /// This list may not be "compact" in that there can be commands that could be optimized or
     /// removed given the context of other commands, for example compaction commands that can be
     /// unified, or run commands that can be dropped due to allowed compaction.
-    commands: Vec<StorageCommand<T>>,
+    commands: Vec<StorageCommand>,
     /// Tracked metrics.
     metrics: HistoryMetrics,
 }
 
-impl<T: std::fmt::Debug> CommandHistory<T> {
+impl CommandHistory {
     /// Constructs a new command history.
     pub fn new(metrics: HistoryMetrics) -> Self {
         metrics.reset();
@@ -44,16 +44,14 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
     }
 
     /// Returns an iterator over the contained storage commands.
-    pub fn iter(&self) -> impl Iterator<Item = &StorageCommand<T>> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &StorageCommand> {
         self.commands.iter()
     }
 
     /// Adds a command to the history.
     ///
     /// This action will reduce the history every time it doubles.
-    pub fn push(&mut self, command: StorageCommand<T>) {
-        use StorageCommand::*;
-
+    pub fn push(&mut self, command: StorageCommand) {
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
@@ -62,16 +60,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
             // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
             // that here in the non-reduce case.
             let command = self.commands.last().expect("pushed above");
-            let metrics = &self.metrics;
-            match command {
-                CreateTimely { .. } => metrics.create_timely_count.inc(),
-                InitializationComplete => metrics.initialization_complete_count.inc(),
-                AllowWrites => metrics.allow_writes_count.inc(),
-                UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
-                RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
-                RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
-                AllowCompaction(x) => metrics.allow_compaction_count.add(x.len().cast_into()),
-            }
+            self.metrics.command_counts.for_command(command).inc();
         }
     }
 
@@ -79,7 +68,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
     pub fn reduce(&mut self) {
         use StorageCommand::*;
 
-        let mut create_timely_command = None;
+        let mut hello_command = None;
         let mut initialization_complete = false;
         let mut allow_writes = false;
         let mut final_compactions = BTreeMap::new();
@@ -89,6 +78,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
         // this scenario, we only want to send the most recent definition of the object.
         let mut final_ingestions = BTreeMap::new();
         let mut final_sinks = BTreeMap::new();
+        let mut final_oneshot_ingestions = BTreeMap::new();
 
         // Collect only the final configuration.
         // Note that this means the final configuration is applied to all objects installed on the
@@ -100,17 +90,25 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
         for command in self.commands.drain(..) {
             match command {
-                cmd @ CreateTimely { .. } => create_timely_command = Some(cmd),
+                cmd @ Hello { .. } => hello_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
-                UpdateConfiguration(params) => final_configuration.update(params),
-                RunIngestions(cmds) => {
-                    final_ingestions.extend(cmds.into_iter().map(|c| (c.id, c)));
+                UpdateConfiguration(params) => final_configuration.update(*params),
+                RunIngestion(ingestion) => {
+                    final_ingestions.insert(ingestion.id, ingestion);
                 }
-                RunSinks(cmds) => {
-                    final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
+                RunSink(sink) => {
+                    final_sinks.insert(sink.id, sink);
                 }
-                AllowCompaction(updates) => final_compactions.extend(updates),
+                AllowCompaction(id, since) => {
+                    final_compactions.insert(id, since);
+                }
+                RunOneshotIngestion(oneshot) => {
+                    final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
+                }
+                CancelOneshotIngestion(uuid) => {
+                    final_oneshot_ingestions.remove(&uuid);
+                }
             }
         }
 
@@ -136,12 +134,11 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
         }
 
         // Discard sinks that have been dropped, advance the as-of of the rest.
-        for mut sink in final_sinks.into_values() {
+        for sink in final_sinks.into_values() {
             if let Some(frontier) = final_compactions.remove(&sink.id) {
                 if frontier.is_empty() {
                     continue;
                 }
-                sink.description.as_of = frontier;
             }
 
             run_sinks.push(sink);
@@ -153,49 +150,65 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
         // counts, as they would be observable by other threads. For example, we should not call
         // `metrics.reset()` here, since otherwise the command history would appear empty for a
         // brief amount of time.
+        let command_counts = &self.metrics.command_counts;
 
-        let count = u64::from(create_timely_command.is_some());
-        self.metrics.create_timely_count.set(count);
-        if let Some(create_timely_command) = create_timely_command {
-            self.commands.push(create_timely_command);
+        let count = u64::from(hello_command.is_some());
+        command_counts.hello.set(count);
+        if let Some(hello) = hello_command {
+            self.commands.push(hello);
         }
 
         let count = u64::from(!final_configuration.all_unset());
-        self.metrics.update_configuration_count.set(count);
+        command_counts.update_configuration.set(count);
         if !final_configuration.all_unset() {
+            let config = Box::new(final_configuration);
             self.commands
-                .push(StorageCommand::UpdateConfiguration(final_configuration));
+                .push(StorageCommand::UpdateConfiguration(config));
         }
 
         let count = u64::cast_from(run_ingestions.len());
-        self.metrics.run_ingestions_count.set(count);
-        if !run_ingestions.is_empty() {
-            self.commands
-                .push(StorageCommand::RunIngestions(run_ingestions));
+        command_counts.run_ingestion.set(count);
+        for ingestion in run_ingestions {
+            self.commands.push(StorageCommand::RunIngestion(ingestion));
         }
 
         let count = u64::cast_from(run_sinks.len());
-        self.metrics.run_ingestions_count.set(count);
-        if !run_sinks.is_empty() {
-            self.commands.push(StorageCommand::RunSinks(run_sinks));
+        command_counts.run_sink.set(count);
+        for sink in run_sinks {
+            self.commands.push(StorageCommand::RunSink(sink));
         }
 
+        // Note: RunOneshotIngestion commands are reduced, as we receive
+        // CancelOneshotIngestion commands.
+        let count = u64::cast_from(final_oneshot_ingestions.len());
+        command_counts.run_oneshot_ingestion.set(count);
+        for ingestion in final_oneshot_ingestions.into_values() {
+            self.commands
+                .push(StorageCommand::RunOneshotIngestion(ingestion));
+        }
+
+        command_counts.cancel_oneshot_ingestion.set(0);
+
         let count = u64::cast_from(allow_compaction.len());
-        self.metrics.allow_compaction_count.set(count);
-        if !allow_compaction.is_empty() {
-            let updates = allow_compaction.into_iter().collect();
-            self.commands.push(StorageCommand::AllowCompaction(updates));
+        command_counts.allow_compaction.set(count);
+        for (id, since) in allow_compaction {
+            self.commands
+                .push(StorageCommand::AllowCompaction(id, since));
         }
 
         let count = u64::from(initialization_complete);
-        self.metrics.initialization_complete_count.set(count);
+        command_counts.initialization_complete.set(count);
         if initialization_complete {
             self.commands.push(StorageCommand::InitializationComplete);
         }
 
+        let count = u64::from(allow_writes);
+        command_counts.allow_writes.set(count);
         if allow_writes {
             self.commands.push(StorageCommand::AllowWrites);
         }
+
+        self.reduced_count = self.commands.len();
     }
 }
 
@@ -203,10 +216,11 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 mod tests {
     use std::str::FromStr;
 
+    use mz_cluster_client::metrics::ControllerMetrics;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
-    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationType};
+    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlRelationType};
     use mz_storage_client::client::{RunIngestionCommand, RunSinkCommand};
     use mz_storage_client::metrics::StorageControllerMetrics;
     use mz_storage_types::connections::inline::InlinedConnection;
@@ -215,8 +229,7 @@ mod tests {
     use mz_storage_types::instances::StorageInstanceId;
     use mz_storage_types::sinks::{
         KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
-        KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
-        StorageSinkConnection, StorageSinkDesc,
+        KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
     };
     use mz_storage_types::sources::load_generator::{
         LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
@@ -229,10 +242,11 @@ mod tests {
 
     use super::*;
 
-    fn history() -> CommandHistory<u64> {
+    fn history() -> CommandHistory {
         let registry = MetricsRegistry::new();
-        let metrics = StorageControllerMetrics::new(registry)
-            .for_instance(StorageInstanceId::System(0))
+        let controller_metrics = ControllerMetrics::new(&registry);
+        let metrics = StorageControllerMetrics::new(&registry, controller_metrics)
+            .for_instance(StorageInstanceId::system(0).expect("0 is a valid ID"))
             .for_history();
 
         CommandHistory::new(metrics)
@@ -254,11 +268,9 @@ mod tests {
                             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                         },
-                        remap_shard: Default::default(),
                         data_shard: Default::default(),
-                        status_shard: Default::default(),
                         relation_desc: RelationDesc::new(
-                            RelationType {
+                            SqlRelationType {
                                 column_types: Default::default(),
                                 keys: Default::default(),
                             },
@@ -278,30 +290,26 @@ mod tests {
             })
             .collect();
 
+        let connection = GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::Auction,
+            tick_micros: Default::default(),
+            as_of: Default::default(),
+            up_to: Default::default(),
+        });
+
         IngestionDescription {
             desc: SourceDesc {
-                connection: GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::Auction,
-                    tick_micros: Default::default(),
-                    as_of: Default::default(),
-                    up_to: Default::default(),
-                }),
-                primary_export: Some(SourceExportDataConfig {
-                    encoding: Default::default(),
-                    envelope: SourceEnvelope::CdcV2,
-                }),
+                connection,
                 timestamp_interval: Default::default(),
             },
-            ingestion_metadata: CollectionMetadata {
+            remap_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -310,16 +318,16 @@ mod tests {
                 txns_shard: Default::default(),
             },
             source_exports,
-            instance_id: StorageInstanceId::System(0),
+            instance_id: StorageInstanceId::system(0).expect("0 is a valid ID"),
             remap_collection_id: GlobalId::User(remap_collection_id),
         }
     }
 
-    fn sink_description() -> StorageSinkDesc<MetadataFilled, u64> {
+    fn sink_description() -> StorageSinkDesc<CollectionMetadata> {
         StorageSinkDesc {
             from: GlobalId::System(1),
             from_desc: RelationDesc::new(
-                RelationType {
+                SqlRelationType {
                     column_types: Default::default(),
                     keys: Default::default(),
                 },
@@ -344,7 +352,7 @@ mod tests {
                 key_desc_and_indices: Default::default(),
                 headers_index: Default::default(),
                 value_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -358,22 +366,18 @@ mod tests {
                 transactional_id: KafkaIdStyle::Legacy,
                 topic_metadata_refresh_interval: Default::default(),
             }),
-            partition_strategy: SinkPartitionStrategy::V1,
             with_snapshot: Default::default(),
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
-            as_of: Antichain::from_elem(0),
-            status_id: Default::default(),
+            as_of: Antichain::from_elem(0.into()),
             from_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -381,6 +385,22 @@ mod tests {
                 ),
                 txns_shard: Default::default(),
             },
+            to_storage_metadata: CollectionMetadata {
+                persist_location: PersistLocation {
+                    blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                },
+                data_shard: Default::default(),
+                relation_desc: RelationDesc::new(
+                    SqlRelationType {
+                        column_types: Default::default(),
+                        keys: Default::default(),
+                    },
+                    Vec::<String>::new(),
+                ),
+                txns_shard: Default::default(),
+            },
+            commit_interval: Default::default(),
         }
     }
 
@@ -389,15 +409,13 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::new()),
-                (GlobalId::User(2), Antichain::new()),
-                (GlobalId::User(3), Antichain::new()),
-            ]),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -415,15 +433,13 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-                (GlobalId::User(3), Antichain::from_elem(3)),
-            ]),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3.into())),
         ];
 
         for cmd in commands.clone() {
@@ -441,11 +457,11 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(2), Antichain::new())]),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 
         for cmd in commands.clone() {
@@ -463,11 +479,11 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_description(),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -486,11 +502,11 @@ mod tests {
 
         let sink_desc = sink_description();
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(Box::new(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::from_elem(42))]),
+            })),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42.into())),
         ];
 
         for cmd in commands {
@@ -501,14 +517,10 @@ mod tests {
 
         let commands_after: Vec<_> = history.iter().cloned().collect();
 
-        let expected_sink_desc = StorageSinkDesc {
-            as_of: Antichain::from_elem(42),
-            ..sink_desc
-        };
-        let expected_commands = [StorageCommand::RunSinks(vec![RunSinkCommand {
+        let expected_commands = [StorageCommand::RunSink(Box::new(RunSinkCommand {
             id: GlobalId::User(1),
-            description: expected_sink_desc,
-        }])];
+            description: sink_desc,
+        }))];
 
         assert_eq!(commands_after, expected_commands);
     }
@@ -518,11 +530,9 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(2), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-            ]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(1.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2.into())),
         ];
 
         for cmd in commands {

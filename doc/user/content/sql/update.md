@@ -16,7 +16,7 @@ UPDATE <table_name> [ AS <table_alias> ]
 [WHERE <condition(s)> ];
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **AS** <table_alias>          | If specified, you can only use the alias to refer to the table within that `UPDATE` statement.
 **WHERE** <condition(s)>      | If specified, only update rows that meet the condition(s).
@@ -26,7 +26,8 @@ Option                        | Description
 ### Known limitations
 
 * `UPDATE` cannot be used inside [transactions](../begin).
-* `UPDATE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* `UPDATE` can reference [read-write tables](../create-table) but not
+  [sources](../create-source) or read-only tables.
 * **Low performance.** While processing an `UPDATE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
 

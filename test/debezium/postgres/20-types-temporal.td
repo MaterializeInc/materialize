@@ -19,6 +19,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTAMP);
 ALTER TABLE temporal_types REPLICA IDENTITY FULL;
 INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 11:11:11.123456');
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -26,12 +27,14 @@ INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE temporal_types
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.temporal_types');
 
 > CREATE TABLE temporal_types_tbl FROM SOURCE temporal_types (REFERENCE "postgres.public.temporal_types")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM temporal_types_tbl;
 2011-11-11 11:11:11.123456 "2011-11-11 11:11:11.123456"

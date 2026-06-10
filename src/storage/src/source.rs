@@ -27,16 +27,18 @@
 
 use crate::source::types::SourceMessage;
 
+mod probe;
+pub(crate) mod reclock;
+mod source_reader_pipeline;
+pub mod types;
+
 pub mod generator;
 mod kafka;
 mod mysql;
 mod postgres;
-pub(crate) mod reclock;
-mod source_reader_pipeline;
-mod statistics;
-pub mod types;
+mod sql_server;
 
 pub use kafka::KafkaSourceReader;
 pub use source_reader_pipeline::{
-    create_raw_source, RawSourceCreationConfig, SourceExportCreationConfig,
+    RawSourceCreationConfig, SourceExportCreationConfig, create_raw_source,
 };

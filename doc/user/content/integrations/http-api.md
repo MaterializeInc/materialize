@@ -4,7 +4,7 @@ description: "How to use Materialize via HTTP"
 menu:
   main:
     parent: "integrations"
-    weight: 25
+    weight: 50
     name: "HTTP API"
 ---
 

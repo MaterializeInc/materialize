@@ -1,0 +1,22 @@
+columns:
+  - column: Organization role
+  - column: Description
+
+rows:
+  - Organization role: "**Organization Admin**"
+    Description: |-
+      - **Console access**: Has access to all Materialize console
+      features, including administrative features (e.g., invite users, create
+      service accounts, manage billing, and organization settings).
+
+      - **Database access**: Has <red>**superuser**</red> privileges in the database.
+
+  - Organization role: "**Organization Member**"
+    Description: |-
+      - **Console access**: Has no access to Materialize console
+        administrative features.
+
+      - **Database access**: Inherits role-level privileges defined by
+        the `PUBLIC` role; may also have additional privileges via grants or
+        default privileges. See [Access control
+        control](/security/cloud/access-control/#roles-and-privileges).

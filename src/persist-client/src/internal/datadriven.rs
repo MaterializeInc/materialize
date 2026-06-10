@@ -104,6 +104,7 @@ impl<'a> DirectiveArgs<'a> {
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
+                        meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
                         structured_key_lower: None,
@@ -112,6 +113,7 @@ impl<'a> DirectiveArgs<'a> {
                         diffs_sum: None,
                         format: None,
                         schema_id: None,
+                        deprecated_schema_id: None,
                     }))
                 })
                 .collect(),
@@ -159,24 +161,26 @@ mod tests {
         datadriven::walk("tests/trace", |f| {
             println!("running datadriven file: {}", f.filename);
             let mut state = trace_dd::TraceState::default();
-            f.run(move |tc| -> String {
-                let args = DirectiveArgs {
-                    args: &tc.args,
-                    input: &tc.input,
-                };
-                let res = match tc.directive.as_str() {
-                    "apply-merge-res" => trace_dd::apply_merge_res(&mut state, args),
-                    "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
-                    "push-batch" => trace_dd::insert(&mut state, args),
-                    "since-upper" => trace_dd::since_upper(&state, args),
-                    "spine-batches" => trace_dd::batches(&state, args),
-                    "take-merge-reqs" => trace_dd::take_merge_req(&mut state, args),
-                    _ => panic!("unknown directive {:?}", tc),
-                };
-                match res {
-                    Ok(x) if x.is_empty() => "<empty>\n".into(),
-                    Ok(x) => x,
-                    Err(err) => format!("error: {:?}\n", err),
+            f.run({
+                move |tc| -> String {
+                    let args = DirectiveArgs {
+                        args: &tc.args,
+                        input: &tc.input,
+                    };
+                    let res = match tc.directive.as_str() {
+                        "apply-merge-res" => trace_dd::apply_merge_res(&mut state, args),
+                        "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
+                        "push-batch" => trace_dd::insert(&mut state, args),
+                        "since-upper" => trace_dd::since_upper(&state, args),
+                        "spine-batches" => trace_dd::batches(&state, args),
+                        "take-merge-reqs" => trace_dd::take_merge_req(&mut state, args),
+                        _ => panic!("unknown directive {:?}", tc),
+                    };
+                    match res {
+                        Ok(x) if x.is_empty() => "<empty>\n".into(),
+                        Ok(x) => x,
+                        Err(err) => format!("error: {:?}\n", err),
+                    }
                 }
             })
         });
@@ -187,98 +191,110 @@ mod tests {
     async fn machine(dyncfgs: ConfigUpdates) {
         use crate::internal::machine::datadriven as machine_dd;
 
-        ::datadriven::walk_async("tests/machine", |mut f| {
-            let initial_state_fut = machine_dd::MachineState::new(&dyncfgs);
-            async move {
-                println!("running datadriven file: {}", f.filename);
-                let state = Arc::new(Mutex::new(initial_state_fut.await));
-                f.run_async(move |tc| {
-                    let state = Arc::clone(&state);
-                    async move {
-                        let args = DirectiveArgs {
-                            args: &tc.args,
-                            input: &tc.input,
-                        };
-                        let mut state = state.lock().await;
-                        let res = match tc.directive.as_str() {
-                            "add-rollup" => machine_dd::add_rollup(&mut state, args).await,
-                            "apply-merge-res" => {
-                                machine_dd::apply_merge_res(&mut state, args).await
+        ::datadriven::walk_async_exclusive(
+            "tests/machine",
+            |mut f| {
+                let initial_state_fut = machine_dd::MachineState::new(&dyncfgs);
+                async move {
+                    println!("running datadriven file: {}", f.filename);
+                    let state = Arc::new(Mutex::new(initial_state_fut.await));
+                    f.run_async(move |tc| {
+                        let state = Arc::clone(&state);
+                        async move {
+                            let args = DirectiveArgs {
+                                args: &tc.args,
+                                input: &tc.input,
+                            };
+                            let mut state = state.lock().await;
+                            let res = match tc.directive.as_str() {
+                                "add-rollup" => machine_dd::add_rollup(&mut state, args).await,
+                                "apply-merge-res" => {
+                                    machine_dd::apply_merge_res(&mut state, args).await
+                                }
+                                "blob-scan-batches" => {
+                                    machine_dd::blob_scan_batches(&state, args).await
+                                }
+                                "clear-blob" => machine_dd::clear_blob(&state, args).await,
+                                "compact" => machine_dd::compact(&mut state, args).await,
+                                "compare-and-append" => {
+                                    machine_dd::compare_and_append(&mut state, args).await
+                                }
+                                "compare-and-append-batches" => {
+                                    machine_dd::compare_and_append_batches(&state, args).await
+                                }
+                                "compare-and-downgrade-since" => {
+                                    machine_dd::compare_and_downgrade_since(&mut state, args).await
+                                }
+                                "consensus-scan" => machine_dd::consensus_scan(&state, args).await,
+                                "consensus-truncate" => {
+                                    machine_dd::consensus_truncate(&state, args).await
+                                }
+                                "downgrade-since" => {
+                                    machine_dd::downgrade_since(&mut state, args).await
+                                }
+                                "dyncfg" => machine_dd::dyncfg(&state, args).await,
+                                "expire-critical-reader" => {
+                                    machine_dd::expire_critical_reader(&mut state, args).await
+                                }
+                                "expire-leased-reader" => {
+                                    machine_dd::expire_leased_reader(&mut state, args).await
+                                }
+                                "expire-writer" => {
+                                    machine_dd::expire_writer(&mut state, args).await
+                                }
+                                "fetch-batch" => machine_dd::fetch_batch(&state, args).await,
+                                "finalize" => machine_dd::finalize(&mut state, args).await,
+                                "gc" => machine_dd::gc(&mut state, args).await,
+                                "is-finalized" => machine_dd::is_finalized(&state, args),
+                                "listen-through" => {
+                                    machine_dd::listen_through(&mut state, args).await
+                                }
+                                "perform-maintenance" => {
+                                    machine_dd::perform_maintenance(&mut state, args).await
+                                }
+                                "register-critical-reader" => {
+                                    machine_dd::register_critical_reader(&mut state, args).await
+                                }
+                                "register-listen" => {
+                                    machine_dd::register_listen(&mut state, args).await
+                                }
+                                "register-leased-reader" => {
+                                    machine_dd::register_leased_reader(&mut state, args).await
+                                }
+                                "restore-blob" => machine_dd::restore_blob(&state, args).await,
+                                "rewrite-ts" => machine_dd::rewrite_ts(&mut state, args).await,
+                                "set-batch-parts-size" => {
+                                    machine_dd::set_batch_parts_size(&mut state, args).await
+                                }
+                                "shard-desc" => machine_dd::shard_desc(&state, args).await,
+                                "snapshot" => machine_dd::snapshot(&state, args).await,
+                                "truncate-batch-desc" => {
+                                    machine_dd::truncate_batch_desc(&mut state, args).await
+                                }
+                                "write-batch" => machine_dd::write_batch(&mut state, args).await,
+                                "write-rollup" => machine_dd::write_rollup(&mut state, args).await,
+                                _ => panic!("unknown directive {:?}", tc),
+                            };
+                            match res {
+                                Ok(x) if x.is_empty() => "<empty>\n".into(),
+                                Ok(x) => x,
+                                Err(err) => format!("error: {}\n", err),
                             }
-                            "blob-scan-batches" => {
-                                machine_dd::blob_scan_batches(&state, args).await
-                            }
-                            "clear-blob" => machine_dd::clear_blob(&state, args).await,
-                            "compact" => machine_dd::compact(&mut state, args).await,
-                            "compare-and-append" => {
-                                machine_dd::compare_and_append(&mut state, args).await
-                            }
-                            "compare-and-append-batches" => {
-                                machine_dd::compare_and_append_batches(&state, args).await
-                            }
-                            "compare-and-downgrade-since" => {
-                                machine_dd::compare_and_downgrade_since(&mut state, args).await
-                            }
-                            "consensus-scan" => machine_dd::consensus_scan(&state, args).await,
-                            "consensus-truncate" => {
-                                machine_dd::consensus_truncate(&state, args).await
-                            }
-                            "downgrade-since" => {
-                                machine_dd::downgrade_since(&mut state, args).await
-                            }
-                            "dyncfg" => machine_dd::dyncfg(&state, args).await,
-                            "expire-critical-reader" => {
-                                machine_dd::expire_critical_reader(&mut state, args).await
-                            }
-                            "expire-leased-reader" => {
-                                machine_dd::expire_leased_reader(&mut state, args).await
-                            }
-                            "expire-writer" => machine_dd::expire_writer(&mut state, args).await,
-                            "fetch-batch" => machine_dd::fetch_batch(&state, args).await,
-                            "finalize" => machine_dd::finalize(&mut state, args).await,
-                            "gc" => machine_dd::gc(&mut state, args).await,
-                            "heartbeat-leased-reader" => {
-                                machine_dd::heartbeat_leased_reader(&state, args).await
-                            }
-                            "is-finalized" => machine_dd::is_finalized(&state, args),
-                            "listen-through" => machine_dd::listen_through(&mut state, args).await,
-                            "perform-maintenance" => {
-                                machine_dd::perform_maintenance(&mut state, args).await
-                            }
-                            "register-critical-reader" => {
-                                machine_dd::register_critical_reader(&mut state, args).await
-                            }
-                            "register-listen" => {
-                                machine_dd::register_listen(&mut state, args).await
-                            }
-                            "register-leased-reader" => {
-                                machine_dd::register_leased_reader(&mut state, args).await
-                            }
-                            "restore-blob" => machine_dd::restore_blob(&state, args).await,
-                            "rewrite-ts" => machine_dd::rewrite_ts(&mut state, args).await,
-                            "set-batch-parts-size" => {
-                                machine_dd::set_batch_parts_size(&mut state, args).await
-                            }
-                            "shard-desc" => machine_dd::shard_desc(&state, args).await,
-                            "snapshot" => machine_dd::snapshot(&state, args).await,
-                            "truncate-batch-desc" => {
-                                machine_dd::truncate_batch_desc(&mut state, args).await
-                            }
-                            "write-batch" => machine_dd::write_batch(&mut state, args).await,
-                            "write-rollup" => machine_dd::write_rollup(&mut state, args).await,
-                            _ => panic!("unknown directive {:?}", tc),
-                        };
-                        match res {
-                            Ok(x) if x.is_empty() => "<empty>\n".into(),
-                            Ok(x) => x,
-                            Err(err) => format!("error: {}\n", err),
                         }
-                    }
-                })
-                .await;
-                f
-            }
-        })
+                    })
+                    .await;
+                    f
+                }
+            },
+            |f| {
+                // Return true iff we want to _exclude_ the given file.
+                let Ok(filter) = std::env::var("DATADRIVEN_FILTER") else {
+                    return false;
+                };
+                let filter_matches = f.filename.contains(&filter);
+                !filter_matches
+            },
+        )
         .await;
     }
 }

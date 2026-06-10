@@ -11,7 +11,7 @@
 
 use mz_repr::explain::ExplainConfig;
 
-use crate::{try_parse_def, try_parse_mir, Def, TestCatalog};
+use crate::{Def, TestCatalog, try_parse_def, try_parse_mir};
 
 pub fn handle_define(catalog: &mut TestCatalog, input: &str) -> String {
     // Parse the relation, returning early on parse error.
@@ -29,7 +29,7 @@ pub fn handle_define(catalog: &mut TestCatalog, input: &str) -> String {
 
 pub fn handle_roundtrip(catalog: &TestCatalog, input: &str) -> String {
     let output = match try_parse_mir(catalog, input) {
-        Ok(expr) => expr.explain(&ExplainConfig::default(), Some(catalog)),
+        Ok(expr) => expr.debug_explain(&ExplainConfig::default(), Some(catalog)),
         Err(err) => return err,
     };
 

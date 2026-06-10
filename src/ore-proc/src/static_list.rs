@@ -17,11 +17,11 @@ use std::collections::VecDeque;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Punct, Spacing, TokenStream as TokenStream2};
-use quote::{quote, ToTokens, TokenStreamExt};
+use quote::{ToTokens, TokenStreamExt, quote};
 use syn::parse::Parse;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Error, Ident, Item, ItemMod, LitInt, LitStr, Token, Type, Visibility,
+    Error, Ident, Item, ItemMod, LitInt, LitStr, Token, Type, Visibility, parse_macro_input,
 };
 
 /// Implementation for the `#[static_list]` macro.
@@ -148,7 +148,7 @@ fn collect_items<'i, 't>(
             }
             Item::Mod(nested_item_mod) => {
                 let nested_items = collect_items(nested_item_mod, expected_ty)?;
-                static_items.extend(nested_items.into_iter());
+                static_items.extend(nested_items);
             }
             _ => (),
         }

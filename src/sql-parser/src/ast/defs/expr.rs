@@ -20,6 +20,7 @@
 
 use std::{fmt, mem};
 
+use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_sql_lexer::keywords::*;
 
@@ -33,7 +34,8 @@ use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expr<T: AstInfo> {
-    /// Identifier e.g. table name or column name
+    /// Identifier e.g. table name or column name. The parser always
+    /// constructs this with a non-empty `Vec`.
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     QualifiedWildcard(Vec<Ident>),
@@ -321,34 +323,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
             }
             Expr::Cast { expr, data_type } => {
-                // We are potentially rewriting an expression like
-                //     CAST(<expr> OP <expr> AS <type>)
-                // to
-                //     <expr> OP <expr>::<type>
-                // which could incorrectly change the meaning of the expression
-                // as the `::` binds tightly. To be safe, we wrap the inner
-                // expression in parentheses
-                //    (<expr> OP <expr>)::<type>
-                // unless the inner expression is of a type that we know is
-                // safe to follow with a `::` to without wrapping.
-                let needs_wrap = !matches!(
-                    **expr,
-                    Expr::Nested(_)
-                        | Expr::Value(_)
-                        | Expr::Cast { .. }
-                        | Expr::Function { .. }
-                        | Expr::Identifier { .. }
-                        | Expr::Collate { .. }
-                        | Expr::HomogenizingFunction { .. }
-                        | Expr::NullIf { .. }
-                );
-                if needs_wrap {
-                    f.write_str('(');
-                }
                 f.write_node(&expr);
-                if needs_wrap {
-                    f.write_str(')');
-                }
                 f.write_str("::");
                 f.write_node(data_type);
             }
@@ -395,7 +370,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str(" ");
                     f.write_node(&operand);
                 }
-                for (c, r) in conditions.iter().zip(results) {
+                for (c, r) in conditions.iter().zip_eq(results) {
                     f.write_str(" WHEN ");
                     f.write_node(c);
                     f.write_str(" THEN ");
@@ -925,7 +900,7 @@ impl<T: AstInfo> FunctionArgs<T> {
         };
         soft_assert_eq_or_log!(args.len(), kws.len());
         let mut delim = "";
-        for (arg, kw) in args.iter().zip(kws) {
+        for (arg, kw) in args.iter().zip_eq(kws) {
             if let Some(kw) = kw {
                 f.write_str(delim);
                 f.write_str(kw.as_str());

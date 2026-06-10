@@ -54,7 +54,7 @@ v3 [2]
 # verify we have a new state that references both batches
 consensus-scan from_seqno=v3
 ----
-seqno=v3 batches=b0,b1 rollups=v1
+seqno=v3 batches=b0,b1 rollups=v0
 
 
 # run gc up to our latest seqno, but without introducing a new rollup.
@@ -64,14 +64,14 @@ gc to_seqno=v3
 v3 batch_parts=0 rollups=0 truncated= state_rollups=
 
 # verify that consensus has not changed
-consensus-scan from_seqno=v3
+consensus-scan from_seqno=v4
 ----
-seqno=v3 batches=b0,b1 rollups=v1
+<empty>
 
 # add a rollup
 write-rollup output=v3
 ----
-state=v3 diffs=[v2, v4)
+state=v3 diffs=[v1, v4)
 
 add-rollup input=v3
 ----
@@ -79,15 +79,15 @@ v4
 
 # run gc up to our latest seqno. gc should truncate up to the latest rollup
 # and introduce its own seqno (to remove the older rollup from state)
-gc to_seqno=v3
+gc to_seqno=v4
 ----
-v5 batch_parts=0 rollups=0 truncated=v3 state_rollups=v1
+v5 batch_parts=0 rollups=0 truncated=v3 state_rollups=v0
 
 # verify that gc removed all seqno less than the latest
 consensus-scan from_seqno=v0
 ----
-seqno=v3 batches=b0,b1 rollups=v1
-seqno=v4 batches=b0,b1 rollups=v1,v3
+seqno=v3 batches=b0,b1 rollups=v0
+seqno=v4 batches=b0,b1 rollups=v0,v3
 seqno=v5 batches=b0,b1 rollups=v3
 
 # insert another batch
@@ -97,8 +97,8 @@ v6 [3]
 
 consensus-scan from_seqno=v0
 ----
-seqno=v3 batches=b0,b1 rollups=v1
-seqno=v4 batches=b0,b1 rollups=v1,v3
+seqno=v3 batches=b0,b1 rollups=v0
+seqno=v4 batches=b0,b1 rollups=v0,v3
 seqno=v5 batches=b0,b1 rollups=v3
 seqno=v6 batches=b0,b1,b2 rollups=v3
 
@@ -119,8 +119,8 @@ v7 true
 # verify that we b0_1 has replaced b0 and b1 in latest state
 consensus-scan from_seqno=v0
 ----
-seqno=v3 batches=b0,b1 rollups=v1
-seqno=v4 batches=b0,b1 rollups=v1,v3
+seqno=v3 batches=b0,b1 rollups=v0
+seqno=v4 batches=b0,b1 rollups=v0,v3
 seqno=v5 batches=b0,b1 rollups=v3
 seqno=v6 batches=b0,b1,b2 rollups=v3
 seqno=v7 batches=b0_1,b2 rollups=v3
@@ -135,7 +135,7 @@ add-rollup input=v6_last_b0_b1_reference
 v8
 
 # run gc to clear only the b0,b1 seqnos
-gc to_seqno=v7
+gc to_seqno=v8
 ----
 v9 batch_parts=0 rollups=1 truncated=v6 state_rollups=v3
 
@@ -167,7 +167,7 @@ add-rollup input=v7
 ----
 v10
 
-gc to_seqno=v7
+gc to_seqno=v8
 ----
 v11 batch_parts=2 rollups=0 truncated=v7 state_rollups=v6
 

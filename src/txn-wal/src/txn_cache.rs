@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -33,9 +34,9 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
+use crate::TxnsCodecDefault;
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
-use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -407,7 +408,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
     }
 
     /// Returns the operations needing application as of the current progress.
-    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
+    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied<'_>, &T)> {
         assert_eq!(self.only_data_id, None);
         let registers = self
             .unapplied_registers
@@ -462,6 +463,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         // which is not what we want. If we ever expose an interface for
         // registering and committing to a data shard at the same
         // timestamp, this will also have to sort registrations first.
+        consolidate_updates(&mut entries);
         entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
         for (e, t, d) in entries {
             match e {
@@ -560,7 +562,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
             assert_eq!(times.last_reg().forget_ts, None);
-            times.writes.push_back(ts);
+
+            // Only add the timestamp if it's not already in the deque. We don't
+            // track all writes in this but track at what timestamps we have
+            // _any_ writes.
+            if times.writes.back() != Some(&ts) {
+                times.writes.push_back(ts);
+            }
         } else if diff == -1 {
             debug!(
                 "cache learned {:.9} applied t={:?} b={}",
@@ -943,10 +951,7 @@ where
                 continue;
             }
             let part_updates = txns_subscribe.fetch_batch_part(part).await;
-            let part_updates = part_updates.map(|((k, v), t, d)| {
-                let (k, v) = (k.expect("valid key"), v.expect("valid val"));
-                (C::decode(k, v), t, d)
-            });
+            let part_updates = part_updates.map(|((k, v), t, d)| (C::decode(k, v), t, d));
             if let Some(only_data_id) = only_data_id.as_ref() {
                 updates.extend(part_updates.filter(|(x, _, _)| x.data_id() == only_data_id));
             } else {
@@ -1118,10 +1123,10 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use DataListenNext::*;
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
-    use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
     use crate::tests::reader;
@@ -1155,10 +1160,7 @@ mod tests {
             snapshot.sort();
             snapshot
                 .into_iter()
-                .flat_map(|((k, v), _t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    std::iter::repeat(k).take(usize::try_from(d).unwrap())
-                })
+                .flat_map(|((k, ()), _t, d)| std::iter::repeat(k).take(usize::try_from(d).unwrap()))
                 .collect()
         }
 
@@ -1175,7 +1177,6 @@ mod tests {
                 data_id,
                 as_of,
                 Antichain::new(),
-                true,
             )
         }
     }
@@ -1219,7 +1220,9 @@ mod tests {
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_snapshot(d0, 0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_snapshot(d0, 0));
+        assert_err!(result);
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
@@ -1486,7 +1489,9 @@ mod tests {
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
-        assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));
+        #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+        let result = std::panic::catch_unwind(|| c.data_listen_next(&d0, &0));
+        assert_err!(result);
 
         let ds = c.data_snapshot(d0, 0);
         assert_eq!(

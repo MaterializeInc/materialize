@@ -12,7 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "materialize-operator.fullname" . }}
-  namespace: {{ .Values.namespace.name }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "materialize-operator.labels" . | nindent 4 }}
 spec:
@@ -25,10 +25,24 @@ spec:
       labels:
         {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
     spec:
+      shareProcessNamespace: true
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsUser: 65532
+        runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
       {{- if .Values.operator.nodeSelector }}
       nodeSelector:
         {{- toYaml .Values.operator.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.operator.affinity }}
+      affinity:
+        {{- toYaml .Values.operator.affinity | nindent 8 }}
+      {{- end }}
+      {{- if .Values.operator.tolerations }}
+      tolerations:
+        {{- toYaml .Values.operator.tolerations | nindent 8 }}
       {{- end }}
       containers:
       - name: {{ .Chart.Name }}
@@ -37,33 +51,50 @@ spec:
         args:
         - "--helm-chart-version={{ .Chart.Version }}"
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
-        - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
-        - "--region={{ .Values.operator.args.region }}"
+        - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
+        - "--region={{ .Values.operator.cloudProvider.region }}"
+        - "--secrets-controller={{ .Values.operator.secretsController }}"
+        # (SangJunBak) For self-managed, we disable statement logging due to performance issues
+        # https://github.com/MaterializeInc/cloud/issues/10755
+        - "--disable-statement-logging"
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
-        {{- if .Values.operator.args.awsAccountID }}
-        - "--aws-account-id={{ .Values.operator.args.awsAccountID }}"
+        {{- if .Values.operator.args.enableInternalStatementLogging }}
+        - "--enable-internal-statement-logging"
         {{- end }}
-        {{- if .Values.operator.args.environmentdIAMRoleARN }}
-        - "--environmentd-iam-role-arn={{ .Values.operator.args.environmentdIAMRoleARN }}"
+        {{- if not .Values.operator.args.enableLicenseKeyChecks }}
+        - "--disable-license-key-checks"
         {{- end }}
-        {{- if .Values.operator.args.environmentdConnectionRoleARN }}
-        - "--environmentd-connection-role-arn={{ .Values.operator.args.environmentdConnectionRoleARN }}"
+
+        {{/* AWS Configuration */}}
+        {{- if eq .Values.operator.cloudProvider.type "aws" }}
+        {{- with .Values.operator.cloudProvider.providers.aws }}
+        {{- if .accountID }}
+        - "--aws-account-id={{ .accountID }}"
         {{- end }}
-        {{- if .Values.operator.args.localDevelopment }}
-        - "--local-development"
+        {{- if .iam.roles.environment }}
+        - "--environmentd-iam-role-arn={{ .iam.roles.environment }}"
         {{- end }}
-        {{- if .Values.operator.args.createBalancers }}
+        {{- if .iam.roles.connection }}
+        - "--environmentd-connection-role-arn={{ .iam.roles.connection }}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
+        {{/* Feature Flags */}}
+        {{- if .Values.balancerd.enabled }}
         - "--create-balancers"
         {{- end }}
-        {{- if .Values.operator.args.createConsole }}
+        {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
-        - "--console-image-tag-default=25.1.0-beta.1"
-        {{- range $key, $value := .Values.operator.args.consoleImageTagMapOverride }}
+        - "--console-image-tag-default={{ .Values.operator.image.tag }}"
+        {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
+
+        {{/* Cluster Configuration */}}
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}
         - '--environmentd-cluster-replica-sizes={{ include "materialize.processClusterSizes" . | fromYaml | toJson }}'
@@ -86,33 +117,142 @@ spec:
         {{ if .Values.operator.clusters.defaultSizes.analytics }}
         - "--bootstrap-builtin-analytics-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.analytics }}"
         {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.system nil }}
+        - "--bootstrap-builtin-system-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.system }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.probe nil }}
+        - "--bootstrap-builtin-probe-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.probe }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.support nil }}
+        - "--bootstrap-builtin-support-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.support }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.analytics nil }}
+        - "--bootstrap-builtin-analytics-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.analytics }}"
+        {{- end }}
         {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
+        {{- if .Values.environmentd.nodeSelector }}
         {{- range $key, $value := .Values.environmentd.nodeSelector }}
         - "--environmentd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- end }}
+        {{- if .Values.environmentd.affinity }}
+        - '--environmentd-affinity={{ toJson .Values.environmentd.affinity }}'
+        {{- end }}
+        {{- if .Values.environmentd.tolerations }}
+        {{- range $toleration := .Values.environmentd.tolerations }}
+        - '--environmentd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.environmentd.defaultResources }}
+        - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
+        {{- end }}
+        {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.clusterd.affinity }}
+        - '--clusterd-affinity={{ toJson .Values.clusterd.affinity }}'
+        {{- end }}
+        {{- if .Values.clusterd.tolerations }}
+        {{- range $toleration := .Values.clusterd.tolerations }}
+        - '--clusterd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.balancerd.nodeSelector }}
+        {{- range $key, $value := .Values.balancerd.nodeSelector }}
+        - "--balancerd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.balancerd.affinity }}
+        - '--balancerd-affinity={{ toJson .Values.balancerd.affinity }}'
+        {{- end }}
+        {{- if .Values.balancerd.tolerations }}
+        {{- range $toleration := .Values.balancerd.tolerations }}
+        - '--balancerd-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.balancerd.defaultResources }}
+        - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
+        {{- end }}
+        {{- if .Values.console.nodeSelector }}
+        {{- range $key, $value := .Values.console.nodeSelector }}
+        - "--console-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.console.affinity }}
+        - '--console-affinity={{ toJson .Values.console.affinity }}'
+        {{- end }}
+        {{- if .Values.console.tolerations }}
+        {{- range $toleration := .Values.console.tolerations }}
+        - '--console-toleration={{ toJson $toleration }}'
+        {{- end }}
+        {{- end }}
+        {{- if .Values.console.defaultResources }}
+        - '--console-default-resources={{ toJson .Values.console.defaultResources }}'
         {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"
         {{- end }}
+
+        {{/* Network Policies */}}
         {{- if .Values.networkPolicies.enabled }}
         {{- if .Values.networkPolicies.internal.enabled }}
-        - "--network-policies-internal-enabled=true"
+        - "--network-policies-internal-enabled"
         {{- end }}
         {{- if .Values.networkPolicies.ingress.enabled }}
-        - "--network-policies-ingress-enabled=true"
+        - "--network-policies-ingress-enabled"
         {{- range $cidr := .Values.networkPolicies.ingress.cidrs }}
         - "--network-policies-ingress-cidrs={{$cidr}}"
         {{- end }}
         {{- end }}
         {{- if .Values.networkPolicies.egress.enabled }}
-        - "--network-policies-egress-enabled=true"
+        - "--network-policies-egress-enabled"
         {{- range $cidr := .Values.networkPolicies.egress.cidrs }}
         - "--network-policies-egress-cidrs={{$cidr}}"
         {{- end }}
         {{- end }}
         {{- end }}
+        {{- if .Values.tls.defaultCertificateSpecs }}
+        - '--default-certificate-specs={{ toJson .Values.tls.defaultCertificateSpecs }}'
+        {{- end }}
+        {{/* Observability */}}
+        {{- if .Values.observability.enabled }}
+        {{- if .Values.observability.podMetrics.enabled }}
+        - "--collect-pod-metrics"
+        {{- end }}
+        {{- if .Values.observability.prometheus.scrapeAnnotations.enabled }}
+        - "--enable-prometheus-scrape-annotations"
+        {{- end }}
+        {{- end }}
+        {{/* Telemetry */}}
+        {{- if .Values.telemetry.enabled }}
+        - "--segment-api-key={{ .Values.telemetry.segmentApiKey }}"
+        {{- if .Values.telemetry.segmentClientSide }}
+        - "--segment-client-side"
+        {{- end }}
+        {{- end }}
+        - "--enable-security-context"
+        {{- if .Values.schedulerName }}
+        - "--scheduler-name={{ .Values.schedulerName }}"
+        {{- end }}
+
+        {{- if .Values.operator.additionalMaterializeCRDColumns }}
+        - >
+          --additional-crd-columns={{ toJson .Values.operator.additionalMaterializeCRDColumns }}
+        {{- end }}
+        ports:
+        - containerPort: 3100
+          name: metrics
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault

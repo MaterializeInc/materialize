@@ -39,12 +39,58 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
-if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
-  pg_ctlcluster 16 main start
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS storage"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS adapter"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS tsoracle"
+is_truthy() {
+    if [[ "$1" == "0" || "$1" == "" || "$1" == "no" || "$1" == "false" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+if is_truthy "${MZ_EAT_MY_DATA:-0}"; then
+    export LD_PRELOAD="libeatmydata.so"
+else
+    unset LD_PRELOAD
+fi
+
+export PGUSER=root
+
+# Start PostgreSQL, unless suppressed.
+if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
+  PGDATA=/mzdata/postgres
+  export PGPORT=26257
+  export PGDATABASE=root
+
+  # Should exist already, but /mzdata might be overwritten with a fresh volume
+  if [ ! -f $PGDATA/PG_VERSION ]; then
+    mkdir -p $PGDATA
+    /usr/lib/postgresql/16/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
+  fi
+
+  # Might have been killed hard
+  rm -f $PGDATA/postmaster.pid
+  /usr/lib/postgresql/16/bin/postgres -D $PGDATA \
+      -c listen_addresses='*' \
+      -c unix_socket_directories=/var/run/postgresql \
+      -c config_file=/etc/postgresql/postgresql.conf > /mzdata/postgres/postgres.log 2>&1 &
+  PGPID=$!
+
+  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
+
+  until /usr/lib/postgresql/16/bin/pg_isready > /dev/null 2>&1; do
+    sleep 0.01
+  done
+
+  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" > /dev/null 2>&1 || true
+  psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
+           CREATE SCHEMA IF NOT EXISTS consensus; \
+           CREATE SCHEMA IF NOT EXISTS storage; \
+           CREATE SCHEMA IF NOT EXISTS adapter; \
+           CREATE SCHEMA IF NOT EXISTS tsoracle;"
+fi
+
+# Start nginx to serve the console.
+if ! is_truthy "${MZ_NO_BUILTIN_CONSOLE:-0}"; then
+  nginx &
 fi
 
 if [[ ! -f /mzdata/environment-id ]]; then
@@ -62,83 +108,119 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-# Ideally we'd want to use the local path, but this parameter is passed through to clusterd
-#export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
-export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257/?options=--search_path=consensus}
+if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+else
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
+fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
+export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
+export MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=${MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR:-0.0.0.0}
 export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
 
 # Supported replica sizes.
 export MZ_CLUSTER_REPLICA_SIZES=${MZ_CLUSTER_REPLICA_SIZES:-$(cat <<EOF
 {
   "25cc": {
+    "cpu_exclusive": false,
     "cpu_limit": 0.5,
     "credits_per_hour": "0.25",
+    "disk_limit": "7762MiB",
+    "memory_limit": "3881MiB",
     "scale": 1,
     "workers": 1
   },
   "50cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 1,
     "credits_per_hour": "0.5",
+    "disk_limit": "15525MiB",
+    "memory_limit": "7762MiB",
     "scale": 1,
     "workers": 1
   },
   "100cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 2,
     "credits_per_hour": "1",
+    "disk_limit": "31050MiB",
+    "memory_limit": "15525MiB",
     "scale": 1,
     "workers": 2
   },
   "200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 4,
     "credits_per_hour": "2",
+    "disk_limit": "62100MiB",
+    "memory_limit": "31050MiB",
     "scale": 1,
     "workers": 4
   },
   "300cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 6,
     "credits_per_hour": "3",
+    "disk_limit": "93150MiB",
+    "memory_limit": "46575MiB",
     "scale": 1,
     "workers": 6
   },
   "400cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 8,
     "credits_per_hour": "4",
+    "disk_limit": "124201MiB",
+    "memory_limit": "62100MiB",
     "scale": 1,
     "workers": 8
   },
   "600cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 12,
     "credits_per_hour": "6",
+    "disk_limit": "186301MiB",
+    "memory_limit": "93150MiB",
     "scale": 1,
     "workers": 12
   },
   "800cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 16,
     "credits_per_hour": "8",
+    "disk_limit": "248402MiB",
+    "memory_limit": "124201MiB",
     "scale": 1,
     "workers": 16
   },
   "1200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 24,
     "credits_per_hour": "12",
+    "disk_limit": "372603MiB",
+    "memory_limit": "186301MiB",
     "scale": 1,
     "workers": 24
   },
   "1600cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 31,
     "credits_per_hour": "16",
+    "disk_limit": "481280MiB",
+    "memory_limit": "240640MiB",
     "scale": 1,
     "workers": 31
   },
   "3200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 62,
     "credits_per_hour": "32",
+    "disk_limit": "962560MiB",
+    "memory_limit": "481280MiB",
     "scale": 1,
     "workers": 62
   }
@@ -146,19 +228,59 @@ export MZ_CLUSTER_REPLICA_SIZES=${MZ_CLUSTER_REPLICA_SIZES:-$(cat <<EOF
 EOF
 )}
 
-export MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE:-25cc}"
-export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
 
-if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
-    export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
-    export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_API_KEY:-true}
+if [ -z "${MZ_LISTENERS_CONFIG_PATH:-}" ]; then
+    if [ -z "${MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM:-}" ]; then
+        export MZ_LISTENERS_CONFIG_PATH="/listener_configs/no_auth.json"
+    else
+        export MZ_LISTENERS_CONFIG_PATH="/listener_configs/password.json"
+    fi
 fi
 
-if [ -n "${MZ_RESTART_ON_FAILURE:-}" ]; then
+CPUS=$(nproc)
+
+if (( CPUS >= 64 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="3200cc"
+elif (( CPUS >= 32 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="1600cc"
+elif (( CPUS >= 24 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="1200cc"
+elif (( CPUS >= 16 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="800cc"
+elif (( CPUS >= 12 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="600cc"
+elif (( CPUS >= 8 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="400cc"
+elif (( CPUS >= 6 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="300cc"
+elif (( CPUS >= 4 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="200cc"
+elif (( CPUS >= 2 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="100cc"
+else
+    DEFAULT_CLUSTER_REPLICA_SIZE="50cc"
+fi
+
+export MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE:-$DEFAULT_CLUSTER_REPLICA_SIZE}"
+DEFAULT_OTHER_CLUSTER_REPLICA_SIZE="25cc"
+export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+# Note(SangJunBak): We remove the mz_system cluster and mz_probe cluster for materialized to decrease the amount of memory needed for the Materialize emulator
+export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR:-0}"
+export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR:-0}"
+
+export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0;memory_limiter_interval=0}"
+
+
+if ! is_truthy "${MZ_NO_TELEMETRY:-0}"; then
+    export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
+    export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_CLIENT_SIDE:-true}
+fi
+
+if is_truthy "${MZ_RESTART_ON_FAILURE:-0}"; then
     for ((i = 0; i < ${MZ_RESTART_LIMIT:-9999999999}; i++)); do
         # Run `environmentd` inside of an `if` to avoid tripping `set -e`
         # behavior.

@@ -101,6 +101,7 @@ impl std::fmt::Display for Output {
 pub struct QueryOutput<'a> {
     pub types: Vec<Type>,
     pub sort: Sort,
+    pub multiline: bool,
     pub label: Option<&'a str>,
     pub column_names: Option<Vec<mz_repr::ColumnName>>,
     pub mode: Mode,
@@ -129,7 +130,9 @@ pub enum Record<'a> {
         location: Location,
         conn: Option<&'a str>,
         user: Option<&'a str>,
+        password: Option<&'a str>,
         sql: &'a str,
+        sort: Sort,
         output: Output,
         output_str: &'a str,
     },

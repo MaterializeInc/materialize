@@ -23,9 +23,10 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::Visit;
-use mz_expr::{BinaryFunc, VariadicFunc};
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
+use mz_repr::ReprRelationType;
 
 use crate::analysis::equivalences::EquivalenceClasses;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -40,12 +41,16 @@ use crate::{TransformCtx, TransformError};
 pub struct Join;
 
 impl crate::Transform for Join {
+    fn name(&self) -> &'static str {
+        "JoinFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "join_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -91,7 +96,7 @@ impl Join {
             // Local non-fusion tidying.
             inputs.retain(|e| !e.is_constant_singleton());
             if inputs.len() == 0 {
-                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
+                *relation = MirRelationExpr::constant(vec![vec![]], ReprRelationType::empty())
                     .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
@@ -172,7 +177,7 @@ impl Join {
                             // the applied map elements will be at the end, starting at `outer_arity`.
                             for expr in map.iter_mut() {
                                 expr.visit_pre_mut(|e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         if *c >= mfp.input_arity {
                                             *c -= mfp.input_arity;
                                             *c += outer_arity;
@@ -184,7 +189,7 @@ impl Join {
                             }
                             for expr in filter.iter_mut() {
                                 expr.visit_pre_mut(|e| {
-                                    if let MirScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c, _) = e {
                                         if *c >= mfp.input_arity {
                                             *c -= mfp.input_arity;
                                             *c += outer_arity;
@@ -229,7 +234,7 @@ impl Join {
                 let (map, filter, project) = outer_mfp.as_map_filter_project();
 
                 *relation = match new_inputs.len() {
-                    0 => MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty()),
+                    0 => MirRelationExpr::constant(vec![vec![]], ReprRelationType::empty()),
                     1 => new_inputs.pop().unwrap(),
                     _ => MirRelationExpr::join(new_inputs, Vec::new()),
                 }
@@ -261,20 +266,20 @@ fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarE
         // TODO: In the long term, we might want to call the entire `EquivalenceClasses::minimize`.
         class.sort_by(EquivalenceClasses::mir_scalar_expr_complexity);
         for expr in class[1..].iter() {
-            result.push(MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: vec![
+            result.push(MirScalarExpr::call_variadic(
+                Or,
+                vec![
                     MirScalarExpr::CallBinary {
-                        func: BinaryFunc::Eq,
+                        func: mz_expr::func::Eq.into(),
                         expr1: Box::new(class[0].clone()),
                         expr2: Box::new(expr.clone()),
                     },
                     MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
+                        func: And.into(),
                         exprs: vec![class[0].clone().call_is_null(), expr.clone().call_is_null()],
                     },
                 ],
-            });
+            ));
         }
     }
     result

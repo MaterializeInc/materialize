@@ -13,9 +13,6 @@ sources:
   - name: tpch
     schema: public_tpch
     tables:
-      - name: tpch_progress
-        data_tests:
-          - makes_progress
       - name: tpch_customer
       - name: tpch_lineitem
       - name: tpch_orders

@@ -10,11 +10,8 @@
 import argparse
 import sys
 
-import boto3
-from mypy_boto3_ec2.type_defs import FilterTypeDef
-
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import print_instances, ui, whoami
+from materialize.cli.scratch import get_instance, list_all_instances, pick_instance
+from materialize.scratch import print_instances, ui
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -38,36 +35,28 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    check_required_vars()
-    instance_ids = []
-    filters: list[FilterTypeDef] = [
-        {
-            "Name": "instance-state-name",
-            "Values": ["pending", "running", "stopping", "stopped"],
-        }
-    ]
-    if args.all_mine:
-        if args.instances:
-            print(
-                "scratch: error: cannot specify --all-mine and instance IDs",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        filters.append({"Name": "tag:LaunchedBy", "Values": [whoami()]})
-    elif not args.instances:
+    if args.all_mine and args.instances:
         print(
-            "scratch: error: must supply at least one instance ID to destroy",
+            "scratch: error: cannot specify --all-mine and instance IDs",
             file=sys.stderr,
         )
         sys.exit(1)
-    else:
-        instance_ids.extend(args.instances)
 
-    instances = list(
-        boto3.resource("ec2").instances.filter(
-            Filters=filters, InstanceIds=instance_ids
-        )
-    )
+    if args.all_mine:
+        instances = [
+            i
+            for i in list_all_instances()
+            if i.state
+            and i.state["Name"] in ("pending", "running", "stopping", "stopped")
+        ]
+    elif args.instances:
+        instances = [get_instance(id) for id in args.instances]
+    else:
+        instances = [pick_instance()]
+
+    if not instances:
+        print("No instances to destroy.")
+        return
 
     print("Destroying instances:")
     print_instances(instances, args.output_format)

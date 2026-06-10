@@ -36,7 +36,7 @@ FROM (SELECT DISTINCT ON(x) * FROM t_using_dataflow_rendering);
 17  360  28.9808917197452229299363057324840764331  5.41401273885350318471337579617834394904
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   x,
   sum(sum(x) OVER (ORDER BY x)) OVER (ORDER BY x),
@@ -47,12 +47,12 @@ FROM (SELECT DISTINCT ON(x) * FROM t_using_dataflow_rendering);
 Explained Query:
   Project (#3, #6, #5, #4)
     Map (record_get[1](#1), record_get[0](#2), record_get[3](#2), record_get[4](#2), record_get[0](#1))
-      FlatMap unnest_list(#0)
+      FlatMap unnest_list(#0{window_agg})
         Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0)), record_get[2](record_get[0](#0))), record_get[2](record_get[0](#0))), record_get[0](record_get[1](#0))))]
           Project (#1)
-            FlatMap unnest_list(#0)
-              Reduce aggregates=[fused_window_agg(row(row(row(#0, #1), row((integer_to_numeric(#0) / 3.14), (integer_to_numeric(#0) / 3.14), #0)), #0))]
-                TopK group_by=[#0] limit=1
+            FlatMap unnest_list(#0{fused_window_agg})
+              Reduce aggregates=[fused_window_agg(row(row(row(#0{x}, #1{y}), row((integer_to_numeric(#0{x}) / 3.14), (integer_to_numeric(#0{x}) / 3.14), #0{x})), #0{x}))]
+                TopK group_by=[#0{x}] limit=1
                   ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering

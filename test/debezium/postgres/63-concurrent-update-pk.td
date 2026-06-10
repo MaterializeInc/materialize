@@ -16,6 +16,7 @@ CREATE TABLE concurrent_update_pk (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE concurrent_update_pk REPLICA IDENTITY FULL;
 INSERT INTO concurrent_update_pk VALUES (1, 10);
 INSERT INTO concurrent_update_pk VALUES (2, 20);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.concurrent_update_pk
 
@@ -25,12 +26,14 @@ $ schema-registry-wait topic=postgres.public.concurrent_update_pk
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE concurrent_update_pk
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update_pk');
 
 > CREATE TABLE concurrent_update_pk_tbl FROM SOURCE concurrent_update_pk (REFERENCE "postgres.public.concurrent_update_pk")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres
 

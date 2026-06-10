@@ -14,10 +14,10 @@ statement.
 ## Syntax
 
 ```mzsql
-SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ]
+SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ];
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **FROM** <schema_name>        | If specified, only show secrets from the specified schema.  Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **LIKE** \<pattern\>          | If specified, only show secrets whose name matches the pattern.

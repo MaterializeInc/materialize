@@ -14,6 +14,8 @@ from textwrap import dedent
 from time import sleep
 from typing import Any, cast
 
+from materialize.util import filter_cmd
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -119,13 +121,9 @@ def run_process_with_error_information(
 
 
 def log_subprocess_error(e: subprocess.CalledProcessError) -> None:
-    LOGGER.error(
-        dedent(
-            f"""
-                cmd: {e.cmd}
+    LOGGER.error(dedent(f"""
+                cmd: {filter_cmd(e.cmd)}
                 returncode: {e.returncode}
                 stdout: {e.stdout}
                 stderr: {e.stderr}
-                """
-        )
-    )
+                """))

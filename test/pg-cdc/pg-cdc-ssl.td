@@ -54,6 +54,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 INSERT INTO numbers VALUES (1, true, 'one');
 
+ANALYZE;
+
 $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
 
 # server: host, client: disable => OK
@@ -63,8 +65,10 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   SSL MODE disable,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -94,8 +98,10 @@ contains: invalid CONNECTION: unknown SSL MODE "prefer"
   SSL MODE require,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -128,8 +134,10 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl"
   SSL MODE require,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -163,8 +171,10 @@ contains:self signed certificate in certificate chain
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -198,8 +208,10 @@ contains:self signed certificate in certificate chain
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -220,8 +232,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE disable,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -281,8 +295,10 @@ contains:self signed certificate in certificate chain
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -334,8 +350,10 @@ contains:db error: FATAL: certificate authentication failed for user "certuser"
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one
@@ -359,8 +377,10 @@ DELETE FROM numbers WHERE number = 2;
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
+> BEGIN
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
+> COMMIT
 > CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
 > SELECT * FROM "numbers";
 1 true one

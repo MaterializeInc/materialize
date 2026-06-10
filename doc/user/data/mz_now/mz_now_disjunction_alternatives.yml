@@ -1,0 +1,73 @@
+columns:
+  - column: "Valid/Invalid"
+  - column: "mz_now() SQL"
+
+rows:
+  - "Valid/Invalid": |
+      <blue>Materialize SQL</blue> ✅
+    "mz_now() SQL": |
+      **Rewrite as UNION ALL with possible duplicates**
+
+      <span class="copyableCode">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_duplicates_possible AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION ALL
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```
+
+      </span>
+
+      **Rewrite as UNION ALL that avoids duplicates across queries**
+
+      <span class="copyableCode">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_union_all AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION ALL
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
+      ;
+      ```
+
+      </span>
+
+      **Rewrite as UNION to deduplicate any and all duplicated results**
+
+      <span class="copyableCode">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_results AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      UNION
+      SELECT item, quantity, status from orders
+      WHERE order_date + interval '30' minutes >= mz_now()
+      ;
+      ```
+
+      </span>
+  - "Valid/Invalid": |
+      <red>Anti-pattern</red> ❌
+
+    "mz_now() SQL": |
+
+      <red>Not supported</red>
+
+      <div style="background-color: var(--code-block)">
+
+      ```none
+      -- Unsupported
+      CREATE MATERIALIZED VIEW forecast_completed_orders_unsupported AS
+      SELECT item, quantity, status from orders
+      WHERE status = 'Shipped'
+      OR order_date + interval '30' minutes >= mz_now();
+      ```
+      </div>

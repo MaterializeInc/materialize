@@ -47,12 +47,14 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE repeated
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-repeated-${testdrive.seed}')
 
 > CREATE TABLE repeated_tbl FROM SOURCE repeated (REFERENCE "testdrive-repeated-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA '${repeated-schema}'
+> COMMIT
 
 > SHOW COLUMNS FROM repeated_tbl
 name       nullable  type  comment

@@ -21,6 +21,7 @@ name                nullable    type      comment
 oid                 false       oid       ""
 relname             false       text      ""
 relnamespace        false       oid       ""
+relnatts            false       smallint  ""
 reloftype           false       oid       ""
 relowner            false       oid       ""
 relam               false       oid       ""
@@ -28,7 +29,7 @@ reltablespace       false       oid       ""
 reltuples           false       real      ""
 reltoastrelid       false       oid       ""
 relhasindex         false       boolean   ""
-relpersistence      false       char      ""
+relpersistence      false       "\"char\""    ""
 relkind             true        text      ""
 relchecks           false       smallint  ""
 relhasrules         false       boolean   ""
@@ -36,7 +37,7 @@ relhastriggers      false       boolean   ""
 relhassubclass      false       boolean   ""
 relrowsecurity      false       boolean   ""
 relforcerowsecurity false       boolean   ""
-relreplident        false       char      ""
+relreplident        false       "\"char\""    ""
 relispartition      false       boolean   ""
 relhasoids          false       boolean   ""
 reloptions          true        text[]    ""
@@ -66,6 +67,7 @@ indisclustered  false       boolean     ""
 indisvalid      false       boolean     ""
 indisreplident  false       boolean     ""
 indkey          false       int2vector  ""
+indnatts        false       smallint    ""
 indoption       false       int2vector  ""
 indexprs        true        text        ""
 indpred         true        text        ""
@@ -83,14 +85,15 @@ name         nullable  type      comment
 ----------------------------------------
 attrelid     false     oid       ""
 attname      false     text      ""
+attndims     false     smallint  ""
 atttypid     false     oid       ""
 attlen       true      smallint  ""
 attnum       false     smallint  ""
 atttypmod    false     integer   ""
 attnotnull   false     boolean   ""
 atthasdef    false     boolean   ""
-attidentity  false     char      ""
-attgenerated false     char      ""
+attidentity  false     "\"char\""    ""
+attgenerated false     "\"char\""    ""
 attisdropped false     boolean   ""
 attcollation false     oid       ""
 
@@ -101,7 +104,7 @@ oid                 false     oid      ""
 collname            false     text     ""
 collnamespace       false     oid      ""
 collowner           false     oid      ""
-collprovider        false     char     ""
+collprovider        false     "\"char\""   ""
 collisdeterministic false     boolean  ""
 collencoding        false     integer  ""
 collcollate         false     text     ""
@@ -114,7 +117,7 @@ name            nullable  type     comment
 oid             false     oid      ""
 polname         false     text     ""
 polrelid        false     oid      ""
-polcmd          false     char     ""
+polcmd          false     "\"char\""   ""
 polpermissive   false     boolean  ""
 polroles        false     oid[]    ""
 polqual         false     text     ""
@@ -150,7 +153,7 @@ rolcanlogin        false       boolean                        ""
 rolreplication     false       boolean                        ""
 rolbypassrls       false       boolean                        ""
 rolconnlimit       false       integer                        ""
-rolpassword        false       text                           ""
+rolpassword        true        text                           ""
 rolvaliduntil      true        "timestamp with time zone"     ""
 
 > SHOW COLUMNS FROM pg_auth_members
@@ -206,8 +209,8 @@ aggminvtransfn     false       regproc     ""
 aggmfinalfn        false       regproc     ""
 aggfinalextra      false       boolean     ""
 aggmfinalextra     false       boolean     ""
-aggfinalmodify     true        char        ""
-aggmfinalmodify    true        char        ""
+aggfinalmodify     true        "\"char\""        ""
+aggmfinalmodify    true        "\"char\""        ""
 aggsortop          false       oid         ""
 aggtranstype       true        oid         ""
 aggtransspace      true        integer     ""
@@ -225,7 +228,7 @@ name                nullable    type        comment
  tgname             false       text        ""
  tgfoid             false       oid         ""
  tgtype             false       smallint    ""
- tgenabled          false       char        ""
+ tgenabled          false       "\"char\""      ""
  tgisinternal       false       boolean     ""
  tgconstrrelid      false       oid         ""
  tgconstrindid      false       oid         ""
@@ -245,8 +248,8 @@ name                nullable    type      comment
  oid                false       oid       ""
  rulename           false       text      ""
  ev_class           false       oid       ""
- ev_type            false       char      ""
- ev_enabled         false       char      ""
+ ev_type            false       "\"char\""    ""
+ ev_enabled         false       "\"char\""    ""
  is_instead         false       boolean   ""
  ev_qual            false       text      ""
  ev_action          false       text      ""
@@ -271,7 +274,7 @@ name                nullable    type    comment
  evtevent           false       text    ""
  evtowner           false       oid     ""
  evtfoid            false       oid     ""
- evtenabled         false       char    ""
+ evtenabled         false       "\"char\""  ""
  evttags            false       text[]  ""
 
 > SHOW COLUMNS FROM pg_language
@@ -303,7 +306,7 @@ name                nullable    type     comment
  refclassid         true        oid      ""
  refobjid           false       oid      ""
  refobjsubid        false       integer  ""
- deptype            false       char     ""
+ deptype            false       "\"char\""   ""
 
 > SHOW COLUMNS FROM pg_indexes
 name                nullable    type    comment
@@ -314,3 +317,16 @@ name                nullable    type    comment
  indexname          false       text    ""
  tablespace         true        text    ""
  indexdef           true        text    ""
+
+# pg_user.passwd is redacted, like pg_roles.rolpassword.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_password_auth = true
+DROP ROLE IF EXISTS passwd_redaction_role
+CREATE ROLE passwd_redaction_role WITH LOGIN PASSWORD 'pw_123'
+
+> SELECT passwd FROM pg_catalog.pg_user WHERE usename = 'passwd_redaction_role'
+"********"
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+DROP ROLE passwd_redaction_role
+ALTER SYSTEM RESET enable_password_auth

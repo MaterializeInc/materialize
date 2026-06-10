@@ -75,7 +75,7 @@ access to all topics by adding a `*` in the **Topics ID** input field.
 
 1. Click **Create**.
 
-## Step 5. Create a topic
+## Step 4. Create a topic
 
 To start using Materialize with Redpanda, you need to point it to an existing
 Redpanda topic you want to read data from. If the topic you want to ingest
@@ -85,7 +85,7 @@ Otherwise, you can install Redpanda Keeper (aka `rpk`) on the client machine
 from the previous step to create a topic. For guidance on how to use `rpk`,
 check the [Redpanda documentation](https://docs.redpanda.com/docs/reference/rpk-commands/#rpk-topic-create).
 
-## Step 6. Start ingesting data
+## Step 5. Create a connection
 
 Now that you’ve configured your Redpanda cluster, you can start ingesting data
 into Materialize. The exact steps depend on your networking configuration, so
@@ -101,7 +101,7 @@ start by selecting the relevant option.
 1. Copy the URL under **Cluster hosts**. This will be your
 `<redpanda-broker-url>` going forward.
 
-1. In the Materialize [SQL shell](https://console.materialize.com/), or your
+1. In the Materialize [SQL shell](/console/), or your
 preferred SQL client, create a connection with your Redpanda Cloud cluster
 access and authentication details using the [`CREATE CONNECTION`](/sql/create-connection/)
 command:
@@ -119,33 +119,9 @@ command:
       );
     ```
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Redpanda Cloud cluster and start ingesting data from your target topic.
-   By default, the source will be created in the active cluster; to use a
-   different cluster, use the `IN CLUSTER` clause.
-
-    ```mzsql
-    CREATE SOURCE rp_source
-      -- The topic you want to read from.
-      FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-      FORMAT JSON;
-    ```
-
-    If the command executes without an error and outputs _CREATE SOURCE_, it
-    means that you have successfully connected Materialize to your Redpanda
-    cluster.
-
-This example walked through creating a source, which is a way of connecting
-Materialize to an external data source. We created a connection to Redpanda
-Cloud using SASL authentication and credentials securely stored as secrets in
-Materialize's secret management system. For input formats, we used `JSON`, but
-you can also ingest Kafka messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
-You can find more details about the various different supported formats and
-possible configurations in the [reference documentation](/sql/create-source/kafka/).
-
 {{< /tab >}}
 
-{{< tab "Use AWS PrivateLink">}}
+{{< tab "Use AWS PrivateLink (Cloud-only)" >}}
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
 Materialize to your Redpanda Cloud instance without exposing traffic to the
@@ -200,7 +176,7 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
         '.cluster.aws_private_link'
     ```
 
-1. In the Materialize [SQL shell](https://console.materialize.com/), or your
+1. In the Materialize [SQL shell](/console/), or your
 preferred SQL client, create a [PrivateLink connection](/ingest-data/network-security/privatelink/)
 using the service name from the previous step. Be sure to specify **all
 availability zones** of your Redpanda Cloud cluster.
@@ -279,7 +255,7 @@ principal:
     This can take several minutes, and report errors like `Error: Endpoint cannot be
     discovered` while the policies are being updated and the endpoint resources are
     being re-evaluated. If the validation errors persist for longer than 10
-    minutes, double-check the ARNs and service names and [contact our team](https://materialize.com/docs/support/).
+    minutes, double-check the ARNs and service names and [contact our team](/support/).
 
 1. Finally, create a connection to your Redpanda Cloud cluster using the AWS
 Privatelink connection you created earlier:
@@ -295,20 +271,21 @@ Privatelink connection you created earlier:
         SASL USERNAME = SECRET redpanda_username,
         SASL PASSWORD = SECRET redpanda_password
     );
-
-    CREATE SOURCE rp_source
-      -- The topic you want to read from.
-      FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-      FORMAT JSON;
     ```
-
-This example walked through creating a source, which is a way of connecting
-Materialize to an external data source. We created a connection to Redpanda
-Cloud using AWS PrivateLink and credentials securely stored as secrets in
-Materialize's secret management system. For input formats, we used `JSON`, but
-you can also ingest Redpanda messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
-You can find more details about the various different supported formats and
-possible configurations in the [reference documentation](/sql/create-source/kafka/).
 
 {{< /tab >}}
 {{< /tabs >}}
+
+## Step 6. Start ingesting data
+
+Once you have created the connection, you can use the connection in the [`CREATE
+SOURCE`](/sql/create-source/) command to your Redpanda Cloud cluster and start
+ingesting data from your target topic. By default, the source will be created in
+the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
+
+```mzsql
+CREATE SOURCE rp_source
+  -- The topic you want to read from.
+  FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
+  FORMAT JSON;
+```

@@ -17,28 +17,32 @@ performance.
 
 ### Query Patterns
 
-{{% idiomatic-sql/general-syntax-table %}}
+{{< yaml-table data="idiomatic_mzsql/patterns_general"
+  columns="pattern_title,syntax_idiomatic" >}}
 
 ### Examples
 
-{{% idiomatic-sql/general-example-table %}}
+{{< yaml-table data="idiomatic_mzsql/patterns_general"
+  columns="pattern_title,example_idiomatic" >}}
 
 ## Window Functions
 {{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
+{{% include-headless "/headless/materialize-window-functions" %}}
 
 {{</ callout >}}
 
 ### Query Patterns
 
-{{% idiomatic-sql/window-functions-syntax-table %}}
+{{< yaml-table data="idiomatic_mzsql/patterns_window_functions"
+  columns="pattern_title,syntax_idiomatic" >}}
 
 ### Examples
 
-{{% idiomatic-sql/window-functions-example-table %}}
+{{< yaml-table data="idiomatic_mzsql/patterns_window_functions"
+  columns="pattern_title,example_idiomatic" >}}
 
 ## See also
 

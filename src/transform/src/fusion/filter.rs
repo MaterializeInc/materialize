@@ -13,20 +13,23 @@
 //!
 //! ```rust
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
-//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::fusion::filter::Filter;
 //!
-//! let input = MirRelationExpr::constant(vec![], RelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
-//! ]));
+//! let input = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: ReprRelationType::new(vec![
+//!         ReprColumnType { scalar_type: ReprScalarType::Bool, nullable: false },
+//!     ]),
+//! };
 //!
-//! let predicate0 = MirScalarExpr::Column(0);
-//! let predicate1 = MirScalarExpr::Column(0);
-//! let predicate2 = MirScalarExpr::Column(0);
+//! let predicate0 = MirScalarExpr::column(0);
+//! let predicate1 = MirScalarExpr::column(0);
+//! let predicate2 = MirScalarExpr::column(0);
 //!
 //! let mut expr = input
 //!     .clone()
@@ -35,9 +38,9 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = typecheck::empty_context();
+//! let typecheck_ctx = typecheck::empty_typechecking_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! // Filter.transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &mut transform_ctx);
@@ -56,12 +59,16 @@ use crate::TransformCtx;
 pub struct Filter;
 
 impl crate::Transform for Filter {
+    fn name(&self) -> &'static str {
+        "FilterFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "filter_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -83,7 +90,7 @@ impl Filter {
             } = &mut **input
             {
                 predicates.append(p2);
-                *input = Box::new(inner.take_dangerous());
+                **input = inner.take_dangerous();
             }
 
             mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);

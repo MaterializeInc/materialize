@@ -60,24 +60,27 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
-use std::collections::BTreeMap;
-
 use mz_expr::{
-    permutation_for_arrangement, AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr,
+    AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
-use mz_ore::{assert_none, soft_assert_or_log};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy};
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
+use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.reduce.rs"));
+use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
 
 /// This enum represents the three potential types of aggregations.
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ReductionType {
     /// Accumulable functions can be subtracted from (are invertible), and associative.
     /// We can compute these results by moving some data to the diff field under arbitrary
@@ -93,35 +96,6 @@ pub enum ReductionType {
     Basic,
 }
 
-impl columnation::Columnation for ReductionType {
-    type InnerRegion = columnation::CopyRegion<ReductionType>;
-}
-
-impl RustType<ProtoReductionType> for ReductionType {
-    fn into_proto(&self) -> ProtoReductionType {
-        use proto_reduction_type::Kind;
-        ProtoReductionType {
-            kind: Some(match self {
-                ReductionType::Accumulable => Kind::Accumulable(()),
-                ReductionType::Hierarchical => Kind::Hierarchical(()),
-                ReductionType::Basic => Kind::Basic(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoReductionType) -> Result<Self, TryFromProtoError> {
-        use proto_reduction_type::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
-        Ok(match kind {
-            Kind::Accumulable(()) => ReductionType::Accumulable,
-            Kind::Hierarchical(()) => ReductionType::Hierarchical,
-            Kind::Basic(()) => ReductionType::Basic,
-        })
-    }
-}
-
 impl TryFrom<&ReducePlan> for ReductionType {
     type Error = ();
 
@@ -130,7 +104,7 @@ impl TryFrom<&ReducePlan> for ReductionType {
             ReducePlan::Hierarchical(_) => Ok(ReductionType::Hierarchical),
             ReducePlan::Accumulable(_) => Ok(ReductionType::Accumulable),
             ReducePlan::Basic(_) => Ok(ReductionType::Basic),
-            _ => Err(()),
+            ReducePlan::Distinct => Err(()),
         }
     }
 }
@@ -158,101 +132,6 @@ pub enum ReducePlan {
     Hierarchical(HierarchicalPlan),
     /// Plan for computing only basic aggregations.
     Basic(BasicPlan),
-    /// Plan for computing a mix of different kinds of aggregations.
-    /// We need to do extra work here to reassemble results back in the
-    /// requested order.
-    Collation(CollationPlan),
-}
-
-proptest::prop_compose! {
-    /// `expected_group_size` is a u64, but instead of a uniform distribution,
-    /// we want a logarithmic distribution so that we have an even distribution
-    /// in the number of layers of buckets that a hierarchical plan would have.
-    fn any_group_size()
-        (bits in 0..u64::BITS)
-        (integer in (((1_u64) << bits) - 1)
-            ..(if bits == (u64::BITS - 1){ u64::MAX }
-                else { (1_u64) << (bits + 1) - 1 }))
-    -> u64 {
-        integer
-    }
-}
-
-/// To avoid stack overflow, this limits the arbitrarily-generated test
-/// `ReducePlan`s to involve at most 8 aggregations.
-///
-/// To have better coverage of realistic expected group sizes, the
-/// `expected group size` has a logarithmic distribution.
-impl Arbitrary for ReducePlan {
-    type Parameters = ();
-
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<AggregateExpr>(), 0..8),
-            any::<bool>(),
-            any::<bool>(),
-            any_group_size(),
-            any::<bool>(),
-        )
-            .prop_map(
-                |(
-                    exprs,
-                    monotonic,
-                    any_expected_size,
-                    expected_group_size,
-                    mut fused_unnest_list,
-                )| {
-                    let expected_group_size = if any_expected_size {
-                        Some(expected_group_size)
-                    } else {
-                        None
-                    };
-                    if !(exprs.len() == 1
-                        && matches!(reduction_type(&exprs[0].func), ReductionType::Basic))
-                    {
-                        fused_unnest_list = false;
-                    }
-                    ReducePlan::create_from(
-                        exprs,
-                        monotonic,
-                        expected_group_size,
-                        fused_unnest_list,
-                    )
-                },
-            )
-            .boxed()
-    }
-}
-
-impl RustType<ProtoReducePlan> for ReducePlan {
-    fn into_proto(&self) -> ProtoReducePlan {
-        use proto_reduce_plan::Kind::*;
-        ProtoReducePlan {
-            kind: Some(match self {
-                ReducePlan::Distinct => Distinct(()),
-                ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
-                ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
-                ReducePlan::Basic(plan) => Basic(plan.into_proto()),
-                ReducePlan::Collation(plan) => Collation(plan.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoReducePlan) -> Result<Self, TryFromProtoError> {
-        use proto_reduce_plan::Kind::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
-        Ok(match kind {
-            Distinct(()) => ReducePlan::Distinct,
-            Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
-            Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
-            Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
-            Collation(plan) => ReducePlan::Collation(plan.into_rust()?),
-        })
-    }
 }
 
 /// Plan for computing a set of accumulable aggregations.
@@ -270,48 +149,11 @@ pub struct AccumulablePlan {
     pub full_aggrs: Vec<AggregateExpr>,
     /// All of the non-distinct accumulable aggregates.
     /// Each element represents:
-    /// (index of the aggregation among accumulable aggregations,
-    ///  index of the datum among inputs, aggregation expr)
+    /// (index of the datum among inputs, aggregation expr)
     /// These will all be rendered together in one dataflow fragment.
-    pub simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
+    pub simple_aggrs: Vec<(usize, AggregateExpr)>,
     /// Same as above but for all of the `DISTINCT` accumulable aggregations.
-    pub distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
-}
-
-impl RustType<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr) {
-    fn into_proto(&self) -> proto_accumulable_plan::ProtoAggr {
-        proto_accumulable_plan::ProtoAggr {
-            index_agg: self.0.into_proto(),
-            index_inp: self.1.into_proto(),
-            expr: Some(self.2.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: proto_accumulable_plan::ProtoAggr) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.index_agg.into_rust()?,
-            proto.index_inp.into_rust()?,
-            proto.expr.into_rust_if_some("ProtoAggr::expr")?,
-        ))
-    }
-}
-
-impl RustType<ProtoAccumulablePlan> for AccumulablePlan {
-    fn into_proto(&self) -> ProtoAccumulablePlan {
-        ProtoAccumulablePlan {
-            full_aggrs: self.full_aggrs.into_proto(),
-            simple_aggrs: self.simple_aggrs.into_proto(),
-            distinct_aggrs: self.distinct_aggrs.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAccumulablePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            full_aggrs: proto.full_aggrs.into_rust()?,
-            simple_aggrs: proto.simple_aggrs.into_rust()?,
-            distinct_aggrs: proto.distinct_aggrs.into_rust()?,
-        })
-    }
+    pub distinct_aggrs: Vec<(usize, AggregateExpr)>,
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -329,6 +171,14 @@ pub enum HierarchicalPlan {
 }
 
 impl HierarchicalPlan {
+    /// Returns the set of aggregations computed by this plan.
+    pub fn aggr_funcs(&self) -> &[AggregateFunc] {
+        match self {
+            HierarchicalPlan::Monotonic(plan) => &plan.aggr_funcs,
+            HierarchicalPlan::Bucketed(plan) => &plan.aggr_funcs,
+        }
+    }
+
     /// Upgrades from a bucketed plan to a monotonic plan, if necessary,
     /// and sets consolidation requirements.
     pub fn as_monotonic(&mut self, must_consolidate: bool) {
@@ -346,29 +196,6 @@ impl HierarchicalPlan {
     }
 }
 
-impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
-    fn into_proto(&self) -> ProtoHierarchicalPlan {
-        use proto_hierarchical_plan::Kind;
-        ProtoHierarchicalPlan {
-            kind: Some(match self {
-                HierarchicalPlan::Monotonic(plan) => Kind::Monotonic(plan.into_proto()),
-                HierarchicalPlan::Bucketed(plan) => Kind::Bucketed(plan.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoHierarchicalPlan) -> Result<Self, TryFromProtoError> {
-        use proto_hierarchical_plan::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoHierarchicalPlan::Kind"))?;
-        Ok(match kind {
-            Kind::Monotonic(plan) => HierarchicalPlan::Monotonic(plan.into_rust()?),
-            Kind::Bucketed(plan) => HierarchicalPlan::Bucketed(plan.into_rust()?),
-        })
-    }
-}
-
 /// Plan for computing a set of hierarchical aggregations with a
 /// monotonic input.
 ///
@@ -381,35 +208,14 @@ impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
 pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
-    /// Set of "skips" or calls to `nth()` an iterator needs to do over
-    /// the input to extract the relevant datums.
-    pub skips: Vec<usize>,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
     /// not a requirement that the input be directly subjected to consolidation.
     /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
     ///
-    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
+    /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
-}
-
-impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
-    fn into_proto(&self) -> ProtoMonotonicPlan {
-        ProtoMonotonicPlan {
-            aggr_funcs: self.aggr_funcs.into_proto(),
-            skips: self.skips.into_proto(),
-            must_consolidate: self.must_consolidate.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMonotonicPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            aggr_funcs: proto.aggr_funcs.into_rust()?,
-            skips: proto.skips.into_rust()?,
-            must_consolidate: proto.must_consolidate.into_rust()?,
-        })
-    }
 }
 
 /// Plan for computing a set of hierarchical aggregations
@@ -426,9 +232,6 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
 pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
-    /// Set of "skips" or calls to `nth()` an iterator needs to do over
-    /// the input to extract the relevant datums.
-    pub skips: Vec<usize>,
     /// The number of buckets in each layer of the reduction tree. Should
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
@@ -441,27 +244,8 @@ impl BucketedPlan {
     fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
         MonotonicPlan {
             aggr_funcs: self.aggr_funcs,
-            skips: self.skips,
             must_consolidate,
         }
-    }
-}
-
-impl RustType<ProtoBucketedPlan> for BucketedPlan {
-    fn into_proto(&self) -> ProtoBucketedPlan {
-        ProtoBucketedPlan {
-            aggr_funcs: self.aggr_funcs.into_proto(),
-            skips: self.skips.into_proto(),
-            buckets: self.buckets.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoBucketedPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            aggr_funcs: proto.aggr_funcs.into_rust()?,
-            skips: proto.skips.into_rust()?,
-            buckets: proto.buckets,
-        })
     }
 }
 
@@ -487,93 +271,34 @@ pub enum BasicPlan {
     /// reduction. Each element represents the:
     /// `(index of the set of the input we are aggregating over,
     ///   the aggregation function)`
-    Multiple(Vec<(usize, AggregateExpr)>),
+    Multiple(Vec<AggregateExpr>),
 }
 
 /// Plan for rendering a single basic aggregation, with possibly fusing a `FlatMap UnnestList` with
 /// this aggregation.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SingleBasicPlan {
-    /// The index in the set of inputs that we are aggregating over.
-    pub index: usize,
     /// The aggregation that we should perform.
     pub expr: AggregateExpr,
     /// Whether we fused a `FlatMap UnnestList` with this aggregation.
     pub fused_unnest_list: bool,
 }
 
-impl RustType<proto_basic_plan::ProtoSimpleSingleBasicPlan> for (usize, AggregateExpr) {
-    fn into_proto(&self) -> proto_basic_plan::ProtoSimpleSingleBasicPlan {
-        proto_basic_plan::ProtoSimpleSingleBasicPlan {
-            index: self.0.into_proto(),
-            expr: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_basic_plan::ProtoSimpleSingleBasicPlan,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.index.into_rust()?,
-            proto
-                .expr
-                .into_rust_if_some("ProtoSimpleSingleBasicPlan::expr")?,
-        ))
-    }
-}
-
-impl RustType<proto_basic_plan::ProtoSingleBasicPlan> for SingleBasicPlan {
-    fn into_proto(&self) -> proto_basic_plan::ProtoSingleBasicPlan {
-        proto_basic_plan::ProtoSingleBasicPlan {
-            index: self.index.into_proto(),
-            expr: Some(self.expr.into_proto()),
-            fused_unnest_list: self.fused_unnest_list.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_basic_plan::ProtoSingleBasicPlan,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(SingleBasicPlan {
-            index: proto.index.into_rust()?,
-            expr: proto.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
-            fused_unnest_list: proto.fused_unnest_list.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoBasicPlan> for BasicPlan {
-    fn into_proto(&self) -> ProtoBasicPlan {
-        use proto_basic_plan::*;
-
-        ProtoBasicPlan {
-            kind: Some(match self {
-                BasicPlan::Single(plan) => Kind::Single(plan.into_proto()),
-                BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
-                    aggrs: aggrs.into_proto(),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoBasicPlan) -> Result<Self, TryFromProtoError> {
-        use proto_basic_plan::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
-
-        Ok(match kind {
-            Kind::Single(plan) => BasicPlan::Single(plan.into_rust()?),
-            Kind::Multiple(x) => BasicPlan::Multiple(x.aggrs.into_rust()?),
-        })
-    }
-}
-
 /// Plan for collating the results of computing multiple aggregation
 /// types.
 ///
 /// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd
+)]
 pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     pub accumulable: Option<AccumulablePlan>,
@@ -599,26 +324,6 @@ impl CollationPlan {
     }
 }
 
-impl RustType<ProtoCollationPlan> for CollationPlan {
-    fn into_proto(&self) -> ProtoCollationPlan {
-        ProtoCollationPlan {
-            accumulable: self.accumulable.into_proto(),
-            hierarchical: self.hierarchical.into_proto(),
-            basic: self.basic.into_proto(),
-            aggregate_types: self.aggregate_types.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCollationPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            accumulable: proto.accumulable.into_rust()?,
-            hierarchical: proto.hierarchical.into_rust()?,
-            basic: proto.basic.into_rust()?,
-            aggregate_types: proto.aggregate_types.into_rust()?,
-        })
-    }
-}
-
 impl ReducePlan {
     /// Generate a plan for computing the supplied aggregations.
     ///
@@ -630,90 +335,41 @@ impl ReducePlan {
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
     ) -> Self {
-        // If we don't have any aggregations we are just computing a distinct.
-        if aggregates.is_empty() {
-            return ReducePlan::Distinct;
-        }
+        // We need to make sure that all aggregates have the same type.
+        let mut aggregates_list = Vec::with_capacity(aggregates.len());
+        let mut aggregates = aggregates.into_iter();
+        if let Some(aggregate) = aggregates.next() {
+            let typ = reduction_type(&aggregate.func);
+            aggregates_list.push(aggregate);
 
-        // Otherwise, we need to group aggregations according to their
-        // reduction type (accumulable, hierarchical, or basic)
-        let mut reduction_types = BTreeMap::new();
-        // We need to make sure that each list of aggregates by type forms
-        // a subsequence of the overall sequence of aggregates.
-        for index in 0..aggregates.len() {
-            let typ = reduction_type(&aggregates[index].func);
-            let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
-            aggregates_list.push((index, aggregates[index].clone()));
-        }
-
-        // Convert each grouped list of reductions into a plan.
-        let plan: Vec<_> = reduction_types
-            .into_iter()
-            .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(
+            for aggregate in aggregates {
+                assert_eq!(
                     typ,
-                    aggregates_list,
-                    monotonic,
-                    expected_group_size,
-                    fused_unnest_list,
-                )
-            })
-            .collect();
-
-        // If we only have a single type of aggregation present we can
-        // render that directly
-        if plan.len() == 1 {
-            return plan[0].clone();
-        }
-
-        // Otherwise, we have to stitch reductions together.
-
-        // First, lets sanity check that we don't have an impossible number
-        // of reduction types.
-        assert!(plan.len() <= 3);
-
-        let mut collation: CollationPlan = Default::default();
-
-        // Construct a mapping from output_position -> reduction that we can
-        // use to reconstruct the output in the correct order.
-        let aggregate_types = aggregates
-            .iter()
-            .map(|a| reduction_type(&a.func))
-            .collect::<Vec<_>>();
-
-        collation.aggregate_types = aggregate_types;
-
-        for expr in plan.into_iter() {
-            match expr {
-                ReducePlan::Accumulable(e) => {
-                    assert_none!(collation.accumulable);
-                    collation.accumulable = Some(e);
-                }
-                ReducePlan::Hierarchical(e) => {
-                    assert_none!(collation.hierarchical);
-                    collation.hierarchical = Some(e);
-                }
-                ReducePlan::Basic(e) => {
-                    assert_none!(collation.basic);
-                    collation.basic = Some(e);
-                }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
-                    panic!("Inner reduce plan was unsupported type!")
-                }
+                    reduction_type(&aggregate.func),
+                    "Multiple reduction types detected"
+                );
+                aggregates_list.push(aggregate);
             }
+            ReducePlan::create_inner(
+                typ,
+                aggregates_list,
+                monotonic,
+                expected_group_size,
+                fused_unnest_list,
+            )
+        } else {
+            // If we don't have any aggregations we are just computing a distinct.
+            ReducePlan::Distinct
         }
-
-        ReducePlan::Collation(collation)
     }
 
     /// Generate a plan for computing the specified type of aggregations.
     ///
     /// This function assumes that all of the supplied aggregates are
-    /// actually of the correct reduction type, and are a subsequence
-    /// of the total list of requested aggregations.
+    /// actually of the correct reduction type.
     fn create_inner(
         typ: ReductionType,
-        aggregates_list: Vec<(usize, AggregateExpr)>,
+        aggregates_list: Vec<AggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
@@ -729,21 +385,15 @@ impl ReducePlan {
             ReductionType::Accumulable => {
                 let mut simple_aggrs = vec![];
                 let mut distinct_aggrs = vec![];
-                let full_aggrs: Vec<_> = aggregates_list
-                    .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr)
-                    .collect();
-                for (accumulable_index, (datum_index, aggr)) in
-                    aggregates_list.into_iter().enumerate()
-                {
+                let full_aggrs = aggregates_list.clone();
+                for (datum_index, aggr) in aggregates_list.into_iter().enumerate() {
                     // Accumulable aggregations need to do extra per-aggregate work
                     // for aggregations with the distinct bit set, so we'll separate
                     // those out now.
                     if aggr.distinct {
-                        distinct_aggrs.push((accumulable_index, datum_index, aggr));
+                        distinct_aggrs.push((datum_index, aggr));
                     } else {
-                        simple_aggrs.push((accumulable_index, datum_index, aggr));
+                        simple_aggrs.push((datum_index, aggr));
                     };
                 }
                 ReducePlan::Accumulable(AccumulablePlan {
@@ -753,25 +403,14 @@ impl ReducePlan {
                 })
             }
             ReductionType::Hierarchical => {
-                let aggr_funcs: Vec<_> = aggregates_list
+                let aggr_funcs = aggregates_list
                     .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr.func)
-                    .collect();
-                let indexes: Vec<_> = aggregates_list
-                    .into_iter()
-                    .map(|(index, _)| index)
+                    .map(|aggr| aggr.func.clone())
                     .collect();
 
-                // We don't have random access over Rows so we can simplify the
-                // task of grabbing the inputs we are aggregating over by
-                // generating a list of "skips" an iterator over the Row needs
-                // to do to get the desired indexes.
-                let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
                     let monotonic = MonotonicPlan {
                         aggr_funcs,
-                        skips,
                         must_consolidate: false,
                     };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
@@ -779,24 +418,19 @@ impl ReducePlan {
                     let buckets = bucketing_of_expected_group_size(expected_group_size);
                     let bucketed = BucketedPlan {
                         aggr_funcs,
-                        skips,
                         buckets,
                     };
 
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
                 }
             }
-            ReductionType::Basic => {
-                if aggregates_list.len() == 1 {
-                    ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
-                        index: aggregates_list[0].0,
-                        expr: aggregates_list[0].1.clone(),
-                        fused_unnest_list,
-                    }))
-                } else {
-                    ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
-                }
-            }
+            ReductionType::Basic => match <_ as TryInto<[_; 1]>>::try_into(aggregates_list) {
+                Ok([expr]) => ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+                    expr,
+                    fused_unnest_list,
+                })),
+                Err(aggregates_list) => ReducePlan::Basic(BasicPlan::Multiple(aggregates_list)),
+            },
         }
     }
 
@@ -807,10 +441,10 @@ impl ReducePlan {
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
         let key = (0..key_arity)
-            .map(MirScalarExpr::Column)
+            .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-        AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
     }
 
     /// Extracts a fusable MFP for the reduction from the given `mfp` along with a residual
@@ -879,32 +513,12 @@ impl ReducePlan {
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     pub key_plan: mz_expr::SafeMfpPlan,
     /// Extracts the columns used to feed the aggregations.
     pub val_plan: mz_expr::SafeMfpPlan,
-}
-
-impl RustType<ProtoKeyValPlan> for KeyValPlan {
-    fn into_proto(&self) -> ProtoKeyValPlan {
-        ProtoKeyValPlan {
-            key_plan: Some(self.key_plan.into_proto()),
-            val_plan: Some(self.val_plan.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyValPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            key_plan: proto
-                .key_plan
-                .into_rust_if_some("ProtoKeyValPlan::key_plan")?,
-            val_plan: proto
-                .val_plan
-                .into_rust_if_some("ProtoKeyValPlan::val_plan")?,
-        })
-    }
 }
 
 impl KeyValPlan {
@@ -913,14 +527,14 @@ impl KeyValPlan {
         input_arity: usize,
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
-        input_permutation_and_new_arity: Option<(BTreeMap<usize, usize>, usize)>,
+        input_permutation_and_new_arity: Option<(Vec<usize>, usize)>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
         let mut key_mfp = MapFilterProject::new(input_arity)
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity.clone() {
-            key_mfp.permute(input_permutation, new_arity);
+            key_mfp.permute_fn(|c| input_permutation[c], new_arity);
         }
 
         // Form an operator for evaluating value expressions.
@@ -928,7 +542,7 @@ impl KeyValPlan {
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity {
-            val_mfp.permute(input_permutation, new_arity);
+            val_mfp.permute_fn(|c| input_permutation[c], new_arity);
         }
 
         key_mfp.optimize();
@@ -1053,26 +667,5 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::WindowAggregate { .. }
         | AggregateFunc::FusedValueWindowFunc { .. }
         | AggregateFunc::FusedWindowAggregate { .. } => ReductionType::Basic,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    // This test causes stack overflows if not run with --release,
-    // ignore by default.
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

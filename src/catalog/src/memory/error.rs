@@ -75,10 +75,20 @@ pub enum ErrorKind {
     TypeRename(String),
     #[error("cannot rename schemas in the ambient database: {}", .0.quoted())]
     AmbientSchemaRename(String),
-    #[error("cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}")]
-    FailedMigration {
+    #[error(
+        "cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}"
+    )]
+    FailedCatalogMigration {
         last_seen_version: String,
         this_version: &'static str,
+        cause: String,
+    },
+    #[error(
+        "cannot migrate builtin schemas from version {last_seen_version} to version {this_version}: {cause}"
+    )]
+    FailedBuiltinSchemaMigration {
+        last_seen_version: String,
+        this_version: String,
         cause: String,
     },
     #[error("failpoint {0} reached)")]
@@ -100,6 +110,8 @@ pub enum ErrorKind {
     VarError(#[from] VarError),
     #[error("unknown cluster replica size {size}")]
     InvalidClusterReplicaSize { size: String, expected: Vec<String> },
+    #[error("failed to get catalog setting: {0}")]
+    SettingError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }

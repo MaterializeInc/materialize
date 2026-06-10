@@ -24,8 +24,9 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
+use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +99,10 @@ pub fn optimize_dataflow(
         transform_ctx.indexes,
         transform_ctx.df_meta,
     )?;
+
+    // Warning: If you want to add a transform call here, consider it very carefully whether it
+    // could accidentally invalidate information that we already derived above in
+    // `optimize_dataflow_monotonic` or `prune_and_annotate_dataflow_index_imports`.
 
     mz_repr::explain::trace_plan(dataflow);
 
@@ -358,7 +363,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+    for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+        let source = &mut source_import.desc;
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
@@ -417,8 +423,8 @@ pub fn optimize_dataflow_monotonic(
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
-    for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
-        if *is_monotonic {
+    for (source_id, source_import) in dataflow.source_imports.iter() {
+        if source_import.monotonic {
             monotonic_ids.insert(source_id.clone());
         }
     }
@@ -443,6 +449,64 @@ pub fn optimize_dataflow_monotonic(
     }
 
     mz_repr::explain::trace_plan(dataflow);
+
+    Ok(())
+}
+
+/// Determine whether we require snapshots from our durable source imports.
+/// (For example, these can often be skipped for simple subscribe queries.)
+pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+    // For every global id, true iff we need a snapshot for that global ID.
+    // This is computed bottom-up: subscribes may or may not require a snapshot from their inputs,
+    // index exports definitely do, and objects-to-build require a snapshot from their inputs if
+    // either they need to provide a snapshot as output or they may need snapshots internally, eg. to
+    // compute a join.
+    let mut downstream_requires_snapshot = BTreeMap::new();
+
+    for (_id, export) in &dataflow.sink_exports {
+        *downstream_requires_snapshot
+            .entry(Id::Global(export.from))
+            .or_default() |= export.with_snapshot;
+    }
+    for (_id, (export, _typ)) in &dataflow.index_exports {
+        *downstream_requires_snapshot
+            .entry(Id::Global(export.on_id))
+            .or_default() |= true;
+    }
+    for BuildDesc { id: _, plan } in dataflow.objects_to_build.iter().rev() {
+        // For now, we treat all intermediate nodes as potentially requiring a snapshot.
+        // Walk the AST, marking anything depended on by a compute object as snapshot-required.
+        let mut todo = vec![(true, &plan.0)];
+        while let Some((requires_snapshot, expr)) = todo.pop() {
+            match expr {
+                MirRelationExpr::Get { id, .. } => {
+                    *downstream_requires_snapshot.entry(*id).or_default() |= requires_snapshot;
+                }
+                other => {
+                    todo.extend(other.children().rev().map(|c| (true, c)));
+                }
+            }
+        }
+    }
+    for (id, import) in &mut dataflow.source_imports {
+        let with_snapshot = downstream_requires_snapshot
+            .entry(Id::Global(*id))
+            .or_default();
+
+        // As above, fetch the snapshot if there are any transformations on the raw source data.
+        // (And we'll always need to check for things like temporal filters, since those allow
+        // snapshot data to affect diffs at times past the as-of.)
+        *with_snapshot |= import.desc.arguments.operators.is_some();
+
+        import.with_snapshot = *with_snapshot;
+    }
+    for (_id, import) in &mut dataflow.index_imports {
+        let with_snapshot = downstream_requires_snapshot
+            .entry(Id::Global(import.desc.on_id))
+            .or_default();
+
+        import.with_snapshot = *with_snapshot;
+    }
 
     Ok(())
 }
@@ -482,18 +546,18 @@ fn prune_and_annotate_dataflow_index_imports(
                     typ,
                     ..
                 } => {
-                    source_keys.entry(*global_id).or_insert(
+                    source_keys.entry(*global_id).or_insert_with(|| {
                         typ.keys
                             .iter()
                             .map(|key| {
                                 key.iter()
                                     // Convert the Vec<usize> key to Vec<MirScalarExpr>, so that
                                     // later we can more easily compare index keys to these keys.
-                                    .map(|col_idx| MirScalarExpr::Column(*col_idx))
+                                    .map(|col_idx| MirScalarExpr::column(*col_idx))
                                     .collect()
                             })
-                            .collect(),
-                    );
+                            .collect()
+                    });
                 }
                 _ => {}
             });
@@ -562,7 +626,9 @@ fn prune_and_annotate_dataflow_index_imports(
                 // `objects_to_build` that will have a Get of the object that the index is on (see
                 // `DataflowDescription::export_index`). Therefore, we should have already requested
                 // an index usage when seeing that Get in `CollectIndexRequests`.
-                soft_panic_or_log!("We are seeing an index export on an id that's not mentioned in `objects_to_build`");
+                soft_panic_or_log!(
+                    "We are seeing an index export on an id that's not mentioned in `objects_to_build`"
+                );
                 requested_idxs.push((
                     idx_id,
                     arbitrary_index_key.to_owned(),
@@ -672,15 +738,18 @@ id: {}, key: {:?}",
             desc: index_desc,
             typ: _,
             monotonic: _,
+            with_snapshot: _,
         },
     ) in dataflow.index_imports.iter_mut()
     {
         // A sanity check that we are not importing an index that we are also exporting.
-        assert!(!dataflow
-            .index_exports
-            .iter()
-            .map(|(exported_index_id, _)| exported_index_id)
-            .any(|exported_index_id| exported_index_id == index_id));
+        assert!(
+            !dataflow
+                .index_exports
+                .iter()
+                .map(|(exported_index_id, _)| exported_index_id)
+                .any(|exported_index_id| exported_index_id == index_id)
+        );
 
         let mut new_usage_types = Vec::new();
         // Let's see whether something has requested an index on this object that this imported
@@ -864,7 +933,6 @@ impl<'a> CollectIndexRequests<'a> {
         contexts: &Vec<IndexUsageContext>,
     ) -> Result<(), RecursionLimitError> {
         self.checked_recur_mut(|this| {
-
             // If an index exists on `on_id`, this function picks an index to be fully scanned.
             let pick_index_for_full_scan = |on_id: &GlobalId| {
                 // Note that the choice we make here might be modified later at the
@@ -872,9 +940,11 @@ impl<'a> CollectIndexRequests<'a> {
                 choose_index(
                     this.source_keys,
                     on_id,
-                    &this.indexes_available.indexes_on(*on_id).map(
-                        |(idx_id, key)| (idx_id, key.iter().cloned().collect_vec())
-                    ).collect_vec()
+                    &this
+                        .indexes_available
+                        .indexes_on(*on_id)
+                        .map(|(idx_id, key)| (idx_id, key.iter().cloned().collect_vec()))
+                        .collect_vec(),
                 )
             };
 
@@ -901,7 +971,9 @@ impl<'a> CollectIndexRequests<'a> {
                             // https://github.com/MaterializeInc/database-issues/issues/2115
                             this.collect_index_reqs_inner(
                                 &mut inputs[0],
-                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)),
+                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(
+                                    DeltaJoinIndexUsageType::Unknown,
+                                )),
                             )?;
                             for input in &mut inputs[1..] {
                                 this.collect_index_reqs_inner(
@@ -916,7 +988,9 @@ impl<'a> CollectIndexRequests<'a> {
                             for input in inputs {
                                 this.collect_index_reqs_inner(
                                     input,
-                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup(*idx_id)),
+                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup(
+                                        *idx_id,
+                                    )),
                                 )?;
                             }
                         }
@@ -928,7 +1002,8 @@ impl<'a> CollectIndexRequests<'a> {
                     }
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
-                    this.collect_index_reqs_inner(input, &IndexUsageContext::add_keys(contexts, keys))?;
+                    let ctx = &IndexUsageContext::add_keys(contexts, keys);
+                    this.collect_index_reqs_inner(input, ctx)?;
                 }
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
@@ -949,22 +1024,33 @@ impl<'a> CollectIndexRequests<'a> {
                                 // We have some index usage context, but didn't see an `ArrangeBy`.
                                 try_full_scan = true;
                                 match context.usage_type {
-                                    IndexUsageType::FullScan | IndexUsageType::SinkExport | IndexUsageType::IndexExport => {
+                                    IndexUsageType::FullScan
+                                    | IndexUsageType::SinkExport
+                                    | IndexUsageType::IndexExport => {
                                         // Not possible, because these don't go through
                                         // IndexUsageContext at all.
                                         unreachable!()
-                                    },
+                                    }
                                     // You can find more info on why the following join cases
                                     // shouldn't happen in comments of the Join lowering to LIR.
-                                    IndexUsageType::Lookup(_) => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
-                                    IndexUsageType::DifferentialJoin => soft_panic_or_log!("CollectIndexRequests encountered a Differential join without an ArrangeBy"),
-                                    IndexUsageType::DeltaJoin(_) => soft_panic_or_log!("CollectIndexRequests encountered a Delta join without an ArrangeBy"),
+                                    IndexUsageType::Lookup(_) => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         an IndexedFilter join without an ArrangeBy"
+                                    ),
+                                    IndexUsageType::DifferentialJoin => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         a Differential join without an ArrangeBy"
+                                    ),
+                                    IndexUsageType::DeltaJoin(_) => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         a Delta join without an ArrangeBy"
+                                    ),
                                     IndexUsageType::PlanRootNoArrangement => {
                                         // This is ok: the entire plan is a `Get`, with not even an
                                         // `ArrangeBy`. Note that if an index exists, the usage will
                                         // be saved as `FullScan` (NOT as `PlanRootNoArrangement`),
                                         // because we are going into the `try_full_scan` if.
-                                    },
+                                    }
                                     IndexUsageType::FastPathLimit => {
                                         // These are created much later, not even inside
                                         // `prune_and_annotate_dataflow_index_imports`.
@@ -974,7 +1060,7 @@ impl<'a> CollectIndexRequests<'a> {
                                         // Not possible, because we create `DanglingArrangeBy`
                                         // only when we see an `ArrangeBy`.
                                         unreachable!()
-                                    },
+                                    }
                                     IndexUsageType::Unknown => {
                                         // These are added only after `CollectIndexRequests` has run.
                                         unreachable!()
@@ -983,28 +1069,30 @@ impl<'a> CollectIndexRequests<'a> {
                             }
                             Some(requested_keys) => {
                                 for requested_key in requested_keys {
-                                    match this
-                                        .indexes_available
-                                        .indexes_on(*global_id)
-                                        .find(|(available_idx_id, available_key)| {
+                                    match this.indexes_available.indexes_on(*global_id).find(
+                                        |(available_idx_id, available_key)| {
                                             match context.usage_type {
                                                 IndexUsageType::Lookup(req_idx_id) => {
                                                     // `LiteralConstraints` already picked an index
                                                     // by id. Let's use that one.
-                                                    assert!(!(available_idx_id == &req_idx_id && available_key != &requested_key));
+                                                    assert!(
+                                                        !(available_idx_id == &req_idx_id
+                                                            && available_key != &requested_key)
+                                                    );
                                                     available_idx_id == &req_idx_id
-                                                },
+                                                }
                                                 _ => available_key == &requested_key,
                                             }
-                                        })
-                                    {
+                                        },
+                                    ) {
                                         Some((idx_id, key)) => {
+                                            let usage = context.usage_type.clone();
                                             this.index_reqs_by_id
                                                 .get_mut(global_id)
                                                 .unwrap()
-                                                .push((idx_id, key.to_owned(), context.usage_type.clone()));
-                                            index_accesses.push((idx_id, context.usage_type.clone()));
-                                        },
+                                                .push((idx_id, key.to_owned(), usage.clone()));
+                                            index_accesses.push((idx_id, usage));
+                                        }
                                         None => {
                                             // If there is a key requested for which we don't have an
                                             // index, then we might still be able to do a full scan of a
@@ -1031,10 +1119,11 @@ impl<'a> CollectIndexRequests<'a> {
                         // Also note that currently we are deduplicating index usage types when
                         // printing index usages in EXPLAIN.
                         if let Some((idx_id, key)) = pick_index_for_full_scan(global_id) {
-                            this.index_reqs_by_id
-                                .get_mut(global_id)
-                                .unwrap()
-                                .push((idx_id, key.to_owned(), IndexUsageType::FullScan));
+                            this.index_reqs_by_id.get_mut(global_id).unwrap().push((
+                                idx_id,
+                                key.to_owned(),
+                                IndexUsageType::FullScan,
+                            ));
                             index_accesses.push((idx_id, IndexUsageType::FullScan));
                         }
                     }
@@ -1066,10 +1155,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // The above call filled in the entry for `id` in `context_across_lets` (if it
                     // was referenced). Anyhow, at least an empty entry should exist, because we started
                     // above with inserting it.
-                    this.collect_index_reqs_inner(
-                        value,
-                        &this.context_across_lets[id].clone(),
-                    )?;
+                    this.collect_index_reqs_inner(value, &this.context_across_lets[id].clone())?;
                     // Clean up the id from the saved contexts.
                     this.context_across_lets.remove(id);
                 }
@@ -1080,8 +1166,10 @@ impl<'a> CollectIndexRequests<'a> {
                     body,
                 } => {
                     for id in ids.iter() {
-                        let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
-                        assert_none!(shadowed_context); // No shadowing in MIR
+                        let shadowed_context =
+                            this.context_across_lets.insert(id.clone(), Vec::new());
+                        // No shadowing in MIR
+                        assert_none!(shadowed_context);
                     }
                     // We go backwards: Recurse on the body first.
                     this.collect_index_reqs_inner(body, contexts)?;
@@ -1094,7 +1182,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // Note that we do only one pass, i.e., we won't see context through a Get that
                     // refers to the previous iteration. But this is ok, because we can't reuse
                     // arrangements across iterations anyway.
-                    for (id, value) in ids.iter().zip(values.iter_mut()).rev() {
+                    for (id, value) in ids.iter().rev().zip_eq(values.iter_mut().rev()) {
                         this.collect_index_reqs_inner(
                             value,
                             &this.context_across_lets[id].clone(),
@@ -1225,7 +1313,8 @@ impl IndexUsageContext {
 
 /// Extra information about the dataflow. This is not going to be shipped, but has to be processed
 /// in other ways, e.g., showing notices to the user, or saving meta-information to the catalog.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     /// Notices that the optimizer wants to show to users.
     /// For pushing a new element, use [`Self::push_optimizer_notice_dedup`].
@@ -1235,7 +1324,7 @@ pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
 }
 
-impl Default for DataflowMetainfo {
+impl<Notice> Default for DataflowMetainfo<Notice> {
     fn default() -> Self {
         DataflowMetainfo {
             optimizer_notices: Vec::new(),
@@ -1262,7 +1351,7 @@ impl<Notice> DataflowMetainfo<Notice> {
                     // running `prune_and_annotate_dataflow_index_imports` on
                     // the dataflow (this happens at the end of the
                     // `optimize_dataflow` call).
-                    let index_usage_type = entry.unwrap_or(vec![IndexUsageType::Unknown]);
+                    let index_usage_type = entry.unwrap_or_else(|| vec![IndexUsageType::Unknown]);
 
                     (*id, index_usage_type)
                 })

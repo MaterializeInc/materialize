@@ -11,46 +11,6 @@ syntax = "proto3";
 
 package mz_storage_types.sources.kafka;
 
-import "google/protobuf/empty.proto";
-import "proto/src/proto.proto";
-import "repr/src/catalog_item_id.proto";
-import "storage-types/src/connections.proto";
-
-message ProtoKafkaSourceConnection {
-  reserved 5, 6, 7, 8, 9, 10, 12, 14;
-  mz_storage_types.connections.ProtoKafkaConnection connection = 1;
-  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 13;
-  string topic = 2;
-  map<int32, int64> start_offsets = 3;
-  optional string group_id_prefix = 4;
-  repeated ProtoKafkaMetadataColumn metadata_columns = 11;
-  mz_proto.ProtoDuration topic_metadata_refresh_interval = 15;
-}
-
-message ProtoKafkaMetadataColumn {
-  string name = 1;
-  ProtoKafkaMetadataKind kind = 2;
-}
-
-message ProtoKafkaMetadataKind {
-  oneof kind {
-    google.protobuf.Empty partition = 1;
-    google.protobuf.Empty offset = 2;
-    google.protobuf.Empty timestamp = 3;
-    google.protobuf.Empty headers = 4;
-    ProtoKafkaHeader header = 5;
-  }
-}
-
-message ProtoKafkaSourceExportDetails {
-  repeated ProtoKafkaMetadataColumn metadata_columns = 1;
-}
-
-message ProtoKafkaHeader {
-  string key = 1;
-  bool use_bytes = 2;
-}
-
 // NOTE: this message is encoded and stored as part of source export
 // statement options
 // Be extra careful about changes, ensuring that all changes are backwards

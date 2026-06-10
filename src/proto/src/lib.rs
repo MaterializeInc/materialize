@@ -16,19 +16,15 @@ use std::fmt;
 use std::num::{NonZeroU64, TryFromIntError};
 use std::sync::Arc;
 
+use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::num::{NonNeg, NonNegError};
 use num::Signed;
 use proptest::prelude::Strategy;
 use prost::UnknownEnumValue;
-use uuid::Uuid;
 
 #[cfg(feature = "chrono")]
 pub mod chrono;
-
-#[cfg(feature = "tokio-postgres")]
-pub mod tokio_postgres;
-pub mod wire_compatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
@@ -215,10 +211,6 @@ impl std::error::Error for TryFromProtoError {
     }
 }
 
-pub fn any_uuid() -> impl Strategy<Value = Uuid> {
-    (0..u128::MAX).prop_map(Uuid::from_u128)
-}
-
 /// A trait that declares that `Self::Proto` is the default
 /// Protobuf representation for `Self`.
 pub trait ProtoRepr: Sized + RustType<Self::Proto> {
@@ -296,6 +288,18 @@ impl RustType<u64> for Option<NonZeroU64> {
 
     fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
         Ok(NonZeroU64::new(proto)) // 0 is correctly mapped to None
+    }
+}
+
+impl RustType<i64> for Overflowing<i64> {
+    #[inline(always)]
+    fn into_proto(&self) -> i64 {
+        self.into_inner()
+    }
+
+    #[inline(always)]
+    fn from_proto(proto: i64) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
     }
 }
 
@@ -488,30 +492,6 @@ impl RustType<i32> for i16 {
 
     fn from_proto(repr: i32) -> Result<Self, TryFromProtoError> {
         i16::try_from(repr).map_err(TryFromProtoError::from)
-    }
-}
-
-impl RustType<ProtoU128> for u128 {
-    // TODO(benesch): add a trait for explicitly performing truncating casts.
-    #[allow(clippy::as_conversions)]
-    fn into_proto(&self) -> ProtoU128 {
-        let lo = (self & u128::from(u64::MAX)) as u64;
-        let hi = (self >> 64) as u64;
-        ProtoU128 { hi, lo }
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(u128::from(proto.hi) << 64 | u128::from(proto.lo))
-    }
-}
-
-impl RustType<ProtoU128> for Uuid {
-    fn into_proto(&self) -> ProtoU128 {
-        self.as_u128().into_proto()
-    }
-
-    fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok(Uuid::from_u128(u128::from_proto(proto)?))
     }
 }
 

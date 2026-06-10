@@ -36,12 +36,14 @@ $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${k
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE topic_compaction
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-compaction-${testdrive.seed}');
 
 > CREATE TABLE topic_compaction_tbl FROM SOURCE topic_compaction (REFERENCE "testdrive-topic-compaction-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM topic_compaction_tbl;
 true

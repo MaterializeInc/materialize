@@ -1,0 +1,32 @@
+- name: "syntax"
+  code: |
+    COMMENT ON <object_type> <name> IS <comment | NULL>;
+  syntax_elements:
+    - name: "`<object_type>`"
+      description: |
+        The type of the object. Supported object types:
+
+        - `CLUSTER`
+        - `CLUSTER REPLICA`
+        - `COLUMN`
+        - `CONNECTION`
+        - `DATABASE`
+        - `FUNCTION`
+        - `INDEX`
+        - `MATERIALIZED VIEW`
+        - `NETWORK POLICY`
+        - `ROLE`
+        - `SCHEMA`
+        - `SECRET`
+        - `SINK`
+        - `SOURCE`
+        - `TABLE`
+        - `TYPE`
+        - `VIEW`
+    - name: "`<name>`"
+      description: |
+        The fully qualified name of the object.
+    - name: "`<comment | NULL>`"
+      description: |
+        - The comment string for the object.
+        - Use `NULL` to remove an existing comment.

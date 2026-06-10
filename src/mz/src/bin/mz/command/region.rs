@@ -32,6 +32,10 @@ pub enum RegionSubcommand {
         version: Option<String>,
         #[clap(hide = true, short, long)]
         environmentd_extra_arg: Option<Vec<String>>,
+        #[clap(hide = true, long)]
+        environmentd_cpu_allocation: Option<String>,
+        #[clap(hide = true, long)]
+        environmentd_memory_allocation: Option<String>,
     },
     /// Disable a region.
     #[clap(hide = true)]
@@ -52,7 +56,18 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
         RegionSubcommand::Enable {
             version,
             environmentd_extra_arg,
-        } => mz::command::region::enable(cx, version, environmentd_extra_arg).await,
+            environmentd_cpu_allocation,
+            environmentd_memory_allocation,
+        } => {
+            mz::command::region::enable(
+                cx,
+                version,
+                environmentd_extra_arg,
+                environmentd_cpu_allocation,
+                environmentd_memory_allocation,
+            )
+            .await
+        }
         RegionSubcommand::Disable { hard } => mz::command::region::disable(cx, hard).await,
         RegionSubcommand::List => mz::command::region::list(cx).await,
         RegionSubcommand::Show => mz::command::region::show(cx).await,

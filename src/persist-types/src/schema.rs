@@ -12,7 +12,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, AsArray, ListArray, StructArray};
+use arrow::array::{Array, AsArray, ListArray, NullArray, StructArray, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -22,7 +22,18 @@ use serde::{Deserialize, Serialize};
 
 /// An ordered identifier for a pair of key and val schemas registered to a
 /// shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct SchemaId(pub usize);
 
@@ -108,9 +119,17 @@ pub(crate) enum StructArrayMigration {
         name: String,
         typ: DataType,
     },
+    /// Drop the field of the provided name.
     DropField {
         name: String,
     },
+    /// Replace the field with a NullArray.
+    ///
+    /// Special case for projecting away all of the columns in a StructArray.
+    MakeNull {
+        name: String,
+    },
+    /// Make the field of the provided name nullable.
     AlterFieldNullable {
         name: String,
     },
@@ -159,7 +178,14 @@ impl ArrayMigration {
                 for migration in migrations {
                     migration.migrate(len, &mut fields, &mut arrays);
                 }
-                Arc::new(StructArray::new(fields, arrays, nulls))
+                assert_eq!(fields.len(), arrays.len(), "invalid migration");
+
+                let array = if arrays.is_empty() {
+                    StructArray::new_empty_fields(len, nulls)
+                } else {
+                    StructArray::new(fields, arrays, nulls)
+                };
+                Arc::new(array)
             }
             List(field, entry_migration) => {
                 let list_array: ListArray = if let Some(list_array) = array.as_list_opt() {
@@ -183,7 +209,7 @@ impl StructArrayMigration {
         use StructArrayMigration::*;
         match self {
             AddFieldNullableAtEnd { .. } => false,
-            DropField { .. } => true,
+            DropField { .. } | MakeNull { .. } => true,
             AlterFieldNullable { .. } => false,
             Recurse { migration, .. } => migration.contains_drop(),
         }
@@ -205,6 +231,20 @@ impl StructArrayMigration {
                 arrays.remove(idx);
                 let mut f = SchemaBuilder::from(&*fields);
                 f.remove(idx);
+                *fields = f.finish().fields;
+            }
+            MakeNull { name } => {
+                let (idx, _) = fields
+                    .find(name)
+                    .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
+                let array_len = arrays
+                    .get(idx)
+                    .expect("checked above that this exists")
+                    .len();
+                arrays[idx] = Arc::new(NullArray::new(array_len));
+                let mut f = SchemaBuilder::from(&*fields);
+                let field = f.field_mut(idx);
+                *field = Arc::new(Field::new(name.clone(), DataType::Null, true));
                 *fields = f.finish().fields;
             }
             AlterFieldNullable { name } => {
@@ -292,6 +332,8 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
             | LargeListView(_)
             | Union(_, _)
             | Dictionary(_, _)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
             | Decimal128(_, _)
             | Decimal256(_, _)
             | RunEndEncoded(_, _),
@@ -334,6 +376,22 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
         if o.is_nullable() && !n.is_nullable() {
             return None;
         }
+
+        // Special case, dropping all of the fields in a StructArray.
+        //
+        // Note: In the SourceDataColumnarEncoder we model empty Rows as a
+        // NullArray and use the validity bitmask on the 'err' column to
+        // determine whether or not a field is actually null.
+        if matches!(o.data_type(), DataType::Struct(_))
+            && o.is_nullable()
+            && n.data_type().is_null()
+        {
+            field_migrations.push(MakeNull {
+                name: n.name().clone(),
+            });
+            continue;
+        }
+
         // However, allowed to make a non-nullable field nullable.
         let make_nullable = !o.is_nullable() && n.is_nullable();
 
@@ -345,14 +403,49 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
                 });
             }
             Some(NoOp) => continue,
-            // For now, don't support both making a field nullable and also
-            // modifying it in some other way. It doesn't seem that we need this for
-            // mz usage.
-            Some(_) if make_nullable => return None,
-            Some(migration) => field_migrations.push(Recurse {
-                name: n.name().clone(),
-                migration,
-            }),
+            Some(migration) => {
+                /// Checks if an [`ArrayMigration`] is only recursively making fields nullable.
+                fn recursively_all_nullable(migration: &ArrayMigration) -> bool {
+                    match migration {
+                        NoOp => true,
+                        List(_field, child) => recursively_all_nullable(child),
+                        Struct(children) => children.iter().all(|child| match child {
+                            AddFieldNullableAtEnd { .. } | DropField { .. } | MakeNull { .. } => {
+                                false
+                            }
+                            AlterFieldNullable { .. } => true,
+                            Recurse { migration, .. } => recursively_all_nullable(migration),
+                        }),
+                    }
+                }
+
+                // We only support making a field nullable concurrently with other changes to said
+                // field, if those other changes are making children nullable as well. Otherwise we
+                // don't allow the migration.
+                //
+                // Note: There's nothing that should really prevent us from supporting this, but at
+                // the moment it's not needed in Materialize.
+                if make_nullable {
+                    if recursively_all_nullable(&migration) {
+                        field_migrations.extend([
+                            AlterFieldNullable {
+                                name: n.name().clone(),
+                            },
+                            Recurse {
+                                name: n.name().clone(),
+                                migration,
+                            },
+                        ]);
+                    } else {
+                        return None;
+                    }
+                } else {
+                    field_migrations.push(Recurse {
+                        name: n.name().clone(),
+                        migration,
+                    })
+                }
+            }
         }
     }
 
@@ -390,33 +483,33 @@ mod tests {
 
     use super::*;
 
+    #[track_caller]
+    fn testcase(old: DataType, new: DataType, expected: Option<bool>) {
+        let migration = super::backward_compatible_typ(&old, &new);
+        let actual = migration.as_ref().map(|x| x.contains_drop());
+        assert_eq!(actual, expected);
+        // If it's backward compatible, make sure that the migration
+        // logic works.
+        if let Some(migration) = migration {
+            let (old, new) = (new_empty_array(&old), new_empty_array(&new));
+            let migrated = migration.migrate(old);
+            assert_eq!(new.data_type(), migrated.data_type());
+        }
+    }
+
+    fn struct_(fields: impl IntoIterator<Item = (&'static str, DataType, bool)>) -> DataType {
+        let fields = fields
+            .into_iter()
+            .map(|(name, typ, nullable)| Field::new(name, typ, nullable))
+            .collect();
+        DataType::Struct(fields)
+    }
+
     // NB: We also have proptest coverage of all this, but it works on
     // RelationDesc+SourceData and so lives in src/storage-types.
     #[mz_ore::test]
     fn backward_compatible() {
         use DataType::*;
-
-        #[track_caller]
-        fn testcase(old: DataType, new: DataType, expected: Option<bool>) {
-            let migration = super::backward_compatible_typ(&old, &new);
-            let actual = migration.as_ref().map(|x| x.contains_drop());
-            assert_eq!(actual, expected);
-            // If it's backward compatible, make sure that the migration
-            // logic works.
-            if let Some(migration) = migration {
-                let (old, new) = (new_empty_array(&old), new_empty_array(&new));
-                let migrated = migration.migrate(old);
-                assert_eq!(new.data_type(), migrated.data_type());
-            }
-        }
-
-        fn struct_(fields: impl IntoIterator<Item = (&'static str, DataType, bool)>) -> DataType {
-            let fields = fields
-                .into_iter()
-                .map(|(name, typ, nullable)| Field::new(name, typ, nullable))
-                .collect();
-            DataType::Struct(fields)
-        }
 
         // Matching primitive types
         testcase(Boolean, Boolean, Some(false));
@@ -584,5 +677,169 @@ mod tests {
             ),
             Some(false),
         );
+
+        // Nested nullability changes
+        testcase(
+            struct_([("0", struct_([("foo", Utf8, false)]), false)]),
+            struct_([("0", struct_([("foo", Utf8, true)]), true)]),
+            Some(false),
+        )
+    }
+
+    /// This is a regression test for a case we found when trying to merge [#30205]
+    ///
+    /// [#30205]: https://github.com/MaterializeInc/materialize/pull/30205
+    #[mz_ore::test]
+    fn backwards_compatible_nested_types() {
+        use DataType::*;
+
+        testcase(
+            struct_([
+                (
+                    "ok",
+                    struct_([
+                        (
+                            "0",
+                            List(
+                                Field::new_struct(
+                                    "map_entries",
+                                    vec![
+                                        Field::new("key", Utf8, false),
+                                        Field::new("val", Int32, true),
+                                    ],
+                                    false,
+                                )
+                                .into(),
+                            ),
+                            true,
+                        ),
+                        (
+                            "1",
+                            List(
+                                Field::new_struct(
+                                    "map_entries",
+                                    vec![
+                                        Field::new("key", Utf8, false),
+                                        Field::new("val", Int32, true),
+                                    ],
+                                    false,
+                                )
+                                .into(),
+                            ),
+                            false,
+                        ),
+                        (
+                            "2",
+                            List(
+                                Field::new_list("item", Field::new_list_field(Int32, true), true)
+                                    .into(),
+                            ),
+                            true,
+                        ),
+                        (
+                            "3",
+                            List(
+                                Field::new_list("item", Field::new_list_field(Int32, true), true)
+                                    .into(),
+                            ),
+                            false,
+                        ),
+                        ("4", struct_([("0", Int32, true), ("1", Utf8, true)]), true),
+                        (
+                            "5",
+                            struct_([("0", Int32, false), ("1", Utf8, false)]),
+                            false,
+                        ),
+                        ("6", Utf8, true),
+                        (
+                            "7",
+                            struct_([
+                                (
+                                    "dims",
+                                    List(Field::new_list_field(FixedSizeBinary(16), true).into()),
+                                    true,
+                                ),
+                                ("vals", List(Field::new_list_field(Utf8, true).into()), true),
+                            ]),
+                            false,
+                        ),
+                    ]),
+                    true,
+                ),
+                ("err", Binary, true),
+            ]),
+            struct_([
+                (
+                    "ok",
+                    struct_([
+                        (
+                            "0",
+                            List(
+                                Field::new_struct(
+                                    "map_entries",
+                                    vec![
+                                        Field::new("key", Utf8, false),
+                                        Field::new("val", Int32, true),
+                                    ],
+                                    false,
+                                )
+                                .into(),
+                            ),
+                            true,
+                        ),
+                        (
+                            "1",
+                            List(
+                                Field::new_struct(
+                                    "map_entries",
+                                    vec![
+                                        Field::new("key", Utf8, false),
+                                        Field::new("val", Int32, true),
+                                    ],
+                                    false,
+                                )
+                                .into(),
+                            ),
+                            true,
+                        ),
+                        (
+                            "2",
+                            List(
+                                Field::new_list("item", Field::new_list_field(Int32, true), true)
+                                    .into(),
+                            ),
+                            true,
+                        ),
+                        (
+                            "3",
+                            List(
+                                Field::new_list("item", Field::new_list_field(Int32, true), true)
+                                    .into(),
+                            ),
+                            true,
+                        ),
+                        ("4", struct_([("0", Int32, true), ("1", Utf8, true)]), true),
+                        ("5", struct_([("0", Int32, true), ("1", Utf8, true)]), true),
+                        ("6", Utf8, true),
+                        (
+                            "7",
+                            struct_([
+                                (
+                                    "dims",
+                                    List(Field::new_list_field(FixedSizeBinary(16), true).into()),
+                                    true,
+                                ),
+                                ("vals", List(Field::new_list_field(Utf8, true).into()), true),
+                            ]),
+                            true,
+                        ),
+                    ]),
+                    true,
+                ),
+                ("err", Binary, true),
+            ]),
+            // Should be able to migrate, should not contain any drops.
+            Some(false),
+        )
     }
 }

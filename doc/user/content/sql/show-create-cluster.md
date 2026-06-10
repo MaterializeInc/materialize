@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-cluster.svg" >}}
+```sql
+SHOW CREATE CLUSTER <cluster_name>
+```
 
- Field                 | Use
------------------------|-------------------------------------------------------------------------------------------------------------------------
- _cluster&lowbar;name_ | The cluster you want to get the `CREATE` statement for. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+For available cluster names, see [`SHOW CLUSTERS`](/sql/show-clusters).
 
 ## Examples
 
@@ -25,12 +25,12 @@ SHOW CREATE CLUSTER c;
 ```nofmt
     name          |    create_sql
 ------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- c                | CREATE CLUSTER "c" (DISK = false, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '100cc', SCHEDULE = MANUAL)
+ c                | CREATE CLUSTER "c" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '100cc', SCHEDULE = MANUAL)
 ```
 
 ## Privileges
 
-There are no privileges required to execute this statement.
+{{% include-headless "/headless/sql-command-privileges/show-create-cluster" %}}
 
 ## Related pages
 

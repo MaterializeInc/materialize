@@ -42,12 +42,14 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE multipart_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multipart-key-${testdrive.seed}');
 
 > CREATE TABLE multipart_key_tbl FROM SOURCE multipart_key (REFERENCE "testdrive-multipart-key-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
+> COMMIT
 
 > SELECT COUNT(*) FROM multipart_key_tbl;
 20000

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -36,16 +37,16 @@ use mz_storage_types::parameters::{
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use uncased::UncasedStr;
 
-use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    DomainConstraint, ValueConstraint, BYTESIZE_AT_LEAST_1MB, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
-use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
+use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
 use crate::session::vars::value::{
-    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone, Value,
-    DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, DEFAULT_DATE_STYLE, Failpoints, IntervalStyle, IsolationLevel,
+    TimeZone, Value,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -65,8 +66,9 @@ pub struct VarDefinition {
     pub value: VarDefaultValue,
     /// Constraint that must be upheld for this variable to be valid.
     pub constraint: Option<ValueConstraint>,
-    /// Optionally hides this variable if it's related to a feature flag being enabled.
-    pub feature_flag: Option<&'static FeatureFlag>,
+    /// When set, prevents getting or setting the variable unless the specified
+    /// feature flag is enabled.
+    pub require_feature_flag: Option<&'static FeatureFlag>,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -107,7 +109,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -126,7 +128,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -145,7 +147,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -170,7 +172,7 @@ impl VarDefinition {
     }
 
     pub const fn with_feature_flag(mut self, feature_flag: &'static FeatureFlag) -> Self {
-        self.feature_flag = Some(feature_flag);
+        self.require_feature_flag = Some(feature_flag);
         self
     }
 
@@ -200,23 +202,14 @@ impl Var for VarDefinition {
         (self.type_name)()
     }
 
-    fn visible(
-        &self,
-        user: &User,
-        system_vars: Option<&super::SystemVars>,
-    ) -> Result<(), VarError> {
+    fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
         if !self.user_visible && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
-        } else if self.name().starts_with("unsafe")
-            && match system_vars {
-                None => true,
-                Some(system_vars) => !system_vars.allow_unsafe(),
-            }
-        {
+        } else if self.is_unsafe() && !system_vars.allow_unsafe() {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
-            if let Some(flag) = self.feature_flag {
-                flag.enabled(system_vars, None, None)?;
+            if let Some(flag) = self.require_feature_flag {
+                flag.require(system_vars)?;
             }
 
             Ok(())
@@ -316,6 +309,13 @@ pub static DATE_STYLE: VarDefinition = VarDefinition::new(
     "DateStyle",
     &DEFAULT_DATE_STYLE,
     "Sets the display format for date and time values (PostgreSQL).",
+    true,
+);
+
+pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::new(
+    "default_cluster_replication_factor",
+    value!(u32; 1),
+    "Default cluster replication factor (Materialize).",
     true,
 );
 
@@ -450,10 +450,17 @@ pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_SQL_SERVER_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_sql_server_connections",
+    value!(u32; 1000),
+    "The maximum number of SQL Server connections in the region, across all schemas (Materialize).",
+    true,
+);
+
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
-     "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+    "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
 
@@ -473,21 +480,21 @@ pub static MAX_SOURCES: VarDefinition = VarDefinition::new(
 
 pub static MAX_SINKS: VarDefinition = VarDefinition::new(
     "max_sinks",
-    value!(u32; 25),
+    value!(u32; 1000),
     "The maximum number of sinks in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_MATERIALIZED_VIEWS: VarDefinition = VarDefinition::new(
     "max_materialized_views",
-    value!(u32; 100),
+    value!(u32; 500),
     "The maximum number of materialized views in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_CLUSTERS: VarDefinition = VarDefinition::new(
     "max_clusters",
-    value!(u32; 10),
+    value!(u32; 25),
     "The maximum number of clusters in the region (Materialize).",
     true,
 );
@@ -542,13 +549,6 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
-    "max_continual_tasks",
-    value!(u32; 100),
-    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
-    true,
-);
-
 pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
@@ -585,11 +585,10 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(u32; 1_073_741_824),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
     true,
 );
 
@@ -668,14 +667,6 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: VarDefinition = VarD
     false,
 );
 
-/// The default for the `DISK` option when creating managed clusters and cluster replicas.
-pub static DISK_CLUSTER_REPLICAS_DEFAULT: VarDefinition = VarDefinition::new(
-    "disk_cluster_replicas_default",
-    value!(bool; false),
-    "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
-    false,
-);
-
 pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     "unsafe_new_transaction_wall_time",
     value!(Option<CheckedTimestamp<DateTime<Utc>>>; None),
@@ -685,6 +676,16 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     // and mz_support users, and we want sqllogictest to have access with its user. Because the name
     // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
     // enabled.
+    true,
+);
+
+pub static SCRAM_ITERATIONS: VarDefinition = VarDefinition::new(
+    "scram_iterations",
+    // / The default iteration count as suggested by
+    // / <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+    value!(NonZeroU32; NonZeroU32::new(600_000).unwrap()),
+    "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. \
+    Please consider the security risks before reducing this below the default value.",
     true,
 );
 
@@ -773,23 +774,6 @@ pub mod upsert_rocksdb {
         "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
         sources. Described in the `mz_rocksdb_types::config` module. \
         Only takes effect on source restart (Materialize).",
-        false,
-    );
-
-    /// Controls whether automatic spill to disk should be turned on when using `DISK`.
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_to_disk",
-        value!(bool; true),
-        "Controls whether automatic spill to disk should be turned on when using `DISK`",
-        false,
-    );
-
-    /// The upsert in memory state size threshold after which it will spill to disk.
-    /// The default is 85 MiB = 89128960 bytes
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_threshold_bytes",
-        value!(usize; mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD),
-        "The upsert in-memory state size threshold in bytes after which it will spill to disk",
         false,
     );
 
@@ -922,9 +906,7 @@ pub static SENTRY_FILTERS: VarDefinition = VarDefinition::new_lazy(
 pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new_lazy(
     "webhooks_secrets_caching_ttl_secs",
     lazy_value!(usize; || {
-        usize::cast_from(
-            mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
-        )
+        usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS)
     }),
     "Sets the time-to-live for values in the Webhooks secrets cache.",
     false,
@@ -1020,26 +1002,6 @@ pub static PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: VarDefinition = VarDefinitio
     false,
 );
 
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_fallback_to_strict_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
-    false,
-);
-
-/// Please see `PgSourceSnapshotConfig`.
-pub static PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: VarDefinition = VarDefinition::new(
-    "pg_source_snapshot_wait_for_count",
-    value!(bool; mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count),
-    "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
-    false,
-);
-
 /// Sets the time between TCP keepalive probes when connecting to MySQL via `mz_mysql_util`.
 pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
     "mysql_source_tcp_keepalive",
@@ -1063,6 +1025,14 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     "mysql_source_snapshot_lock_wait_timeout",
     value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
     "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    false,
+);
+
+/// Sets the timeout for establishing an authenticated connection to MySQL
+pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_connect_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_CONNECT_TIMEOUT),
+    "Sets the timeout for establishing an authenticated connection to MySQL",
     false,
 );
 
@@ -1152,15 +1122,6 @@ pub static KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: VarDefinition = VarDefinition::n
     false,
 );
 
-/// The interval we will fetch metadata from, unless overridden by the source.
-pub static KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: VarDefinition = VarDefinition::new(
-    "kafka_default_metadata_fetch_interval",
-    value!(Duration; mz_kafka_util::client::DEFAULT_METADATA_FETCH_INTERVAL),
-    "The interval we will fetch metadata from, unless overridden by the source. \
-        Defaults to 60s.",
-    false,
-);
-
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
 /// dataflows_.
 /// Currently defaults to 256MiB = 268435456 bytes
@@ -1191,7 +1152,7 @@ pub static STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: VarDefinition = VarDef
 pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: VarDefinition =
     VarDefinition::new_lazy(
         "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction",
-        lazy_value!(Option<Numeric>; || Some(0.0025.into())),
+        lazy_value!(Option<Numeric>; || Some(0.01.into())),
         "The fraction of the cluster replica size to be used as the maximum number of \
             in-flight bytes emitted by persist_sources feeding storage dataflows. \
             If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
@@ -1302,10 +1263,18 @@ pub static ENABLE_RBAC_CHECKS: VarDefinition = VarDefinition::new(
 
 pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     "enable_session_rbac_checks",
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    // TODO(jkosh44) Once RBAC is enabled in all environments, change this to `true`.
     value!(bool; false),
     "User facing session boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
+    true,
+);
+
+pub static RESTRICT_TO_USER_OBJECTS: VarDefinition = VarDefinition::new(
+    "restrict_to_user_objects",
+    value!(bool; false),
+    "When enabled, queries are restricted from accessing system catalog objects. \
+        Useful for MCP tool queries that should only access user-created data products.",
     true,
 );
 
@@ -1358,13 +1327,6 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     true,
 ).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-pub static ARRANGEMENT_EXERT_PROPORTIONALITY: VarDefinition = VarDefinition::new(
-    "arrangement_exert_proportionality",
-    value!(u32; 16),
-    "Value that controls how much merge effort to exert on arrangements.",
-    false,
-);
-
 pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::new(
     "enable_default_connection_validation",
     value!(bool; true),
@@ -1374,7 +1336,7 @@ pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::
 
 pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new(
     "statement_logging_max_data_credit",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(50 * 1024 * 1024)),
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
@@ -1383,7 +1345,7 @@ pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::new(
     "statement_logging_target_data_rate",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(2071)),
     "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
     false,
 );
@@ -1404,6 +1366,13 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition:
     true,
 )
 .with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
+
+pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_internal_statement_logging",
+    value!(bool; false),
+    "Whether to log statements from the `mz_system` user.",
+    false,
+);
 
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
@@ -1467,12 +1436,13 @@ pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
-    true,
-);
+pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
+    "default_timestamp_interval",
+    value!(Duration; Duration::from_millis(1000)),
+    "The interval at which timestamps are assigned to data from sources and tables.",
+    false,
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
@@ -1511,17 +1481,19 @@ pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
     true,
 );
 
-pub static ENABLE_CREATE_TABLE_FROM_SOURCE: VarDefinition = VarDefinition::new(
-    "enable_create_table_from_source",
-    value!(bool; false),
-    "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
-    true,
-);
-
 pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
     "force_source_table_syntax",
     value!(bool; false),
     "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources",
+    true,
+);
+
+pub static OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD: VarDefinition = VarDefinition::new(
+    "optimizer_e2e_latency_warning_threshold",
+    value!(Duration; Duration::from_millis(500)),
+    "Sets the duration that a query can take to compile; queries that take longer \
+        will trigger a warning. If this value is specified without units, it is taken as \
+        milliseconds. A value of zero disables the timeout (Materialize).",
     true,
 );
 
@@ -1545,7 +1517,7 @@ pub mod grpc_client {
 
     pub static HTTP2_KEEP_ALIVE_TIMEOUT: VarDefinition = VarDefinition::new(
         "grpc_client_http2_keep_alive_timeout",
-        value!(Duration; Duration::from_secs(5)),
+        value!(Duration; Duration::from_secs(60)),
         "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
         false,
     );
@@ -1586,17 +1558,30 @@ pub mod cluster_scheduling {
         false,
     );
 
-    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition = VarDefinition::new(
-        "cluster_topology_spread_ignore_non_singular_scale",
-        value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
-        "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
-        false,
-    );
+    pub static CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: VarDefinition =
+        VarDefinition::new(
+            "cluster_topology_spread_ignore_non_singular_scale",
+            value!(bool; DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE),
+            "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+            false,
+        );
 
     pub static CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: VarDefinition = VarDefinition::new(
         "cluster_topology_spread_max_skew",
         value!(i32; DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW),
         "The `maxSkew` for replica topology spread constraints (Materialize).",
+        false,
+    );
+
+    // `minDomains`, like maxSkew, is used to spread across a topology
+    // key. Unlike max skew, minDomains will force node creation to ensure
+    // distribution across a minimum number of keys.
+    // https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/#spread-constraint-definition
+    pub static CLUSTER_TOPOLOGY_SPREAD_MIN_DOMAINS: VarDefinition = VarDefinition::new(
+        "cluster_topology_spread_min_domains",
+        value!(Option<i32>; None),
+        "`minDomains` for replica topology spread constraints. \
+            Should be set to the number of Availability Zones (Materialize).",
         false,
     );
 
@@ -1619,13 +1604,6 @@ pub mod cluster_scheduling {
         "cluster_soften_az_affinity_weight",
         value!(i32; DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT),
         "The preference weight for `cluster_soften_az_affinity` (Materialize).",
-        false,
-    );
-
-    pub static CLUSTER_ALWAYS_USE_DISK: VarDefinition = VarDefinition::new(
-        "cluster_always_use_disk",
-        value!(bool; DEFAULT_ALWAYS_USE_DISK),
-        "Always provisions a replica with disk, regardless of `DISK` DDL option.",
         false,
     );
 
@@ -1655,7 +1633,7 @@ pub mod cluster_scheduling {
         false,
     );
 
-    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(60);
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(1200);
 
     pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
         "cluster_refresh_mv_compaction_estimate",
@@ -1795,18 +1773,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_create_sink_denylist_with_options,
-        desc: "CREATE SINK with unsafe options",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_source_denylist_with_options,
-        desc: "CREATE SOURCE with unsafe options",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,
@@ -1870,7 +1836,7 @@ feature_flags!(
     {
         name: enable_collection_partition_by,
         desc: "PARTITION BY",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -1904,39 +1870,45 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_check_constraint,
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_replica_targeted_materialized_views,
+        desc: "replica-targeted materialized views",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_foreign_key,
+        name: unsafe_enable_table_foreign_key,
         desc: "CREATE TABLE with a foreign key",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_keys,
+        name: unsafe_enable_table_keys,
         desc: "CREATE TABLE with a primary key or unique constraint",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unorchestrated_cluster_replicas,
+        name: unsafe_enable_unorchestrated_cluster_replicas,
         desc: "unorchestrated cluster replicas",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unstable_dependencies,
+        name: unsafe_enable_unstable_dependencies,
         desc: "depending on unstable objects",
         default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_disk_cluster_replicas,
-        desc: "`WITH (DISK)` for cluster replicas",
-        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -1949,12 +1921,24 @@ feature_flags!(
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_broker_matching_rules,
+        desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_glue_schema_registry,
+        desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
+        default: false,
         enable_for_item_parsing: true,
     },
     {
@@ -1964,7 +1948,7 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unsafe_functions,
+        name: unsafe_enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
         enable_for_item_parsing: true,
@@ -1979,7 +1963,7 @@ feature_flags!(
         name: statement_logging_use_reproducible_rng,
         desc: "statement logging with reproducible RNG",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_notices_for_index_already_exists,
@@ -2000,8 +1984,8 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_comment,
-        desc: "the COMMENT ON feature for objects",
+        name: enable_notices_for_equals_null,
+        desc: "emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN)",
         default: true,
         enable_for_item_parsing: true,
     },
@@ -2024,10 +2008,28 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_load_generator_counter,
+        desc: "Create a LOAD GENERATOR COUNTER",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_clock,
+        desc: "Create a LOAD GENERATOR CLOCK",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_datums,
+        desc: "Create a LOAD GENERATOR DATUMS",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_load_generator_key_value,
         desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
-        enable_for_item_parsing: false,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_expressions_in_limit_syntax,
@@ -2079,9 +2081,9 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_copy_to_expr,
-        desc: "COPY ... TO 's3://...'",
-        default: true,
+        name: enable_storage_introspection_logs,
+        desc: "forward storage timely logging events into compute's introspection dataflow",
+        default: false,
         enable_for_item_parsing: false,
     },
     {
@@ -2093,7 +2095,7 @@ feature_flags!(
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2115,12 +2117,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_kafka_sink_partition_by,
-        desc: "Enable the PARTITION BY option for Kafka sinks",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
@@ -2129,98 +2125,228 @@ feature_flags!(
     {
         name: enable_envelope_upsert_inline_errors,
         desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_graceful_cluster_reconfiguration,
-        desc: "Enable graceful reconfiguration for alter cluster",
-        default: false,
         enable_for_item_parsing: false,
     },
     {
-        name: enable_aws_msk_iam_auth,
-        desc: "Enable AWS MSK IAM authentication for Kafka connections",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_clock_load_generator,
-        desc: "Enable the clock load generator",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_yugabyte_connection,
-        desc: "Create a YUGABYTE connection",
+        name: enable_zero_downtime_cluster_reconfiguration,
+        desc: "Enable zero-downtime reconfiguration for alter cluster",
         default: false,
         enable_for_item_parsing: false,
-    },
-    {
-        name: enable_value_window_function_fusion,
-        desc: "Enables the value window function fusion optimization",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_window_aggregation_fusion,
-        desc: "Enables the window aggregation fusion optimization",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_reduce_unnest_list_fusion,
-        desc: "Enables fusing `Reduce` with `FlatMap UnnestList` for better window function performance",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_continual_task_create,
-        desc: "CREATE CONTINUAL TASK",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_transform,
-        desc: "CREATE CONTINUAL TASK .. FROM TRANSFORM .. USING",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_retain,
-        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
-        default: false,
-        enable_for_item_parsing: true,
     },
     {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_table_from_source,
+        desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_join_prioritize_arranged,
+        desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_projection_pushdown_after_relation_cse,
+        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_less_reduce_in_eqprop,
+        desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_dequadratic_eqprop_map,
+        desc: "Skip the quadratic part of EquivalencePropagation's handling of Map.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eq_classes_withholding_errors,
+        desc: "Use `EquivalenceClassesWithholdingErrors` instead of raw `EquivalenceClasses` during eq prop for joins.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_fast_path_plan_insights,
+        desc: "Enables those plan insight notices that help with getting fast path queries. Don't turn on before #9492 is fixed!",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_with_ordinality_legacy_fallback,
+        desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
+        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cast_elimination,
+        desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_case_literal_transform,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_simplify_quantified_comparisons,
+        desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_coalesce_case_transform,
+        desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
     },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
-            enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
-            enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
+            enable_projection_pushdown_after_relation_cse: vars
+                .enable_projection_pushdown_after_relation_cse(),
+            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
+            enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
+            enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
+            enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::vars::SystemVars;
+
+    /// Ensure that all vars used for optimizer features have `enable_for_item_parsing = false`.
+    ///
+    /// This is important to ensure that plan caching works as intended during item parsing. Cached
+    /// plans include the optimizer features they were produced with, and if they don't match on
+    /// lookup, that results in a cache miss.
+    #[mz_ore::test]
+    fn optimizer_features_no_enable_for_item_parsing() {
+        // Construct a `SystemVars` where all optimizer features are `false`.
+        //
+        // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
+        // then assigning them to their respective system vars, to ensure we don't forget to update
+        // this test when new optimizer features are added.
+        let false_features = OptimizerFeatures::default();
+        let OptimizerFeatures {
+            enable_eq_classes_withholding_errors,
+            enable_eager_delta_joins,
+            enable_letrec_fixpoint_analysis,
+            enable_new_outer_join_lowering,
+            enable_reduce_mfp_fusion,
+            enable_variadic_left_join_lowering,
+            enable_cardinality_estimates,
+            persist_fast_path_limit,
+            reoptimize_imported_views,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
+            enable_less_reduce_in_eqprop,
+            enable_dequadratic_eqprop_map,
+            enable_fast_path_plan_insights,
+            enable_cast_elimination,
+            enable_case_literal_transform,
+            enable_simplify_quantified_comparisons,
+            enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
+        } = false_features;
+
+        let mut vars = SystemVars::new();
+
+        macro_rules! set_var {
+            ($var:ident) => {
+                vars.set(stringify!($var), VarInput::Flat(&$var.to_string()))
+                    .unwrap();
+            };
+        }
+
+        set_var!(enable_eq_classes_withholding_errors);
+        set_var!(enable_eager_delta_joins);
+        set_var!(enable_letrec_fixpoint_analysis);
+        set_var!(enable_new_outer_join_lowering);
+        set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_variadic_left_join_lowering);
+        set_var!(enable_cardinality_estimates);
+        set_var!(persist_fast_path_limit);
+        let _ = reoptimize_imported_views; // no corresponding var
+        set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_less_reduce_in_eqprop);
+        set_var!(enable_dequadratic_eqprop_map);
+        set_var!(enable_fast_path_plan_insights);
+        set_var!(enable_cast_elimination);
+        set_var!(enable_case_literal_transform);
+        set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
+
+        // Enable for item parsing, then ensure we still get the same optimizer features.
+        vars.enable_for_item_parsing();
+        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        assert_eq!(features_for_item_parsing, false_features);
     }
 }

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # This testdrive file is exactly the same as upsert-kafka.td, but using the new syntax.
 
@@ -640,13 +640,16 @@ val2:[1,2,
 > CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}';
 
 # should error without the feature flag enabled
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_upsert_inline_errors = false
+
 ! CREATE SOURCE value_decode_error
   IN CLUSTER inline_error_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT JSON
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
-contains:The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is not supported
+contains:The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is not available
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true

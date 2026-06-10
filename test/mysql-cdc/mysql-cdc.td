@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -143,7 +142,6 @@ ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 > CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
 
 > SHOW SUBSOURCES ON test_slot_source
-test_slot_source_progress progress
 
 > SHOW TABLES
 pk_table ""
@@ -288,7 +286,6 @@ contains: CREATE SOURCE specifies DETAILS option
 
 > SHOW SOURCES
 mz_source             mysql      cdc_cluster  ""
-mz_source_progress    progress   <null>        ""
 
 > SHOW TABLES
 conflict_table        ""
@@ -317,22 +314,19 @@ public          nonpk_table
 public          types_table
 public          nulls_table
 public          multipart_pk
-public          "\"mixED_CAse\""
-public          "\"space table\""
-public          "\"таблица\""
+public          mixED_CAse
+public          "space table"
+public          таблица
 public          trailing_space_pk
 public          escaped_text_table
 public          trailing_space_nopk
-public          "\"\"\"literal_quotes\"\"\""
+public          "\"literal_quotes\""
 conflict_schema conflict_table
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
-running
-
-> SELECT count(*) FROM mz_source_progress WHERE transaction_id > 0
+> SELECT count(*) FROM mz_source WHERE transaction_id > 0
 1
 
 # There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
@@ -541,7 +535,7 @@ true
 # Ensure we can start a source with more workers
 #
 
-> CREATE CLUSTER large_cluster SIZE '16';
+> CREATE CLUSTER large_cluster SIZE 'scale=1,workers=16'
 
 > CREATE SOURCE large_cluster_source
   IN CLUSTER large_cluster
@@ -681,7 +675,6 @@ contains:TEXT COLUMNS refers to table not currently being added
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 enum_source             mysql     cdc_cluster  ""
-enum_source_progress    progress  <null>       ""
 
 > SELECT * FROM (SHOW TABLES) WHERE name LIKE '%enum%';
 another_enum_table      ""
@@ -709,15 +702,16 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 #
 # Check schema scoped tables
 
+> BEGIN
 > CREATE SOURCE another_source
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE another_table FROM SOURCE another_source (REFERENCE another_schema.another_table);
+> COMMIT
 
 > SHOW SOURCES
 another_source          mysql  cdc_cluster     ""
-another_source_progress progress <null>        ""
 
 > SHOW TABLES
 another_table           ""

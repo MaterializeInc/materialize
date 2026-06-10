@@ -14,15 +14,11 @@ from materialize.checks.checks import Check
 
 class RenameTable(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE rename_table1 (f1 INTEGER);
                 > INSERT INTO rename_table1 VALUES (1);
                 > CREATE MATERIALIZED VIEW rename_table_view AS SELECT DISTINCT f1 FROM rename_table1;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -34,12 +30,6 @@ class RenameTable(Check):
                 > INSERT INTO rename_table2 VALUES (3);
                 """,
                 """
-                # When upgrading from old version without roles the table is
-                # owned by default_role, thus we have to change the owner
-                # before dropping it:
-                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER TABLE rename_table2 OWNER TO materialize;
-
                 > INSERT INTO rename_table2 VALUES (4);
                 > ALTER TABLE rename_table2 RENAME TO rename_table3;
                 > INSERT INTO rename_table3 VALUES (5);
@@ -48,9 +38,7 @@ class RenameTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM rename_table3;
                 1
                 2
@@ -64,6 +52,4 @@ class RenameTable(Check):
                 3
                 4
                 5
-           """
-            )
-        )
+           """))

@@ -70,62 +70,61 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use differential_dataflow::consolidation;
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
+use mz_cluster_client::ReplicaId;
 use mz_dyncfg::ConfigSet;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::vec::VecExt;
-use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::batch::Added;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::Codec64;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
     MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
-    WALLCLOCK_LAG_HISTORY_DESC,
+    WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::ControllerSinkStatistics;
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
-    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL,
+    WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
 };
 use mz_storage_types::parameters::{
-    StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+    STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT, StorageParameters,
 };
 use mz_storage_types::sources::SourceData;
-use mz_txn_wal::txn_read::TxnsRead;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
-    sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,
-    statistics, StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
+    StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError, collection_mgmt,
+    privatelink_status_history_desc, replica_status_history_desc, sink_status_history_desc,
+    snapshot_statistics, source_status_history_desc, statistics,
 };
 
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
 /// A channel for sending writes to a differential collection.
-type DifferentialWriteChannel<T> =
-    mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
+type DifferentialWriteChannel =
+    mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>;
 
 /// A channel for sending writes to an append-only collection.
-type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
+type AppendOnlyWriteChannel = mpsc::UnboundedSender<(
     Vec<AppendOnlyUpdate>,
-    oneshot::Sender<Result<(), StorageError<T>>>,
+    oneshot::Sender<Result<(), StorageError>>,
 )>;
 
 type WriteTask = AbortOnDropHandle<()>;
@@ -149,10 +148,7 @@ pub enum CollectionManagerKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct CollectionManager<T>
-where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
+pub struct CollectionManager {
     /// When a [`CollectionManager`] is in read-only mode it must not affect any
     /// changes to external state.
     read_only: bool,
@@ -163,14 +159,14 @@ where
     /// internal _desired_ collection. The `CollectionManager` continually makes
     /// sure that collection contents (in persist) match the desired state.
     differential_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (DifferentialWriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (DifferentialWriteChannel, WriteTask, ShutdownSender)>>>,
 
     /// Collections that we only append to using blind-writes.
     ///
     /// Every write succeeds at _some_ timestamp, and we never check what the
     /// actual contents of the collection (in persist) are.
     append_only_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel, WriteTask, ShutdownSender)>>>,
 
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
@@ -187,11 +183,8 @@ where
 ///   second. For this usecase:
 ///     - The `CollectionManager` handles contention by permitting and ignoring errors.
 ///     - Closed collections will not panic if they continue receiving these requests.
-impl<T> CollectionManager<T>
-where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-{
-    pub(super) fn new(read_only: bool, now: NowFn) -> CollectionManager<T> {
+impl CollectionManager {
+    pub(super) fn new(read_only: bool, now: NowFn) -> CollectionManager {
         let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
             .as_millis()
             .try_into()
@@ -223,13 +216,14 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         read_handle_fn: R,
         force_writable: bool,
-        introspection_config: DifferentialIntrospectionConfig<T>,
+        introspection_config: DifferentialIntrospectionConfig,
     ) where
-        R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-            + Send
+        R: FnMut() -> Pin<
+                Box<dyn Future<Output = ReadHandle<SourceData, (), Timestamp, StorageDiff>> + Send>,
+            > + Send
             + Sync
             + 'static,
     {
@@ -277,9 +271,9 @@ where
     pub(super) fn register_append_only_collection(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         force_writable: bool,
-        introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
+        introspection_config: Option<AppendOnlyIntrospectionConfig>,
     ) {
         let mut guard = self
             .append_only_collections
@@ -357,6 +351,30 @@ where
         Box::pin(futures::future::ready(()))
     }
 
+    /// Returns a sender for writes to the given append-only collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to an append-only collections.
+    pub(super) fn append_only_write_sender(&self, id: GlobalId) -> AppendOnlyWriteChannel {
+        let collections = self.append_only_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing append-only collection: {id}"),
+        }
+    }
+
+    /// Returns a sender for writes to the given differential collection.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collections.
+    pub(super) fn differential_write_sender(&self, id: GlobalId) -> DifferentialWriteChannel {
+        let collections = self.differential_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((tx, _, _)) => tx.clone(),
+            None => panic!("missing differential collection: {id}"),
+        }
+    }
+
     /// Appends `updates` to the append-only collection identified by `id`, at
     /// _some_ timestamp. Does not wait for the append to complete.
     ///
@@ -369,19 +387,17 @@ where
             panic!("attempting blind write to {} while in read-only mode", id);
         }
 
-        if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .append_only_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
-                update_tx.clone()
-            };
+        if updates.is_empty() {
+            return;
+        }
 
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).expect("rx hung up");
+        let collections = self.append_only_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((update_tx, _, _)) => {
+                let (tx, _rx) = oneshot::channel();
+                update_tx.send((updates, tx)).expect("rx hung up");
+            }
+            None => panic!("missing append-only collection: {id}"),
         }
     }
 
@@ -393,19 +409,17 @@ where
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
     pub(super) fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
-        if !op.is_empty_append() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .differential_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing differential collection");
-                update_tx.clone()
-            };
+        if op.is_empty_append() {
+            return;
+        }
 
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((op, tx)).expect("rx hung up");
+        let collections = self.differential_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((update_tx, _, _)) => {
+                let (tx, _rx) = oneshot::channel();
+                update_tx.send((op, tx)).expect("rx hung up");
+            }
+            None => panic!("missing differential collection: {id}"),
         }
     }
 
@@ -423,7 +437,7 @@ where
     pub(super) fn monotonic_appender(
         &self,
         id: GlobalId,
-    ) -> Result<MonotonicAppender<T>, StorageError<T>> {
+    ) -> Result<MonotonicAppender, StorageError> {
         let guard = self
             .append_only_collections
             .lock()
@@ -446,21 +460,17 @@ where
     }
 }
 
-pub(crate) struct DifferentialIntrospectionConfig<T>
-where
-    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-{
-    pub(crate) recent_upper: Antichain<T>,
+pub(crate) struct DifferentialIntrospectionConfig {
+    pub(crate) recent_upper: Antichain<Timestamp>,
     pub(crate) introspection_type: IntrospectionType,
-    pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    pub(crate) txns_read: TxnsRead<T>,
-    pub(crate) persist: Arc<PersistClientCache>,
-    pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
+    pub(crate) storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+    pub(crate) collection_manager: collection_mgmt::CollectionManager,
     pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     pub(crate) sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
+        Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
     pub(crate) statistics_interval: Duration,
     pub(crate) statistics_interval_receiver: watch::Receiver<Duration>,
+    pub(crate) statistics_retention_duration: Duration,
     pub(crate) metrics: StorageControllerMetrics,
     pub(crate) introspection_tokens: Arc<Mutex<BTreeMap<GlobalId, Box<dyn Any + Send + Sync>>>>,
 }
@@ -471,17 +481,17 @@ where
 /// NOTE: This implementation is a bit clunky, and could be optimized by not keeping
 /// all of desired in memory (see commend below). It is meant to showcase the
 /// general approach.
-struct DifferentialWriteTask<T, R>
+struct DifferentialWriteTask<R>
 where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-        + Send
+    R: FnMut() -> Pin<
+            Box<dyn Future<Output = ReadHandle<SourceData, (), Timestamp, StorageDiff>> + Send>,
+        > + Send
         + 'static,
 {
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -496,7 +506,7 @@ where
     upper_tick_interval: tokio::time::Interval,
 
     /// Receiver for write commands. These change our desired state.
-    cmd_rx: mpsc::UnboundedReceiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
+    cmd_rx: mpsc::UnboundedReceiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>,
 
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
@@ -512,24 +522,24 @@ where
     // We can optimize for a multi-writer case by keeping an open
     // ReadHandle and continually reading updates from persist, updating
     // a desired in place. Similar to the self-correcting persist_sink.
-    desired: Vec<(Row, i64)>,
+    desired: Vec<(Row, Diff)>,
 
     /// Updates that we have to write when next writing to persist. This is
     /// determined by looking at what is desired and what is in persist.
-    to_write: Vec<(Row, i64)>,
+    to_write: Vec<(Row, Diff)>,
 
     /// Current upper of the persist shard. We keep track of this so that we
     /// realize when someone else writes to the shard, in which case we have to
     /// update our state of the world, that is update our `to_write` based on
     /// `desired` and the contents of the persist shard.
-    current_upper: T,
+    current_upper: Timestamp,
 }
 
-impl<T, R> DifferentialWriteTask<T, R>
+impl<R> DifferentialWriteTask<R>
 where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
-        + Send
+    R: FnMut() -> Pin<
+            Box<dyn Future<Output = ReadHandle<SourceData, (), Timestamp, StorageDiff>> + Send>,
+        > + Send
         + Sync
         + 'static,
 {
@@ -537,18 +547,16 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         read_handle_fn: R,
         read_only: bool,
         now: NowFn,
-        introspection_config: DifferentialIntrospectionConfig<T>,
-    ) -> (DifferentialWriteChannel<T>, WriteTask, ShutdownSender) {
+        introspection_config: DifferentialIntrospectionConfig,
+    ) -> (DifferentialWriteChannel, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let upper_tick_interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
-
-        let current_upper = T::minimum();
 
         let task = Self {
             id,
@@ -561,7 +569,7 @@ where
             shutdown_rx,
             desired: Vec::new(),
             to_write: Vec::new(),
-            current_upper,
+            current_upper: Timestamp::MIN,
         };
 
         let handle = mz_ore::task::spawn(
@@ -576,7 +584,7 @@ where
                     ControlFlow::Break(reason) => {
                         info!("write_task-{} ending: {}", id, reason);
                     }
-                    c => {
+                    c @ ControlFlow::Continue(_) => {
                         unreachable!(
                             "cannot break out of the loop with a Continue, but got: {:?}",
                             c
@@ -594,7 +602,7 @@ where
     ///
     /// This might include consolidation, deleting older entries or seeding
     /// in-memory state of, say, scrapers, with current collection contents.
-    async fn prepare(&self, introspection_config: DifferentialIntrospectionConfig<T>) {
+    async fn prepare(&self, introspection_config: DifferentialIntrospectionConfig) {
         tracing::info!(%self.id, ?introspection_config.introspection_type, "preparing differential introspection collection for writes");
 
         match introspection_config.introspection_type {
@@ -610,16 +618,10 @@ where
                     self.id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
-                    &introspection_config.txns_read,
-                    &introspection_config.persist,
                 )
                 .await;
 
-                let scraper_token = statistics::spawn_statistics_scraper::<
-                    statistics::SourceStatistics,
-                    SourceStatisticsUpdate,
-                    _,
-                >(
+                let scraper_token = statistics::spawn_statistics_scraper(
                     self.id.clone(),
                     // These do a shallow copy.
                     introspection_config.collection_manager,
@@ -627,6 +629,7 @@ where
                     prev,
                     introspection_config.statistics_interval.clone(),
                     introspection_config.statistics_interval_receiver.clone(),
+                    introspection_config.statistics_retention_duration,
                     introspection_config.metrics,
                 );
                 let web_token = statistics::spawn_webhook_statistics_scraper(
@@ -648,21 +651,19 @@ where
                     self.id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
-                    &introspection_config.txns_read,
-                    &introspection_config.persist,
                 )
                 .await;
 
-                let scraper_token =
-                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                        self.id.clone(),
-                        introspection_config.collection_manager,
-                        Arc::clone(&introspection_config.sink_statistics),
-                        prev,
-                        introspection_config.statistics_interval,
-                        introspection_config.statistics_interval_receiver,
-                        introspection_config.metrics,
-                    );
+                let scraper_token = statistics::spawn_statistics_scraper(
+                    self.id.clone(),
+                    introspection_config.collection_manager,
+                    Arc::clone(&introspection_config.sink_statistics),
+                    prev,
+                    introspection_config.statistics_interval,
+                    introspection_config.statistics_interval_receiver,
+                    introspection_config.statistics_retention_duration,
+                    introspection_config.metrics,
+                );
 
                 // Make sure this is dropped when the controller is
                 // dropped, so that the internal task will stop.
@@ -677,13 +678,15 @@ where
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
-            | IntrospectionType::ComputeHydrationTimes => {
+            | IntrospectionType::ComputeHydrationTimes
+            | IntrospectionType::ComputeObjectArrangementSizes => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }
 
             introspection_type @ IntrospectionType::ReplicaMetricsHistory
             | introspection_type @ IntrospectionType::WallclockLagHistory
+            | introspection_type @ IntrospectionType::WallclockLagHistogram
             | introspection_type @ IntrospectionType::PreparedStatementHistory
             | introspection_type @ IntrospectionType::StatementExecutionHistory
             | introspection_type @ IntrospectionType::SessionHistory
@@ -699,8 +702,7 @@ where
     }
 
     async fn run(mut self) -> ControlFlow<String> {
-        const BATCH_SIZE: usize = 4096;
-        let mut updates = Vec::with_capacity(BATCH_SIZE);
+        let mut updates = Vec::new();
         loop {
             tokio::select! {
                 // Prefer sending actual updates over just bumping the upper,
@@ -715,15 +717,14 @@ where
                 }
 
                 // Pull a chunk of queued updates off the channel.
-                count = self.cmd_rx.recv_many(&mut updates, BATCH_SIZE) => {
-                    if count > 0 {
-                        let _ = self.handle_updates(&mut updates).await?;
-                    } else {
+                () = recv_all_commands(&mut self.cmd_rx, &mut updates) => {
+                    if updates.is_empty() {
                         // Sender has been dropped, which means the collection
                         // should have been unregistered, break out of the run
                         // loop if we weren't already aborted.
                         return ControlFlow::Break("sender has been dropped".to_string());
                     }
+                    self.handle_updates(&mut updates).await?;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -732,14 +733,14 @@ where
                         // Not bumping uppers while in read-only mode.
                         continue;
                     }
-                    let _ = self.tick_upper().await?;
+                    self.tick_upper().await?;
                 },
             }
         }
     }
 
     async fn tick_upper(&mut self) -> ControlFlow<String> {
-        let now = T::from((self.now)());
+        let now = Timestamp::from((self.now)());
 
         if now <= self.current_upper {
             // Upper is already further along than current wall-clock time, no
@@ -752,8 +753,9 @@ where
             .write_handle
             .compare_and_append_batch(
                 &mut [],
-                Antichain::from_elem(self.current_upper.clone()),
-                Antichain::from_elem(now.clone()),
+                Antichain::from_elem(self.current_upper),
+                Antichain::from_elem(now),
+                true,
             )
             .await
             .expect("valid usage");
@@ -769,7 +771,7 @@ where
                 // our `to_write`, based on what we learn and `desired`.
 
                 let actual_upper = if let Some(ts) = err.current.as_option() {
-                    ts.clone()
+                    *ts
                 } else {
                     return ControlFlow::Break("upper is the empty antichain".to_string());
                 };
@@ -806,7 +808,7 @@ where
 
     async fn handle_updates(
         &mut self,
-        batch: &mut Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
+        batch: &mut Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>,
     ) -> ControlFlow<String> {
         // Put in place _some_ rate limiting.
         let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
@@ -862,7 +864,7 @@ where
                 self.to_write.extend(updates);
             }
             StorageWriteOp::Delete { filter } => {
-                let to_delete = self.desired.drain_filter_swapping(|(row, _)| filter(row));
+                let to_delete = self.desired.extract_if(.., |(row, _)| filter(row));
                 let retractions = to_delete.map(|(row, diff)| (row, -diff));
                 self.to_write.extend(retractions);
             }
@@ -874,7 +876,7 @@ where
     /// upper was not what we expected.
     async fn write_to_persist(
         &mut self,
-        responders: Vec<oneshot::Sender<Result<(), StorageError<T>>>>,
+        responders: Vec<oneshot::Sender<Result<(), StorageError>>>,
     ) -> ControlFlow<String> {
         if self.read_only {
             tracing::debug!(%self.id, "not writing to differential collection: read-only");
@@ -898,11 +900,8 @@ where
 
         loop {
             // Append updates to persist!
-            let now = T::from((self.now)());
-            let new_upper = std::cmp::max(
-                now,
-                TimestampManipulation::step_forward(&self.current_upper),
-            );
+            let now = Timestamp::from((self.now)());
+            let new_upper = std::cmp::max(now, self.current_upper.step_forward());
 
             let updates_to_write = self
                 .to_write
@@ -910,8 +909,8 @@ where
                 .map(|(row, diff)| {
                     (
                         (SourceData(Ok(row.clone())), ()),
-                        self.current_upper.clone(),
-                        diff.clone(),
+                        self.current_upper,
+                        diff.into_inner(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -921,8 +920,8 @@ where
                 .write_handle
                 .compare_and_append(
                     updates_to_write,
-                    Antichain::from_elem(self.current_upper.clone()),
-                    Antichain::from_elem(new_upper.clone()),
+                    Antichain::from_elem(self.current_upper),
+                    Antichain::from_elem(new_upper),
                 )
                 .await
                 .expect("valid usage");
@@ -949,7 +948,7 @@ where
                     // from persist and update to_write based on that and the
                     // desired state.
                     let actual_upper = if let Some(ts) = err.current.as_option() {
-                        ts.clone()
+                        *ts
                     } else {
                         return ControlFlow::Break("upper is the empty antichain".to_string());
                     };
@@ -977,7 +976,10 @@ where
 
                     self.sync_to_persist().await;
 
-                    debug!("Retrying invalid-uppers error while appending to differential collection {}", self.id);
+                    debug!(
+                        "Retrying invalid-uppers error while appending to differential collection {}",
+                        self.id
+                    );
                 }
             }
         }
@@ -994,10 +996,7 @@ where
     /// match what we expected.
     async fn sync_to_persist(&mut self) {
         let mut read_handle = (self.read_handle_fn)().await;
-        let as_of = self
-            .current_upper
-            .step_back()
-            .unwrap_or_else(|| T::minimum());
+        let as_of = self.current_upper.step_back().unwrap_or(Timestamp::MIN);
         let as_of = Antichain::from_elem(as_of);
         let snapshot = read_handle.snapshot_and_fetch(as_of).await;
 
@@ -1005,12 +1004,12 @@ where
             Ok(contents) => {
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
-                    let row = data.expect("invalid protobuf data").0.unwrap();
-                    snapshot.push((row, -diff));
+                    let row = data.0.unwrap();
+                    snapshot.push((row, -Diff::from(diff)));
                 }
                 snapshot
             }
-            Err(_) => panic!("read before since"),
+            Err(e) => panic!("read before since: {e:?}"),
         };
 
         self.to_write.clear();
@@ -1020,48 +1019,37 @@ where
     }
 }
 
-pub(crate) struct AppendOnlyIntrospectionConfig<T>
-where
-    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-{
+pub(crate) struct AppendOnlyIntrospectionConfig {
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) config_set: Arc<ConfigSet>,
     pub(crate) parameters: StorageParameters,
-    pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    pub(crate) txns_read: TxnsRead<T>,
-    pub(crate) persist: Arc<PersistClientCache>,
+    pub(crate) storage_collections: Arc<dyn StorageCollections + Send + Sync>,
 }
 
 /// A task that writes to an append only collection and continuously bumps the upper for the specified
 /// collection.
 ///
 /// For status history collections, this task can deduplicate redundant [`Statuses`](Status).
-struct AppendOnlyWriteTask<T>
-where
-    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-{
+struct AppendOnlyWriteTask {
     /// The collection that we are writing to.
     id: GlobalId,
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     read_only: bool,
     now: NowFn,
     user_batch_duration_ms: Arc<AtomicU64>,
     /// Receiver for write commands.
     rx: mpsc::UnboundedReceiver<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
+        oneshot::Sender<Result<(), StorageError>>,
     )>,
 
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
     /// If this collection deduplicates statuses, this map is used to track the previous status.
-    previous_statuses: Option<BTreeMap<GlobalId, Status>>,
+    previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>>,
 }
 
-impl<T> AppendOnlyWriteTask<T>
-where
-    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
-{
+impl AppendOnlyWriteTask {
     /// Spawns an [`AppendOnlyWriteTask`] in an [`mz_ore::task`] that will continuously bump the
     /// upper for the specified collection,
     /// and append data that is sent via the provided [`mpsc::UnboundedSender`].
@@ -1071,46 +1059,49 @@ where
     /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         read_only: bool,
         now: NowFn,
         user_batch_duration_ms: Arc<AtomicU64>,
-        introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
-    ) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender) {
+        introspection_config: Option<AppendOnlyIntrospectionConfig>,
+    ) -> (AppendOnlyWriteChannel, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let previous_statuses: Option<BTreeMap<GlobalId, Status>> = match introspection_config
-            .as_ref()
-            .map(|config| config.introspection_type)
-        {
-            Some(IntrospectionType::SourceStatusHistory)
-            | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
+        let previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>> =
+            match introspection_config
+                .as_ref()
+                .map(|config| config.introspection_type)
+            {
+                Some(IntrospectionType::SourceStatusHistory)
+                | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
 
-            Some(IntrospectionType::ReplicaMetricsHistory)
-            | Some(IntrospectionType::WallclockLagHistory)
-            | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
-            | Some(IntrospectionType::ReplicaStatusHistory)
-            | Some(IntrospectionType::PreparedStatementHistory)
-            | Some(IntrospectionType::StatementExecutionHistory)
-            | Some(IntrospectionType::SessionHistory)
-            | Some(IntrospectionType::StatementLifecycleHistory)
-            | Some(IntrospectionType::SqlText)
-            | None => None,
+                Some(IntrospectionType::ReplicaMetricsHistory)
+                | Some(IntrospectionType::WallclockLagHistory)
+                | Some(IntrospectionType::WallclockLagHistogram)
+                | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
+                | Some(IntrospectionType::ReplicaStatusHistory)
+                | Some(IntrospectionType::PreparedStatementHistory)
+                | Some(IntrospectionType::StatementExecutionHistory)
+                | Some(IntrospectionType::SessionHistory)
+                | Some(IntrospectionType::StatementLifecycleHistory)
+                | Some(IntrospectionType::SqlText)
+                | None => None,
 
-            Some(introspection_type @ IntrospectionType::ShardMapping)
-            | Some(introspection_type @ IntrospectionType::Frontiers)
-            | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
-            | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
-            | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
-            | Some(introspection_type @ IntrospectionType::ComputeDependencies)
-            | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
-            | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
-            | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
-            | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
-                unreachable!("not append-only collection: {introspection_type:?}")
-            }
-        };
+                Some(introspection_type @ IntrospectionType::ShardMapping)
+                | Some(introspection_type @ IntrospectionType::Frontiers)
+                | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
+                | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
+                | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
+                | Some(introspection_type @ IntrospectionType::ComputeDependencies)
+                | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
+                | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
+                | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
+                | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes)
+                | Some(introspection_type @ IntrospectionType::ComputeObjectArrangementSizes) => {
+                    unreachable!("not append-only collection: {introspection_type:?}")
+                }
+            };
 
         let mut task = Self {
             id,
@@ -1140,20 +1131,20 @@ where
     /// writing to the given append only introspection collection.
     ///
     /// This might include consolidation or deleting older entries.
-    async fn prepare(&mut self, introspection_config: Option<AppendOnlyIntrospectionConfig<T>>) {
+    async fn prepare(&mut self, introspection_config: Option<AppendOnlyIntrospectionConfig>) {
         let Some(AppendOnlyIntrospectionConfig {
             introspection_type,
             config_set,
             parameters,
             storage_collections,
-            txns_read,
-            persist,
         }) = introspection_config
         else {
             return;
         };
         let initial_statuses = match introspection_type {
-            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
+            IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::WallclockLagHistogram => {
                 let result = partially_truncate_metrics_history(
                     self.id,
                     introspection_type,
@@ -1161,8 +1152,6 @@ where
                     config_set,
                     self.now.clone(),
                     storage_collections,
-                    txns_read,
-                    persist,
                 )
                 .await;
                 if let Err(error) = result {
@@ -1181,8 +1170,6 @@ where
                     privatelink_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
                 Vec::new()
@@ -1195,8 +1182,6 @@ where
                     replica_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
                 Vec::new()
@@ -1224,8 +1209,6 @@ where
                     source_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
 
@@ -1258,8 +1241,6 @@ where
                     sink_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
 
@@ -1294,7 +1275,8 @@ where
             | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
             | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
             | introspection_type @ IntrospectionType::ComputeErrorCounts
-            | introspection_type @ IntrospectionType::ComputeHydrationTimes => {
+            | introspection_type @ IntrospectionType::ComputeHydrationTimes
+            | introspection_type @ IntrospectionType::ComputeObjectArrangementSizes => {
                 unreachable!("not append-only collection: {introspection_type:?}")
             }
         };
@@ -1306,8 +1288,7 @@ where
     async fn run(mut self) {
         let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 
-        const BATCH_SIZE: usize = 4096;
-        let mut batch: Vec<(Vec<_>, _)> = Vec::with_capacity(BATCH_SIZE);
+        let mut batch: Vec<(Vec<_>, _)> = Vec::new();
 
         'run: loop {
             tokio::select! {
@@ -1338,72 +1319,79 @@ where
                 }
 
                 // Pull a chunk of queued updates off the channel.
-                count = self.rx.recv_many(&mut batch, BATCH_SIZE) => {
-                    if count > 0 {
-                        // To rate limit appends to persist we add artificial latency, and will
-                        // finish no sooner than this instant.
-                        let batch_duration_ms = match self.id {
-                            GlobalId::User(_) => Duration::from_millis(self.user_batch_duration_ms.load(Ordering::Relaxed)),
-                            // For non-user collections, always just use the default.
-                            _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
-                        };
-                        let use_batch_now = Instant::now();
-                        let min_time_to_complete = use_batch_now + batch_duration_ms;
-
-                        tracing::debug!(
-                            ?use_batch_now,
-                            ?batch_duration_ms,
-                            ?min_time_to_complete,
-                            "batch duration",
-                        );
-
-                        // Reset the interval which is used to periodically bump the uppers
-                        // because the uppers will get bumped with the following update. This
-                        // makes it such that we will write at most once every `interval`.
-                        //
-                        // For example, let's say our `DEFAULT_TICK` interval is 10, so at
-                        // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
-                        // update at `t + 3` we want to shift this window so we bump the uppers
-                        // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
-                        interval.reset();
-
-
-                        let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
-                        let mut responders = Vec::with_capacity(batch.len());
-
-                        for (updates, responder) in batch.drain(..) {
-                            let rows = self.process_updates(updates);
-
-                            all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
-                            responders.push(responder);
-                        }
-
-                        if self.read_only {
-                            tracing::warn!(%self.id, ?all_rows, "append while in read-only mode");
-                            notify_listeners(responders, || Err(StorageError::ReadOnly));
-                            continue;
-                        }
-
-                        // Append updates to persist!
-                        let at_least = T::from((self.now)());
-
-                        if !all_rows.is_empty() {
-                            monotonic_append(&mut self.write_handle, all_rows, at_least).await;
-                        }
-                        // Notify all of our listeners.
-                        notify_listeners(responders, || Ok(()));
-
-                        // Wait until our artificial latency has completed.
-                        //
-                        // Note: if writing to persist took longer than `DEFAULT_TICK` this
-                        // await will resolve immediately.
-                        tokio::time::sleep_until(min_time_to_complete).await;
-                    } else {
+                () = recv_all_commands(&mut self.rx, &mut batch) => {
+                    if batch.is_empty() {
                         // Sender has been dropped, which means the collection should have been
                         // unregistered, break out of the run loop if we weren't already
                         // aborted.
                         break 'run;
                     }
+
+                    // To rate limit appends to persist we add artificial latency, and will
+                    // finish no sooner than this instant.
+                    let batch_duration_ms = match self.id {
+                        GlobalId::User(_) => Duration::from_millis(
+                            self.user_batch_duration_ms.load(Ordering::Relaxed),
+                        ),
+                        // For non-user collections, always just use the default.
+                        _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+                    };
+                    let use_batch_now = Instant::now();
+                    let min_time_to_complete = use_batch_now + batch_duration_ms;
+
+                    tracing::debug!(
+                        ?use_batch_now,
+                        ?batch_duration_ms,
+                        ?min_time_to_complete,
+                        "batch duration",
+                    );
+
+                    // Reset the interval which is used to periodically bump the uppers
+                    // because the uppers will get bumped with the following update. This
+                    // makes it such that we will write at most once every `interval`.
+                    //
+                    // For example, let's say our `DEFAULT_TICK` interval is 10, so at
+                    // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
+                    // update at `t + 3` we want to shift this window so we bump the uppers
+                    // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
+                    interval.reset();
+
+                    let capacity: usize = batch
+                        .iter()
+                        .map(|(rows, _)| rows.len())
+                        .sum();
+                    let mut all_rows = Vec::with_capacity(capacity);
+                    let mut responders = Vec::with_capacity(batch.len());
+
+                    for (updates, responder) in batch.drain(..) {
+                        let rows = self.process_updates(updates);
+
+                        all_rows.extend(
+                            rows.map(|(row, diff)| TimestamplessUpdate { row, diff }),
+                        );
+                        responders.push(responder);
+                    }
+
+                    if self.read_only {
+                        tracing::warn!(%self.id, ?all_rows, "append while in read-only mode");
+                        notify_listeners(responders, || Err(StorageError::ReadOnly));
+                        continue;
+                    }
+
+                    // Append updates to persist!
+                    let at_least = Timestamp::from((self.now)());
+
+                    if !all_rows.is_empty() {
+                        monotonic_append(&mut self.write_handle, all_rows, at_least).await;
+                    }
+                    // Notify all of our listeners.
+                    notify_listeners(responders, || Ok(()));
+
+                    // Wait until our artificial latency has completed.
+                    //
+                    // Note: if writing to persist took longer than `DEFAULT_TICK` this
+                    // await will resolve immediately.
+                    tokio::time::sleep_until(min_time_to_complete).await;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -1414,9 +1402,9 @@ where
                     }
 
                     // Update our collection.
-                    let now = T::from((self.now)());
+                    let now = Timestamp::from((self.now)());
                     let updates = vec![];
-                    let at_least = now.clone();
+                    let at_least = now;
 
                     // Failures don't matter when advancing collections' uppers. This might
                     // fail when a clusterd happens to be writing to this concurrently.
@@ -1442,7 +1430,12 @@ where
                 .filter(|r| match r {
                     AppendOnlyUpdate::Row(_) => true,
                     AppendOnlyUpdate::Status(update) => {
-                        match (previous_statuses.get(&update.id).as_deref(), &update.status) {
+                        match (
+                            previous_statuses
+                                .get(&(update.id, update.replica_id))
+                                .as_deref(),
+                            &update.status,
+                        ) {
                             (None, _) => true,
                             (Some(old), new) => old.superseded_by(*new),
                         }
@@ -1451,7 +1444,9 @@ where
                 .collect();
             previous_statuses.extend(new.iter().filter_map(|update| match update {
                 AppendOnlyUpdate::Row(_) => None,
-                AppendOnlyUpdate::Status(update) => Some((update.id, update.status)),
+                AppendOnlyUpdate::Status(update) => {
+                    Some(((update.id, update.replica_id), update.status))
+                }
             }));
             new
         } else {
@@ -1468,19 +1463,14 @@ where
 /// # Panics
 ///
 /// Panics if `collection` is not a metrics history.
-async fn partially_truncate_metrics_history<T>(
+async fn partially_truncate_metrics_history(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     config_set: Arc<ConfigSet>,
     now: NowFn,
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: TxnsRead<T>,
-    persist: Arc<PersistClientCache>,
-) -> Result<(), anyhow::Error>
-where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
-{
+    storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+) -> Result<(), anyhow::Error> {
     let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
             REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(&config_set),
@@ -1496,6 +1486,13 @@ where
                 .expect("schema has not changed")
                 .0,
         ),
+        IntrospectionType::WallclockLagHistogram => (
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL.get(&config_set),
+            WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC
+                .get_by_name(&ColumnName::from("period_start"))
+                .expect("schema has not changed")
+                .0,
+        ),
         _ => panic!("not a metrics history: {introspection_type:?}"),
     };
 
@@ -1507,45 +1504,50 @@ where
         return Ok(()); // nothing to truncate
     };
 
-    let mut rows = snapshot(id, as_of_ts, &storage_collections, &txns_read, &persist)
+    let mut rows = storage_collections
+        .snapshot_cursor(id, as_of_ts)
         .await
         .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
 
     let now = mz_ore::now::to_datetime(now());
     let keep_since = now - keep_duration;
 
-    // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
-    // of all other rows to 0.
-    for (row, diff) in &mut rows {
-        let datums = row.unpack();
-        let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
-        *diff = if *occurred_at < keep_since { -*diff } else { 0 };
-    }
-
-    // Consolidate to avoid superfluous writes.
-    consolidation::consolidate(&mut rows);
-
-    if rows.is_empty() {
-        return Ok(());
-    }
-
     // It is very important that we append our retractions at the timestamp
     // right after the timestamp at which we got our snapshot. Otherwise,
     // it's possible for someone else to sneak in retractions or other
     // unexpected changes.
-    let old_upper_ts = upper_ts.clone();
-    let write_ts = old_upper_ts.clone();
-    let new_upper_ts = TimestampManipulation::step_forward(&old_upper_ts);
+    let old_upper_ts = *upper_ts;
+    let new_upper_ts = old_upper_ts.step_forward();
 
-    let updates = rows
-        .into_iter()
-        .map(|(row, diff)| ((SourceData(Ok(row)), ()), write_ts.clone(), diff));
+    // Produce retractions by inverting diffs of rows we want to delete.
+    let mut builder = write_handle.builder(Antichain::from_elem(old_upper_ts));
+    while let Some(chunk) = rows.next().await {
+        for (data, _t, diff) in chunk {
+            let Ok(row) = &data.0 else { continue };
+            let datums = row.unpack();
+            let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
+            if *occurred_at >= keep_since {
+                continue;
+            }
+            let diff = -diff;
+            match builder.add(&data, &(), &old_upper_ts, &diff).await? {
+                Added::Record => {}
+                Added::RecordAndParts => {
+                    debug!(?id, "added part to builder");
+                }
+            }
+        }
+    }
+
+    let mut updates = builder.finish(Antichain::from_elem(new_upper_ts)).await?;
+    let mut batches = vec![&mut updates];
 
     write_handle
-        .compare_and_append(
-            updates,
+        .compare_and_append_batch(
+            batches.as_mut_slice(),
             Antichain::from_elem(old_upper_ts),
             Antichain::from_elem(new_upper_ts),
+            true,
         )
         .await
         .expect("valid usage")
@@ -1561,27 +1563,25 @@ where
 /// cannot maintain a desired state for them.
 ///
 /// Returns a map with latest unpacked row per key.
-pub(crate) async fn partially_truncate_status_history<T, K>(
+pub(crate) async fn partially_truncate_status_history<K>(
     id: GlobalId,
     introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: &TxnsRead<T>,
-    persist: &Arc<PersistClientCache>,
+    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
 ) -> BTreeMap<K, Row>
 where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
     K: Clone + Debug + Ord + Send + Sync,
 {
     let upper = write_handle.fetch_recent_upper().await.clone();
 
     let mut rows = match upper.as_option() {
-        Some(f) if f > &T::minimum() => {
+        Some(f) if f > &Timestamp::MIN => {
             let as_of = f.step_back().unwrap();
 
-            snapshot(id, as_of, storage_collections, txns_read, persist)
+            storage_collections
+                .snapshot_cursor(id, as_of)
                 .await
                 .expect("snapshot succeeds")
         }
@@ -1594,10 +1594,14 @@ where
     let mut latest_row_per_key: BTreeMap<K, (CheckedTimestamp<DateTime<Utc>>, Row)> =
         BTreeMap::new();
 
-    // Consolidate the snapshot, so we can process it correctly below.
-    differential_dataflow::consolidation::consolidate(&mut rows);
+    // It is very important that we append our retractions at the timestamp
+    // right after the timestamp at which we got our snapshot. Otherwise,
+    // it's possible for someone else to sneak in retractions or other
+    // unexpected changes.
+    let expected_upper = upper.into_option().expect("checked above");
+    let new_upper = expected_upper.step_forward();
 
-    let mut deletions = vec![];
+    let mut deletions = write_handle.builder(Antichain::from_elem(expected_upper));
 
     let mut handle_row = {
         let latest_row_per_key = &mut latest_row_per_key;
@@ -1631,29 +1635,35 @@ where
                 BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
             > = BTreeMap::new();
 
-            for (row, diff) in rows {
-                let (key, timestamp) = handle_row(&row, diff);
+            while let Some(chunk) = rows.next().await {
+                for (data, _t, diff) in chunk {
+                    let Ok(row) = &data.0 else { continue };
+                    let (key, timestamp) = handle_row(row, diff);
 
-                // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
-                // so we handle duplicated rows separately.
-                let entries = last_n_entries_per_key.entry(key).or_default();
-                for _ in 0..diff {
-                    // We CAN have multiple statuses (most likely Starting and Running) at the exact same
-                    // millisecond, depending on how the `health_operator` is scheduled.
-                    //
-                    // Note that these will be arbitrarily ordered, so a Starting event might
-                    // survive and a Running one won't. The next restart will remove the other,
-                    // so we don't bother being careful about it.
-                    //
-                    // TODO(guswynn): unpack these into health-status objects and use
-                    // their `Ord` impl.
-                    entries.push(Reverse((timestamp, row.clone())));
+                    // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
+                    // so we handle duplicated rows separately.
+                    let entries = last_n_entries_per_key.entry(key).or_default();
+                    for _ in 0..diff {
+                        // We CAN have multiple statuses (most likely Starting and Running) at the exact same
+                        // millisecond, depending on how the `health_operator` is scheduled.
+                        //
+                        // Note that these will be arbitrarily ordered, so a Starting event might
+                        // survive and a Running one won't. The next restart will remove the other,
+                        // so we don't bother being careful about it.
+                        //
+                        // TODO(guswynn): unpack these into health-status objects and use
+                        // their `Ord` impl.
+                        entries.push(Reverse((timestamp, row.clone())));
 
-                    // Retain some number of entries, using pop to mark the oldest entries for
-                    // deletion.
-                    while entries.len() > n {
-                        if let Some(Reverse((_, r))) = entries.pop() {
-                            deletions.push(r);
+                        // Retain some number of entries, using pop to mark the oldest entries for
+                        // deletion.
+                        while entries.len() > n {
+                            if let Some(Reverse((_, r))) = entries.pop() {
+                                deletions
+                                    .add(&SourceData(Ok(r)), &(), &expected_upper, &-1)
+                                    .await
+                                    .expect("usage should be valid");
+                            }
                         }
                     }
                 }
@@ -1665,34 +1675,35 @@ where
             let keep_since = now - time_window;
 
             // Mark any row outside the retention window for deletion
-            for (row, diff) in rows {
-                let (_, timestamp) = handle_row(&row, diff);
+            while let Some(chunk) = rows.next().await {
+                for (data, _t, diff) in chunk {
+                    let Ok(row) = &data.0 else { continue };
+                    let (_, timestamp) = handle_row(row, diff);
 
-                if *timestamp < keep_since {
-                    deletions.push(row);
+                    if *timestamp < keep_since {
+                        deletions
+                            .add(&data, &(), &expected_upper, &-1)
+                            .await
+                            .expect("usage should be valid");
+                    }
                 }
             }
         }
     }
 
-    // It is very important that we append our retractions at the timestamp
-    // right after the timestamp at which we got our snapshot. Otherwise,
-    // it's possible for someone else to sneak in retractions or other
-    // unexpected changes.
-    let expected_upper = upper.into_option().expect("checked above");
-    let new_upper = TimestampManipulation::step_forward(&expected_upper);
+    let mut updates = deletions
+        .finish(Antichain::from_elem(new_upper))
+        .await
+        .expect("expected valid usage");
+    let mut batches = vec![&mut updates];
 
-    // Updates are only deletes because everything else is already in the shard.
-    let updates = deletions
-        .into_iter()
-        .map(|row| ((SourceData(Ok(row)), ()), expected_upper.clone(), -1))
-        .collect::<Vec<_>>();
-
+    // Updates are only deletes because everything else is already in the shard.\
     let res = write_handle
-        .compare_and_append(
-            updates,
-            Antichain::from_elem(expected_upper.clone()),
+        .compare_and_append_batch(
+            batches.as_mut_slice(),
+            Antichain::from_elem(expected_upper),
             Antichain::from_elem(new_upper),
+            true,
         )
         .await
         .expect("usage was valid");
@@ -1722,10 +1733,10 @@ where
         .collect()
 }
 
-async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+async fn monotonic_append(
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
-    at_least: T,
+    at_least: Timestamp,
 ) {
     let mut expected_upper = write_handle.shared_upper();
     loop {
@@ -1740,17 +1751,12 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
             .into_option()
             .expect("cannot append data to closed collection");
 
-        let lower = if upper.less_than(&at_least) {
-            at_least.clone()
-        } else {
-            upper.clone()
-        };
-
-        let new_upper = TimestampManipulation::step_forward(&lower);
+        let lower = std::cmp::max(upper, at_least);
+        let new_upper = lower.step_forward();
         let updates = updates
             .iter()
             .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
+                ((SourceData(Ok(row.clone())), ()), lower, diff.into_inner())
             })
             .collect::<Vec<_>>();
         let res = write_handle
@@ -1782,11 +1788,45 @@ fn notify_listeners<T>(
     }
 }
 
+/// Receive all currently enqueued messages from a task command channel.
+///
+/// If no messages are initially enqueued, this function blocks until messages become available or
+/// the channel is closed.
+///
+/// If the `out` buffer has a large amount of free capacity at the end of this operation, it is
+/// shrunk to reclaim some of its memory.
+///
+/// # Cancel safety
+///
+/// This function is cancel safe. It only awaits `UnboundedReceiver::recv`, which is itself cancel
+/// safe.
+async fn recv_all_commands<T>(rx: &mut mpsc::UnboundedReceiver<T>, out: &mut Vec<T>) {
+    if let Some(msg) = rx.recv().await {
+        out.push(msg);
+    } else {
+        return; // channel closed
+    };
+
+    out.reserve(rx.len());
+    while let Ok(msg) = rx.try_recv() {
+        out.push(msg);
+    }
+
+    // We may have the opportunity to reclaim allocated memory.
+    // Given that `push` will at most double the capacity when the vector is more than half full,
+    // and we want to avoid entering into a resizing cycle, we choose to only shrink if the
+    // vector's length is less than one fourth of its capacity.
+    if out.capacity() > out.len() * 4 {
+        out.shrink_to_fit();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use itertools::Itertools;
     use mz_repr::{Datum, Row};
     use mz_storage_client::client::StatusUpdate;
     use mz_storage_client::healthcheck::{
@@ -1806,14 +1846,18 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1850,14 +1894,18 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1878,14 +1926,18 @@ mod tests {
             error: None,
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1922,14 +1974,18 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1967,14 +2023,18 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));

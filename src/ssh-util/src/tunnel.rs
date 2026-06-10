@@ -255,17 +255,17 @@ async fn connect(
         // to lock ourselves into trusting only the first we see. In any case,
         // recording a known host would only last as long as the life of a
         // storage pod, so it doesn't offer any protection.
-        match openssh::SessionBuilder::default()
+        let mut builder = openssh::SessionBuilder::default();
+        builder
             .known_hosts_check(openssh::KnownHosts::Accept)
             .user_known_hosts_file("/dev/null")
             .user(config.user.clone())
             .port(config.port)
             .keyfile(&path)
             .server_alive_interval(timeout_config.keepalives_idle)
-            .connect_timeout(timeout_config.connect_timeout)
-            .connect_mux(host.clone())
-            .await
-        {
+            .connect_timeout(timeout_config.connect_timeout);
+
+        match builder.connect_mux(host.clone()).await {
             Ok(session) => {
                 // Delete the private key for safety: since `ssh` still has an open
                 // handle to it, it still has access to the key.
@@ -292,8 +292,8 @@ async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, a
     // Loop trying to find an open port.
     for _ in 0..50 {
         // Choose a dynamic port according to RFC 6335.
-        let mut rng = StdRng::from_entropy();
-        let local_port: u16 = rng.gen_range(49152..65535);
+        let mut rng = StdRng::from_os_rng();
+        let local_port: u16 = rng.random_range(49152..65535);
 
         // Force use of IPv4 loopback. Do not use the hostname `localhost`,
         // as that can resolve to IPv6, and the SSH tunnel is only listening

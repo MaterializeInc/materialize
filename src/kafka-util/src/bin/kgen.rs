@@ -16,17 +16,17 @@ use std::time::Duration;
 use anyhow::bail;
 use chrono::DateTime;
 use crossbeam::thread;
+use mz_avro::Schema;
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
-use mz_avro::Schema;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
-use rand::distributions::uniform::SampleUniform;
-use rand::distributions::{Alphanumeric, Bernoulli, Uniform, WeightedIndex};
+use rand::distr::uniform::SampleUniform;
+use rand::distr::weighted::WeightedIndex;
+use rand::distr::{Alphanumeric, Bernoulli, Uniform};
 use rand::prelude::{Distribution, ThreadRng};
-use rand::thread_rng;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
@@ -222,7 +222,7 @@ impl<'a> RandomAvroGenerator<'a> {
             SchemaPiece::Fixed { size: _ } => unreachable!(),
         }
     }
-    pub fn gen(&mut self, rng: &mut ThreadRng) -> Value {
+    pub fn generate(&mut self, rng: &mut ThreadRng) -> Value {
         self.gen_inner(self.schema, rng)
     }
     fn new_inner(
@@ -231,12 +231,16 @@ impl<'a> RandomAvroGenerator<'a> {
         annotations: &Map<String, serde_json::Value>,
         field_name: Option<&str>,
     ) {
-        fn bool_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> bool + Clone {
+        fn bool_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> bool + Clone + use<> {
             let x = json.as_f64().unwrap();
             let dist = Bernoulli::new(x).unwrap();
             move |rng| dist.sample(rng)
         }
-        fn integral_dist<T>(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> T + Clone
+        fn integral_dist<T>(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> T + Clone + use<T>
         where
             T: SampleUniform + TryFrom<i64> + Clone,
             T::Sampler: Clone,
@@ -247,24 +251,30 @@ impl<'a> RandomAvroGenerator<'a> {
                 x[0].as_i64().unwrap().try_into().unwrap(),
                 x[1].as_i64().unwrap().try_into().unwrap(),
             );
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).expect("valid range");
             move |rng| dist.sample(rng)
         }
-        fn float_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f32 + Clone {
+        fn float_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> f32 + Clone + use<> {
             let x = json.as_array().unwrap();
             // TODO(benesch): rewrite to avoid `as`.
             #[allow(clippy::as_conversions)]
             let (min, max) = (x[0].as_f64().unwrap() as f32, x[1].as_f64().unwrap() as f32);
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).expect("valid range");
             move |rng| dist.sample(rng)
         }
-        fn double_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f64 + Clone {
+        fn double_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> f64 + Clone + use<> {
             let x = json.as_array().unwrap();
             let (min, max) = (x[0].as_f64().unwrap(), x[1].as_f64().unwrap());
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).expect("valid range");
             move |rng| dist.sample(rng)
         }
-        fn string_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        fn string_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let mut len = integral_dist::<usize>(json);
             move |rng| {
                 let len = len(rng);
@@ -272,18 +282,20 @@ impl<'a> RandomAvroGenerator<'a> {
                 iter::repeat_with(|| cd.sample(rng)).take(len).collect()
             }
         }
-        fn bytes_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        fn bytes_dist(
+            json: &serde_json::Value,
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let mut len = integral_dist::<usize>(json);
             move |rng| {
                 let len = len(rng);
-                let bd = Uniform::new_inclusive(0, 255);
+                let bd = Uniform::new_inclusive(0, 255).expect("valid range");
                 iter::repeat_with(|| bd.sample(rng)).take(len).collect()
             }
         }
         fn decimal_dist(
             json: &serde_json::Value,
             precision: usize,
-        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
+        ) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone + use<> {
             let x = json.as_array().unwrap();
             let (min, max): (i64, i64) = (x[0].as_i64().unwrap(), x[1].as_i64().unwrap());
             // Ensure values fit within precision bounds.
@@ -302,7 +314,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 min,
                 precision
             );
-            let dist = Uniform::<i64>::new_inclusive(min, max);
+            let dist = Uniform::<i64>::new_inclusive(min, max).expect("valid range");
             move |rng| dist.sample(rng).to_be_bytes().to_vec()
         }
         // TODO(benesch): rewrite to avoid `as`.
@@ -465,7 +477,7 @@ impl<'a> ValueGenerator<'a> {
                 schema,
                 schema_id,
             } => {
-                let value = inner.gen(rng);
+                let value = inner.generate(rng);
                 out.clear();
                 out.push(0);
                 for b in schema_id.to_be_bytes().iter() {
@@ -478,14 +490,14 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum KeyFormat {
     Avro,
     Random,
     Sequential,
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum ValueFormat {
     Bytes,
     Avro,
@@ -529,23 +541,23 @@ struct Args {
         short = 'k',
         long = "keys",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "sequential"
     )]
     key_format: KeyFormat,
     /// Minimum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("key-format", "random"))]
+    #[clap(long, required_if_eq("key_format", "random"))]
     key_min: Option<u64>,
     /// Maximum key value to generate, if using random-formatted keys.
-    #[clap(long, required_if_eq("key-format", "random"))]
+    #[clap(long, required_if_eq("key_format", "random"))]
     key_max: Option<u64>,
     /// Schema describing Avro key data to randomly generate, if using
     /// Avro-formatted keys.
-    #[clap(long, required_if_eq("key-format", "avro"))]
+    #[clap(long, required_if_eq("key_format", "avro"))]
     avro_key_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro key object, if using Avro-formatted keys.
-    #[clap(long, required_if_eq("key-format", "avro"))]
+    #[clap(long, required_if_eq("key_format", "avro"))]
     avro_key_distribution: Option<serde_json::Value>,
 
     // == Value arguments. ==
@@ -554,7 +566,7 @@ struct Args {
         short = 'v',
         long = "values",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "bytes"
     )]
     value_format: ValueFormat,
@@ -562,23 +574,23 @@ struct Args {
     #[clap(
         short = 'm',
         long = "min-message-size",
-        required_if_eq("value-format", "bytes")
+        required_if_eq("value_format", "bytes")
     )]
     min_value_size: Option<usize>,
     /// Maximum value size to generate, if using bytes-formatted values.
     #[clap(
         short = 'M',
         long = "max-message-size",
-        required_if_eq("value-format", "bytes")
+        required_if_eq("value_format", "bytes")
     )]
     max_value_size: Option<usize>,
     /// Schema describing Avro value data to randomly generate, if using
     /// Avro-formatted values.
-    #[clap(long = "avro-schema", required_if_eq("value-format", "avro"))]
+    #[clap(long = "avro-schema", required_if_eq("value_format", "avro"))]
     avro_value_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro value object, if using Avro-formatted keys.
-    #[clap(long = "avro-distribution", required_if_eq("value-format", "avro"))]
+    #[clap(long = "avro-distribution", required_if_eq("value_format", "avro"))]
     avro_value_distribution: Option<serde_json::Value>,
 
     // == Output control. ==
@@ -602,8 +614,9 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --avro-distribution without --values=avro");
             }
             let len =
-                Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap());
-            let bytes = Uniform::new_inclusive(0, 255);
+                Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap())
+                    .expect("valid range");
+            let bytes = Uniform::new_inclusive(0, 255).expect("valid range");
 
             ValueGenerator::UniformBytes { len, bytes }
         }
@@ -677,10 +690,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let key_dist = if let KeyFormat::Random = args.key_format {
-        Some(Uniform::new_inclusive(
-            args.key_min.unwrap(),
-            args.key_max.unwrap(),
-        ))
+        Some(
+            Uniform::new_inclusive(args.key_min.unwrap(), args.key_max.unwrap())
+                .expect("valid range"),
+        )
     } else {
         None
     };
@@ -711,7 +724,7 @@ async fn main() -> anyhow::Result<()> {
                 n += 1;
             }
             scope.spawn(move |_| {
-                let mut rng = thread_rng();
+                let mut rng = rand::rng();
                 for _ in 0..n {
                     let i = counter.fetch_add(1, Ordering::Relaxed);
                     if !args.quiet && i % 100_000 == 0 {

@@ -13,16 +13,17 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{CatalogItemId, ColumnType, RelationDesc, RelationVersionSelector, ScalarType};
-use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
-    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+use mz_repr::{
+    CatalogItemId, ColumnIndex, RelationDesc, RelationVersionSelector, SqlColumnType, SqlScalarType,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_sql_parser::ast::{
+    ColumnDef, ColumnName, CreateMaterializedViewStatement, RawItemName, ShowStatement,
+    StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
+};
+use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -37,7 +38,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -62,7 +63,7 @@ pub struct StatementDesc {
     /// produces rows.
     pub relation_desc: Option<RelationDesc>,
     /// The determined types of the parameters in the statement, if any.
-    pub param_types: Vec<ScalarType>,
+    pub param_types: Vec<SqlScalarType>,
     /// Whether the statement is a `COPY` statement.
     pub is_copy: bool,
 }
@@ -85,7 +86,7 @@ impl StatementDesc {
             .unwrap_or(0)
     }
 
-    fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
+    fn with_params(mut self, param_types: Vec<SqlScalarType>) -> Self {
         self.param_types = param_types;
         self
     }
@@ -103,7 +104,7 @@ pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
-    param_types_in: &[Option<ScalarType>],
+    param_types_in: &[Option<SqlScalarType>],
 ) -> Result<StatementDesc, PlanError> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
@@ -117,6 +118,7 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     let desc = match stmt {
@@ -124,6 +126,9 @@ pub fn describe(
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::describe_alter_materialized_view_apply_replacement(&scx, stmt)?
+        }
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRetainHistory(stmt) => ddl::describe_alter_retain_history(&scx, stmt)?,
@@ -159,7 +164,6 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
-        Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -203,6 +207,9 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
+        Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
+            show::describe_show_create_type(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
         }
@@ -226,6 +233,10 @@ pub fn describe(
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
         Statement::ExplainPushdown(stmt) => dml::describe_explain_pushdown(&scx, stmt)?,
+        Statement::ExplainAnalyzeObject(stmt) => dml::describe_explain_analyze_object(&scx, stmt)?,
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::describe_explain_analyze_cluster(&scx, stmt)?
+        }
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -245,6 +256,12 @@ pub fn describe(
             scl::describe_inspect_shard(&scx, stmt)?
         }
         Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -274,9 +291,12 @@ pub fn plan(
     stmt: Statement<Aug>,
     params: &Params,
     resolved_ids: &ResolvedIds,
-) -> Result<Plan, PlanError> {
+) -> Result<(Plan, ResolvedIds), PlanError> {
     let param_types = params
-        .types
+        // We need the `expected_types` here, not the `actual_types`! This is because
+        // `expected_types` is how the parameter expression (e.g. `$1`) looks "from the outside":
+        // `bind_parameters` will insert a cast from the actual type to the expected type.
+        .expected_types
         .iter()
         .enumerate()
         .map(|(i, ty)| (i + 1, ty.clone()))
@@ -290,6 +310,7 @@ pub fn plan(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     if resolved_ids
@@ -302,7 +323,7 @@ pub fn plan(
                     == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
         })
     {
-        scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
+        scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNSAFE_FUNCTIONS)?;
     }
 
     let plan = match stmt {
@@ -310,6 +331,9 @@ pub fn plan(
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::plan_alter_materialized_view_apply_replacement(scx, stmt)
+        }
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRetainHistory(stmt) => ddl::plan_alter_retain_history(scx, stmt),
@@ -339,11 +363,8 @@ pub fn plan(
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateTableFromSource(stmt) => ddl::plan_create_table_from_source(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
-        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
-        Statement::CreateMaterializedView(stmt) => {
-            ddl::plan_create_materialized_view(scx, stmt, params)
-        }
-        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt, params),
+        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
+        Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -362,7 +383,13 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainPushdown(stmt) => dml::plan_explain_pushdown(scx, stmt, params),
-        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
+        Statement::ExplainAnalyzeObject(stmt) => {
+            dml::plan_explain_analyze_object(scx, stmt, params)
+        }
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::plan_explain_analyze_cluster(scx, stmt, params)
+        }
+        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt),
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
@@ -395,6 +422,9 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
         }
+        Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
+            show::plan_show_create_type(scx, stmt).map(Plan::ShowCreate)
+        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
 
         // SCL statements.
@@ -419,6 +449,12 @@ pub fn plan(
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     if let Ok(plan) = &plan {
@@ -430,17 +466,28 @@ pub fn plan(
         );
     }
 
-    plan
+    // Return the plan along with any resolved IDs accumulated from sql_impl
+    // function bodies. These are kept separate from the main resolved_ids
+    // because they are implementation details of the functions, not real
+    // dependencies of the statement. They should only be used for the
+    // restrict_to_user_objects RBAC check.
+    let sql_impl_ids = scx
+        .sql_impl_resolved_ids
+        .lock()
+        .expect("planning is single-threaded")
+        .clone();
+    plan.map(|p| (p, sql_impl_ids))
 }
 
 pub fn plan_copy_from(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: CatalogItemId,
-    columns: Vec<usize>,
+    target_id: CatalogItemId,
+    target_name: String,
+    columns: Vec<ColumnIndex>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
-    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
+    query::plan_copy_from_rows(pcx, catalog, target_id, target_name, columns, rows)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
@@ -483,10 +530,20 @@ pub struct StatementContext<'a> {
     pub catalog: &'a dyn SessionCatalog,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    pub param_types: RefCell<BTreeMap<usize, SqlScalarType>>,
     /// Whether the statement contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
+    /// Accumulates resolved IDs from SQL-implemented function bodies (`sql_impl_func`,
+    /// `sql_impl_table_func`). These are kept separate from the statement's main
+    /// `resolved_ids` because they are implementation details of the functions, not
+    /// real dependencies of the statement. They are only used for the
+    /// `restrict_to_user_objects` RBAC check.
+    ///
+    /// Uses `Arc<Mutex<_>>` so that cloned `StatementContext`s (as in `sql_impl`)
+    /// share the same underlying storage. `Arc` (vs `Rc`) is needed because
+    /// `StatementContext` must be `Send`.
+    pub sql_impl_resolved_ids: Arc<Mutex<ResolvedIds>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -499,6 +556,7 @@ impl<'a> StatementContext<'a> {
             catalog,
             param_types: Default::default(),
             ambiguous_columns: RefCell::new(false),
+            sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
         }
     }
 
@@ -515,6 +573,18 @@ impl<'a> StatementContext<'a> {
 
     pub fn pcx(&self) -> Result<&PlanContext, PlanError> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
+    }
+
+    /// Records resolved IDs from a SQL-implemented expression body (e.g. a SHOW
+    /// command's inner query or an EXPLAIN ANALYZE query) into the accumulator
+    /// checked by `restrict_to_user_objects`. These are kept separate from the
+    /// statement's main `resolved_ids` because they are implementation details,
+    /// not real dependencies.
+    pub(crate) fn record_sql_impl_ids(&self, ids: &ResolvedIds) {
+        self.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(ids);
     }
 
     pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
@@ -540,7 +610,9 @@ impl<'a> StatementContext<'a> {
                     match self.catalog.active_database_name() {
                         Some(name) => (RawDatabaseSpecifier::Name(name.to_string()), schema),
                         None => {
-                            sql_bail!("no database specified for non-system schema and no active database")
+                            sql_bail!(
+                                "no database specified for non-system schema and no active database"
+                            )
                         }
                     }
                 }
@@ -599,16 +671,12 @@ impl<'a> StatementContext<'a> {
         &self,
         name: PartialItemName,
     ) -> Result<QualifiedItemName, PlanError> {
-        if let Some(name) = name.schema {
-            if name
-                != self
-                    .get_schema(
-                        &ResolvedDatabaseSpecifier::Ambient,
-                        &SchemaSpecifier::Temporary,
-                    )
-                    .name()
-                    .schema
-            {
+        // Compare against the MZ_TEMP_SCHEMA constant directly instead of calling
+        // get_schema(), because with lazy temporary schema creation, the temp
+        // schema may not exist yet. (This is similar to what `allocate_temporary_full_name` was
+        // doing already before making temporary schemas lazy.)
+        if let Some(schema_name) = name.schema {
+            if schema_name != mz_repr::namespaces::MZ_TEMP_SCHEMA {
                 return Err(PlanError::InvalidTemporarySchema);
             }
         }
@@ -665,7 +733,7 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster {
+    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster<'_> {
         self.catalog.get_cluster(*id)
     }
 
@@ -730,13 +798,12 @@ impl<'a> StatementContext<'a> {
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<Box<dyn CatalogCollectionItem>, PlanError> {
+    ) -> Result<Box<dyn CatalogCollectionItem + '_>, PlanError> {
         match name {
             ResolvedItemName::Item { id, version, .. } => {
                 Ok(self.get_item(id).at_version(*version))
             }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
@@ -744,7 +811,7 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(Box<dyn CatalogCollectionItem>, usize), PlanError> {
+    ) -> Result<(Box<dyn CatalogCollectionItem + '_>, usize), PlanError> {
         match (&name.relation, &name.column) {
             (
                 ResolvedItemName::Item { id, version, .. },
@@ -767,7 +834,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
-    pub fn resolve_cluster(&self, name: Option<&Ident>) -> Result<&dyn CatalogCluster, PlanError> {
+    pub fn resolve_cluster(
+        &self,
+        name: Option<&Ident>,
+    ) -> Result<&dyn CatalogCluster<'_>, PlanError> {
         let name = name.map(|name| name.as_str());
         Ok(self.catalog.resolve_cluster(name)?)
     }
@@ -822,30 +892,17 @@ impl<'a> StatementContext<'a> {
     }
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.
-    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
-        flag.enabled(Some(self.catalog.system_vars()), None, None)?;
-        Ok(())
-    }
-
-    /// Equivalent to [`Self::require_feature_flag`] but with the ability for the caller to control
-    /// the error message.
-    pub fn require_feature_flag_w_dynamic_desc(
-        &self,
-        flag: &FeatureFlag,
-        desc: String,
-        detail: String,
-    ) -> Result<(), PlanError> {
-        flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
+    pub fn require_feature_flag(&self, flag: &'static FeatureFlag) -> Result<(), PlanError> {
+        flag.require(self.catalog.system_vars())?;
         Ok(())
     }
 
     /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
-    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
-        flag.enabled(Some(self.catalog.system_vars()), None, None)
-            .is_ok()
+    pub fn is_feature_flag_enabled(&self, flag: &'static FeatureFlag) -> bool {
+        self.require_feature_flag(flag).is_ok()
     }
 
-    pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
+    pub fn finalize_param_types(self) -> Result<Vec<SqlScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];
         for (i, (n, typ)) in param_types.into_iter().enumerate() {
@@ -857,50 +914,16 @@ impl<'a> StatementContext<'a> {
         Ok(out)
     }
 
-    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        self.catalog.humanize_scalar_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+        self.catalog.humanize_sql_scalar_type(typ, postgres_compat)
     }
 
-    pub fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        self.catalog.humanize_column_type(typ)
-    }
-
-    pub(crate) fn build_tunnel_definition(
-        &self,
-        ssh_tunnel: Option<with_options::Object>,
-        aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
-    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
-        match (ssh_tunnel, aws_privatelink) {
-            (None, None) => Ok(Tunnel::Direct),
-            (Some(ssh_tunnel), None) => {
-                let id = CatalogItemId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id);
-                match ssh_tunnel.connection()? {
-                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
-                        connection_id: id,
-                        connection: id,
-                    })),
-                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
-                }
-            }
-            (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
-                        // By default we do not specify an availability zone for the tunnel.
-                        availability_zone: None,
-                        // We always use the port as specified by the top-level connection.
-                        port: aws_privatelink.port,
-                    })),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
-            }
-        }
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
+        self.catalog.humanize_sql_column_type(typ, postgres_compat)
     }
 
     pub fn relation_desc_into_table_defs(
@@ -940,7 +963,9 @@ impl<'a> StatementContext<'a> {
                 if !null_cols.contains(col_idx) {
                     // Note that alternatively we could support NULL values in keys with `NULLS NOT
                     // DISTINCT` semantics, which treats `NULL` as a distinct value.
-                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                    sql_bail!(
+                        "[internal error] key columns must be NOT NULL when generating table constraints"
+                    );
                 }
                 col_names.push(columns[*col_idx].name.clone());
             }
@@ -1031,6 +1056,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterCluster(_) => DDL,
             Statement::AlterConnection(_) => DDL,
             Statement::AlterIndex(_) => DDL,
+            Statement::AlterMaterializedViewApplyReplacement(_) => DDL,
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,
@@ -1048,7 +1074,6 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateCluster(_) => DDL,
             Statement::CreateClusterReplica(_) => DDL,
             Statement::CreateConnection(_) => DDL,
-            Statement::CreateContinualTask(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
             Statement::CreateRole(_) => DDL,
@@ -1081,6 +1106,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Delete(_) => DML,
             Statement::ExplainPlan(_) => DML,
             Statement::ExplainPushdown(_) => DML,
+            Statement::ExplainAnalyzeObject(_) => DML,
+            Statement::ExplainAnalyzeCluster(_) => DML,
             Statement::ExplainTimestamp(_) => DML,
             Statement::ExplainSinkSchema(_) => DML,
             Statement::Insert(_) => DML,
@@ -1098,6 +1125,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateType(_)) => Show,
             Statement::Show(ShowStatement::ShowObjects(_)) => Show,
 
             // SCL statements.
@@ -1122,6 +1150,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Raise(_) => Other,
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
+            Statement::ExecuteUnitTest(_) => Other,
         }
     }
 }

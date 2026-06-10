@@ -9,40 +9,36 @@
 
 //! AWS configuration for sources and sinks.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
-use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_sdk_sts::error::SdkError;
 use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
-use aws_types::region::Region;
 use aws_types::SdkConfig;
+use aws_types::region::Region;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, GlobalId};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::AlterCompatible;
 use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
 };
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.connections.aws.rs"
-));
-
 /// AWS connection configuration.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsConnection {
     pub auth: AwsAuth,
     /// The AWS region to use.
@@ -54,42 +50,6 @@ pub struct AwsConnection {
     pub endpoint: Option<String>,
 }
 
-impl RustType<ProtoAwsConnection> for AwsConnection {
-    fn into_proto(&self) -> ProtoAwsConnection {
-        let auth = match &self.auth {
-            AwsAuth::Credentials(credentials) => {
-                proto_aws_connection::Auth::Credentials(credentials.into_proto())
-            }
-            AwsAuth::AssumeRole(assume_role) => {
-                proto_aws_connection::Auth::AssumeRole(assume_role.into_proto())
-            }
-        };
-
-        ProtoAwsConnection {
-            auth: Some(auth),
-            region: self.region.clone(),
-            endpoint: self.endpoint.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsConnection) -> Result<Self, TryFromProtoError> {
-        let auth = match proto.auth.expect("auth expected") {
-            proto_aws_connection::Auth::Credentials(credentials) => {
-                AwsAuth::Credentials(credentials.into_rust()?)
-            }
-            proto_aws_connection::Auth::AssumeRole(assume_role) => {
-                AwsAuth::AssumeRole(assume_role.into_rust()?)
-            }
-        };
-
-        Ok(AwsConnection {
-            auth,
-            region: proto.region,
-            endpoint: proto.endpoint,
-        })
-    }
-}
-
 impl AlterCompatible for AwsConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AWS connection is configurable.
@@ -98,7 +58,8 @@ impl AlterCompatible for AwsConnection {
 }
 
 /// Describes how to authenticate with AWS.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum AwsAuth {
     /// Authenticate with an access key.
     Credentials(AwsCredentials),
@@ -107,7 +68,8 @@ pub enum AwsAuth {
 }
 
 /// AWS credentials to access an AWS account using user access keys.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsCredentials {
     /// The AWS API Access Key required to connect to the AWS account.
     pub access_key_id: StringOrSecret,
@@ -124,7 +86,7 @@ impl AwsCredentials {
         connection_context: &ConnectionContext,
         // Whether or not to do IO in a separate Tokio task.
         in_task: InTask,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
@@ -154,30 +116,9 @@ impl AwsCredentials {
     }
 }
 
-impl RustType<ProtoAwsCredentials> for AwsCredentials {
-    fn into_proto(&self) -> ProtoAwsCredentials {
-        ProtoAwsCredentials {
-            access_key_id: Some(self.access_key_id.into_proto()),
-            secret_access_key: Some(self.secret_access_key.into_proto()),
-            session_token: self.session_token.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsCredentials) -> Result<Self, TryFromProtoError> {
-        Ok(AwsCredentials {
-            access_key_id: proto
-                .access_key_id
-                .into_rust_if_some("ProtoAwsCredentials::access_key_id")?,
-            secret_access_key: proto
-                .secret_access_key
-                .into_rust_if_some("ProtoAwsCredentials::secret_access_key")?,
-            session_token: proto.session_token.into_rust()?,
-        })
-    }
-}
-
 /// Describes an AWS IAM role to assume.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsAssumeRole {
     /// The Amazon Resource Name of the role to assume.
     pub arn: String,
@@ -192,8 +133,15 @@ impl AwsAssumeRole {
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
-        let external_id = self.external_id(connection_context, connection_id)?;
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
+        let external_id = self
+            .external_id(connection_context, connection_id)
+            .with_context(|| {
+                format!(
+                    "failed to compute external ID for AWS AssumeRole connection {} (role arn {})",
+                    connection_id, self.arn
+                )
+            })?;
         // It's okay to use `dangerously_load_credentials_provider` here, as
         // this is the method that provides a safe wrapper by forcing use of the
         // correct external ID.
@@ -216,9 +164,14 @@ impl AwsAssumeRole {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
         external_id: Option<String>,
-    ) -> Result<impl ProvideCredentials, anyhow::Error> {
+    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
-            bail!("internal error: no AWS connection role configured");
+            bail!(
+                "internal error: no AWS connection role configured while loading AssumeRole \
+                 credentials for connection {} (role arn {})",
+                connection_id,
+                self.arn
+            );
         };
 
         // Load the default SDK configuration to use for the assume role
@@ -303,23 +256,15 @@ impl AwsAssumeRole {
     }
 }
 
-impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
-    fn into_proto(&self) -> ProtoAwsAssumeRole {
-        ProtoAwsAssumeRole {
-            arn: self.arn.clone(),
-            session_name: self.session_name.clone(),
+impl AwsConnection {
+    /// Returns a string describing the authentication method of this connection, for use in error messages.
+    pub(crate) fn auth_method(&self) -> &'static str {
+        match self.auth {
+            AwsAuth::Credentials(_) => "credentials",
+            AwsAuth::AssumeRole(_) => "assume_role",
         }
     }
 
-    fn from_proto(proto: ProtoAwsAssumeRole) -> Result<Self, TryFromProtoError> {
-        Ok(AwsAssumeRole {
-            arn: proto.arn,
-            session_name: proto.session_name,
-        })
-    }
-}
-
-impl AwsConnection {
     /// Loads the AWS SDK configuration with the configuration specified on this
     /// object.
     pub async fn load_sdk_config(
@@ -327,6 +272,7 @@ impl AwsConnection {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
         in_task: InTask,
+        enforce_external_addresses: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
         let connection_context = connection_context.clone();
         let this = self.clone();
@@ -337,15 +283,39 @@ impl AwsConnection {
                 AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
                     credentials
                         .load_credentials_provider(&connection_context, InTask::No)
-                        .await?,
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to load static AWS credentials for connection {}",
+                                connection_id
+                            )
+                        })?,
                 ),
                 AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
                     assume_role
                         .load_credentials_provider(&connection_context, connection_id)
-                        .await?,
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to initialize AssumeRole credential provider for \
+                                 connection {} (role arn {})",
+                                connection_id, assume_role.arn
+                            )
+                        })?,
                 ),
             };
-            this.load_sdk_config_from_credentials(credentials).await
+            this.load_sdk_config_from_credentials(credentials, enforce_external_addresses)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to build AWS SDK config for connection {} \
+                         (auth method: {}, region: {:?}, endpoint: {:?})",
+                        connection_id,
+                        this.auth_method(),
+                        this.region,
+                        this.endpoint
+                    )
+                })
         }
         .run_in_task_if(in_task, || "load_sdk_config".to_string())
         .await
@@ -354,12 +324,23 @@ impl AwsConnection {
     async fn load_sdk_config_from_credentials(
         &self,
         credentials: impl ProvideCredentials + 'static,
+        enforce_external_addresses: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
         let mut loader = mz_aws_util::defaults().credentials_provider(credentials);
         if let Some(region) = &self.region {
             loader = loader.region(Region::new(region.clone()));
         }
         if let Some(endpoint) = &self.endpoint {
+            // The custom DNS resolver wired into the AWS HTTP client is only
+            // invoked for hostnames; IP-literal endpoints (e.g. `http://127.0.0.1`)
+            // bypass it. Validate IP literals here so they cannot circumvent
+            // the global-address enforcement.
+            if enforce_external_addresses && let Ok(url) = url::Url::parse(endpoint) {
+                mz_ore::netio::ensure_url_ip_global(&url)?;
+            }
+            loader = loader.http_client(mz_aws_util::http_client_with_resolver(
+                enforce_external_addresses,
+            ));
             loader = loader.endpoint_url(endpoint);
         }
         Ok(loader.load().await)
@@ -370,12 +351,15 @@ impl AwsConnection {
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
+        let enforce_external_addresses =
+            crate::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set());
         let aws_config = self
             .load_sdk_config(
                 &storage_configuration.connection_context,
                 id,
                 // We are in a normal tokio context during validation, already.
                 InTask::No,
+                enforce_external_addresses,
             )
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
@@ -394,7 +378,9 @@ impl AwsConnection {
                     external_id,
                 )
                 .await?;
-            let aws_config = self.load_sdk_config_from_credentials(credentials).await?;
+            let aws_config = self
+                .load_sdk_config_from_credentials(credentials, enforce_external_addresses)
+                .await?;
             let sts_client = aws_sdk_sts::Client::new(&aws_config);
             if sts_client.get_caller_identity().send().await.is_ok() {
                 return Err(AwsConnectionValidationError::RoleDoesNotRequireExternalId {
@@ -426,10 +412,12 @@ impl AwsConnectionValidationError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            AwsConnectionValidationError::RoleDoesNotRequireExternalId {
-                role_arn
-            } => Some(format!("The trust policy for the connection's role ({role_arn}) is insecure and allows any Materialize customer to assume the role.")),
-            _ => None
+            AwsConnectionValidationError::RoleDoesNotRequireExternalId { role_arn } => {
+                Some(format!(
+                    "The trust policy for the connection's role ({role_arn}) is insecure and allows any Materialize customer to assume the role."
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -445,7 +433,7 @@ impl AwsConnectionValidationError {
 }
 
 /// References an AWS connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsConnectionReference<C: ConnectionAccess = InlinedConnection> {
     /// ID of the AWS connection.
     pub connection_id: CatalogItemId,
@@ -466,25 +454,5 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
             connection: r.resolve_connection(connection).unwrap_aws(),
             connection_id,
         }
-    }
-}
-
-impl RustType<ProtoAwsConnectionReference> for AwsConnectionReference<InlinedConnection> {
-    fn into_proto(&self) -> ProtoAwsConnectionReference {
-        ProtoAwsConnectionReference {
-            connection_id: Some(self.connection_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsConnectionReference) -> Result<Self, TryFromProtoError> {
-        Ok(AwsConnectionReference {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoAwsConnectionReference::connection_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoAwsConnectionReference::connection")?,
-        })
     }
 }

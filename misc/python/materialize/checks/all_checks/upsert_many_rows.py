@@ -11,30 +11,28 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class UpsertManyRows(Check):
     """Upsert 1M rows"""
 
+    def _can_run(self, e: Executor) -> bool:
+        # Was broken in v0.144, see https://github.com/MaterializeInc/database-issues/issues/8106#issuecomment-3013859893
+        return self.base_version >= MzVersion.parse_mz("v0.146.0")
+
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
-            + dedent(
-                """
+        return Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent("""
                 $ kafka-create-topic topic=upsert-many-rows
                 $ kafka-ingest format=avro key-format=avro topic=upsert-many-rows key-schema=${keyschema} schema=${schema} repeat=1000000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "X"}
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "X"}
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "X"}
 
-                >[version<11900] CREATE SOURCE upsert_many_rows
+                > CREATE SOURCE upsert_many_rows_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-rows-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-
-                >[version>=11900] CREATE SOURCE upsert_many_rows_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-rows-${testdrive.seed}')
-                >[version>=11900] CREATE TABLE upsert_many_rows FROM SOURCE upsert_many_rows_src (REFERENCE "testdrive-upsert-many-rows-${testdrive.seed}")
+                > CREATE TABLE upsert_many_rows FROM SOURCE upsert_many_rows_src (REFERENCE "testdrive-upsert-many-rows-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -42,9 +40,7 @@ class UpsertManyRows(Check):
                   SELECT f1, COUNT(*) AS count_rows, COUNT(DISTINCT key1) AS count_keys
                   FROM upsert_many_rows
                   GROUP BY f1
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -76,11 +72,7 @@ class UpsertManyRows(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_many_rows_view
                 Z 2000000 2000000
-                """
-            )
-        )
+                """))

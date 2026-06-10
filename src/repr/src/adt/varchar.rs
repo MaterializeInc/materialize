@@ -14,7 +14,9 @@ use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -24,19 +26,29 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
 pub const MAX_MAX_LENGTH: u32 = 10_485_760;
 
 /// A marker type indicating that a Rust string should be interpreted as a
-/// [`ScalarType::VarChar`].
+/// [`SqlScalarType::VarChar`].
 ///
-/// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
+/// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct VarChar<S: AsRef<str>>(pub S);
 
-/// The `max_length` of a [`ScalarType::VarChar`].
+/// The `max_length` of a [`SqlScalarType::VarChar`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
+/// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub struct VarCharMaxLength(pub(crate) u32);
 
@@ -70,6 +82,7 @@ impl RustType<ProtoVarCharMaxLength> for VarCharMaxLength {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for VarCharMaxLength {
     type Parameters = ();
     type Strategy = BoxedStrategy<VarCharMaxLength>;

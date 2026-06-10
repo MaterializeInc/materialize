@@ -11,26 +11,11 @@ menu:
     weight: 5
 ---
 
-Materialize is the Cloud Operational Data Store that delivers the speed of
-streaming with the ease of a data warehouse. With Materialize, organizations can
-use SQL to transform, deliver, and act on fast-changing data.
+{{% include-headless "/headless/materialize-intro/intro" %}}
 
-To keeps results up-to-date as new data arrives, Materialize incrementally
-updates results as it ingests data rather than recalculating results from
-scratch.
+## Materialize offerings
 
-{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
-
-## Try it out! 🚀
-
-1. Sign up for a [free trial
-   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   or [download the Materialize Emulator Docker
-   image](/get-started/install-materialize-emulator/).
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
-
-{{</ callout >}}
+{{% include-headless "/headless/materialize-intro/offerings" %}}
 
 ## Key features
 
@@ -65,33 +50,17 @@ complex analytical
 workloads using **[any type of join](/sql/select/join/)** (including
 non-windowed joins and joins on arbitrary conditions) as well as leverage new
 SQL patterns enabled by streaming like [**Change Data Capture
-(CDC)**](/integrations/#databases), [**temporal
+(CDC)**](/ingest-data/), [**temporal
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
-{{% materialize-postgres-compatibility %}}
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### Real-time data ingestion
 
 Materialize provides **native connectors** that allow ingesting data from various external systems:
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-source/kafka)
-- [Redpanda](/sql/create-source/kafka)
-- [Other message brokers](/integrations/#message-brokers)
-{{</ linkbox >}}
-{{< linkbox title="Databases (CDC)" >}}
-- [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/sql/create-source/mysql)
-- [Other databases](/integrations/#other-databases)
-{{</ linkbox >}}
-{{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
-- [Segment](/ingest-data/webhooks/segment/)
-- [Other webhooks](/sql/create-source/webhook)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
 
 For more information, see [Ingest Data](/ingest-data/) and
 [Integrations](/integrations/).

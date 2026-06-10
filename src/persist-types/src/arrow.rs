@@ -23,6 +23,7 @@
 //! [Arrow IPC]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 
 use std::cmp::Ordering;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -39,7 +40,7 @@ mod proto {
     include!(concat!(env!("OUT_DIR"), "/mz_persist_types.arrow.rs"));
 }
 use crate::arrow::proto::data_type;
-pub use proto::ProtoArrayData;
+pub use proto::{DataType as ProtoDataType, ProtoArrayData};
 
 /// Extract the list of fields for our recursive datatypes.
 pub fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
@@ -74,6 +75,8 @@ pub fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
         | DataType::Utf8
         | DataType::LargeUtf8
         | DataType::Utf8View
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
         | DataType::Decimal256(_, _) => &[],
         DataType::ListView(_)
@@ -111,7 +114,9 @@ fn into_proto_with_type(data: &ArrayData, expected_type: Option<&DataType>) -> P
         children: data
             .child_data()
             .iter()
-            .zip_eq(fields_for_type(expected_type.unwrap_or(data.data_type())))
+            .zip_eq(fields_for_type(
+                expected_type.unwrap_or_else(|| data.data_type()),
+            ))
             .map(|(child, expect)| into_proto_with_type(child, Some(expect.data_type())))
             .collect(),
         nulls: data.nulls().map(|n| n.inner().into_proto()),
@@ -149,7 +154,7 @@ fn from_proto_with_type(
         (None, None) => {
             return Err(TryFromProtoError::MissingField(
                 "ProtoArrayData::data_type".to_string(),
-            ))
+            ));
         }
     };
     let nulls = nulls
@@ -175,7 +180,8 @@ fn from_proto_with_type(
 
     // Construct the builder which validates all inputs and aligns data.
     builder
-        .build_aligned()
+        .align_buffers(true)
+        .build()
         .map_err(|e| TryFromProtoError::RowConversionError(e.to_string()))
 }
 
@@ -291,14 +297,21 @@ impl RustType<proto::Field> for arrow::datatypes::Field {
 
 impl RustType<proto::Buffer> for arrow::buffer::Buffer {
     fn into_proto(&self) -> proto::Buffer {
-        // TODO(parkmycar): There is probably something better we can do here.
+        // Wrapping since arrow's buffer doesn't implement AsRef, though the deref impl exists.
+        #[repr(transparent)]
+        struct BufferWrapper(arrow::buffer::Buffer);
+        impl AsRef<[u8]> for BufferWrapper {
+            fn as_ref(&self) -> &[u8] {
+                &*self.0
+            }
+        }
         proto::Buffer {
-            data: bytes::Bytes::copy_from_slice(self.as_slice()),
+            data: bytes::Bytes::from_owner(BufferWrapper(self.clone())),
         }
     }
 
     fn from_proto(proto: proto::Buffer) -> Result<Self, TryFromProtoError> {
-        Ok(arrow::buffer::Buffer::from_bytes(proto.data.into()))
+        Ok(arrow::buffer::Buffer::from(proto.data))
     }
 }
 
@@ -318,7 +331,7 @@ impl RustType<proto::BooleanBuffer> for arrow::buffer::BooleanBuffer {
 }
 
 /// Wraps a single arrow array, downcasted to a specific type.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ArrayOrd {
     /// Wraps a `NullArray`.
     Null(NullArray),
@@ -426,8 +439,52 @@ impl ArrayOrd {
     }
 
     /// Return a struct representing the value at a particular index in this array.
-    pub fn at(&self, idx: usize) -> ArrayIdx {
+    pub fn at(&self, idx: usize) -> ArrayIdx<'_> {
         ArrayIdx { idx, array: self }
+    }
+}
+
+impl Debug for ArrayOrd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct DebugType<'a>(&'a ArrayOrd);
+
+        impl Debug for DebugType<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self.0 {
+                    ArrayOrd::Null(_) => write!(f, "Null"),
+                    ArrayOrd::Bool(_) => write!(f, "Bool"),
+                    ArrayOrd::Int8(_) => write!(f, "Int8"),
+                    ArrayOrd::Int16(_) => write!(f, "Int16"),
+                    ArrayOrd::Int32(_) => write!(f, "Int32"),
+                    ArrayOrd::Int64(_) => write!(f, "Int64"),
+                    ArrayOrd::UInt8(_) => write!(f, "UInt8"),
+                    ArrayOrd::UInt16(_) => write!(f, "UInt16"),
+                    ArrayOrd::UInt32(_) => write!(f, "UInt32"),
+                    ArrayOrd::UInt64(_) => write!(f, "UInt64"),
+                    ArrayOrd::Float32(_) => write!(f, "Float32"),
+                    ArrayOrd::Float64(_) => write!(f, "Float64"),
+                    ArrayOrd::String(_) => write!(f, "String"),
+                    ArrayOrd::Binary(_) => write!(f, "Binary"),
+                    ArrayOrd::FixedSizeBinary(a) => f
+                        .debug_tuple("FixedSizeBinary")
+                        .field(&a.value_length())
+                        .finish(),
+                    ArrayOrd::List(_, _, nested) => f.debug_tuple("List").field(&*nested).finish(),
+                    ArrayOrd::Struct(_, fields) => {
+                        let mut tuple = f.debug_tuple("Struct");
+                        for field in fields {
+                            tuple.field(field);
+                        }
+                        tuple.finish()
+                    }
+                }
+            }
+        }
+
+        f.debug_struct("ArrayOrd")
+            .field("type", &DebugType(self))
+            .field("goodbytes", &self.goodbytes())
+            .finish()
     }
 }
 
@@ -446,12 +503,56 @@ pub struct ArrayIdx<'a> {
     pub array: &'a ArrayOrd,
 }
 
+impl Display for ArrayIdx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.array {
+            ArrayOrd::Null(_) => write!(f, "null"),
+            ArrayOrd::Bool(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int8(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int16(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Int64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt8(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt16(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::UInt64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Float32(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Float64(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::String(a) => write!(f, "{}", a.value(self.idx)),
+            ArrayOrd::Binary(a) => {
+                for byte in a.value(self.idx) {
+                    write!(f, "{:02x}", byte)?;
+                }
+                Ok(())
+            }
+            ArrayOrd::FixedSizeBinary(a) => {
+                for byte in a.value(self.idx) {
+                    write!(f, "{:02x}", byte)?;
+                }
+                Ok(())
+            }
+            ArrayOrd::List(_, offsets, nested) => {
+                write!(
+                    f,
+                    "[{}]",
+                    mz_ore::str::separated(", ", list_range(offsets, nested, self.idx))
+                )
+            }
+            ArrayOrd::Struct(_, nested) => write!(
+                f,
+                "{{{}}}",
+                mz_ore::str::separated(", ", nested.iter().map(|f| f.at(self.idx)))
+            ),
+        }
+    }
+}
+
 #[inline]
 fn list_range<'a>(
     offsets: &OffsetBuffer<i32>,
     values: &'a ArrayOrd,
     idx: usize,
-) -> impl Iterator<Item = ArrayIdx<'a>> {
+) -> impl Iterator<Item = ArrayIdx<'a>> + Clone {
     let offsets = offsets.inner();
     let from = offsets[idx].as_usize();
     let to = offsets[idx + 1].as_usize();
@@ -566,7 +667,7 @@ impl<'a> Ord for ArrayIdx<'a> {
                     }
                 }
             }
-            (_, _) => panic!("array types did not match"),
+            (a, b) => panic!("array types did not match! {a:?} vs. {b:?}",),
         }
     }
 }
@@ -612,7 +713,7 @@ impl ArrayBound {
     }
 
     /// Get the value of the bound.
-    pub fn get(&self) -> ArrayIdx {
+    pub fn get(&self) -> ArrayIdx<'_> {
         self.ord.at(self.index)
     }
 
@@ -702,7 +803,7 @@ fn maybe_trim_proto(data_type: &mut proto::DataType, body: &mut ProtoArrayData, 
 mod tests {
     use crate::arrow::{ArrayBound, ArrayOrd};
     use arrow::array::{
-        make_array, ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array,
+        ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array, make_array,
     };
     use arrow::datatypes::{DataType, Field, Fields};
     use mz_ore::assert_none;

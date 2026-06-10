@@ -1,0 +1,90 @@
+- name: "syntax"
+  description: |
+    To create a source from an external MySQL database:
+
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM MYSQL CONNECTION <connection_name>
+    [WITH ( <with_option> [, ...] )]
+    ;
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if a source with the same
+        name already exists. Instead, issue a notice and skip the source creation.
+
+    - name: "`<source_name>`"
+      description: |
+        The name of the source to create. Names for sources must follow the
+        [naming guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        *Optional.* The [cluster](/sql/create-cluster) to maintain this source.
+        Otherwise, the source will be created in the active cluster.
+
+        {{< tip >}}
+        If possible, use a cluster dedicated just for sources. See also
+        [Operational guidelines](/manage/operational-guidelines/#sources).
+        {{< /tip >}}
+
+    - name: "`<connection_name>`"
+      description: |
+        The name of the MySQL connection to use for the source. For details
+        on creating connections, see [`CREATE
+        CONNECTION`](/sql/create-connection/#mysql).
+
+        A connection is **reusable** across multiple `CREATE SOURCE` statements.
+
+        To start ingesting data, create a [`CREATE TABLE FROM
+        SOURCE`](/sql/create-table/) statement for each upstream table to
+        replicate.
+
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        *Optional.* The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `TIMESTAMP INTERVAL [=] <interval>` | The interval at which timestamps are assigned to data read from this source. Accepts positive [interval](/sql/types/interval/) values (e.g. `'500ms'`, `'1s'`). The value must be between the system parameters `min_timestamp_interval` and `max_timestamp_interval`. Default: the value of the `default_timestamp_interval` system parameter (`1s`). The interval can also be changed after creation with [`ALTER SOURCE`](/sql/alter-source/). |
+
+- name: "create-source"
+  description: |
+     Once you have configured the upstream MySQL, network security, and created
+     the [connection to MySQL](/sql/create-connection/#mysql), you can create
+     the source. In this example, assume the connection you created is named
+     `mysql_connection`.
+  test_setup: |
+    $ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
+    $ mysql-execute name=mysql
+    DROP DATABASE IF EXISTS mydb;
+    CREATE DATABASE mydb;
+    USE mydb;
+    CREATE TABLE items (a INT);
+    CREATE TABLE orders (a INT);
+
+    > CREATE SECRET mysqlpass AS 'p@ssw0rd'
+    > CREATE CONNECTION mysql_connection TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+
+  code: |
+     CREATE SOURCE mysql_source
+     FROM MYSQL CONNECTION mysql_connection;
+
+  testable_results: false
+- name: "create-table"
+  description: |
+    After a source is created, you can [create a table from the
+    source](/sql/create-table/), referencing specific upstream table(s). Use a
+    [DDL transaction block](/sql/begin/#ddl-only-transactions) to create
+    multiple tables from the same source.
+  code: |
+    BEGIN;
+    CREATE TABLE items
+    FROM SOURCE mysql_source (REFERENCE mydb.items);
+
+    CREATE TABLE orders
+    FROM SOURCE mysql_source (REFERENCE mydb.orders);
+    COMMIT;
+
+  testable_results: false

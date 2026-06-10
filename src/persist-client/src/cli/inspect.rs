@@ -11,14 +11,12 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
-use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::{StreamExt, TryStreamExt};
@@ -28,16 +26,16 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::codec_impls::TodoSchema;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
+use crate::cli::args::{NO_COMMIT, READ_ALL_BUILD_INFO, StateArgs, make_blob, make_consensus};
 use crate::error::CodecConcreteType;
-use crate::fetch::{Cursor, EncodedPart};
+use crate::fetch::{EncodedPart, FetchConfig};
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -318,18 +316,6 @@ struct BatchPartUpdate {
     d: i64,
 }
 
-#[derive(PartialOrd, Ord, PartialEq, Eq)]
-struct PrettyBytes<'a>(&'a [u8]);
-
-impl fmt::Debug for PrettyBytes<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match std::str::from_utf8(self.0) {
-            Ok(x) => fmt::Debug::fmt(x, f),
-            Err(_) => fmt::Debug::fmt(self.0, f),
-        }
-    }
-}
-
 /// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
     blob_uri: &SensitiveUrl,
@@ -351,6 +337,7 @@ pub async fn blob_batch_part(
     let desc = parsed.desc.clone();
 
     let encoded_part = EncodedPart::new(
+        &FetchConfig::from_persist_config(&cfg),
         metrics.read.snapshot.clone(),
         parsed.desc.clone(),
         &key.0,
@@ -361,15 +348,19 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let mut cursor = Cursor::default();
-    while let Some(((k, v, t, d), _)) = cursor.pop(&encoded_part) {
+    let records = encoded_part
+        .updates()
+        .as_part()
+        .ok_or_else(|| anyhow!("expected structured data"))?
+        .as_ord();
+    for (k, v, t, d) in records.iter() {
         if out.updates.len() > limit {
             break;
         }
         out.updates.push(BatchPartUpdate {
-            k: format!("{:?}", PrettyBytes(k)),
-            v: format!("{:?}", PrettyBytes(v)),
-            t,
+            k: k.to_string(),
+            v: v.to_string(),
+            t: u64::from_le_bytes(t),
             d: i64::from_le_bytes(d),
         });
     }
@@ -380,6 +371,7 @@ pub async fn blob_batch_part(
 async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
+    let cfg = &state_versions.cfg;
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
@@ -391,13 +383,14 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     // This is odd, but advance by the upper to get maximal consolidation.
     let as_of = state.upper().borrow();
 
-    let mut updates = Vec::new();
+    let mut parts = Vec::new();
     for batch in state.collections.trace.batches() {
         let mut part_stream =
             pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
         while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
+                &FetchConfig::from_persist_config(cfg),
                 &shard_id,
                 &*state_versions.blob,
                 &state_versions.metrics,
@@ -408,19 +401,35 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
             )
             .await
             .expect("part exists");
-            let mut cursor = Cursor::default();
-            while let Some(((k, v, mut t, d), _)) = cursor.pop(&encoded_part) {
-                t.advance_by(as_of);
-                let d = <i64 as Codec64>::decode(d);
-                updates.push(((k.to_owned(), v.to_owned()), t, d));
-            }
+            let part = encoded_part.updates();
+            let part = part
+                .as_part()
+                .ok_or_else(|| anyhow!("expected structured data"))?
+                .as_ord();
+            parts.push(part);
         }
     }
 
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let mut updates = vec![];
+    for part in &parts {
+        for (k, v, t, d) in part.iter() {
+            let mut t = <u64 as Codec64>::decode(t);
+            t.advance_by(as_of);
+            let d = <i64 as Codec64>::decode(d);
+            updates.push(((k, v), t, d));
+        }
+    }
+
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("before: {} updates {} bytes", updates.len(), bytes);
     differential_dataflow::consolidation::consolidate_updates(&mut updates);
-    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    let bytes: usize = updates
+        .iter()
+        .map(|((k, v), _, _)| k.goodbytes() + v.goodbytes())
+        .sum();
     println!("after : {} updates {} bytes", updates.len(), bytes);
 
     Ok(())
@@ -503,7 +512,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     })
     .await?;
 
-    println!("shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers");
+    println!(
+        "shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers"
+    );
     for (shard, (seqno, rollup)) in rollup_keys {
         let rollup_key = PartialRollupKey::new(seqno, &rollup).complete(&shard);
         // Basic stats about the trace.
@@ -544,7 +555,9 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
                 byte_width += largest_part;
             }
         });
-        println!("{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}");
+        println!(
+            "{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}"
+        );
     }
 
     Ok(())
@@ -587,11 +600,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
 
     let mut known_parts = BTreeSet::new();
     let mut known_rollups = BTreeSet::new();
-    let mut known_writers = BTreeSet::new();
     while let Some(v) = state_iter.next(|_| {}) {
-        for writer_id in v.collections.writers.keys() {
-            known_writers.insert(writer_id.clone());
-        }
         for batch in v.collections.trace.batches() {
             // TODO: this may end up refetching externally-stored runs once per batch...
             // but if we have enough parts for this to be a problem, we may need to track a more
@@ -615,10 +624,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     // versions are also considered live
     let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        let is_unreferenced = match writer {
-            WriterKey::Id(writer) => !known_writers.contains(&writer),
-            version @ WriterKey::Version(_) => version < minimum_version,
-        };
+        let is_unreferenced = writer < minimum_version;
         if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
@@ -645,7 +651,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let isolated_runtime = Arc::new(IsolatedRuntime::default());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),
@@ -690,10 +696,6 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 pub(crate) struct K;
 #[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct V;
-#[derive(Default, Debug, PartialEq, Eq)]
-struct T;
-#[derive(Default, Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
-struct D(i64);
 
 pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
     Mutex::new((
@@ -760,61 +762,9 @@ impl Codec for V {
     }
 }
 
-impl Codec for T {
-    type Storage = ();
-    type Schema = TodoSchema<T>;
-
-    fn codec_name() -> String {
-        KVTD_CODECS.lock().expect("lockable").2.clone()
-    }
-
-    fn encode<B>(&self, _buf: &mut B)
-    where
-        B: BufMut,
-    {
-    }
-
-    fn decode(_buf: &[u8], _schema: &TodoSchema<T>) -> Result<Self, String> {
-        Ok(Self)
-    }
-
-    fn encode_schema(_schema: &Self::Schema) -> Bytes {
-        Bytes::new()
-    }
-
-    fn decode_schema(buf: &Bytes) -> Self::Schema {
-        assert_eq!(*buf, Bytes::new());
-        TodoSchema::default()
-    }
-}
-
-impl Codec64 for D {
-    fn codec_name() -> String {
-        KVTD_CODECS.lock().expect("lockable").3.clone()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        [0; 8]
-    }
-
-    fn decode(_buf: [u8; 8]) -> Self {
-        Self(0)
-    }
-}
-
-impl Semigroup for D {
-    fn plus_equals(&mut self, _rhs: &Self) {}
-}
-
-impl IsZero for D {
-    fn is_zero(&self) -> bool {
-        false
-    }
-}
-
 pub(crate) static FAKE_OPAQUE_CODEC: Mutex<String> = Mutex::new(String::new());
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct O([u8; 8]);
 
 impl Codec64 for O {
@@ -828,11 +778,5 @@ impl Codec64 for O {
 
     fn decode(buf: [u8; 8]) -> Self {
         Self(buf)
-    }
-}
-
-impl Opaque for O {
-    fn initial() -> Self {
-        Self([0; 8])
     }
 }

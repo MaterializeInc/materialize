@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 #
@@ -39,15 +38,19 @@ INSERT INTO t2 VALUES (5);
 
 > CREATE SCHEMA schema1
 
+> BEGIN
 > CREATE SOURCE mz_source1
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t1_1 FROM SOURCE mz_source1 (REFERENCE public.t1);
 > CREATE TABLE t2_1 FROM SOURCE mz_source1 (REFERENCE public.t2);
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE mz_source2
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t1_2 FROM SOURCE mz_source2 (REFERENCE public.t1);
 > CREATE TABLE t2_2 FROM SOURCE mz_source2 (REFERENCE public.t2);
+> COMMIT
 
 > SELECT * FROM t1_1;
 1

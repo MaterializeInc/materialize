@@ -108,6 +108,9 @@ class Report:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
         return scenario_result.get_scenario_version()
 
+    def has_scenario_result(self, scenario_name: str) -> bool:
+        return scenario_name in self._result_by_scenario_name
+
     def get_scenario_result_by_name(
         self, scenario_name: str
     ) -> BenchmarkScenarioResult:
@@ -125,7 +128,7 @@ class Report:
 
 
 def determine_scenario_classes_with_regressions(
-    selected_report_by_scenario_name: dict[str, Report]
+    selected_report_by_scenario_name: dict[str, Report],
 ) -> list[type[Scenario]]:
     scenario_classes_with_regressions = set()
 

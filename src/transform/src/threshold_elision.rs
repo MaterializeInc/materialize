@@ -15,22 +15,27 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
-use crate::analysis::{DerivedBuilder, NonNegative, SubtreeSize};
 use crate::TransformCtx;
+use crate::analysis::{DerivedBuilder, NonNegative, SubtreeSize};
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]
 pub struct ThresholdElision;
 
 impl crate::Transform for ThresholdElision {
+    fn name(&self) -> &'static str {
+        "ThresholdElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "threshold_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -53,7 +58,7 @@ impl crate::Transform for ThresholdElision {
                     view = view.last_child();
                 }
             }
-            todo.extend(expr.children_mut().rev().zip(view.children_rev()))
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()))
         }
 
         mz_repr::explain::trace_plan(&*relation);

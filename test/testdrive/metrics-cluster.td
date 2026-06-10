@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
+$ set-sql-timeout duration=300s
+
+> CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1,workers=1'), size_32 (SIZE 'scale=1,workers=32'), size_2_2 (SIZE 'scale=2,workers=2'))
 > CREATE CLUSTER bar REPLICAS ()
-> CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))
+> CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE 'scale=1,workers=4'))
 
 > SELECT
       c.name,
@@ -17,7 +19,7 @@
       u.process_id,
       u.cpu_percent >= 0.0,
       u.memory_percent > 0.0,
-      u.disk_percent
+      (u.disk_percent IS NULL OR u.disk_percent > 0.0)
   FROM
       mz_clusters AS c
           JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
@@ -26,11 +28,11 @@
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
   ORDER BY c.name, r.name, process_id
-foo size_1 0 true true <null>
-foo size_2_2 0 true true <null>
-foo size_2_2 1 true true <null>
-foo size_32 0 true true <null>
-xyzzy size_4 0 true true <null>
+foo size_1 0 true true true
+foo size_2_2 0 true true true
+foo size_2_2 1 true true true
+foo size_32 0 true true true
+xyzzy size_4 0 true true true
 
 > SELECT DISTINCT ON (c.name, r.name, u.process_id)
       c.name,
@@ -38,7 +40,7 @@ xyzzy size_4 0 true true <null>
       u.process_id,
       u.cpu_percent >= 0.0,
       u.memory_percent > 0.0,
-      u.disk_percent
+      (u.disk_percent IS NULL OR u.disk_percent > 0.0)
   FROM
       mz_clusters AS c
           JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
@@ -47,8 +49,8 @@ xyzzy size_4 0 true true <null>
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
   ORDER BY c.name, r.name, process_id, occurred_at DESC
-foo size_1 0 true true <null>
-foo size_2_2 0 true true <null>
-foo size_2_2 1 true true <null>
-foo size_32 0 true true <null>
-xyzzy size_4 0 true true <null>
+foo size_1 0 true true true
+foo size_2_2 0 true true true
+foo size_2_2 1 true true true
+foo size_32 0 true true true
+xyzzy size_4 0 true true true

@@ -10,33 +10,35 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-arrow = { version = "51.0.0", default-features = false }
-async-trait = "0.1.68"
-bytes = "1.3.0"
-bytesize = "1.1.0"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-dec = "0.4.8"
-deadpool-postgres = "0.10.3"
-derivative = "2.2.0"
-differential-dataflow = "0.13.1"
-enum-kinds = "0.5.1"
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-governor = "0.6.0"
-hex = "0.4.3"
-http = "1.1.0"
-ipnet = "2.5.0"
-itertools = "0.10.5"
-launchdarkly-server-sdk = { version = "1.0.0", default-features = false, features = [
-    "hypertls",
-] }
-maplit = "1.0.2"
+anyhow.workspace = true
+arrow.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+dec.workspace = true
+derivative.workspace = true
+differential-dataflow.workspace = true
+enum-kinds.workspace = true
+fail.workspace = true
+futures.workspace = true
+governor.workspace = true
+hex.workspace = true
+imbl.workspace = true
+http.workspace = true
+hyper-tls = "0.5.0"
+ipnet.workspace = true
+itertools.workspace = true
+launchdarkly-server-sdk.workspace = true
+maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
+mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
-mz-ccsr = { path = "../ccsr" }
+mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -45,87 +47,70 @@ mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
+mz-license-keys = { path = "../license-keys" }
 mz-kafka-util = { path = "../kafka-util" }
+mz-metrics = { path = "../metrics" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing_"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "panic", "process", "tracing", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire-common = { path = "../pgwire-common" }
-mz-postgres-client = { path = "../postgres-client" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util"}
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
-mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
-mz-timestamp-oracle = { path = "../timestamp-oracle" }
-opentelemetry = { version = "0.24.0", features = ["trace"] }
-prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
-qcell = "0.5"
-rand = "0.8.5"
-rand_chacha = "0.3"
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
-regex = "1.7.0"
-reqwest = "0.11.13"
-semver = "1.0.16"
-serde = "1.0.152"
-serde_json = "1.0.125"
-serde_plain = "1.0.1"
-sha2 = "0.10.6"
-smallvec = { version = "1.10.0", features = ["union"] }
-static_assertions = "1.1"
-timely = "0.14.1"
-tokio = { version = "1.38.0", features = ["rt", "time"] }
-tokio-postgres = { version = "0.7.8" }
-tokio-stream = "0.1.11"
-tracing = "0.1.37"
-tracing-core = "0.1.30"
-tracing-opentelemetry = { version = "0.25.0" }
-tracing-subscriber = "0.3.16"
-thiserror = "1.0.37"
-uncased = "0.9.7"
-url = "2.3.1"
-uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
+openssl.workspace = true
+opentelemetry.workspace = true
+prometheus.workspace = true
+prost.workspace = true
+qcell.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_plain.workspace = true
+sha2.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+static_assertions.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tracing-core.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.4.0", features = ["async_tokio"] }
-datadriven = "0.8.0"
+criterion.workspace = true
+datadriven.workspace = true
+mz-persist = { path = "../persist", features = ["turmoil"] }
+mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
+turmoil.workspace = true
 
 [[bench]]
 name = "catalog"
 harness = false
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-# TODO(parkmycar): No idea what, but something in this crate is non-deterministic and it breaks
-# pipelining.
-disable_pipelining = true
-
-[package.metadata.cargo-gazelle.test.sql]
-data = ["tests/testdata/sql"]
-
-[package.metadata.cargo-gazelle.test.timestamp_selection]
-data = ["tests/testdata/timestamp_selection"]
+[features]
+default = []
+foundationdb = ["mz-timestamp-oracle/foundationdb"]

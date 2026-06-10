@@ -51,30 +51,35 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 
 use mz_expr::visit::Visit;
-use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateExpr, Columns, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformCtx;
+use crate::analysis::equivalences::EquivalenceClasses;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
+    fn name(&self) -> &'static str {
+        "ReductionPushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduction_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.
-        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        relation.visit_mut_pre(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
@@ -85,7 +90,7 @@ impl ReductionPushdown {
     /// edges are join constraints. After removing constraints containing a
     /// GroupBy, the reduce will be pushed down to all connected components. If
     /// there is only one connected component, this method is a no-op.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -107,30 +112,30 @@ impl ReductionPushdown {
                 for index in 0..scalars.len() {
                     let (lower, upper) = scalars.split_at_mut(index);
                     upper[0].visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c, _) = e {
                             if *c >= arity {
                                 *e = lower[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
                 for key in group_key.iter_mut() {
                     key.visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c, _) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
                 for agg in aggregates.iter_mut() {
                     agg.expr.visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
+                        if let mz_expr::MirScalarExpr::Column(c, _) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }
                         }
-                    })?;
+                    });
                 }
 
                 **input = inner.take_dangerous()
@@ -153,7 +158,6 @@ impl ReductionPushdown {
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -179,8 +183,14 @@ fn try_push_reduce_through_join(
     // `<component>` is either `Join {<subset of inputs>}` or
     // `<element of inputs>`.
 
-    let old_join_mapper =
-        JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
+    // 0) Make sure that `equivalences` is a proper equivalence relation. Later, in 3a)/i), we'll
+    //    rely on expressions appearing in at most one equivalence class.
+    let mut eq_classes = EquivalenceClasses::default();
+    eq_classes.classes = equivalences.clone();
+    eq_classes.minimize(None);
+    let equivalences = eq_classes.classes;
+
+    let old_join_mapper = JoinInputMapper::new(inputs.as_slice());
     // 1) Partition the join constraints into constraints containing a group
     //    key and constraints that don't.
     let (new_join_equivalences, component_equivalences): (Vec<_>, Vec<_>) = equivalences
@@ -252,6 +262,8 @@ fn try_push_reduce_through_join(
     // (2) every expression in the equivalences of the new join.
     for key in group_key {
         // i) Find the equivalence class that the key is in.
+        //    This relies on the expression appearing in at most one equivalence class. This
+        //    invariant is ensured in step 0).
         if let Some(cls) = new_join_equivalences
             .iter()
             .find(|cls| cls.iter().any(|expr| expr == key))
@@ -326,7 +338,7 @@ fn try_push_reduce_through_join(
         .map(|cls| {
             cls.into_iter()
                 .map(|(idx, col)| {
-                    MirScalarExpr::Column(new_join_mapper.map_column_to_global(col, idx))
+                    MirScalarExpr::column(new_join_mapper.map_column_to_global(col, idx))
                 })
                 .collect::<Vec<_>>()
         })
@@ -430,7 +442,7 @@ impl ReduceBuilder {
                     predicates.push(
                         class[0]
                             .clone()
-                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq)
+                            .call_binary(expr.clone(), mz_expr::func::Eq)
                             .or(class[0]
                                 .clone()
                                 .call_is_null()

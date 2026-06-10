@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -16,19 +16,26 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
+use mz_compute_client::controller::error::InstanceMissing;
+
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::{NotNullViolation, Timestamp};
+use mz_repr::strconv::{ParseError, ParseErrorKind};
+use mz_repr::{ColumnDiff, ColumnName, KeyDiff, NotNullViolation, RelationDescDiff, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::errors::CollectionMissing;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -36,6 +43,7 @@ use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CollectionLookupError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -51,7 +59,10 @@ pub enum AdapterError {
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
-    /// The cached plan or descriptor changed.
+    /// 1. The cached plan or descriptor changed,
+    /// 2. or some dependency of a statement disappeared during sequencing.
+    /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
+    /// (e.g., in MV sequencing)
     ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
@@ -92,11 +103,26 @@ pub enum AdapterError {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
-    InvalidTableMutationSelection,
+    InvalidTableMutationSelection {
+        /// The full name of the problematic object (e.g. a source or source-export table).
+        object_name: String,
+        /// Human-readable type of the object (e.g. "source", "source-export table").
+        object_type: String,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// An error occurred while decoding COPY data.
+    CopyFormatError(String),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
+    /// A dependency was dropped while sequencing a statement.
+    ConcurrentDependencyDrop {
+        dependency_kind: &'static str,
+        dependency_id: String,
+    },
+    CollectionUnreadable {
+        id: String,
+    },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
         name: String,
@@ -175,6 +201,13 @@ pub enum AdapterError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
+    /// Some feature isn't available for a (potentially opaque) reason.
+    /// For example, in cloud Self-Managed auth features aren't available,
+    /// but we don't want to mention self managed auth.
+    UnavailableFeature {
+        feature: String,
+        docs: Option<String>,
+    },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
@@ -187,16 +220,8 @@ pub enum AdapterError {
     DDLOnlyTransaction,
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
-    /// Used to prevent us from durably committing state while a DDL transaction is open, should
-    /// never be returned to the user.
-    TransactionDryRun {
-        /// New operations that were run in the transaction.
-        new_ops: Vec<crate::catalog::Op>,
-        /// New resulting `CatalogState`.
-        new_state: crate::catalog::CatalogState,
-    },
     /// An error occurred in the storage layer
-    Storage(mz_storage_types::controller::StorageError<mz_repr::Timestamp>),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
@@ -225,12 +250,196 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
-    /// This use session has been deneid by a NetworkPolicy.
+    /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
+    AlterClusterWhilePendingReplicas,
+    AuthenticationError(AuthenticationError),
+    /// Schema of a replacement is incompatible with the target.
+    ReplacementSchemaMismatch(RelationDescDiff),
+    /// Attempt to apply a replacement to a sealed materialized view.
+    ReplaceMaterializedViewSealed {
+        name: String,
+    },
+    /// Could not find a valid timestamp satisfying all constraints.
+    ImpossibleTimestampConstraints {
+        constraints: String,
+    },
+    /// OIDC group-to-role sync failed and strict mode is enabled.
+    OidcGroupSyncFailed(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthenticationError {
+    #[error("invalid credentials")]
+    InvalidCredentials,
+    #[error("role is not allowed to login")]
+    NonLogin,
+    #[error("role does not exist")]
+    RoleNotFound,
+    #[error("password is required")]
+    PasswordRequired,
+}
+
+/// Maps a parse/cast [`ParseError`] to the appropriate `DATA_EXCEPTION` (class
+/// 22) SQLSTATE. Out-of-range values map to overflow codes and malformed input
+/// maps to invalid-representation codes, in both cases distinguishing datetime
+/// types from everything else, matching PostgreSQL.
+fn parse_error_code(err: &ParseError) -> SqlState {
+    let is_datetime = matches!(
+        &*err.type_name,
+        "date" | "time" | "timestamp" | "timestamp with time zone" | "interval"
+    );
+    match (err.kind, is_datetime) {
+        (ParseErrorKind::OutOfRange, true) => SqlState::DATETIME_FIELD_OVERFLOW,
+        (ParseErrorKind::OutOfRange, false) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        (ParseErrorKind::InvalidInputSyntax, true) => SqlState::INVALID_DATETIME_FORMAT,
+        (ParseErrorKind::InvalidInputSyntax, false) => SqlState::INVALID_TEXT_REPRESENTATION,
+    }
+}
+
+/// Maps an [`EvalError`] to the appropriate SQLSTATE.
+///
+/// Historically every `EvalError` fell through to `INTERNAL_ERROR` (`XX000`),
+/// but the overwhelming majority are user-facing data exceptions (class 22) or
+/// other well-defined conditions, not internal errors. This match is
+/// deliberately exhaustive — with no wildcard — so that adding a new
+/// `EvalError` variant is a compile error until it is assigned a code, and we
+/// never silently regress to `XX000`. Codes are chosen to match PostgreSQL
+/// where an equivalent error exists.
+fn eval_error_code(err: &EvalError) -> SqlState {
+    match err {
+        // Division and mathematical domain errors.
+        EvalError::DivisionByZero => SqlState::DIVISION_BY_ZERO,
+        EvalError::NegSqrt | EvalError::ComplexOutOfRange(_) => {
+            SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION
+        }
+        EvalError::InfinityOutOfDomain(_)
+        | EvalError::NegativeOutOfDomain(_)
+        | EvalError::ZeroOutOfDomain(_)
+        | EvalError::OutOfDomain(..)
+        | EvalError::Undefined(_) => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Out-of-range numeric, integer, and float values.
+        EvalError::FloatOverflow
+        | EvalError::FloatUnderflow
+        | EvalError::NumericFieldOverflow
+        | EvalError::Float32OutOfRange(_)
+        | EvalError::Float64OutOfRange(_)
+        | EvalError::Int16OutOfRange(_)
+        | EvalError::Int32OutOfRange(_)
+        | EvalError::Int64OutOfRange(_)
+        | EvalError::UInt16OutOfRange(_)
+        | EvalError::UInt32OutOfRange(_)
+        | EvalError::UInt64OutOfRange(_)
+        | EvalError::OidOutOfRange(_)
+        | EvalError::MzTimestampOutOfRange(_)
+        | EvalError::MzTimestampStepOverflow
+        | EvalError::CharOutOfRange => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+
+        // Out-of-range datetime and interval values.
+        EvalError::DateOutOfRange
+        | EvalError::TimestampOutOfRange
+        | EvalError::TimestampCannotBeNan
+        | EvalError::DateBinOutOfRange(_)
+        | EvalError::DateDiffOverflow { .. } => SqlState::DATETIME_FIELD_OVERFLOW,
+        EvalError::IntervalOutOfRange(_) => SqlState::INTERVAL_FIELD_OVERFLOW,
+
+        // Parse/cast failures, plus other malformed textual/encoded input.
+        EvalError::Parse(e) => parse_error_code(e),
+        EvalError::ParseHex(_)
+        | EvalError::InvalidBase64Equals
+        | EvalError::InvalidBase64Symbol(_)
+        | EvalError::InvalidBase64EndSequence => SqlState::INVALID_TEXT_REPRESENTATION,
+        EvalError::InvalidByteSequence { .. } => SqlState::CHARACTER_NOT_IN_REPERTOIRE,
+        EvalError::CharacterNotValidForEncoding(_) | EvalError::CharacterTooLargeForEncoding(_) => {
+            SqlState::PROGRAM_LIMIT_EXCEEDED
+        }
+
+        // Invalid argument values.
+        EvalError::InvalidTimezone(_)
+        | EvalError::InvalidTimezoneInterval
+        | EvalError::InvalidTimezoneConversion
+        | EvalError::InvalidIanaTimezoneId(_)
+        | EvalError::InvalidLayer { .. }
+        | EvalError::InvalidEncodingName(_)
+        | EvalError::InvalidHashAlgorithm(_)
+        | EvalError::InvalidDatePart(_)
+        | EvalError::InvalidParameterValue(_)
+        | EvalError::InvalidJsonbCast { .. }
+        | EvalError::UnknownUnits(_)
+        | EvalError::UnsupportedUnits(..)
+        | EvalError::InvalidIdentifier { .. }
+        | EvalError::InvalidRoleId(_)
+        | EvalError::InvalidPrivileges(_)
+        | EvalError::NegLimit => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Regular expressions.
+        EvalError::InvalidRegex(_) | EvalError::InvalidRegexFlag(_) => {
+            SqlState::INVALID_REGULAR_EXPRESSION
+        }
+
+        // LIKE escape sequences.
+        EvalError::UnterminatedLikeEscapeSequence | EvalError::LikeEscapeTooLong => {
+            SqlState::INVALID_ESCAPE_SEQUENCE
+        }
+
+        // NULL values where they are not permitted.
+        EvalError::KeyCannotBeNull
+        | EvalError::MustNotBeNull(_)
+        | EvalError::AclArrayNullElement
+        | EvalError::MzAclArrayNullElement => SqlState::NULL_VALUE_NOT_ALLOWED,
+
+        // Array subscript/dimension errors.
+        EvalError::IndexOutOfRange { .. }
+        | EvalError::ArrayFillWrongArraySubscripts
+        | EvalError::IncompatibleArrayDimensions { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        EvalError::InvalidArray(e) => match e {
+            InvalidArrayError::TooManyDimensions(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+            InvalidArrayError::WrongCardinality { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        },
+
+        // Range errors.
+        EvalError::InvalidRange(e) => match e {
+            InvalidRangeError::CanonicalizationOverflow(_) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+            InvalidRangeError::MisorderedRangeBounds
+            | InvalidRangeError::InvalidRangeBoundFlags
+            | InvalidRangeError::NullRangeBoundFlags
+            | InvalidRangeError::DiscontiguousUnion
+            | InvalidRangeError::DiscontiguousDifference => SqlState::DATA_EXCEPTION,
+        },
+
+        // Cardinality violations from scalar subqueries.
+        EvalError::MultipleRowsFromSubquery | EvalError::NegativeRowsFromSubquery => {
+            SqlState::CARDINALITY_VIOLATION
+        }
+
+        // Length, size, and resource limits.
+        EvalError::StringValueTooLong { .. } => SqlState::STRING_DATA_RIGHT_TRUNCATION,
+        EvalError::LikePatternTooLong
+        | EvalError::LengthTooLarge
+        | EvalError::NullCharacterNotPermitted
+        | EvalError::MaxArraySizeExceeded(_)
+        | EvalError::LetRecLimitExceeded(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+
+        // Unsupported features.
+        EvalError::Unsupported { .. }
+        | EvalError::MultidimensionalArrayRemovalNotSupported
+        | EvalError::MultiDimensionalArraySearch => SqlState::FEATURE_NOT_SUPPORTED,
+
+        // User-raised errors (e.g. `error_if_null`).
+        EvalError::IfNullError(_) => SqlState::DATA_EXCEPTION,
+
+        // Genuinely internal errors.
+        EvalError::Internal(_)
+        | EvalError::InvalidCatalogJson(_)
+        | EvalError::TypeFromOid(_)
+        | EvalError::PrettyError(_)
+        | EvalError::RedactError(_) => SqlState::INTERNAL_ERROR,
+    }
 }
 
 impl AdapterError {
@@ -257,7 +466,7 @@ impl AdapterError {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
                 Some("This is a current limitation in Materialize".into())
-            },
+            }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -284,6 +493,15 @@ impl AdapterError {
                 specify size via SIZE option."
                     .into(),
             ),
+            AdapterError::InvalidTableMutationSelection {
+                object_name,
+                object_type,
+            } => Some(format!(
+                "{object_type} '{}' may not be used in this operation; \
+                     the selection may refer to views and materialized views, but transitive \
+                     dependencies must not include sources or source-export tables",
+                object_name.quoted()
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -300,19 +518,24 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::DependentObject(dependent_objects) => {
-                Some(dependent_objects
+            AdapterError::DependentObject(dependent_objects) => Some(
+                dependent_objects
                     .iter()
-                    .map(|(role_name, err_msgs)| err_msgs
-                        .iter()
-                        .map(|err_msg| format!("{role_name}: {err_msg}"))
-                        .join("\n"))
-                    .join("\n"))
-            },
-            AdapterError::Storage(storage_error) => {
-                storage_error.source().map(|source_error| source_error.to_string_with_causes())
-            }
-            AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
+                    .map(|(role_name, err_msgs)| {
+                        err_msgs
+                            .iter()
+                            .map(|err_msg| format!("{role_name}: {err_msg}"))
+                            .join("\n")
+                    })
+                    .join("\n"),
+            ),
+            AdapterError::Storage(storage_error) => storage_error
+                .source()
+                .map(|source_error| source_error.to_string_with_causes()),
+            AdapterError::ReadOnlyTransaction => Some(
+                "SELECT queries cannot be combined with other query types, including SUBSCRIBE."
+                    .into(),
+            ),
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
             AdapterError::ConnectionValidation(e) => e.detail(),
@@ -320,30 +543,105 @@ impl AdapterError {
                 Some(format!(
                     "The specified last refresh is at {}, while the earliest possible time to compute the materialized \
                     view is {}.",
-                    last_refresh,
-                    earliest_possible,
+                    last_refresh, earliest_possible,
                 ))
             }
-            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(||
-                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(|| {
+                    format!(
+                        "The transaction is executing on the \
+                        {cluster} cluster, maybe having been routed \
+                        there by the first statement in the transaction."
+                    )
+                })
+            }
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
                 Some(format!(
                     "The requested REFRESH AT time is {}, \
                     but not all input collections are readable earlier than [{}].",
                     oracle_read_ts,
                     if least_valid_read.len() == 1 {
-                        format!("{}", least_valid_read.as_option().expect("antichain contains exactly 1 timestamp"))
+                        format!(
+                            "{}",
+                            least_valid_read
+                                .as_option()
+                                .expect("antichain contains exactly 1 timestamp")
+                        )
                     } else {
                         // This can't occur currently
                         format!("{:?}", least_valid_read)
                     }
                 ))
             }
-            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
-            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
-            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
+            AdapterError::RtrTimeout(name) => Some(format!(
+                "{name} failed to ingest data up to the real-time recency point"
+            )),
+            AdapterError::RtrDropFailure(name) => Some(format!(
+                "{name} dropped before ingesting data to the real-time recency point"
+            )),
+            AdapterError::UserSessionsDisallowed => {
+                Some("Your organization has been blocked. Please contact support.".to_string())
+            }
+            AdapterError::NetworkPolicyDenied(reason) => Some(format!("{reason}.")),
+            AdapterError::ReplacementSchemaMismatch(diff) => {
+                let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
+                    let pos = idx + 1;
+                    match diff {
+                        ColumnDiff::Missing { name } => {
+                            let name = name.as_str().quoted();
+                            format!("missing column {name} at position {pos}")
+                        }
+                        ColumnDiff::Extra { name } => {
+                            let name = name.as_str().quoted();
+                            format!("extra column {name} at position {pos}")
+                        }
+                        ColumnDiff::TypeMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            format!("column {name} at position {pos}: type mismatch (target: {left:?}, replacement: {right:?})")
+                        }
+                        ColumnDiff::NullabilityMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            let left = if *left { "NULL" } else { "NOT NULL" };
+                            let right = if *right { "NULL" } else { "NOT NULL" };
+                            format!("column {name} at position {pos}: nullability mismatch (target: {left}, replacement: {right})")
+                        }
+                        ColumnDiff::NameMismatch { left, right } => {
+                            let left = left.as_str().quoted();
+                            let right = right.as_str().quoted();
+                            format!("column at position {pos}: name mismatch (target: {left}, replacement: {right})")
+                        }
+                    }
+                }).collect();
+
+                if let Some(KeyDiff { left, right }) = &diff.key_diff {
+                    let format_keys = |keys: &BTreeSet<Vec<ColumnName>>| {
+                        if keys.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            keys.iter()
+                                .map(|key| {
+                                    let cols = key.iter().map(|c| c.as_str()).join(", ");
+                                    format!("{{{cols}}}")
+                                })
+                                .join(", ")
+                        }
+                    };
+                    lines.push(format!(
+                        "keys differ (target: {}, replacement: {})",
+                        format_keys(left),
+                        format_keys(right)
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "The materialized view has already computed its output until the end of time, \
+                 so replacing its definition would have no effect."
+                    .into(),
+            ),
+            AdapterError::ImpossibleTimestampConstraints { constraints } => {
+                Some(format!("Constraints:\n{}", constraints))
+            }
             _ => None,
         }
     }
@@ -414,11 +712,21 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
             ),
+            AdapterError::DDLTransactionRace => Some(
+                "Currently, DDL transactions fail when any other DDL happens concurrently, \
+                 even on unrelated schemas/clusters.".into()
+            ),
+            AdapterError::CollectionUnreadable { .. } => Some(
+                "This could be because the collection has recently been dropped.".into()
+            ),
             _ => None,
         }
     }
 
     pub fn code(&self) -> SqlState {
+        // We define this up here to make sure `AdapterError::` and `OptimizerError::` act the same way.
+        const RECURSION_LIMIT_ERROR_CODE: SqlState = SqlState::INTERNAL_ERROR;
+
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
@@ -443,17 +751,11 @@ impl AdapterError {
             },
             AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
-            AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::LengthTooLarge) => SqlState::PROGRAM_LIMIT_EXCEEDED,
-            AdapterError::Eval(EvalError::NullCharacterNotPermitted) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
+            // Evaluation errors are almost all user-facing data exceptions, not
+            // internal errors. `eval_error_code` matches every variant
+            // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
+            // to errors that are really the user's fault. See SQL-326.
+            AdapterError::Eval(e) => eval_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
@@ -464,9 +766,14 @@ impl AdapterError {
             AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                SqlState::INVALID_TRANSACTION_STATE
+            }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -474,6 +781,12 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
             AdapterError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
                 SqlState::DUPLICATE_COLUMN
+            }
+            AdapterError::PlanError(PlanError::UnknownParameter(_)) => {
+                SqlState::UNDEFINED_PARAMETER
+            }
+            AdapterError::PlanError(PlanError::ParameterNotAllowed(_)) => {
+                SqlState::UNDEFINED_PARAMETER
             }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
@@ -486,19 +799,27 @@ impl AdapterError {
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }
-            AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::RecursionLimit(_) => RECURSION_LIMIT_ERROR_CODE,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
-                OptimizerError::PlanError(e) => {
-                    AdapterError::PlanError(e.clone()).code() // Delegate to outer
+                OptimizerError::PlanError(PlanError::InvalidSchemaName) => {
+                    SqlState::INVALID_SCHEMA_NAME
                 }
-                OptimizerError::RecursionLimitError(e) => {
-                    AdapterError::RecursionLimit(e.clone()).code() // Delegate to outer
+                OptimizerError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
+                    SqlState::DUPLICATE_COLUMN
                 }
+                OptimizerError::PlanError(PlanError::UnknownParameter(_)) => {
+                    SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(PlanError::ParameterNotAllowed(_)) => {
+                    SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
+                OptimizerError::RecursionLimitError(_) => RECURSION_LIMIT_ERROR_CODE,
                 OptimizerError::Internal(s) => {
                     AdapterError::Internal(s.clone()).code() // Delegate to outer
                 }
@@ -508,9 +829,11 @@ impl AdapterError {
                 OptimizerError::TransformError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::UnsupportedTemporalExpression(_) => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::RestrictedFunction(_) => SqlState::INSUFFICIENT_PRIVILEGE,
                 // This should be handled by peek optimization, so it's an internal error if it
                 // reaches the user.
-                OptimizerError::UnsafeMfpPlan => SqlState::INTERNAL_ERROR,
+                OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
@@ -522,10 +845,10 @@ impl AdapterError {
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnavailableFeature { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
-            AdapterError::TransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -550,11 +873,165 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
+                SqlState::INVALID_PASSWORD
+            }
+            AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::ReplaceMaterializedViewSealed { .. } => {
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
+            }
+            // similar to AbsurdSubscribeBounds
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
         }
     }
 
     pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
         AdapterError::Internal(format!("{context}: {e}"))
+    }
+
+    // We don't want the following error conversions to `ConcurrentDependencyDrop` to happen
+    // automatically, because it might depend on the context whether `ConcurrentDependencyDrop`
+    // is appropriate, so we want to make the conversion target explicit at the call site.
+    // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
+    // in which case `ConcurrentDependencyDrop` would not be appropriate.
+
+    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "cluster",
+            dependency_id: e.0.to_string(),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "collection",
+            dependency_id: e.0.to_string(),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_lookup_error(
+        e: CollectionLookupError,
+        compute_instance: ComputeInstanceId,
+    ) -> Self {
+        match e {
+            CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+            CollectionLookupError::InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: compute_instance.to_string(),
+            },
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+        e: compute_error::CollectionLookupError,
+    ) -> Self {
+        match e {
+            compute_error::CollectionLookupError::InstanceMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: id.to_string(),
+                }
+            }
+            compute_error::CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_instance_peek_error(
+        e: mz_compute_client::controller::instance_client::PeekError,
+        compute_instance: ComputeInstanceId,
+    ) -> AdapterError {
+        use mz_compute_client::controller::instance_client::PeekError::*;
+        match e {
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: compute_instance.to_string(),
+            },
+            e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
+            e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_update_error(
+        e: compute_error::CollectionUpdateError,
+    ) -> Self {
+        use compute_error::CollectionUpdateError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_peek_error(
+        e: mz_compute_client::controller::error::PeekError,
+    ) -> AdapterError {
+        use mz_compute_client::controller::error::PeekError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
+                AdapterError::internal("peek error", e)
+            }
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_dataflow_creation_error(
+        e: compute_error::DataflowCreationError,
+    ) -> Self {
+        use compute_error::DataflowCreationError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {
+                AdapterError::internal("dataflow creation error", e)
+            }
+        }
     }
 }
 
@@ -562,11 +1039,10 @@ impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AdapterError::AbsurdSubscribeBounds { as_of, up_to } => {
-                assert!(up_to < as_of);
                 write!(
                     f,
-                    r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
-                    up_to, as_of
+                    "subscription lower bound (`AS OF`) is greater than its upper bound (`UP TO`): \
+                     {as_of} > {up_to}",
                 )
             }
             AdapterError::AmbiguousSystemColumnReference => {
@@ -608,14 +1084,33 @@ impl fmt::Display for AdapterError {
             AdapterError::SourceOrSinkSizeRequired { .. } => {
                 write!(f, "must specify either cluster or size option")
             }
-            AdapterError::InvalidTableMutationSelection => {
-                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                write!(
+                    f,
+                    "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
+                )
+            }
+            AdapterError::ReplaceMaterializedViewSealed { name } => {
+                write!(
+                    f,
+                    "materialized view {name} is sealed and thus cannot be replaced"
+                )
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
+            AdapterError::CopyFormatError(e) => write!(f, "{e}"),
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
+            }
+            AdapterError::ConcurrentDependencyDrop {
+                dependency_kind,
+                dependency_id,
+            } => {
+                write!(f, "{dependency_kind} '{dependency_id}' was dropped")
+            }
+            AdapterError::CollectionUnreadable { id } => {
+                write!(f, "collection '{id}' is not readable at any timestamp")
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
@@ -729,10 +1224,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
-            AdapterError::DDLTransactionRace => {
-                f.write_str("object state changed while transaction was in progress")
-            }
-            AdapterError::TransactionDryRun { .. } => f.write_str("transaction dry run"),
+            AdapterError::DDLTransactionRace => f.write_str(
+                "another session modified the catalog while this DDL transaction was open",
+            ),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
@@ -766,7 +1260,10 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::RtrTimeout(_) => {
-                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+                write!(
+                    f,
+                    "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                )
             }
             AdapterError::RtrDropFailure(_) => write!(
                 f,
@@ -781,15 +1278,40 @@ impl fmt::Display for AdapterError {
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
             }
+            AdapterError::AuthenticationError(e) => {
+                write!(f, "authentication error {e}")
+            }
+            AdapterError::UnavailableFeature { feature, docs } => {
+                write!(f, "{} is not supported in this environment.", feature)?;
+                if let Some(docs) = docs {
+                    write!(
+                        f,
+                        " For more information consult the documentation at {docs}"
+                    )?;
+                }
+                Ok(())
+            }
+            AdapterError::AlterClusterWhilePendingReplicas => {
+                write!(f, "cannot alter clusters with pending updates")
+            }
+            AdapterError::ReplacementSchemaMismatch(_) => {
+                write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ImpossibleTimestampConstraints { .. } => {
+                write!(f, "could not find a valid timestamp for the query")
+            }
+            AdapterError::OidcGroupSyncFailed(msg) => {
+                write!(f, "OIDC group-to-role sync failed: {msg}")
+            }
         }
     }
 }
 
 impl From<anyhow::Error> for AdapterError {
     fn from(e: anyhow::Error) -> AdapterError {
-        match e.downcast_ref::<PlanError>() {
-            Some(plan_error) => AdapterError::PlanError(plan_error.clone()),
-            None => AdapterError::Unstructured(e),
+        match e.downcast::<PlanError>() {
+            Ok(plan_error) => AdapterError::PlanError(plan_error),
+            Err(e) => AdapterError::Unstructured(e),
         }
     }
 }
@@ -847,7 +1369,10 @@ impl From<mz_sql::catalog::CatalogError> for AdapterError {
 
 impl From<PlanError> for AdapterError {
     fn from(e: PlanError) -> AdapterError {
-        AdapterError::PlanError(e)
+        match e {
+            PlanError::UnknownCursor(name) => AdapterError::UnknownCursor(name),
+            _ => AdapterError::PlanError(e),
+        }
     }
 }
 
@@ -858,7 +1383,13 @@ impl From<OptimizerError> for AdapterError {
             PlanError(e) => Self::PlanError(e),
             RecursionLimitError(e) => Self::RecursionLimit(e),
             EvalError(e) => Self::Eval(e),
+            InternalUnsafeMfpPlan(e) => Self::Internal(e),
             Internal(e) => Self::Internal(e),
+            RestrictedFunction(func) => {
+                Self::Unauthorized(mz_sql::rbac::UnauthorizedError::RestrictedSystemObject {
+                    object_name: format!("function {func}"),
+                })
+            }
             e => Self::Optimizer(e),
         }
     }
@@ -882,8 +1413,8 @@ impl From<oneshot::error::RecvError> for AdapterError {
     }
 }
 
-impl From<StorageError<mz_repr::Timestamp>> for AdapterError {
-    fn from(e: StorageError<mz_repr::Timestamp>) -> Self {
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
         AdapterError::Storage(e)
     }
 }
@@ -926,10 +1457,10 @@ impl From<mz_sql_parser::ast::IdentError> for AdapterError {
     }
 }
 
-impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
-    fn from(value: mz_sql::session::vars::ConnectionError) -> Self {
+impl From<mz_pgwire_common::ConnectionError> for AdapterError {
+    fn from(value: mz_pgwire_common::ConnectionError) -> Self {
         match value {
-            mz_sql::session::vars::ConnectionError::TooManyConnections { current, limit } => {
+            mz_pgwire_common::ConnectionError::TooManyConnections { current, limit } => {
                 AdapterError::ResourceExhaustion {
                     resource_type: "connection".into(),
                     limit_name: "max_connections".into(),

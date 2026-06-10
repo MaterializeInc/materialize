@@ -10,32 +10,22 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class DefaultPrivileges(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE DATABASE defpriv_db
             > SET DATABASE = defpriv_db
             > CREATE SCHEMA defpriv_schema
             > SET SCHEMA defpriv_schema
             > CREATE ROLE defpriv_role1
-            >[version<5900] ALTER ROLE defpriv_role1 CREATEDB CREATECLUSTER
 
-            $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
             GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
 
             > CREATE TABLE defpriv_table1 (c int)
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -46,9 +36,8 @@ class DefaultPrivileges(Check):
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role1;
                 > CREATE ROLE defpriv_role2
-                >[version<5900] ALTER ROLE defpriv_role2 CREATEDB CREATECLUSTER
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
 
                 > CREATE TABLE defpriv_table2 (c int)
@@ -58,9 +47,8 @@ class DefaultPrivileges(Check):
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role2;
                 > CREATE ROLE defpriv_role3
-                >[version<5900] ALTER ROLE defpriv_role3 CREATEDB CREATECLUSTER
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
 
                 > CREATE TABLE defpriv_table3 (c int)
@@ -69,9 +57,7 @@ class DefaultPrivileges(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role3;
@@ -103,6 +89,4 @@ class DefaultPrivileges(Check):
                 defpriv_table3 defpriv_role1=arwd/materialize
                 defpriv_table3 defpriv_role2=arwd/materialize
                 defpriv_table3 materialize=arwd/materialize
-                """
-            )
-        )
+                """))

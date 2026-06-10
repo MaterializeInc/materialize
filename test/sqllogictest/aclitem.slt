@@ -195,7 +195,7 @@ SELECT a::text from t
 statement ok
 DROP TABLE t
 
-query error binary encoding of aclitem types does not exist
+query error no binary output function available for type aclitem
 SELECT makeaclitem(1, 2, 'CREATE', false)
 
 query T
@@ -287,7 +287,7 @@ SELECT makeaclitem(1, 2, 'CREATE', true)::text
 
 # aclexplode
 
-query T
+query T rowsort
 SELECT aclexplode(ARRAY[makeaclitem(1, 2, 'SELECT, INSERT, DELETE', false), makeaclitem(3, 4, 'USAGE', false)])
 ----
 (4,3,USAGE,f)

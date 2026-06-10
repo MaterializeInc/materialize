@@ -12,14 +12,14 @@
 //! The specialized [`Explain`] implementation for an [`MirRelationExpr`]
 //! wrapped in an [`Explainable`] newtype struct allows us to interpret more
 //! [`mz_repr::explain::ExplainConfig`] options. This is the case because
-//! attribute derivation and let normalization are defined in [`mz_transform`]
-//! and conssequently are not available for the default [`Explain`]
+//! Analysis derivation and Let normalization are defined in [`mz_transform`]
+//! and consequently are not available for the default [`Explain`]
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::explain::export_ids_for;
 use mz_expr::explain::{
-    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource,
+    ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource, enforce_linear_chains,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
@@ -133,8 +133,8 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .0
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _))| {
-                let op = source_desc.arguments.operators.as_ref();
+            .map(|(id, import)| {
+                let op = import.desc.arguments.operators.as_ref();
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();

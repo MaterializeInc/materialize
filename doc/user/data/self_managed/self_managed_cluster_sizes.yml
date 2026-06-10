@@ -1,0 +1,97 @@
+cluster_sizes:
+  - size: 25cc
+    workers: 1
+    scale: 1
+    cpu_exclusive: false
+    cpu_limit: 0.5
+    credits_per_hour: "0.25"
+    disk_limit: "7762MiB"
+    memory_limit: "3881MiB"
+  - size: 50cc
+    workers: 1
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 1
+    credits_per_hour: "0.5"
+    disk_limit: "15525MiB"
+    memory_limit: "7762MiB"
+  - size: 100cc
+    workers: 2
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 2
+    credits_per_hour: "1"
+    disk_limit: "31050MiB"
+    memory_limit: "15525MiB"
+  - size: 200cc
+    workers: 4
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 4
+    credits_per_hour: "2"
+    disk_limit: "62100MiB"
+    memory_limit: "31050MiB"
+  - size: 300cc
+    workers: 6
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 6
+    credits_per_hour: "3"
+    disk_limit: "93150MiB"
+    memory_limit: "46575MiB"
+  - size: 400cc
+    workers: 8
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 8
+    credits_per_hour: "4"
+    disk_limit: "124201MiB"
+    memory_limit: "62100MiB"
+  - size: 600cc
+    workers: 12
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 12
+    credits_per_hour: "6"
+    disk_limit: "186301MiB"
+    memory_limit: "93150MiB"
+  - size: 800cc
+    workers: 16
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 16
+    credits_per_hour: "8"
+    disk_limit: "248402MiB"
+    memory_limit: "124201MiB"
+  - size: 1200cc
+    workers: 24
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 24
+    credits_per_hour: "12"
+    disk_limit: "372603MiB"
+    memory_limit: "186301MiB"
+  - size: 1600cc
+    workers: 31
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 31
+    credits_per_hour: "16"
+    disk_limit: "481280MiB"
+    memory_limit: "240640MiB"
+  - size: 3200cc
+    workers: 62
+    scale: 1
+    cpu_exclusive: true
+    cpu_limit: 62
+    credits_per_hour: "32"
+    disk_limit: "962560MiB"
+    memory_limit: "481280MiB"
+  - size: 6400cc
+    workers: 62
+    scale: 2
+    cpu_exclusive: true
+    cpu_limit: 62
+    credits_per_hour: "64"
+    disk_limit: "962560MiB"
+    memory_limit: "481280MiB"

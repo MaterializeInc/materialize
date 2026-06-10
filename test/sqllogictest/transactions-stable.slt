@@ -53,23 +53,23 @@ CREATE TABLE dec (d mz_timestamp)
 # would produce different times even in a transaction (hence the test
 # in this file). Although this error message is misleading, we don't
 # expect users to do this, so it's ok for now.
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 INSERT INTO dec VALUES (mz_now())
 
 statement ok
 CREATE VIEW v AS SELECT mz_now()
 
 # Check that read-then-write can look through transitive dependencies.
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 INSERT INTO dec SELECT * FROM v
 
 # DELETE and UPDATE also cannot use mz_now.
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 UPDATE dec SET d = mz_now()
 
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 DELETE FROM dec WHERE d = mz_now()
 
 # RETURNING also nope.
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 INSERT INTO dec VALUES (0) RETURNING mz_now()

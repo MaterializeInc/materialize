@@ -14,30 +14,34 @@
 //! can be simplified to a map operation.
 
 use itertools::Itertools;
-use mz_expr::MirRelationExpr;
+use mz_expr::{Columns, MirRelationExpr};
 
-use crate::analysis::{DerivedBuilder, DerivedView};
-use crate::analysis::{RelationType, UniqueKeys};
 use crate::TransformCtx;
+use crate::analysis::{DerivedBuilder, DerivedView};
+use crate::analysis::{ReprRelationType, UniqueKeys};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
 pub struct ReduceElision;
 
 impl crate::Transform for ReduceElision {
+    fn name(&self) -> &'static str {
+        "ReduceElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require(RelationType);
+        builder.require(ReprRelationType);
         builder.require(UniqueKeys);
         let derived = builder.visit(relation);
         let derived_view = derived.as_view();
@@ -65,8 +69,8 @@ impl ReduceElision {
             {
                 let input_type = view
                     .last_child()
-                    .value::<RelationType>()
-                    .expect("RelationType required")
+                    .value::<ReprRelationType>()
+                    .expect("ReprRelationType required")
                     .as_ref()
                     .expect("Expression not well-typed");
                 let input_keys = view
@@ -76,7 +80,7 @@ impl ReduceElision {
 
                 if input_keys.iter().any(|keys| {
                     keys.iter()
-                        .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
+                        .all(|k| group_key.iter().any(|gk| gk.as_column() == Some(*k)))
                 }) {
                     let map_scalars = aggregates
                         .iter()
@@ -110,7 +114,7 @@ impl ReduceElision {
 
             // This gets around an awkward borrow of both `expr` and `input` above.
             if !replaced {
-                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+                todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()));
             }
         }
     }

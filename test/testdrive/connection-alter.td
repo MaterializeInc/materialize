@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
 $ set-arg-default single-replica-cluster=quickstart
 #
 # Test basic connection functionality
@@ -34,12 +35,14 @@ conn   kafka
     SECURITY PROTOCOL PLAINTEXT
   )
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
 
 > CREATE TABLE mz_source_tbl (first, second) FROM SOURCE mz_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
+> COMMIT
 
 > SELECT * FROM mz_source_tbl
 first second
@@ -47,20 +50,20 @@ first second
 1     2
 
 ! ALTER CONNECTION conn RESET (broker);
-contains:invalid ALTER CONNECTION: invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 ! ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = true);
 contains:Failed to resolve hostname
 
 > ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = false);
 
-> SELECT status = 'stalled' FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status = 'stalled' FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_tbl';
 true
 
 > SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKER = 'abcd', SECURITY PROTOCOL = \"plaintext\")"
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn TO KAFKA (BROKER = 'abcd', SECURITY PROTOCOL = plaintext);"
 
 $ kafka-ingest format=bytes topic=connection_test
 2,3
@@ -73,17 +76,27 @@ first second
 1     2
 2     3
 
-> SHOW CREATE CONNECTION conn
+>[version<2600700] SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION conn
+name   create_sql
+---------------------------------
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
 
 > ALTER CONNECTION conn SET (BROKERS ['${testdrive.kafka-addr}'])
 
-> SHOW CREATE CONNECTION conn
+>[version<2600700] SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
-materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = \"plaintext\")"
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION conn
+name   create_sql
+---------------------------------
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn\nTO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = plaintext);"
 
 ! ALTER CONNECTION conn DROP (SECURITY PROTOCOL);
 contains:Broker does not support SSL connections
@@ -98,7 +111,7 @@ contains:BROKER specified more than once
 contains:BROKER specified more than once
 
 ! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), SET (BROKERS ['${testdrive.kafka-addr}'])
-contains:invalid ALTER CONNECTION: invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:can only set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 ! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), DROP (BROKERS)
 contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER, BROKERS
@@ -108,7 +121,7 @@ contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER,
 
 # We permit resetting both of these options, and the error occurs later in planning
 ! ALTER CONNECTION conn RESET (BROKER), RESET (BROKERS);
-contains:invalid ALTER CONNECTION: invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 > ALTER CONNECTION conn SET (BROKER = '${testdrive.kafka-addr}');
 

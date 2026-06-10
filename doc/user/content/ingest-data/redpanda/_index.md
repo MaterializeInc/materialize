@@ -36,6 +36,10 @@ enabled explicitly in Redpanda:
 For more information on general Redpanda configuration, see the
 [Redpanda documentation](https://docs.redpanda.com/home/).
 
+## Supported versions
+
+Materialize supports **Redpanda 24.1+** and is compatible with most common Redpanda hosted services. This includes [all officially supported versions of Redpanda](https://support.redpanda.com/hc/en-us/articles/20617574366743-Redpanda-Supported-Versions).
+
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source/kafka/)

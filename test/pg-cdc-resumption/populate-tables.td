@@ -40,3 +40,5 @@ CREATE TABLE alter_fail_drop_constraint (f1 INTEGER NOT NULL);
 ALTER TABLE alter_fail_drop_constraint REPLICA IDENTITY FULL;
 
 INSERT INTO alter_fail_drop_constraint VALUES (1);
+
+ANALYZE;

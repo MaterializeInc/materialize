@@ -121,6 +121,10 @@ v12 ok
 v12 ok
 v12 ok
 v12 ok
+v12 ok
+v12 ok
+v12 ok
+v12 ok
 
 # Explicit finalization should fail when the shard isn't fully advanced.
 is-finalized
@@ -180,8 +184,8 @@ perform-maintenance
 
 consensus-scan from_seqno=v0
 ----
-seqno=v17 batches= rollups=v1
-seqno=v18 batches= rollups=v1,v17
+seqno=v17 batches= rollups=v0
+seqno=v18 batches= rollups=v0,v17
 
 blob-scan-batches
 ----

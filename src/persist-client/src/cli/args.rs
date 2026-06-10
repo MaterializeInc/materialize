@@ -9,11 +9,11 @@
 
 //! CLI argument types for persist
 
+use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::ShardId;
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_build_info::BuildInfo;
@@ -27,8 +27,8 @@ use mz_persist::location::{
     VersionedData,
 };
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::warn;
 
 /// Arguments for commands that work over both backing stores.
@@ -100,7 +100,6 @@ pub struct StateArgs {
 pub(crate) const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
-    time: "",
 };
 
 // All `inspect` command are read-only.
@@ -131,6 +130,7 @@ pub(super) async fn make_consensus(
         consensus_uri,
         Box::new(cfg.clone()),
         metrics.postgres_consensus.clone(),
+        Arc::clone(&cfg.configs),
     )?;
     let consensus = consensus.clone().open().await?;
     let consensus = if commit {
@@ -149,13 +149,8 @@ pub(super) async fn make_blob(
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob>> {
-    let blob = BlobConfig::try_from(
-        blob_uri,
-        Box::new(cfg.clone()),
-        metrics.s3_blob.clone(),
-        Arc::clone(&cfg.configs),
-    )
-    .await?;
+    let blob =
+        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
         blob
@@ -235,7 +230,7 @@ impl Blob for ReadOnly<Arc<dyn Blob>> {
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus>> {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         if self.ignored_write() {
             warn!("potentially-invalid list_keys() after ignored write");
         }
@@ -252,12 +247,12 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         warn!(
-            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {:?})",
             new.data.len(),
+            new.seqno,
         );
         self.ignoring_write();
         Ok(CaSResult::Committed)
@@ -275,9 +270,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
         self.store.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
         self.ignoring_write();
-        Ok(0)
+        Ok(None)
     }
 }

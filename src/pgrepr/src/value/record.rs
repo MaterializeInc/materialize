@@ -12,7 +12,7 @@
 
 use std::error::Error;
 
-use postgres_types::{private, FromSql, Kind, Type, WrongType};
+use postgres_types::{FromSql, Kind, Type, WrongType, private};
 
 /// A wrapper for tuples that implements [`FromSql`] for PostgreSQL composite
 /// types.

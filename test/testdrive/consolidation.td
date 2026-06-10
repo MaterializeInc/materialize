@@ -102,6 +102,7 @@ $ kafka-create-topic topic=nums
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE nums
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
@@ -109,6 +110,7 @@ $ kafka-create-topic topic=nums
 > CREATE TABLE nums_tbl FROM SOURCE nums (REFERENCE "testdrive-nums-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE DEFAULT INDEX ON nums_tbl
 
@@ -207,10 +209,11 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_tbl AS OF 2
-contains:Timestamp (2) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums_tbl AS OF 3
-contains:Timestamp (3) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums_tbl AS OF 4
 6
 
@@ -240,9 +243,10 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 > SELECT * FROM nums_tbl AS OF 6
 8
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_compacted AS OF 4
-contains:Timestamp (4) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums_compacted AS OF 5
-contains:Timestamp (5) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums_compacted AS OF 6
 8

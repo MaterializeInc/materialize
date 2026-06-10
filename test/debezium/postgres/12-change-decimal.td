@@ -16,6 +16,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_change_decimal (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_change_decimal REPLICA IDENTITY FULL;
 INSERT INTO alter_change_decimal VALUES (0, 0),(NULL, 1),(12.345, 2);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_change_decimal
 
@@ -25,12 +26,14 @@ $ schema-registry-wait topic=postgres.public.alter_change_decimal
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_change_decimal
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_decimal');
 
 > CREATE TABLE alter_change_decimal_tbl FROM SOURCE alter_change_decimal (REFERENCE "postgres.public.alter_change_decimal")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1 FROM alter_change_decimal_tbl;
 <null>

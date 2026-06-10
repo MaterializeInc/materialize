@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TYPE enum1 AS ENUM ('val1', 'val2');
 CREATE TABLE enum_type ( f1 enum1, f2 INTEGER PRIMARY KEY);
 INSERT INTO enum_type VALUES ('val1', 0), ('val2', 1);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.enum_type
 
@@ -24,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.enum_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE enum_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.enum_type');
 
 > CREATE TABLE enum_type_tbl FROM SOURCE enum_type (REFERENCE "postgres.public.enum_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT pg_typeof(f1), f1 FROM enum_type_tbl;
 text val1

@@ -7,13 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
-# Test the PARTITION BY option for Kafka sinks, which allows specifying a custom
-# partition strategy.
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_sink_partition_by = true
+# Test the PARTITION BY option for Kafka sinks
 
 > CREATE CONNECTION k
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -155,9 +153,35 @@ $ kafka-verify-data format=json sink=materialize.public.invalid_output sort-mess
 {"a": 1, "b": 1}  partition=1
 {"a": 2, "b": 1}  partition=2
 
-# Test that `PARTITION BY` works with `ENVELOPE DEBEZIUM`.
+# Test that null values in PARTITION BY expressions go to partition 0.
 
 > DROP MATERIALIZED VIEW input CASCADE
+> CREATE TABLE input (part int, value text);
+
+> INSERT INTO input VALUES (0, 'zero'), (1, 'one'), (null, 'null-value-1'), (2, 'two'), (null, 'null-value-2')
+
+> CREATE SINK null_partition_output
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
+  INTO KAFKA CONNECTION k (
+    TOPIC 'testdrive-null-partition-${testdrive.seed}',
+    TOPIC PARTITION COUNT 4,
+    PARTITION BY part
+  )
+  KEY (value) NOT ENFORCED
+  FORMAT JSON
+  ENVELOPE UPSERT
+
+$ kafka-verify-data format=json sink=materialize.public.null_partition_output sort-messages=true
+{"part": null, "value": "null-value-1"} partition=0
+{"part": null, "value": "null-value-2"} partition=0
+{"part": 0, "value": "zero"} partition=0
+{"part": 1, "value": "one"} partition=1
+{"part": 2, "value": "two"} partition=2
+
+# Test that `PARTITION BY` works with `ENVELOPE DEBEZIUM`.
+
+> DROP TABLE input CASCADE
 > CREATE TABLE input (k int, v text);
 
 > CREATE SINK debezium_output

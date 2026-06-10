@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 #
@@ -56,10 +56,15 @@ testconn   kafka
 > SHOW CONNECTIONS
 testconn    kafka    ""
 
-> SHOW CREATE CONNECTION testconn
+>[version<2600700] SHOW CREATE CONNECTION testconn
 name   create_sql
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
+materialize.public.testconn   "CREATE CONNECTION materialize.public.testconn TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION testconn
+name   create_sql
+---------------------------------
+materialize.public.testconn   "CREATE CONNECTION materialize.public.testconn\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
 
 > SELECT
       brokers,
@@ -191,6 +196,7 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
 contains:is not a KAFKA CONNECTION
 
 > CREATE CLUSTER csr_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE csr_source
     IN CLUSTER csr_source_cluster
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -199,6 +205,7 @@ contains:is not a KAFKA CONNECTION
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * from csr_source_tbl
 id creature
@@ -208,6 +215,7 @@ id creature
 > CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER two_connection_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE two_connection_source
   IN CLUSTER two_connection_source_cluster
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -215,6 +223,7 @@ id creature
 > CREATE TABLE two_connection_source_tbl FROM SOURCE two_connection_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * from two_connection_source_tbl
 id creature
@@ -314,12 +323,14 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   )
 
 > CREATE CLUSTER import_connection_csr_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE import_connection_csr
   IN CLUSTER import_connection_csr_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
 
 > CREATE TABLE import_connection_csr_tbl FROM SOURCE import_connection_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
+> COMMIT
 
 > SELECT importee1::text, importee2::text FROM import_connection_csr_tbl
 importee1  importee2
@@ -468,6 +479,63 @@ contains: HOST option is required
 ! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093), SECURITY PROTOCOL PLAINTEXT);
 contains: unknown catalog item 'foo'
 
+! CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK foo (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK foo (PORT 9093, AVAILABILITY ZONE = 'use1-az2')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: unknown catalog item 'foo'
+
+## MATCHING broker rules for PrivateLink
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_aws_privatelink_connections = 5;
+
+> CREATE CONNECTION pl_for_matching TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+  )
+
+# MATCHING requires the feature flag
+! CREATE CONNECTION kafka_matching_no_flag TO KAFKA (
+    BROKERS (
+        'broker:9092',
+        MATCHING '*' USING AWS PRIVATELINK pl_for_matching
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: MATCHING broker rules in BROKERS for Kafka PrivateLink connections is not available
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_broker_matching_rules = true;
+
+# MATCHING-only BROKERS without a static broker is rejected
+! CREATE CONNECTION kafka_matching_no_static TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: BROKERS must contain at least one static broker address
+
+# Static broker + MATCHING works (validate = false, we just test planning)
+> CREATE CONNECTION kafka_matching_ok TO KAFKA (
+    BROKERS (
+        'broker:9092' USING AWS PRIVATELINK pl_for_matching,
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az2')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false)
+
+> DROP CONNECTION kafka_matching_ok
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_kafka_broker_matching_rules;
+ALTER SYSTEM RESET max_aws_privatelink_connections;
+
 ! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)
 contains: unknown catalog item 'foo'
 
@@ -478,6 +546,6 @@ contains: unknown catalog item 'foo'
 # Error in cloudtest/K8s: creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
   )
 contains: AWS PrivateLink

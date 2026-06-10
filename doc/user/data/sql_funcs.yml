@@ -37,7 +37,7 @@
   - signature: 'bool_or(x: T) -> T'
     description: _NULL_ if all values of `x` are _NULL_, otherwise true if any values of `x` are true, otherwise false.
 
-  - signature: 'count(x: T) -> int'
+  - signature: 'count(x: T) -> bigint'
     description: Number of non-_NULL_ inputs.
 
   - signature: jsonb_agg(expression) -> jsonb
@@ -150,16 +150,16 @@
   - signature: 'cbrt(x: double precision) -> double precision'
     description: The cube root of `x`.
 
-  - signature: 'ceil(x: N) -> N'
+  - signature: 'ceil(x: N) -> double precision'
     description: The smallest integer >= `x`.
 
-  - signature: 'ceiling(x: N) -> N'
+  - signature: 'ceiling(x: N) -> double precision'
     description: "Alias of `ceil`."
 
-  - signature: 'exp(x: N) -> N'
+  - signature: 'exp(x: N) -> double precision'
     description: Exponential of `x` (e raised to the given power)
 
-  - signature: 'floor(x: N) -> N'
+  - signature: 'floor(x: N) -> double precision'
     description: The largest integer <= `x`.
 
   - signature: 'ln(x: double precision) -> double precision'
@@ -198,7 +198,7 @@
   - signature: 'power(x: numeric, y: numeric) -> numeric'
     description: "`x` raised to the power of `y`."
 
-  - signature: 'round(x: N) -> N'
+  - signature: 'round(x: N) -> double precision'
     description: |
       `x` rounded to the nearest whole number.
       If `N` is `real` or `double precision`, rounds ties to the nearest even number.
@@ -214,7 +214,7 @@
   - signature: 'sqrt(x: double precision) -> double precision'
     description: The square root of `x`.
 
-  - signature: 'trunc(x: N) -> N'
+  - signature: 'trunc(x: N) -> double precision'
     description: "`x` truncated toward zero to a whole number."
 
 - type: Trigonometric
@@ -276,6 +276,9 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
+  - signature: 'bit_count(b: bytea) -> bigint'
+    description: Returns the number of bits set in the bit string (aka _popcount_).
+
   - signature: 'bit_length(s: str) -> int'
     description: Number of bits in `s`.
 
@@ -292,21 +295,24 @@
       The NULL (0) character is not allowed.
 
   - signature: 'concat(f: any, r: any...) -> text'
-    description: Concatenates the text representation of non-NULL arguments.
+    description: Concatenates the text representation of non-NULL arguments. The maximum length of the result string is 100 MiB.
 
   - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
-    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`.
+    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`. The maximum length of the result string is 100 MiB.
 
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
 
   - signature: 'decode(s: text, format: text) -> bytea'
-    description: Decode `s` using the specified textual representation
+    description: Decode `s` using the specified textual representation. The maximum size of the result is 100 MiB.
     url: /sql/functions/encode
 
   - signature: 'encode(b: bytea, format: text) -> text'
     description: Encode `b` using the specified textual representation
     url: /sql/functions/encode
+
+  - signature: 'get_bit(b: bytea, n: int) -> int'
+    description: Return the `n`th bit from `b`, where the left-most bit in `b` is at the 0th position.
 
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
@@ -344,17 +350,25 @@
 
   - signature: 'lpad(s: str, len: int) -> str'
     description: "Prepend `s` with spaces up to length `len`,
-      or right truncate if `len` is less than the length of `s`."
+      or right truncate if `len` is less than the length of `s`. The maximum length of the result string is 100 MiB."
 
   - signature: 'lpad(s: str, len: int, p: str) -> str'
     description: "Prepend `s` with characters pulled from `p` up to length `len`,
-      or right truncate if `len` is less than the length of `s`."
+      or right truncate if `len` is less than the length of `s`. The maximum length of the result string is 100 MiB."
 
   - signature: 'ltrim(s: str) -> str'
     description: Trim all spaces from the left side of `s`.
 
   - signature: 'ltrim(s: str, c: str) -> str'
     description: Trim any character in `c` from the left side of `s`.
+
+  - signature: 'normalize(s: str) -> str'
+    description: Normalize `s` to Unicode Normalization Form NFC (default).
+    url: /sql/functions/normalize
+
+  - signature: 'normalize(s: str, form: keyword) -> str'
+    description: Normalize `s` to the specified Unicode normalization form (NFC, NFD, NFKC, or NFKD).
+    url: /sql/functions/normalize
 
   - signature: 'octet_length(s: str) -> int'
     description: Number of bytes in `s`.
@@ -381,6 +395,11 @@
 
   - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
     description: |
+      {{< warning >}}
+      This function has the potential to produce very large strings and
+      may cause queries to run out of memory or crash. Use with caution.
+      {{< /warning >}}
+
       Replaces the first occurrence of `pattern` with `replacement` in `source`.
       No match will return `source` unchanged.
 
@@ -393,16 +412,25 @@
 
       See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
 
+  - signature: "regexp_matches(haystack: str, needle: str [, flags: str]]) -> str[]"
+    description: |
+      Matches the regular expression `needle` against haystack, returning a
+      string array that contains the value of each capture group specified in
+      `needle`, in order. If `flags` is set to the string `i` matches
+      case-insensitively. If `flags` is set to the string `g` all matches are
+      returned, otherwise only the first match is returned. Without the `g`
+      flag, the behavior is the same as `regexp_match`.
+
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
     description: |
       Splits `text` by the regular expression `pattern` into an array.
       If `flags` is set to `i`, matches case-insensitively.
 
   - signature: 'repeat(s: str, n: int) -> str'
-    description: Replicate the string `n` times.
+    description: Replicate the string `n` times. The maximum length of the result string is 100 MiB.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
-    description: "`s` with all instances of `f` replaced with `r`."
+    description: "`s` with all instances of `f` replaced with `r`. The maximum length of the result string is 100 MiB."
 
   - signature: 'right(s: str, n: int) -> str'
     description: The last `n` characters of `s`. If `n` is negative, all but the first `|n|` characters of `s`.
@@ -454,6 +482,28 @@
 
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
+
+  - signature: 'reverse(s: str) -> str'
+    description: Reverse the characters in `s`.
+
+  - signature: 'string_to_array(s: str, delimiter: str [, null_string: str]) -> str[]'
+    description: |
+      Splits the string at occurrences of delimiter and returns a text array of
+      the split segments.
+
+      If `delimiter` is NULL, each character in the string will become a
+      separate element in the array.
+
+      If `delimiter` is an empty string, then the string is treated as a single
+      field.
+
+      If `null_string` is supplied and is not NULL, fields matching that string
+      are replaced by NULL.
+
+      If `s` is NULL, the result is NULL. If `s` is the empty string, the
+      result is an empty array (regardless of `delimiter` or `null_string`).
+
+      For example: `string_to_array('xx~~yy~~zz', '~~', 'yy')` → `{xx,NULL,zz}`
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
@@ -509,8 +559,20 @@
     description: "`true` if `s` returns zero rows."
 
   - signature: 'expression NOT IN(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` for each value in `expression`
-      if it does not match any elements of `s`."
+    description: |
+     `s` must return exactly one column; `true` for each value in `expression`
+     if it does not match any elements of `s`.
+
+     {{< note >}}
+
+     When evaluating a `WHERE fieldX NOT IN (<subquery>)` predicate involving
+     possible `NULL` values for `fieldX` or `<subquery>`, Materialize performs a
+     cross join between the outer relation and the subquery to preserve SQL
+     `NULL` semantics, which can significantly increase memory usage. If
+     possible, rewrite using [idiomatic Materialize
+     SQL](/transform-data/idiomatic-materialize-sql/not-in/).
+
+     {{< /note >}}
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
@@ -684,7 +746,10 @@
     url: /sql/types/jsonb#to_jsonb
 
 - type: Table
-  description: Table functions evaluate to a set of rows, rather than a single expression.
+  description: |
+    Table functions evaluate to a collection of rows rather than a single row. You can use the `WITH ORDINALITY` and
+    `ROWS FROM` clauses together with table functions. For more details, see [Table functions](/sql/functions/table-functions).
+
   functions:
   - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
@@ -697,7 +762,9 @@
   - signature: 'generate_subscripts(a: anyarray, dim: int) -> Col<int>'
     description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`.
+    description: Values of the capture groups of `regex` as matched in `haystack`. Outputs each capture group in a
+      separate column. At least one capture group is needed. (The capture groups are the parts of the regular expression
+      between parentheses.)
   - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
     description: |
       Splits `text` by the regular expression `pattern`.
@@ -723,6 +790,11 @@
     description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: |
+      {{< warning >}}
+      This function has the potential to produce very large strings and
+      may cause queries to run out of memory or crash. Use with caution.
+      {{< /warning >}}
+
       Concatenates the elements of `array` together separated by `sep`.
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.
@@ -770,11 +842,11 @@
       description: |
         Computes the MD5 hash of the given bytea `data`.
         For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
-    - signature: 'seahash(data: bytea) -> bigint'
+    - signature: 'seahash(data: bytea) -> u64'
       description: |
         Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
       version-added: v0.114
-    - signature: 'seahash(data: text) -> bigint'
+    - signature: 'seahash(data: text) -> u64'
       description: |
         Computes the [SeaHash](https://docs.rs/seahash) hash of the given text `data`.
       version-added: v0.114
@@ -821,7 +893,7 @@
     ROW`.
 
     {{< note >}}
-    {{% idiomatic-sql/materialize-window-functions %}}
+    {{% include-headless "/headless/materialize-window-functions" %}}
 
     See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
     for examples of rewriting window functions.
@@ -1083,3 +1155,4 @@
         the `current_role` is assumed.
     - signature: 'mz_is_superuser() -> bool'
       description: Reports whether the `current_role` is a superuser.
+      unmaterializable: true

@@ -11,29 +11,25 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::Config;
 use mz_proto::RustType;
-use mz_repr::{ColumnType, RelationType, ScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
+    ExternalReferences, Ident, PgConfigOptionName, TableConstraint, UnresolvedItemName, Value,
+    WithOptionValue,
 };
-use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::SourceExportStatementDetails;
+use mz_storage_types::sources::casts::{CastFunc, StorageScalarExpr};
+use mz_storage_types::sources::postgres::CastType;
 use prost::Message;
-use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
+use tokio_postgres::types::Oid;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::expr::ColumnRef;
-use crate::plan::typeconv::{plan_cast, CastContext};
-use crate::plan::{
-    ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
-};
+use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
 use super::references::RetrievedSourceReferences;
@@ -43,32 +39,32 @@ use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, Source
 /// start snapshotting because if we discover we cannot `COPY` from a table while
 /// snapshotting, we break the entire source.
 pub(super) async fn validate_requested_references_privileges(
-    config: &Config,
     client: &Client,
     table_oids: &[Oid],
 ) -> Result<(), PlanError> {
-    privileges::check_table_privileges(config, client, table_oids).await?;
+    privileges::check_table_privileges(client, table_oids).await?;
+    privileges::check_rls_privileges(client, table_oids).await?;
     replica_identity::check_replica_identity_full(client, table_oids).await?;
 
     Ok(())
 }
 
-/// Generate a mapping of `Oid`s to column names that should be ingested as text
-/// (rather than their type in the upstream database).
+/// Map a list of column references to a map of table oids to column names.
 ///
-/// Additionally, modify `text_columns` so that they contain database-qualified
+/// Additionally, modify `columns` so that they contain database-qualified
 /// references to the columns.
-pub(super) fn generate_text_columns(
+pub(super) fn map_column_refs(
     retrieved_references: &RetrievedSourceReferences,
-    text_columns: &mut [UnresolvedItemName],
+    columns: &mut [UnresolvedItemName],
+    option_type: PgConfigOptionName,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
-    let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
+    let mut cols_map: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
-    for name in text_columns {
+    for name in columns {
         let (qual, col) = match name.0.split_last().expect("must have at least one element") {
-            (col, qual) if qual.is_empty() => {
+            (col, []) => {
                 return Err(PlanError::InvalidOptionValue {
-                    option_name: "TEXT COLUMNS".to_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnderqualifiedColumnName(
                         col.as_str().to_string(),
                     )),
@@ -82,7 +78,7 @@ pub(super) fn generate_text_columns(
             resolved_reference
                 .external_reference()
                 .map_err(|e| PlanError::InvalidOptionValue {
-                    option_name: "TEXT COLUMNS".to_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(e.into()),
                 })?;
 
@@ -101,7 +97,7 @@ pub(super) fn generate_text_columns(
                 })
                 .collect();
             return Err(PlanError::InvalidOptionValue {
-                option_name: "TEXT COLUMNS".to_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnknownColumn {
                     table: Some(
                         normalize::unresolved_item_name(fully_qualified_name)
@@ -118,20 +114,20 @@ pub(super) fn generate_text_columns(
         fully_qualified_name.0.push(col_ident);
         *name = fully_qualified_name;
 
-        let new = text_cols_dict
+        let new = cols_map
             .entry(desc.oid)
             .or_default()
             .insert(col.as_str().to_string());
 
         if !new {
             return Err(PlanError::InvalidOptionValue {
-                option_name: "TEXT COLUMNS".to_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
             });
         }
     }
 
-    Ok(text_cols_dict)
+    Ok(cols_map)
 }
 
 pub fn generate_create_subsource_statements(
@@ -150,6 +146,7 @@ pub fn generate_create_subsource_statements(
             columns,
             constraints,
             text_columns,
+            exclude_columns,
             details,
             external_reference,
         } = generate_source_export_statement_values(scx, purified_export, &mut unsupported_cols)?;
@@ -171,6 +168,13 @@ pub fn generate_create_subsource_statements(
             with_options.push(CreateSubsourceOption {
                 name: CreateSubsourceOptionName::TextColumns,
                 value: Some(WithOptionValue::Sequence(text_columns)),
+            });
+        }
+
+        if let Some(exclude_columns) = exclude_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExcludeColumns,
+                value: Some(WithOptionValue::Sequence(exclude_columns)),
             });
         }
 
@@ -210,6 +214,7 @@ pub(super) struct PostgresExportStatementValues {
     pub(super) columns: Vec<ColumnDef<Aug>>,
     pub(super) constraints: Vec<TableConstraint<Aug>>,
     pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) exclude_columns: Option<Vec<WithOptionValue<Aug>>>,
     pub(super) details: SourceExportStatementDetails,
     pub(super) external_reference: UnresolvedItemName,
 }
@@ -219,37 +224,43 @@ pub(super) fn generate_source_export_statement_values(
     purified_export: PurifiedSourceExport,
     unsupported_cols: &mut Vec<(String, mz_repr::adt::system::Oid)>,
 ) -> Result<PostgresExportStatementValues, PlanError> {
-    let (text_columns, table) = match purified_export.details {
-        PurifiedExportDetails::Postgres {
-            text_columns,
-            table,
-        } => (text_columns, table),
-        _ => unreachable!("purified export details must be postgres"),
+    let PurifiedExportDetails::Postgres {
+        table,
+        text_columns,
+        exclude_columns,
+    } = purified_export.details
+    else {
+        bail_internal!("purified export details must be postgres");
     };
 
-    let text_column_set = text_columns
-        .as_ref()
-        .map(|v| BTreeSet::from_iter(v.iter().map(Ident::as_str)));
+    let text_column_set = BTreeSet::from_iter(text_columns.iter().flatten().map(Ident::as_str));
+    let exclude_column_set =
+        BTreeSet::from_iter(exclude_columns.iter().flatten().map(Ident::as_str));
 
     // Figure out the schema of the subsource
     let mut columns = vec![];
     for c in table.columns.iter() {
         let name = Ident::new(c.name.clone())?;
 
-        let ty = match text_column_set {
-            Some(ref names) if names.contains(c.name.as_str()) => mz_pgrepr::Type::Text,
-            _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+        if exclude_column_set.contains(c.name.as_str()) {
+            continue;
+        }
+
+        let ty = if text_column_set.contains(c.name.as_str()) {
+            mz_pgrepr::Type::Text
+        } else {
+            match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
                 Ok(t) => t,
                 Err(_) => {
                     let mut full_name = purified_export.external_reference.0.clone();
                     full_name.push(name);
                     unsupported_cols.push((
-                        UnresolvedItemName(full_name).to_ast_string(),
+                        UnresolvedItemName(full_name).to_ast_string_simple(),
                         mz_repr::adt::system::Oid(c.type_oid),
                     ));
                     continue;
                 }
-            },
+            }
         };
 
         let data_type = scx.resolve_type(ty)?;
@@ -311,10 +322,19 @@ pub(super) fn generate_source_export_statement_values(
             .collect()
     });
 
+    let exclude_columns = exclude_columns.map(|mut columns| {
+        columns.sort();
+        columns
+            .into_iter()
+            .map(WithOptionValue::Ident::<Aug>)
+            .collect()
+    });
+
     Ok(PostgresExportStatementValues {
         columns,
         constraints,
         text_columns,
+        exclude_columns,
         details,
         external_reference: purified_export.external_reference,
     })
@@ -336,10 +356,10 @@ pub(super) struct PurifiedSourceExports {
 // fields necessary to generate relevant statements and update statement options
 pub(super) async fn purify_source_exports(
     client: &Client,
-    config: &mz_postgres_util::Config,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
+    mut exclude_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
@@ -364,6 +384,16 @@ pub(super) async fn purify_source_exports(
                 )?
             }
 
+            // If no external reference is specified, it does not make sense to include
+            // exclude columns.
+            if !exclude_columns.is_empty() {
+                Err(
+                    PgSourcePurificationError::UnnecessaryOptionsWithoutReferences(
+                        "EXCLUDE COLUMNS".to_string(),
+                    ),
+                )?
+            }
+
             return Ok(PurifiedSourceExports {
                 source_exports: BTreeMap::new(),
                 normalized_text_columns: vec![],
@@ -374,7 +404,10 @@ pub(super) async fn purify_source_exports(
     if requested_exports.is_empty() {
         sql_bail!(
             "[internal error]: Postgres reference {} did not match any tables",
-            requested_references.as_ref().unwrap().to_ast_string()
+            requested_references
+                .as_ref()
+                .unwrap()
+                .to_ast_string_simple()
         );
     }
 
@@ -385,9 +418,18 @@ pub(super) async fn purify_source_exports(
         .map(|r| r.meta.postgres_desc().expect("is postgres").oid)
         .collect();
 
-    validate_requested_references_privileges(config, client, &table_oids).await?;
+    validate_requested_references_privileges(client, &table_oids).await?;
 
-    let mut text_column_map = generate_text_columns(retrieved_references, &mut text_columns)?;
+    let mut text_column_map = map_column_refs(
+        retrieved_references,
+        &mut text_columns,
+        PgConfigOptionName::TextColumns,
+    )?;
+    let mut exclude_column_map = map_column_refs(
+        retrieved_references,
+        &mut exclude_columns,
+        PgConfigOptionName::ExcludeColumns,
+    )?;
 
     // Normalize options to contain full qualified values.
     text_columns.sort();
@@ -400,23 +442,43 @@ pub(super) async fn purify_source_exports(
     let source_exports = requested_exports
         .into_iter()
         .map(|r| {
-            let desc = r.meta.postgres_desc().expect("known postgres");
-            (
+            let mut desc = r.meta.postgres_desc().expect("known postgres").clone();
+            let text_columns = text_column_map.remove(&desc.oid);
+            let exclude_columns = exclude_column_map.remove(&desc.oid);
+
+            if let Some(exclude_cols) = &exclude_columns {
+                desc.columns.retain(|c| !exclude_cols.contains(&c.name));
+            }
+
+            if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
+                let intersection: Vec<_> = text_cols.intersection(exclude_cols).collect();
+                if !intersection.is_empty() {
+                    return Err(PgSourcePurificationError::DuplicatedColumnNames(
+                        intersection.iter().map(|s| (*s).to_string()).collect(),
+                    ));
+                }
+            }
+            Ok((
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::Postgres {
-                        text_columns: text_column_map.remove(&desc.oid).map(|v| {
+                        text_columns: text_columns.map(|v| {
                             v.into_iter()
                                 .map(|s| Ident::new(s).expect("validated above"))
                                 .collect()
                         }),
-                        table: desc.clone(),
+                        exclude_columns: exclude_columns.map(|v| {
+                            v.into_iter()
+                                .map(|s| Ident::new(s).expect("validated above"))
+                                .collect()
+                        }),
+                        table: desc,
                     },
                 },
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     if !text_column_map.is_empty() {
         // If any any item was not removed from the text_column_map, it wasn't being
@@ -429,11 +491,7 @@ pub(super) async fn purify_source_exports(
                 .iter()
                 .find_map(|reference| {
                     let desc = reference.postgres_desc().expect("is postgres");
-                    if desc.oid == *id {
-                        Some(desc)
-                    } else {
-                        None
-                    }
+                    if desc.oid == *id { Some(desc) } else { None }
                 })
                 .expect("validated when generating text columns");
 
@@ -445,9 +503,41 @@ pub(super) async fn purify_source_exports(
         }
 
         dangling_text_column_refs.sort();
-        Err(PgSourcePurificationError::DanglingTextColumns {
-            items: dangling_text_column_refs,
-        })?;
+        return Err(PlanError::from(
+            PgSourcePurificationError::DanglingTextColumns {
+                items: dangling_text_column_refs,
+            },
+        ));
+    }
+
+    if !exclude_column_map.is_empty() {
+        // If any any item was not removed from the exclude_column_map, it wasn't being
+        // added.
+        let mut dangling_exclude_column_refs = vec![];
+        let all_references = retrieved_references.all_references();
+
+        for id in exclude_column_map.keys() {
+            let desc = all_references
+                .iter()
+                .find_map(|reference| {
+                    let desc = reference.postgres_desc().expect("is postgres");
+                    if desc.oid == *id { Some(desc) } else { None }
+                })
+                .expect("validated when generating exclude columns");
+
+            dangling_exclude_column_refs.push(PartialItemName {
+                database: None,
+                schema: Some(desc.namespace.clone()),
+                item: desc.name.clone(),
+            });
+        }
+
+        dangling_exclude_column_refs.sort();
+        return Err(PlanError::from(
+            PgSourcePurificationError::DanglingExcludeColumns {
+                items: dangling_exclude_column_refs,
+            },
+        ));
     }
 
     Ok(PurifiedSourceExports {
@@ -460,42 +550,13 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
-) -> Result<Vec<(CastType, MirScalarExpr)>, PlanError> {
+) -> Result<Vec<(CastType, StorageScalarExpr)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
-    // the appropriate target types, creating a Vec<MirScalarExpr>
-    // The postgres source reader will then eval each of those on the incoming rows
-    // First, construct an expression context where the expression is evaluated on an
-    // imaginary row which has the same number of columns as the upstream table but all
-    // of the types are text
-    let mut cast_scx = scx.clone();
-    cast_scx.param_types = Default::default();
-    let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
-    let mut column_types = vec![];
-    for column in table.columns.iter() {
-        column_types.push(ColumnType {
-            nullable: column.nullable,
-            scalar_type: ScalarType::String,
-        });
-    }
-
-    let cast_ecx = ExprContext {
-        qcx: &cast_qcx,
-        name: "plan_postgres_source_cast",
-        scope: &Scope::empty(),
-        relation_type: &RelationType {
-            column_types,
-            keys: vec![],
-        },
-        allow_aggregates: false,
-        allow_subqueries: false,
-        allow_parameters: false,
-        allow_windows: false,
-    };
+    // the appropriate target types, creating a Vec<StorageScalarExpr>.
+    // The postgres source reader will then eval each of those on the incoming rows.
 
     let text_columns = BTreeSet::from_iter(text_columns.iter().map(Ident::as_str));
 
-    // Then, for each column we will generate a MirRelationExpr that extracts the nth
-    // column and casts it to the appropriate target type
     let mut table_cast = vec![];
     for (i, column) in table.columns.iter().enumerate() {
         let (cast_type, ty) = if text_columns.contains(column.name.as_str()) {
@@ -515,36 +576,44 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
-                                HirScalarExpr::literal_null(ScalarType::String),
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!("Unsupported type with OID {}", column.type_oid)
-                                            .as_str(),
-                                    ),
-                                    ScalarType::String,
-                                ),
-                            ],
-                        }
-                        .lower_uncorrelated()
-                        .expect("no correlation"),
+                        StorageScalarExpr::ErrorIfNull(
+                            Box::new(StorageScalarExpr::Literal(
+                                Row::pack_slice(&[Datum::Null]),
+                                ReprColumnType {
+                                    nullable: true,
+                                    scalar_type: ReprScalarType::String,
+                                },
+                            )),
+                            format!("Unsupported type with OID {}", column.type_oid),
+                        ),
                     ));
                     continue;
                 }
             }
         };
 
-        let data_type = scx.resolve_type(ty)?;
-        let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
-
-        let col_expr = HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: i,
-        });
-
-        let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
+        let cast_expr = match pg_type_to_cast_func(scx, &ty) {
+            Ok(None) => {
+                // No cast needed (e.g. Text → String identity).
+                StorageScalarExpr::Column(i)
+            }
+            Ok(Some(cast_func)) => {
+                StorageScalarExpr::CallUnary(cast_func, Box::new(StorageScalarExpr::Column(i)))
+            }
+            Err(PlanError::TableContainsUningestableTypes { type_, .. }) => {
+                // We expect only reg* types and similar to encounter
+                // this. Users can ingest the data as text if they need
+                // to. This is acceptable because we don't expect the
+                // OIDs from an external PG source to be unilaterally
+                // usable in resolving item names in MZ.
+                return Err(PlanError::TableContainsUningestableTypes {
+                    name: table.name.to_string(),
+                    type_,
+                    column: column.name.to_string(),
+                });
+            }
+            Err(e) => return Err(e),
+        };
 
         let cast = if column.nullable {
             cast_expr
@@ -554,60 +623,193 @@ pub(crate) fn generate_column_casts(
             // constraint changes and we want to error subsource if
             // e.g. the constraint is dropped and we don't notice
             // it.
-            HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
-                                cast_expr,
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!(
-                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
-                                            table.namespace.clone(),
-                                            table.name.clone(),
-                                            column.name.clone())
-                                            .as_str(),
-                                    ),
-                                    ScalarType::String,
-                                ),
-                            ],
-                        }
+            let message = format!(
+                "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                table.namespace, table.name, column.name
+            );
+            StorageScalarExpr::ErrorIfNull(Box::new(cast_expr), message)
         };
 
-        // We expect only reg* types to encounter this issue. Users
-        // can ingest the data as text if they need to ingest it.
-        // This is acceptable because we don't expect the OIDs from
-        // an external PG source to be unilaterally usable in
-        // resolving item names in MZ.
-        let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
-            tracing::info!(
-                "cannot ingest {:?} data from PG source because cast is correlated",
-                scalar_type
-            );
-
-            PlanError::TableContainsUningestableTypes {
-                name: table.name.to_string(),
-                type_: scx.humanize_scalar_type(&scalar_type),
-                column: column.name.to_string(),
-            }
-        })?;
-
-        table_cast.push((cast_type, mir_cast));
+        table_cast.push((cast_type, cast));
     }
     Ok(table_cast)
 }
 
+/// Resolve a PG type to its corresponding `SqlScalarType` via the catalog.
+fn resolve_pg_type_to_scalar_type(
+    scx: &StatementContext,
+    ty: &mz_pgrepr::Type,
+) -> Result<SqlScalarType, PlanError> {
+    let data_type = scx.resolve_type(ty.clone())?;
+    crate::plan::query::scalar_type_from_sql(scx, &data_type)
+}
+
+/// Map a PG type to the corresponding `CastFunc` variant. Returns:
+/// - `Ok(Some(func))` for types that need a cast
+/// - `Ok(None)` for types that need no cast (Text → String identity)
+/// - `Err(PlanError::TableContainsUningestableTypes { .. })` for types
+///   that cannot be ingested. The error uses placeholder strings for
+///   table/column name; callers with context should use
+///   `pg_type_to_cast_func_or_uningestable` instead.
+fn pg_type_to_cast_func(
+    scx: &StatementContext,
+    ty: &mz_pgrepr::Type,
+) -> Result<Option<CastFunc>, PlanError> {
+    use mz_pgrepr::Type;
+
+    let cast_func = match ty {
+        Type::Bool => CastFunc::CastStringToBool,
+        Type::Bytea => CastFunc::CastStringToBytes,
+        Type::Char => CastFunc::CastStringToPgLegacyChar,
+        Type::Date => CastFunc::CastStringToDate,
+        Type::Float4 => CastFunc::CastStringToFloat32,
+        Type::Float8 => CastFunc::CastStringToFloat64,
+        Type::Int2 => CastFunc::CastStringToInt16,
+        Type::Int4 => CastFunc::CastStringToInt32,
+        Type::Int8 => CastFunc::CastStringToInt64,
+        Type::UInt2 => CastFunc::CastStringToUint16,
+        Type::UInt4 => CastFunc::CastStringToUint32,
+        Type::UInt8 => CastFunc::CastStringToUint64,
+        Type::Interval { .. } => CastFunc::CastStringToInterval,
+        Type::Jsonb => CastFunc::CastStringToJsonb,
+        Type::Name => CastFunc::CastStringToPgLegacyName,
+        Type::Numeric { .. } => {
+            // Resolve through the catalog to get the repr NumericMaxScale type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Numeric { max_scale } => CastFunc::CastStringToNumeric(max_scale),
+                _ => unreachable!("Numeric must resolve to Numeric"),
+            }
+        }
+        Type::Oid => CastFunc::CastStringToOid,
+        Type::Text => return Ok(None),
+        Type::BpChar { .. } => {
+            // Resolve through the catalog to get the repr CharLength type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Char { length } => CastFunc::CastStringToChar {
+                    length,
+                    fail_on_len: true,
+                },
+                _ => unreachable!("BpChar must resolve to Char"),
+            }
+        }
+        Type::VarChar { .. } => {
+            // Resolve through the catalog to get the repr VarCharMaxLength type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::VarChar { max_length } => CastFunc::CastStringToVarChar {
+                    length: max_length,
+                    fail_on_len: true,
+                },
+                _ => unreachable!("VarChar must resolve to VarChar"),
+            }
+        }
+        Type::Time { .. } => {
+            // Time precision is not yet fully supported; resolve_type strips precision.
+            CastFunc::CastStringToTime
+        }
+        Type::Timestamp { .. } => {
+            // Resolve through the catalog to get the repr TimestampPrecision type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Timestamp { precision } => {
+                    CastFunc::CastStringToTimestamp(precision)
+                }
+                _ => unreachable!("Timestamp must resolve to Timestamp"),
+            }
+        }
+        Type::TimestampTz { .. } => {
+            // Resolve through the catalog to get the repr TimestampPrecision type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::TimestampTz { precision } => {
+                    CastFunc::CastStringToTimestampTz(precision)
+                }
+                _ => unreachable!("TimestampTz must resolve to TimestampTz"),
+            }
+        }
+        Type::Uuid => CastFunc::CastStringToUuid,
+        Type::Int2Vector => CastFunc::CastStringToInt2Vector,
+        Type::MzTimestamp => CastFunc::CastStringToMzTimestamp,
+        // JSON is ingested as JSONB (same as the old plan_cast path).
+        Type::Json => CastFunc::CastStringToJsonb,
+        Type::Array(elem) => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, elem)?;
+            CastFunc::CastStringToArray {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        Type::List(elem) => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, elem)?;
+            CastFunc::CastStringToList {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        Type::Map { value_type } => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let value_cast = build_element_cast_expr(scx, value_type)?;
+            CastFunc::CastStringToMap {
+                return_ty,
+                cast_expr: Box::new(value_cast),
+            }
+        }
+        Type::Range { element_type } => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, element_type)?;
+            CastFunc::CastStringToRange {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        // reg* types require subquery-based casts that storage cannot
+        // evaluate. Users can ingest them as text via TEXT COLUMNS.
+        Type::RegType | Type::RegClass | Type::RegProc => {
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: ty.name().to_string(),
+                column: String::new(),
+            });
+        }
+        other => {
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: other.name().to_string(),
+                column: String::new(),
+            });
+        }
+    };
+    Ok(Some(cast_func))
+}
+
+/// Build the element cast expression for container types (Array, List, Map,
+/// Range). The element expression operates on a single-column input row
+/// containing the text-encoded element at column 0.
+fn build_element_cast_expr(
+    scx: &StatementContext,
+    elem_ty: &mz_pgrepr::Type,
+) -> Result<StorageScalarExpr, PlanError> {
+    match pg_type_to_cast_func(scx, elem_ty)? {
+        None => Ok(StorageScalarExpr::Column(0)),
+        Some(cast_func) => Ok(StorageScalarExpr::CallUnary(
+            cast_func,
+            Box::new(StorageScalarExpr::Column(0)),
+        )),
+    }
+}
+
 mod privileges {
-    use mz_postgres_util::{Config, PostgresError};
+    use mz_postgres_util::PostgresError;
 
     use super::*;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
-    async fn check_schema_privileges(
-        config: &Config,
-        client: &Client,
-        table_oids: &[Oid],
-    ) -> Result<(), PlanError> {
+    async fn check_schema_privileges(client: &Client, table_oids: &[Oid]) -> Result<(), PlanError> {
         let invalid_schema_privileges_rows = client
             .query(
                 "
@@ -621,11 +823,8 @@ mod privileges {
                 SELECT d.schema_name
                 FROM distinct_namespace AS d
                 WHERE
-                    NOT has_schema_privilege($2::TEXT, d.oid, 'usage')",
-                &[
-                    &table_oids,
-                    &config.get_user().expect("connection specifies user"),
-                ],
+                    NOT has_schema_privilege(CURRENT_USER::TEXT, d.oid, 'usage')",
+                &[&table_oids],
             )
             .await
             .map_err(PostgresError::from)?;
@@ -640,10 +839,6 @@ mod privileges {
         } else {
             invalid_schema_privileges.sort();
             Err(PgSourcePurificationError::UserLacksUsageOnSchemas {
-                user: config
-                    .get_user()
-                    .expect("connection specifies user")
-                    .to_string(),
                 schemas: invalid_schema_privileges,
             })?
         }
@@ -660,11 +855,10 @@ mod privileges {
     /// # Panics
     /// If `config` does not specify a user.
     pub async fn check_table_privileges(
-        config: &Config,
         client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        check_schema_privileges(config, client, table_oids).await?;
+        check_schema_privileges(client, table_oids).await?;
 
         let invalid_table_privileges_rows = client
             .query(
@@ -676,11 +870,8 @@ mod privileges {
                  pg_class c ON c.oid = oids.oid
              JOIN
                  pg_namespace n ON c.relnamespace = n.oid
-             WHERE NOT has_table_privilege($2::text, c.oid, 'select')",
-                &[
-                    &table_oids,
-                    &config.get_user().expect("connection specifies user"),
-                ],
+             WHERE NOT has_table_privilege(CURRENT_USER::text, c.oid, 'select')",
+                &[&table_oids],
             )
             .await
             .map_err(PostgresError::from)?;
@@ -695,12 +886,30 @@ mod privileges {
         } else {
             invalid_table_privileges.sort();
             Err(PgSourcePurificationError::UserLacksSelectOnTables {
-                user: config
-                    .get_user()
-                    .expect("connection must specify user")
-                    .to_string(),
                 tables: invalid_table_privileges,
             })?
+        }
+    }
+
+    /// Ensure that the user specified in `config` can read data from tables if row level security
+    /// (RLS) is enabled. If the user/role does not have the BYPASSRLS attribute set, there is
+    /// the possibility that MZ may not be able to read all data during the snapshot, which would
+    /// result in missing data.
+    pub async fn check_rls_privileges(
+        client: &Client,
+        table_oids: &[Oid],
+    ) -> Result<(), PlanError> {
+        match mz_postgres_util::validate_no_rls_policies(client, table_oids).await {
+            Ok(_) => Ok(()),
+            Err(err) => match err {
+                // This is a little gross to do, but PlanError::PostgresConnectionErr implements
+                // From<PostgresError>, and the error in that case would be
+                // "failed to connect to PostgreSQL database", which doesn't make any sense.
+                PostgresError::BypassRLSRequired(tables) => {
+                    Err(PgSourcePurificationError::BypassRLSRequired { tables })?
+                }
+                _ => Err(err)?,
+            },
         }
     }
 }

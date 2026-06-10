@@ -14,7 +14,7 @@ import pytest
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
-TD_TIMEOUT_SHORT = 80
+TD_TIMEOUT_SHORT = 10
 TD_TIMEOUT_FULL_RECOVERY = 660
 
 
@@ -37,7 +37,7 @@ class ClusterDefinition:
         replica_definitions = []
         for replica in self.replica_definitions:
             replica_definitions.append(
-                f"{replica.get_name()} (SIZE = '1', AVAILABILITY ZONE '{replica.availability_zone}')"
+                f"{replica.get_name()} (SIZE = 'scale=1,workers=1', AVAILABILITY ZONE '{replica.availability_zone}')"
             )
 
         return ", ".join(replica_definitions)
@@ -69,6 +69,15 @@ def populate(
     compute_cluster: ClusterDefinition,
     storage_cluster: ClusterDefinition,
 ) -> None:
+    # Make sure the `quickstart` cluster replica gets is scheduled on its own
+    # node, so queries still work when a node running a compute/storage replica
+    # is suspended.
+    mz.environmentd.sql(
+        "ALTER CLUSTER quickstart SET (AVAILABILITY ZONES ('quickstart'))",
+        port="internal",
+        user="mz_system",
+    )
+
     all_clusters = [compute_cluster, storage_cluster]
 
     drop_cluster_statements = [
@@ -85,12 +94,10 @@ def populate(
     create_cluster_statement_sql = "\n".join(create_cluster_statements)
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > DROP MATERIALIZED VIEW IF EXISTS mv;
             > DROP SOURCE IF EXISTS source CASCADE;
-            """
-        )
+            """)
         + dedent(drop_cluster_statement_sql)
         + "\n"
         + dedent(create_cluster_statement_sql)
@@ -105,10 +112,12 @@ def populate(
               FROM LOAD GENERATOR COUNTER
               (TICK INTERVAL '500ms');
 
+            > CREATE TABLE source_tbl FROM SOURCE source;
+
             > SELECT COUNT(*) FROM (SHOW SOURCES) WHERE name = 'source';
             1
 
-            > CREATE MATERIALIZED VIEW mv (f1) IN CLUSTER {compute_cluster.name} AS SELECT counter + 1 FROM source;
+            > CREATE MATERIALIZED VIEW mv (f1) IN CLUSTER {compute_cluster.name} AS SELECT counter + 1 FROM source_tbl;
 
             > CREATE DEFAULT INDEX IN CLUSTER {compute_cluster.name} ON mv;
 
@@ -131,7 +140,7 @@ def validate_state(
     comparison_operator = ">" if must_exceed_reached_index else ">="
     print(f"Expect '{expected_state}' within timeout of {timeout_in_sec}s")
 
-    testdrive_run_timeout_in_sec = 10
+    testdrive_run_timeout_in_sec = 20
 
     validation_succeeded = False
     last_error_message = None
@@ -145,17 +154,15 @@ def validate_state(
         is_last_run = run + 1 == max_run_count
         try:
             mz.testdrive.run(
-                input=dedent(
-                    f"""
+                input=dedent(f"""
                     > SET TRANSACTION_ISOLATION TO '{isolation_level}';
 
-                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source; -- validate source with isolation {isolation_level}
+                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source_tbl; -- validate source with isolation {isolation_level}
                     true
 
                     > SELECT COUNT(*) {comparison_operator} {reached_index} FROM mv; -- validate mv with isolation {isolation_level}
                     true
-                    """
-                ),
+                    """),
                 default_timeout=f"{testdrive_run_timeout_in_sec}s",
                 no_reset=True,
                 suppress_command_error_output=not is_last_run,
@@ -192,7 +199,9 @@ def get_current_counter_index(mz: MaterializeApplication) -> int:
     """
     This query has no timeout. Only use it if is expected to deliver.
     """
-    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source")[0][0]
+    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source_tbl")[
+        0
+    ][0]
     return reached_value
 
 
@@ -387,12 +396,10 @@ def test_envd_on_failing_node(mz: MaterializeApplication) -> None:
     # all connections / queries should fail initially
     try:
         mz.testdrive.run(
-            input=dedent(
-                """
+            input=dedent("""
                 > SELECT COUNT(*) > 0 FROM mz_tables;
                 true
-                """
-            ),
+                """),
             default_timeout=f"{TD_TIMEOUT_SHORT}s",
             no_reset=True,
             suppress_command_error_output=True,

@@ -64,11 +64,16 @@ class RestartMz(TransactionDef):
     workload: "Workload"
 
     def __init__(
-        self, composition: Composition, probability: float, workload: "Workload"
+        self,
+        composition: Composition,
+        probability: float,
+        workload: "Workload",
+        azurite: bool,
     ):
         self.composition = composition
         self.probability = probability
         self.workload = workload
+        self.azurite = azurite
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
@@ -82,12 +87,13 @@ class RestartMz(TransactionDef):
                 Materialized(
                     name=self.workload.mz_service,
                     ports=ports,
-                    external_minio=True,
+                    external_blob_store=True,
+                    blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
-                    system_parameter_defaults=get_default_system_parameters(
-                        zero_downtime=True
-                    ),
-                    additional_system_parameter_defaults={"enable_table_keys": "true"},
+                    system_parameter_defaults=get_default_system_parameters(),
+                    additional_system_parameter_defaults={
+                        "unsafe_enable_table_keys": "true"
+                    },
                     deploy_generation=self.workload.deploy_generation,
                     sanity_restart=False,
                 ),
@@ -104,11 +110,16 @@ class ZeroDowntimeDeploy(TransactionDef):
     workload: "Workload"
 
     def __init__(
-        self, composition: Composition, probability: float, workload: "Workload"
+        self,
+        composition: Composition,
+        probability: float,
+        workload: "Workload",
+        azurite: bool,
     ):
         self.composition = composition
         self.probability = probability
         self.workload = workload
+        self.azurite = azurite
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
@@ -129,12 +140,13 @@ class ZeroDowntimeDeploy(TransactionDef):
                 Materialized(
                     name=self.workload.mz_service,
                     ports=ports,
-                    external_minio=True,
+                    external_blob_store=True,
+                    blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
-                    system_parameter_defaults=get_default_system_parameters(
-                        zero_downtime=True
-                    ),
-                    additional_system_parameter_defaults={"enable_table_keys": "true"},
+                    system_parameter_defaults=get_default_system_parameters(),
+                    additional_system_parameter_defaults={
+                        "unsafe_enable_table_keys": "true"
+                    },
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",
                     healthcheck=LEADER_STATUS_HEALTHCHECK,

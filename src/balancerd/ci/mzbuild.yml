@@ -11,6 +11,5 @@ name: balancerd
 description: Ingress balancer.
 pre-image:
   - type: cargo-build
-    bin: [balancerd]
-    bazel-bin: "@//src/balancerd:balancerd"
+    bin: balancerd
     split_debuginfo: true

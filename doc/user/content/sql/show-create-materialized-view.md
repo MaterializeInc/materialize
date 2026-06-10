@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-materialized-view.svg" >}}
+```sql
+SHOW [REDACTED] CREATE MATERIALIZED VIEW <view_name>;
+```
 
-Field | Use
-------|-----
-_view&lowbar;name_ | The materialized view you want to use. You can find available materialized view names through [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available materialized view names, see [`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views).
 
 ## Examples
 
@@ -31,7 +33,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the materialized view.
+{{% include-headless "/headless/sql-command-privileges/show-create-materialized-view" %}}
 
 ## Related pages
 

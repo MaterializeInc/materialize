@@ -16,14 +16,10 @@ class Like(Check):
     """LIKE, ILIKE, with and without a constant pattern are all compiled and evaluated differently"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE like_regex_table (f1 STRING, f2 STRING, f3 STRING, f4 STRING);
             > INSERT INTO like_regex_table VALUES ('abc', 'abc', 'a~%', '~');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -41,9 +37,7 @@ class Like(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM like_regex_view1;
             true true false true false false false
             true true false false false true false
@@ -53,6 +47,4 @@ class Like(Check):
             true true false true false false false
             true true false false false true false
             true true true false false true false
-            """
-            )
-        )
+            """))

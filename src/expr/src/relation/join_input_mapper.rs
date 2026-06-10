@@ -11,8 +11,10 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use itertools::Itertools;
-use mz_repr::RelationType;
+use mz_repr::ReprRelationType;
 
+use crate::scalar::columns::Columns;
+use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr, VariadicFunc};
 
@@ -47,14 +49,14 @@ impl JoinInputMapper {
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method saves is more
-    /// efficient if input types have been pre-calculated
-    pub fn new_from_input_types(types: &[RelationType]) -> Self {
-        Self::new_from_input_arities(types.iter().map(|t| t.column_types.len()))
+    /// columns to local context columns. Using this method is more
+    /// efficient if input repr types have been pre-calculated.
+    pub fn new_from_input_types(types: &[ReprRelationType]) -> Self {
+        Self::new_from_input_arities(types.iter().map(|t| t.arity()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method saves is more
+    /// columns to local context columns. Using this method is more
     /// efficient if input arities have been pre-calculated
     pub fn new_from_input_arities<I>(arities: I) -> Self
     where
@@ -129,7 +131,7 @@ impl JoinInputMapper {
                 for expr in equivalence {
                     // then store all columns in the constraint that don't come
                     // from the first input
-                    if let MirScalarExpr::Column(c) = expr {
+                    if let MirScalarExpr::Column(c, _name) = expr {
                         let (col, input) = self.map_column_to_local(*c);
                         if input > min_bound_input {
                             column_with_prior_bound_by_input[input - 1].insert(col);
@@ -179,11 +181,9 @@ impl JoinInputMapper {
     /// Takes an expression from the global context and creates a new version
     /// where column references have been remapped to the local context.
     /// Assumes that all columns in `expr` are from the same input.
-    pub fn map_expr_to_local(&self, mut expr: MirScalarExpr) -> MirScalarExpr {
-        expr.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(c) = e {
-                *c -= self.prior_arities[self.input_relation[*c]];
-            }
+    pub fn map_expr_to_local<C: Columns + Sized>(&self, mut expr: C) -> C {
+        expr.visit_columns(|c| {
+            *c -= self.prior_arities[self.input_relation[*c]];
         });
         expr
     }
@@ -191,11 +191,9 @@ impl JoinInputMapper {
     /// Takes an expression from the local context of the `index`th input and
     /// creates a new version where column references have been remapped to the
     /// global context.
-    pub fn map_expr_to_global(&self, mut expr: MirScalarExpr, index: usize) -> MirScalarExpr {
-        expr.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(c) = e {
-                *c += self.prior_arities[index];
-            }
+    pub fn map_expr_to_global<C: Columns + Sized>(&self, mut expr: C, index: usize) -> C {
+        expr.visit_columns(|c| {
+            *c += self.prior_arities[index];
         });
         expr
     }
@@ -228,7 +226,7 @@ impl JoinInputMapper {
     }
 
     /// Find the sorted, dedupped set of inputs an expression references
-    pub fn lookup_inputs(&self, expr: &MirScalarExpr) -> impl Iterator<Item = usize> {
+    pub fn lookup_inputs<C: Columns>(&self, expr: &C) -> impl Iterator<Item = usize> + use<C> {
         expr.support()
             .iter()
             .map(|c| self.input_relation[*c])
@@ -237,7 +235,7 @@ impl JoinInputMapper {
     }
 
     /// Returns the index of the only input referenced in the given expression.
-    pub fn single_input(&self, expr: &MirScalarExpr) -> Option<usize> {
+    pub fn single_input(&self, expr: &impl Columns) -> Option<usize> {
         let mut inputs = self.lookup_inputs(expr);
         if let Some(first_input) = inputs.next() {
             if inputs.next().is_none() {
@@ -248,7 +246,7 @@ impl JoinInputMapper {
     }
 
     /// Returns whether the given expr refers to columns of only the `index`th input.
-    pub fn is_localized(&self, expr: &MirScalarExpr, index: usize) -> bool {
+    pub fn is_localized(&self, expr: &impl Columns, index: usize) -> bool {
         if let Some(single_input) = self.single_input(expr) {
             if single_input == index {
                 return true;
@@ -264,13 +262,13 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
     /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
-    /// let schema = RelationType::new(vec![
-    ///   ScalarType::Int32.nullable(false),
-    ///   ScalarType::Int32.nullable(false),
+    /// let schema = ReprRelationType::new(vec![
+    ///   ReprScalarType::Int32.nullable(false),
+    ///   ReprScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
@@ -281,30 +279,30 @@ impl JoinInputMapper {
     ///
     /// // [input0(#0) = input2(#1)], [input0(#1) = input1(#0) = input2(#0)]
     /// let equivalences = vec![
-    ///   vec![MirScalarExpr::Column(0), MirScalarExpr::Column(5)],
-    ///   vec![MirScalarExpr::Column(1), MirScalarExpr::Column(2), MirScalarExpr::Column(4)],
+    ///   vec![MirScalarExpr::column(0), MirScalarExpr::column(5)],
+    ///   vec![MirScalarExpr::column(1), MirScalarExpr::column(2), MirScalarExpr::column(4)],
     /// ];
     ///
     /// let input_mapper = JoinInputMapper::new(&[input0, input1, input2]);
     /// assert_eq!(
-    ///   Some(MirScalarExpr::Column(4)),
-    ///   input_mapper.find_bound_expr(&MirScalarExpr::Column(2), &[2], &equivalences)
+    ///   Some(MirScalarExpr::column(4)),
+    ///   input_mapper.find_bound_expr(&MirScalarExpr::column(2), &[2], &equivalences)
     /// );
     /// assert_eq!(
     ///   None,
-    ///   input_mapper.find_bound_expr(&MirScalarExpr::Column(0), &[1], &equivalences)
+    ///   input_mapper.find_bound_expr(&MirScalarExpr::column(0), &[1], &equivalences)
     /// );
     /// ```
-    pub fn find_bound_expr(
+    pub fn find_bound_expr<C: Columns + Clone + Eq>(
         &self,
-        expr: &MirScalarExpr,
+        expr: &C,
         bound_inputs: &[usize],
-        equivalences: &[Vec<MirScalarExpr>],
-    ) -> Option<MirScalarExpr> {
+        equivalences: &[Vec<C>],
+    ) -> Option<C> {
         if let Some(equivalence) = equivalences.iter().find(|equivs| equivs.contains(expr)) {
             if let Some(bound_expr) = equivalence
                 .iter()
-                .find(|expr| self.lookup_inputs(expr).all(|i| bound_inputs.contains(&i)))
+                .find(|expr| self.lookup_inputs(*expr).all(|i| bound_inputs.contains(&i)))
             {
                 return Some(bound_expr.clone());
             }
@@ -330,8 +328,7 @@ impl JoinInputMapper {
         // `e` anyway, so we end up visiting nodes in `e` multiple times
         // here. Alternatively, consider having the future `PredicateKnowledge`
         // take over the responsibilities of this code?
-        #[allow(deprecated)]
-        expr.visit_mut_pre_post_nolimit(
+        expr.visit_mut_pre_post(
             &mut |e| {
                 let mut inputs = self.lookup_inputs(e);
                 if let Some(first_input) = inputs.next() {
@@ -400,7 +397,7 @@ impl JoinInputMapper {
         } else {
             match expr {
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Or,
+                    func: VariadicFunc::Or(_),
                     exprs: or_args,
                 } => {
                     // Each OR arg should provide a consequence. If they do, we OR them.
@@ -410,13 +407,10 @@ impl JoinInputMapper {
                             mz_ore::stack::maybe_grow(|| self.consequence_for_input(or_arg, index))
                         })
                         .collect::<Option<Vec<_>>>()?; // return None if any of them are None
-                    Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs: consequences_per_arg,
-                    })
+                    Some(MirScalarExpr::call_variadic(Or, consequences_per_arg))
                 }
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
+                    func: VariadicFunc::And(_),
                     exprs: and_args,
                 } => {
                     // If any of the AND args provide a consequence, then we take those that do,
@@ -431,10 +425,7 @@ impl JoinInputMapper {
                     if consequences_per_arg.is_empty() {
                         None
                     } else {
-                        Some(MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::And,
-                            exprs: consequences_per_arg,
-                        })
+                        Some(MirScalarExpr::call_variadic(And, consequences_per_arg))
                     }
                 }
                 _ => None,
@@ -445,8 +436,9 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, ScalarType};
+    use mz_repr::{Datum, ReprScalarType};
 
+    use crate::scalar::func;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
@@ -461,9 +453,9 @@ mod tests {
         };
 
         // keys are numbered by (equivalence class #, input #)
-        let key10 = MirScalarExpr::Column(0);
-        let key12 = MirScalarExpr::Column(6);
-        let localized_key12 = MirScalarExpr::Column(1);
+        let key10 = MirScalarExpr::column(0);
+        let key12 = MirScalarExpr::column(6);
+        let localized_key12 = MirScalarExpr::column(1);
 
         let mut equivalences = vec![vec![key10.clone(), key12.clone()]];
 
@@ -471,7 +463,7 @@ mod tests {
         // is that it gets localized
         let mut cloned = key12.clone();
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 2, &equivalences);
-        assert_eq!(MirScalarExpr::Column(1), cloned,);
+        assert_eq!(MirScalarExpr::column(1), cloned);
 
         // basic tests that we can find a column's corresponding column in a
         // different input
@@ -486,18 +478,18 @@ mod tests {
 
         let key20 = MirScalarExpr::CallUnary {
             func: UnaryFunc::NegInt32(crate::func::NegInt32),
-            expr: Box::new(MirScalarExpr::Column(1)),
+            expr: Box::new(MirScalarExpr::column(1)),
         };
         let key21 = MirScalarExpr::CallBinary {
-            func: BinaryFunc::AddInt32,
-            expr1: Box::new(MirScalarExpr::Column(2)),
+            func: BinaryFunc::AddInt32(func::AddInt32),
+            expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),
-                ScalarType::Int32,
+                ReprScalarType::Int32,
             )),
         };
-        let key22 = MirScalarExpr::Column(5);
-        let localized_key22 = MirScalarExpr::Column(0);
+        let key22 = MirScalarExpr::column(5);
+        let localized_key22 = MirScalarExpr::column(0);
         equivalences.push(vec![key22.clone(), key20.clone(), key21.clone()]);
 
         // basic tests that we can find an expression's corresponding expression in a
@@ -512,7 +504,7 @@ mod tests {
         // test that `try_map_to_input_with_bound_expr` will map multiple
         // subexpressions to the corresponding expressions bound to a different input
         let key_comp = MirScalarExpr::CallBinary {
-            func: BinaryFunc::MulInt32,
+            func: func::MulInt32.into(),
             expr1: Box::new(key12.clone()),
             expr2: Box::new(key22),
         };
@@ -520,7 +512,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 0, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::MulInt32,
+                func: func::MulInt32.into(),
                 expr1: Box::new(key10.clone()),
                 expr2: Box::new(key20.clone()),
             },
@@ -536,9 +528,9 @@ mod tests {
         );
 
         let key_comp_plus_non_key = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: func::Eq.into(),
             expr1: Box::new(key_comp),
-            expr2: Box::new(MirScalarExpr::Column(7)),
+            expr2: Box::new(MirScalarExpr::column(7)),
         };
         let mut mutab = key_comp_plus_non_key;
         assert_eq!(
@@ -547,7 +539,7 @@ mod tests {
         );
 
         let key_comp_multi_input = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: func::Eq.into(),
             expr1: Box::new(key12),
             expr2: Box::new(key21),
         };
@@ -557,7 +549,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 2, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: func::Eq.into(),
                 expr1: Box::new(localized_key12),
                 expr2: Box::new(localized_key22),
             },
@@ -569,7 +561,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 0, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: func::Eq.into(),
                 expr1: Box::new(key10),
                 expr2: Box::new(key20),
             },

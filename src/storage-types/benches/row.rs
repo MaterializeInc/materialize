@@ -9,13 +9,13 @@
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;
-use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, ProtoRow, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_storage_types::sources::SourceData;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, Distribution, SampleString, StandardUniform};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -40,6 +40,17 @@ fn decode_legacy(part: &ColumnarRecords, schema: &RelationDesc) -> SourceData {
     data
 }
 
+fn random_option<T>(rng: &mut StdRng) -> Option<T>
+where
+    StandardUniform: Distribution<T>,
+{
+    if rng.random::<bool>() {
+        Some(rng.random())
+    } else {
+        None
+    }
+}
+
 fn bench_roundtrip(c: &mut Criterion, name: &str, schema: &RelationDesc, data: &[SourceData]) {
     c.bench_function(&format!("roundtrip_{}_encode_legacy", name), |b| {
         b.iter(|| std::hint::black_box(encode_legacy(data)));
@@ -58,24 +69,24 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::UInt64,
+                    scalar_type: SqlScalarType::UInt64,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::UInt64,
+                    scalar_type: SqlScalarType::UInt64,
                 },
             ),
         ]);
         let data = (0..num_rows)
             .map(|_| {
                 let row = Row::pack(vec![
-                    Datum::from(rng.gen::<u64>()),
-                    Datum::from(rng.gen::<Option<u64>>()),
+                    Datum::from(rng.random::<u64>()),
+                    Datum::from(random_option::<u64>(&mut rng)),
                 ]);
                 SourceData(Ok(row))
             })
@@ -87,27 +98,27 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::Bytes,
+                    scalar_type: SqlScalarType::Bytes,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::Bytes,
+                    scalar_type: SqlScalarType::Bytes,
                 },
             ),
         ]);
         let data = (0..num_rows)
             .map(|_| {
-                let str_len = rng.gen_range(0..10);
+                let str_len = rng.random_range(0..10);
                 let row = Row::pack(vec![
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_bytes()),
                     Datum::from(
                         Some(Alphanumeric.sample_string(&mut rng, str_len).as_bytes())
-                            .filter(|_| rng.gen::<bool>()),
+                            .filter(|_| rng.random::<bool>()),
                     ),
                 ]);
                 SourceData(Ok(row))
@@ -120,27 +131,27 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::String,
+                    scalar_type: SqlScalarType::String,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::String,
+                    scalar_type: SqlScalarType::String,
                 },
             ),
         ]);
         let data = (0..num_rows)
             .map(|_| {
-                let str_len = rng.gen_range(0..10);
+                let str_len = rng.random_range(0..10);
                 let row = Row::pack(vec![
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                     Datum::from(
                         Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
-                            .filter(|_| rng.gen::<bool>()),
+                            .filter(|_| rng.random::<bool>()),
                     ),
                 ]);
                 SourceData(Ok(row))

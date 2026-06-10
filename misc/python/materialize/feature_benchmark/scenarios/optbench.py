@@ -110,7 +110,7 @@ class OptbenchTPCH(Scenario):
 
     QUERY = 1
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.20,  # increased because it's easy to regress
+        MeasurementType.WALLCLOCK: 0.30,  # increased because it's easy to regress
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
     }

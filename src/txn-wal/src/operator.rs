@@ -13,41 +13,44 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use futures::StreamExt;
-use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::lattice::Lattice;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
-use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
-use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
-use mz_persist_client::project::ProjectionPushdown;
+use mz_persist_client::cfg::RetryParameters;
+use mz_persist_client::operators::shard_source::{
+    ErrorHandler, FilterResult, SnapshotMode, shard_source,
+};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event as AsyncEvent, InputConnection,
-    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, button,
 };
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+#[cfg(test)]
+use timely::dataflow::operators::Input;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
-use timely::dataflow::{ProbeHandle, Scope, Stream};
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::operators::vec::{Broadcast, Map};
+use timely::dataflow::operators::{Capture, Leave, Probe};
+use timely::dataflow::{ProbeHandle, Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{Data, PartialOrder, WorkerConfig};
+use timely::{PartialOrder, WorkerConfig};
 use tracing::debug;
 
-use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 use crate::TxnsCodecDefault;
+use crate::txn_cache::TxnsCache;
+use crate::txn_read::{DataRemapEntry, TxnsRead};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -91,11 +94,10 @@ use crate::TxnsCodecDefault;
 ///   10). It knows that the data shard _WAS_ involved in this, so it forwards
 ///   on data from its input until the input has progressed to 10, at which
 ///   point it can itself downgrade to 10.
-pub fn txns_progress<K, V, T, D, P, C, F, G>(
-    passthrough: Stream<G, P>,
+pub fn txns_progress<'scope, K, V, T, D, P, C, F>(
+    passthrough: StreamVec<'scope, T, P>,
     name: &str,
     ctx: &TxnsContext,
-    worker_dyncfgs: &ConfigSet,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -103,48 +105,33 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (Stream<G, P>, Vec<PressOnDropButton>)
+) -> (StreamVec<'scope, T, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
-    G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(worker_dyncfgs) {
-        txns_progress_source_global::<K, V, T, D, P, C, G>(
-            passthrough.scope(),
-            name,
-            ctx.clone(),
-            client_fn(),
-            txns_id,
-            data_id,
-            as_of,
-            data_key_schema,
-            data_val_schema,
-            unique_id,
-        )
-    } else {
-        txns_progress_source_local::<K, V, T, D, P, C, G>(
-            passthrough.scope(),
-            name,
-            client_fn(),
-            txns_id,
-            data_id,
-            as_of,
-            data_key_schema,
-            data_val_schema,
-            unique_id,
-        )
-    };
+    let (remap, source_button) = txns_progress_source_global::<K, V, T, D, P, C>(
+        passthrough.scope(),
+        name,
+        ctx.clone(),
+        client_fn(),
+        txns_id,
+        data_id,
+        as_of,
+        data_key_schema,
+        data_val_schema,
+        unique_id,
+    );
     // Each of the `txns_frontiers` workers wants the full copy of the remap
     // information.
     let remap = remap.broadcast();
-    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C, G>(
+    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C>(
         remap,
         passthrough,
         name,
@@ -153,110 +140,6 @@ where
         unique_id,
     );
     (passthrough, vec![source_button, frontiers_button])
-}
-
-/// An alternative implementation of [`txns_progress_source_global`] that opens
-/// a new [`TxnsCache`] local to the operator.
-fn txns_progress_source_local<K, V, T, D, P, C, G>(
-    scope: G,
-    name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
-    txns_id: ShardId,
-    data_id: ShardId,
-    as_of: T,
-    data_key_schema: Arc<K::Schema>,
-    data_val_schema: Arc<V::Schema>,
-    unique_id: u64,
-) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
-where
-    K: Debug + Codec + Send + Sync,
-    V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
-    C: TxnsCodec + 'static,
-    G: Scope<Timestamp = T>,
-{
-    let worker_idx = scope.index();
-    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let name = format!("txns_progress_source({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
-    let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output();
-
-    let shutdown_button = builder.build(move |capabilities| async move {
-        if worker_idx != chosen_worker {
-            return;
-        }
-
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
-
-        let _ = txns_cache.update_gt(&as_of).await;
-        let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        if let Some(snapshot) = subscribe.snapshot.take() {
-            snapshot.unblock_read(data_write).await;
-        }
-
-        debug!("{} emitting {:?}", name, subscribe.remap);
-        remap_output.give(&cap, subscribe.remap.clone());
-
-        loop {
-            let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
-            cap.downgrade(&subscribe.remap.logical_upper);
-            let data_listen_next =
-                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
-            debug!(
-                "{} data_listen_next at {:?}: {:?}",
-                name, subscribe.remap.logical_upper, data_listen_next,
-            );
-            match data_listen_next {
-                // We've caught up to the txns upper and we have to wait for it
-                // to advance before asking again.
-                //
-                // Note that we're asking again with the same input, but once
-                // the cache is past remap.logical_upper (as it will be after
-                // this update_gt call), we're guaranteed to get an answer.
-                DataListenNext::WaitForTxnsProgress => {
-                    let _ = txns_cache.update_gt(&subscribe.remap.logical_upper).await;
-                }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscribe.remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone());
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscribe.remap.physical_upper < new_progress);
-                    assert!(subscribe.remap.logical_upper < new_progress);
-
-                    subscribe.remap.logical_upper = new_progress;
-                    // As mentioned in the docs on `DataRemapEntry`, we only
-                    // emit updates when the physical upper changes (which
-                    // happens to makes the protocol a tiny bit more
-                    // remap-like).
-                    debug!("{} not emitting {:?}", name, subscribe.remap);
-                }
-            }
-        }
-    });
-    (remap_stream, shutdown_button.press_on_drop())
 }
 
 /// TODO: I'd much prefer the communication protocol between the two operators
@@ -272,8 +155,8 @@ where
 ///
 /// [reclocking design doc]:
 ///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-fn txns_progress_source_global<K, V, T, D, P, C, G>(
-    scope: G,
+fn txns_progress_source_global<'scope, K, V, T, D, P, C>(
+    scope: Scope<'scope, T>,
     name: &str,
     ctx: TxnsContext,
     client: impl Future<Output = PersistClient> + 'static,
@@ -283,22 +166,21 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
     unique_id: u64,
-) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
+) -> (StreamVec<'scope, T, DataRemapEntry<T>>, PressOnDropButton)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec + 'static,
-    G: Scope<Timestamp = T>,
 {
     let worker_idx = scope.index();
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -320,7 +202,7 @@ where
             .await
             .expect("schema shouldn't change");
         let mut rx = txns_read
-            .data_subscribe(data_id, as_of.clone(), Box::new(data_write))
+            .data_subscribe(data_id, as_of.clone(), data_write)
             .await;
         debug!("{} starting as_of={:?}", name, as_of);
 
@@ -348,183 +230,224 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
-fn txns_progress_frontiers<K, V, T, D, P, C, G>(
-    remap: Stream<G, DataRemapEntry<T>>,
-    passthrough: Stream<G, P>,
+/// The block ordering inside the schedule closure is load-bearing: pending
+/// passthrough input is emitted at the pre-activation capability BEFORE any
+/// capability downgrade, which keeps the differential invariant `send_time <=
+/// record_time` and avoids dropping in-flight rows when the passthrough
+/// frontier crosses `until` in the same activation (SQL-299). Do not reorder.
+fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
+    remap: StreamVec<'scope, T, DataRemapEntry<T>>,
+    passthrough: StreamVec<'scope, T, P>,
     name: &str,
     data_id: ShardId,
     until: Antichain<T>,
     unique_id: u64,
-) -> (Stream<G, P>, PressOnDropButton)
+) -> (StreamVec<'scope, T, P>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Data + Semigroup + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Clone + 'static + Monoid + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec,
-    G: Scope<Timestamp = T>,
 {
+    let scope = passthrough.scope();
     let name = format!("txns_progress_frontiers({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
+    let mut builder = OperatorBuilderRc::new(name.clone(), scope.clone());
+    let info = builder.operator_info();
     let name = format!(
         "{} [{}] {}/{} {:.9}",
         name,
         unique_id,
-        passthrough.scope().index(),
-        passthrough.scope().peers(),
+        scope.index(),
+        scope.peers(),
         data_id.to_string(),
     );
-    let (passthrough_output, passthrough_stream) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
-    let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
+    let (passthrough_output, passthrough_stream) = builder.new_output::<Vec<P>>();
+    let mut passthrough_output = OutputBuilder::from(passthrough_output);
+    // Both inputs are disconnected from the output: capability advancement is
+    // driven manually based on the remap stream and the passthrough frontier.
+    // NB: the output is created BEFORE the inputs on purpose. `new_output`
+    // connects to whatever inputs already exist (here, none); the `[]`
+    // connection arg below records the input-to-output summary but does not by
+    // itself disconnect the output. Creating an input before the output would
+    // silently connect them and break the manual capability management.
+    let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
+    let mut passthrough_input = builder.new_input_connection(passthrough, Pipeline, []);
 
-    let shutdown_button = builder.build(move |capabilities| async move {
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+    let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
 
-        // None is used to indicate that both uppers are the empty antichain.
-        let mut remap = Some(DataRemapEntry {
+    builder.build_reschedule(move |capabilities| {
+        // The output capability's time tracks how far we've progressed in
+        // copying along the passthrough input. `None` indicates that we've
+        // dropped the capability to shut down.
+        let [cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let mut capability = Some(cap);
+        // The most recently observed remap state. Retained even after the remap
+        // input closes so we can still advance the output capability to the
+        // last known `logical_upper` while the passthrough input is draining.
+        // This deliberately diverges from the async impl, which dropped the
+        // entry on close and stalled (PER-4).
+        let mut remap = DataRemapEntry {
             physical_upper: T::minimum(),
             logical_upper: T::minimum(),
-        });
-        // NB: The following loop uses `cap.time()`` to track how far we've
-        // progressed in copying along the passthrough input.
-        loop {
-            debug!("{} remap {:?}", name, remap);
-            if let Some(r) = remap.as_ref() {
-                assert!(r.physical_upper <= r.logical_upper);
-                // If we've passed through data to at least `physical_upper`,
-                // then it means we can artificially advance the upper of the
-                // output to `logical_upper`. This also indicates that we need
-                // to wait for the next DataRemapEntry. It can either (A) have
-                // the same physical upper or (B) have a larger physical upper.
-                //
-                // - If (A), then we would again satisfy this `physical_upper`
-                //   check, again advance the logical upper again, ...
-                // - If (B), then we'd fall down to the code below, which copies
-                //   the passthrough data until the frontier passes
-                //   `physical_upper`, then loops back up here.
-                if r.physical_upper.less_equal(cap.time()) {
-                    if cap.time() < &r.logical_upper {
-                        cap.downgrade(&r.logical_upper);
-                    }
-                    remap = txns_progress_frontiers_read_remap_input(
-                        &name,
-                        &mut remap_input,
-                        r.clone(),
-                    )
-                    .await;
-                    continue;
-                }
+        };
+        // Whether the remap input has reached the empty antichain.
+        let mut remap_closed = false;
+
+        move |frontiers| {
+            // If our worker pressed the button we stop producing data and
+            // frontier updates downstream, but mirror `builder_async`: hold the
+            // capability and stop draining the inputs until ALL workers have
+            // pressed. Dropping the capability on the local press alone would
+            // let the downstream frontier advance during cross-worker teardown
+            // skew, past times whose data this worker has discarded, while
+            // other workers' operator instances still feed downstream.
+            if shutdown_handle.local_pressed() {
+                return if shutdown_handle.all_pressed() {
+                    // All workers pressed: drop the capability and drain the
+                    // inputs so teardown does not stall the dataflow.
+                    capability = None;
+                    remap_input.for_each(|_input_cap, _data| {});
+                    passthrough_input.for_each(|_input_cap, _data| {});
+                    false
+                } else {
+                    // Wedge: keep the capability, leave the inputs undrained
+                    // (their pending messages hold the frontier), and ask to be
+                    // rescheduled until the remaining workers press.
+                    true
+                };
             }
 
-            // This only returns None when there are no more data left. Turn it
-            // into an empty frontier progress so we can re-use the shutdown
-            // code below.
-            let event = passthrough_input
-                .next()
-                .await
-                .unwrap_or_else(|| AsyncEvent::Progress(Antichain::new()));
-            match event {
-                // NB: Ignore the data_cap because this input is disconnected.
-                AsyncEvent::Data(_data_cap, mut data) => {
-                    // NB: Nothing to do here for `until` because both the
-                    // `shard_source` (before this operator) and
-                    // `mfp_and_decode` (after this operator) do the necessary
-                    // filtering.
-                    debug!("{} emitting data {:?}", name, data);
-                    passthrough_output.give_container(&cap, &mut data);
-                }
-                AsyncEvent::Progress(new_progress) => {
-                    // If `until.less_equal(new_progress)`, it means that all
-                    // subsequent batches will contain only times greater or
-                    // equal to `until`, which means they can be dropped in
-                    // their entirety.
-                    //
-                    // Ideally this check would live in `txns_progress_source`,
-                    // but that turns out to be much more invasive (requires
-                    // replacing lots of `T`s with `Antichain<T>`s). Given that
-                    // we've been thinking about reworking the operators, do the
-                    // easy but more wasteful thing for now.
-                    if PartialOrder::less_equal(&until, &new_progress) {
-                        debug!(
-                            "{} progress {:?} has passed until {:?}",
-                            name,
-                            new_progress.elements(),
-                            until.elements()
+            // Fold new DataRemapEntries, keeping the one with the largest
+            // logical_upper. The ordering of incoming entries is not assumed.
+            remap_input.for_each(|_input_cap, data| {
+                for x in data.drain(..) {
+                    debug!("{} got remap {:?}", name, x);
+                    if remap.logical_upper < x.logical_upper {
+                        assert!(
+                            remap.physical_upper <= x.physical_upper,
+                            "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
+                            remap.physical_upper,
+                            x.physical_upper,
                         );
-                        return;
-                    }
-                    // We reached the empty frontier! Shut down.
-                    let Some(new_progress) = new_progress.into_option() else {
-                        return;
-                    };
-
-                    // Recall that any reads of the data shard are always
-                    // correct, so given that we've passed through any data
-                    // from the input, that means we're free to pass through
-                    // frontier updates too.
-                    if cap.time() < &new_progress {
-                        debug!("{} downgrading cap to {:?}", name, new_progress);
-                        cap.downgrade(&new_progress);
+                        // TODO: If the physical upper has advanced, that's a very
+                        // strong hint that the data shard is about to be written to.
+                        // Because the data shard's upper advances sparsely (on write,
+                        // but not on passage of time) which invalidates the "every 1s"
+                        // assumption of the default tuning, we've had to de-tune the
+                        // listen sleeps on the paired persist_source. Maybe we use "one
+                        // state" to wake it up in case pubsub doesn't and remove the
+                        // listen polling entirely? (NB: This would have to happen in
+                        // each worker so that it's guaranteed to happen in each
+                        // process.)
+                        remap = x;
                     }
                 }
+            });
+
+            // Apply the remap input's frontier as a `logical_upper` bump. We do
+            // not discard `remap` on the empty antichain: the last observed
+            // entry remains valid and lets the capability still advance past
+            // `physical_upper` while the passthrough input drains.
+            if let Some(logical_upper) = frontiers[0].frontier().as_option() {
+                if remap.logical_upper < *logical_upper {
+                    remap.logical_upper = logical_upper.clone();
+                }
+            } else {
+                remap_closed = true;
             }
+
+            debug!("{} remap {:?} remap_closed={}", name, remap, remap_closed);
+
+            // Pass through any data the passthrough input has pending, at the
+            // current (pre-downgrade) capability, BEFORE any downgrade below.
+            // `cap.time()` here equals the pre-activation frontier, which is
+            // `<=` every pending record's time, so the differential invariant
+            // `send_time <= record_time` holds. Doing this before the
+            // `until`-driven drop is the SQL-299 fix. NB: nothing to do for
+            // `until` because the shard_source (before) and mfp_and_decode
+            // (after) filter.
+            if let Some(cap) = capability.as_ref() {
+                let mut output = passthrough_output.activate();
+                passthrough_input.for_each(|_input_cap, data| {
+                    debug!("{} emitting data {:?}", name, data);
+                    output.session(cap).give_container(data);
+                });
+            } else {
+                // Still drain to avoid stalling the dataflow.
+                passthrough_input.for_each(|_input_cap, _data| {});
+            }
+
+            // Only consult the passthrough frontier when not waiting on remap to
+            // push `physical_upper` past the capability. While `physical_upper
+            // <= cap.time()` and the remap input is open, the next expected
+            // event is a remap update that jumps `cap` to `logical_upper`, not a
+            // passthrough advance. Consulting the passthrough frontier then can
+            // drop the capability prematurely (e.g. `SELECT AS OF MAX`, where no
+            // remap update ever arrives and the passthrough side reports the
+            // empty antichain). Once remap is closed, the passthrough frontier
+            // is the only remaining driver.
+            let waiting_for_remap = match capability.as_ref() {
+                Some(cap) => !remap_closed && remap.physical_upper.less_equal(cap.time()),
+                None => false,
+            };
+            if !waiting_for_remap {
+                // Apply the passthrough input's frontier.
+                //
+                // If `until.less_equal(pass_frontier)`, it means that all
+                // subsequent batches will contain only times greater or equal
+                // to `until`, which means they can be dropped in their entirety.
+                //
+                // Ideally this check would live in `txns_progress_source`, but
+                // that turns out to be much more invasive (requires replacing
+                // lots of `T`s with `Antichain<T>`s). Given that we've been
+                // thinking about reworking the operators, do the easy but more
+                // wasteful thing for now.
+                let pass_frontier = frontiers[1].frontier();
+                if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
+                    debug!(
+                        "{} progress {:?} has passed until {:?}",
+                        name,
+                        pass_frontier,
+                        until.elements(),
+                    );
+                    capability = None;
+                } else if let Some(new_progress) = pass_frontier.as_option() {
+                    // Recall that any reads of the data shard are always
+                    // correct, so given that we've passed through any data from
+                    // the input, that means we're free to pass through frontier
+                    // updates too.
+                    if let Some(cap) = capability.as_mut() {
+                        if cap.time() < new_progress {
+                            debug!("{} downgrading cap to {:?}", name, new_progress);
+                            cap.downgrade(new_progress);
+                        }
+                    }
+                } else {
+                    // Reached the empty frontier; shut down.
+                    capability = None;
+                }
+            }
+
+            // If we've copied passthrough data to at least `physical_upper`, we
+            // can artificially advance the output to `logical_upper`. By the
+            // emptiness of `[physical_upper, logical_upper)`, no record still in
+            // flight lies below `logical_upper`, so this never strands data.
+            if let Some(cap) = capability.as_mut() {
+                assert!(remap.physical_upper <= remap.logical_upper);
+                let phys_reached = remap.physical_upper.less_equal(cap.time());
+                let logical_ahead = cap.time() < &remap.logical_upper;
+                if phys_reached && logical_ahead {
+                    cap.downgrade(&remap.logical_upper);
+                }
+            }
+
+            false
         }
     });
-    (passthrough_stream, shutdown_button.press_on_drop())
-}
 
-async fn txns_progress_frontiers_read_remap_input<T, C>(
-    name: &str,
-    input: &mut AsyncInputHandle<T, Vec<DataRemapEntry<T>>, C>,
-    mut remap: DataRemapEntry<T>,
-) -> Option<DataRemapEntry<T>>
-where
-    T: Timestamp + TotalOrder,
-    C: InputConnection<T>,
-{
-    while let Some(event) = input.next().await {
-        let xs = match event {
-            AsyncEvent::Progress(logical_upper) => {
-                if let Some(logical_upper) = logical_upper.into_option() {
-                    if remap.logical_upper < logical_upper {
-                        remap.logical_upper = logical_upper;
-                        return Some(remap);
-                    }
-                }
-                continue;
-            }
-            AsyncEvent::Data(_cap, xs) => xs,
-        };
-        for x in xs {
-            debug!("{} got remap {:?}", name, x);
-            // Don't assume anything about the ordering.
-            if remap.logical_upper < x.logical_upper {
-                assert!(
-                    remap.physical_upper <= x.physical_upper,
-                    "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
-                    remap.physical_upper,
-                    x.physical_upper,
-                );
-                // TODO: If the physical upper has advanced, that's a very
-                // strong hint that the data shard is about to be written to.
-                // Because the data shard's upper advances sparsely (on write,
-                // but not on passage of time) which invalidates the "every 1s"
-                // assumption of the default tuning, we've had to de-tune the
-                // listen sleeps on the paired persist_source. Maybe we use "one
-                // state" to wake it up in case pubsub doesn't and remove the
-                // listen polling entirely? (NB: This would have to happen in
-                // each worker so that it's guaranteed to happen in each
-                // process.)
-                remap = x;
-            }
-        }
-        return Some(remap);
-    }
-    // remap_input is closed, which indicates the data shard is finished.
-    None
+    (passthrough_stream, shutdown_button.press_on_drop())
 }
 
 /// The process global [`TxnsRead`] that any operator can communicate with.
@@ -599,7 +522,7 @@ pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
 /// [Subscribe]: mz_persist_client::read::Subscribe
 pub struct DataSubscribe {
     pub(crate) as_of: u64,
-    pub(crate) worker: Worker<timely::communication::allocator::Thread>,
+    pub(crate) worker: Worker,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,
     capture: mpsc::Receiver<Event<u64, Vec<(String, u64, i64)>>>,
@@ -637,16 +560,19 @@ impl DataSubscribe {
         data_id: ShardId,
         as_of: u64,
         until: Antichain<u64>,
-        use_global_txn_cache: bool,
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
-            timely::communication::allocator::Thread::new(),
+            timely::communication::Allocator::Thread(
+                timely::communication::allocator::Thread::default(),
+            ),
+            Some(std::time::Instant::now()),
         );
-        let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
-            let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+        let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|outer| {
+            let (data_stream, shard_source_token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
                 let client = client.clone();
-                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _, _>(
+                let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
+                    outer,
                     scope,
                     name,
                     move || std::future::ready(client.clone()),
@@ -654,38 +580,27 @@ impl DataSubscribe {
                     Some(Antichain::from_elem(as_of)),
                     SnapshotMode::Include,
                     until.clone(),
-                    false.then_some(|_, _: &_, _| unreachable!()),
+                    false.then_some(|_, _, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
-                    |_, _| true,
+                    FilterResult::keep_all,
                     false.then_some(|| unreachable!()),
                     async {},
-                    |error| panic!("data_subscribe: {error}"),
-                    ProjectionPushdown::FetchAll,
+                    ErrorHandler::Halt("data_subscribe"),
                 );
-                (data_stream.leave(), token)
+                (data_stream.leave(outer), token)
             });
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
-                part.part.map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                part.part.map(|((k, ()), t, d)| (k, t, d))
             });
             let data_stream = data_stream.probe_with(&data);
-            // We purposely do not use the `ConfigSet` in `client` so that
-            // different tests can set different values.
-            let config_set = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
-            let mut updates = ConfigUpdates::default();
-            updates.add(&USE_GLOBAL_TXN_CACHE_SOURCE, use_global_txn_cache);
-            updates.apply(&config_set);
             let (data_stream, mut txns_progress_token) =
-                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
+                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _>(
                     data_stream,
                     name,
                     &TxnsContext::default(),
-                    &config_set,
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
@@ -822,7 +737,7 @@ impl DataSubscribeTask {
     pub async fn finish(self) -> Vec<(String, u64, i64)> {
         // Closing the channel signals the task to exit.
         drop(self.tx);
-        self.task.wait_and_assert_finished().await
+        self.task.await
     }
 
     fn task(
@@ -842,7 +757,6 @@ impl DataSubscribeTask {
             data_id,
             as_of,
             Antichain::new(),
-            true,
         );
         let mut output = Vec::new();
         loop {
@@ -876,20 +790,191 @@ impl DataSubscribeTask {
 #[cfg(test)]
 mod tests {
     use itertools::{Either, Itertools};
-    use mz_persist_types::Opaque;
 
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
     use super::*;
 
-    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    /// One scripted action applied to the operator's two inputs.
+    #[derive(Debug, Clone)]
+    enum Action {
+        /// Send a `DataRemapEntry` on the remap input.
+        Remap {
+            physical_upper: u64,
+            logical_upper: u64,
+        },
+        /// Advance the remap input frontier to `ts` (empty antichain if `None`).
+        RemapFrontier(Option<u64>),
+        /// Send passthrough data records (as `(payload, time)`), then leave them buffered.
+        Pass { records: Vec<(i64, u64)> },
+        /// Advance the passthrough input frontier to `ts` (empty antichain if `None`).
+        PassFrontier(Option<u64>),
+        /// Step the worker once.
+        Step,
+    }
+
+    /// Runs `schedule` against the operator built by `build`, returning the
+    /// captured output events and the final exclusive output frontier. Each
+    /// event is shaped as `(payload, time, count)`, where `count` is synthesized
+    /// as `1` so the output looks like a differential collection.
+    fn run_schedule(
+        build: impl for<'a> Fn(
+            StreamVec<'a, u64, DataRemapEntry<u64>>,
+            StreamVec<'a, u64, i64>,
+            Antichain<u64>,
+        ) -> (StreamVec<'a, u64, i64>, PressOnDropButton),
+        until: Antichain<u64>,
+        schedule: &[Action],
+    ) -> (Vec<(i64, u64, i64)>, u64) {
+        let mut worker = Worker::new(
+            WorkerConfig::default(),
+            timely::communication::Allocator::Thread(
+                timely::communication::allocator::Thread::default(),
+            ),
+            Some(std::time::Instant::now()),
+        );
+
+        // The button must outlive the run: dropping it presses the shutdown
+        // handle, which makes the operator drop its capability on the next
+        // activation. Hold it until after the drain loop completes.
+        let (remap_handle, pass_handle, probe, capture, _button) =
+            worker.dataflow::<u64, _, _>(|scope| {
+                let (remap_handle, remap_stream) = scope.new_input::<Vec<DataRemapEntry<u64>>>();
+                let (pass_handle, pass_stream) = scope.new_input::<Vec<i64>>();
+                let (out, button) = build(remap_stream, pass_stream, until.clone());
+                let probe = ProbeHandle::new();
+                let out = out.probe_with(&probe);
+                (remap_handle, pass_handle, probe, out.capture(), button)
+            });
+
+        // timely input handles can only `advance_to` forward in time. Track the
+        // last time used on each input so we can fail loudly with a useful
+        // message instead of panicking deep inside timely on a decreasing time.
+        let mut last_remap_ts = 0u64;
+        let mut last_pass_ts = 0u64;
+        // Held in `Option`s so a `*Frontier(None)` action can `take` and drop the
+        // handle, which closes the input to the empty antichain. Advancing to
+        // `u64::MAX` is NOT equivalent: it leaves the input's frontier at
+        // `Some(u64::MAX)`, which the operator (correctly) treats as a finite
+        // `logical_upper`/passthrough advance rather than a closed input.
+        let mut remap_handle = Some(remap_handle);
+        let mut pass_handle = Some(pass_handle);
+        for action in schedule {
+            match action.clone() {
+                // `Remap` is a `send` at the handle's current time, so it carries
+                // no explicit time and needs no monotonicity assert.
+                Action::Remap {
+                    physical_upper,
+                    logical_upper,
+                } => remap_handle
+                    .as_mut()
+                    .expect("remap input still open")
+                    .send(DataRemapEntry {
+                        physical_upper,
+                        logical_upper,
+                    }),
+                Action::RemapFrontier(Some(ts)) => {
+                    assert!(
+                        ts >= last_remap_ts,
+                        "Action::RemapFrontier time {ts} < previous remap time {last_remap_ts}; per-input times must be non-decreasing"
+                    );
+                    last_remap_ts = ts;
+                    remap_handle
+                        .as_mut()
+                        .expect("remap input still open")
+                        .advance_to(ts);
+                }
+                // Drop the handle to close the input to the empty antichain.
+                Action::RemapFrontier(None) => {
+                    last_remap_ts = u64::MAX;
+                    drop(remap_handle.take());
+                }
+                Action::Pass { records } => {
+                    let handle = pass_handle.as_mut().expect("passthrough input still open");
+                    for (payload, time) in records {
+                        assert!(
+                            time >= last_pass_ts,
+                            "Action::Pass time {time} < previous passthrough time {last_pass_ts}; per-input times must be non-decreasing"
+                        );
+                        last_pass_ts = time;
+                        // `advance_to` is what makes each record's time visible to
+                        // the operator; the subsequent `send` emits the payload at
+                        // that time. Both impls consume the identical schedule, so
+                        // the exact send mechanics need only be self-consistent.
+                        handle.advance_to(time);
+                        handle.send(payload);
+                    }
+                }
+                Action::PassFrontier(Some(ts)) => {
+                    assert!(
+                        ts >= last_pass_ts,
+                        "Action::PassFrontier time {ts} < previous passthrough time {last_pass_ts}; per-input times must be non-decreasing"
+                    );
+                    last_pass_ts = ts;
+                    pass_handle
+                        .as_mut()
+                        .expect("passthrough input still open")
+                        .advance_to(ts);
+                }
+                // Drop the handle to close the input to the empty antichain.
+                Action::PassFrontier(None) => {
+                    last_pass_ts = u64::MAX;
+                    drop(pass_handle.take());
+                }
+                Action::Step => {
+                    worker.step();
+                }
+            }
+        }
+        // Drain: flush inputs and step until the output probe frontier stops
+        // advancing. A hard cap PANICS so a buggy operator that never settles
+        // fails loudly instead of silently returning partial results.
+        if let Some(handle) = remap_handle.as_mut() {
+            handle.flush();
+        }
+        if let Some(handle) = pass_handle.as_mut() {
+            handle.flush();
+        }
+        let mut last = probe.with_frontier(|f| f.to_owned());
+        let mut stable = 0;
+        for step in 0.. {
+            assert!(
+                step < 4096,
+                "run_schedule did not quiesce within 4096 steps"
+            );
+            worker.step();
+            let now = probe.with_frontier(|f| f.to_owned());
+            if now == last {
+                stable += 1;
+                // Require a few consecutive no-change steps so in-flight messages flush.
+                if stable >= 8 {
+                    break;
+                }
+            } else {
+                stable = 0;
+                last = now;
+            }
+        }
+
+        let frontier = probe.with_frontier(|f| *f.as_option().unwrap_or(&u64::MAX));
+        let mut output = Vec::new();
+        while let Ok(event) = capture.try_recv() {
+            if let Event::Messages(time, msgs) = event {
+                for payload in msgs {
+                    output.push((payload, time, 1));
+                }
+            }
+        }
+        (output, frontier)
+    }
+
+    impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
         C: TxnsCodec,
     {
         async fn subscribe_task(
@@ -998,7 +1083,7 @@ mod tests {
 
         // Now finalize the shard to writes.
         let () = d0_write
-            .compare_and_append_batch(&mut [], Antichain::from_elem(6), Antichain::new())
+            .compare_and_append_batch(&mut [], Antichain::from_elem(6), Antichain::new(), true)
             .await
             .unwrap()
             .unwrap();
@@ -1070,7 +1155,6 @@ mod tests {
             d0,
             3,
             Antichain::from_elem(until),
-            true,
         );
         // Manually step the dataflow, instead of going through the
         // `DataSubscribe` helper because we're interested in all captured
@@ -1085,11 +1169,39 @@ mod tests {
                 Event::Progress(progress) => Either::Left(progress),
                 Event::Messages(ts, data) => Either::Right((ts, data)),
             });
-        let expected = vec![
-            (3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            (3, vec![("4".to_owned(), 4, 1)]),
+        // Aggregate the captured records, ignoring the stream-level
+        // timestamp on each batch. The operator emits each container at
+        // whatever capability it currently holds (which is determined by
+        // its scheduling cadence and the upstream frontiers it has
+        // observed), so the per-batch `ts` is not deterministic and not
+        // part of the operator's contract. Per-record `(key, time, diff)`
+        // tuples are what callers see, and the differential invariant
+        // (stream `ts <= record time`) is checked separately below.
+        let mut actual_records: Vec<(String, u64, i64)> = actual_events
+            .iter()
+            .flat_map(|(_ts, data)| data.iter().cloned())
+            .collect();
+        actual_records.sort();
+        let expected_records: Vec<(String, u64, i64)> = vec![
+            ("2".to_owned(), 3, 1),
+            ("3".to_owned(), 3, 1),
+            ("4".to_owned(), 4, 1),
         ];
-        assert_eq!(actual_events, expected);
+        assert_eq!(actual_records, expected_records);
+
+        // Verify the differential invariant: each batch's stream
+        // timestamp `ts` must be `<= record_time` for every record it
+        // carries. The operator's contract requires this so that
+        // downstream differential operators can integrate the records
+        // at their declared times.
+        for (ts, data) in &actual_events {
+            for (_key, record_ts, _diff) in data {
+                assert!(
+                    ts <= record_ts,
+                    "differential invariant violated: stream ts {ts} > record time {record_ts}",
+                );
+            }
+        }
 
         // The number and contents of progress messages is not guaranteed and
         // depends on the downgrade behavior. The only thing we can assert is
@@ -1102,5 +1214,211 @@ mod tests {
         {
             assert!(max_progress_ts < until, "{max_progress_ts} < {until}");
         }
+    }
+
+    /// Builds the sync operator for the harness.
+    fn build_sync<'a>(
+        remap: StreamVec<'a, u64, DataRemapEntry<u64>>,
+        pass: StreamVec<'a, u64, i64>,
+        until: Antichain<u64>,
+    ) -> (StreamVec<'a, u64, i64>, PressOnDropButton) {
+        txns_progress_frontiers::<String, (), u64, i64, i64, TxnsCodecDefault>(
+            remap,
+            pass,
+            "test",
+            ShardId::new(),
+            until,
+            0,
+        )
+    }
+
+    /// Generates a random schedule for the no-data-loss fuzz test. Interleaves
+    /// remap entries/frontiers with passthrough data/frontiers. Payloads are
+    /// unique and increasing so a single dropped or duplicated record is
+    /// detectable; per-input times are non-decreasing (the harness requires
+    /// this). The schedule never closes the passthrough input, and the test
+    /// uses `until = ∅`, so the operator never has a legitimate reason to shut
+    /// down and must pass through every record it is given.
+    ///
+    /// Schedules are intentionally NOT constrained to respect the remap
+    /// "[physical_upper, logical_upper) is empty" contract. The no-data-loss
+    /// property must hold under arbitrary interleavings, so feeding
+    /// contract-violating schedules only strengthens the test.
+    fn gen_schedule(seed: u64) -> Vec<Action> {
+        // Simple xorshift RNG for determinism without extra deps.
+        let mut state = seed.wrapping_add(0x9E3779B97F4A7C15).max(1);
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let mut schedule = Vec::new();
+        let mut physical = 0u64;
+        let mut logical = 0u64;
+        let mut pass_frontier = 0u64;
+        let mut payload = 0i64;
+        let mut remap_closed = false;
+        let steps = 8 + (next() % 16);
+        for _ in 0..steps {
+            match next() % 5 {
+                0 if !remap_closed => {
+                    physical += next() % 3;
+                    logical = logical.max(physical) + (next() % 4);
+                    schedule.push(Action::Remap {
+                        physical_upper: physical,
+                        logical_upper: logical,
+                    });
+                }
+                1 if !remap_closed => {
+                    if next() % 8 == 0 {
+                        remap_closed = true;
+                        schedule.push(Action::RemapFrontier(None));
+                    } else {
+                        logical += next() % 3;
+                        schedule.push(Action::RemapFrontier(Some(logical)));
+                    }
+                }
+                2 => {
+                    let t = pass_frontier + (next() % 3);
+                    pass_frontier = t;
+                    payload += 1;
+                    schedule.push(Action::Pass {
+                        records: vec![(payload, t)],
+                    });
+                }
+                3 => {
+                    pass_frontier += next() % 3;
+                    schedule.push(Action::PassFrontier(Some(pass_frontier)));
+                }
+                _ => schedule.push(Action::Step),
+            }
+            schedule.push(Action::Step);
+        }
+        schedule
+    }
+
+    /// Fuzz: under any random interleaving, the deasynced operator must emit
+    /// every passthrough record it is given (no loss, no duplication) and must
+    /// not prematurely shut down. With `until = ∅` and no passthrough close, the
+    /// operator never legitimately drops its capability, so the output frontier
+    /// must stay finite.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_fuzz_no_data_loss() {
+        for seed in 0..500u64 {
+            let schedule = gen_schedule(seed);
+            let mut sent: Vec<i64> = schedule
+                .iter()
+                .flat_map(|a| match a {
+                    Action::Pass { records } => records.iter().map(|(p, _)| *p).collect(),
+                    _ => Vec::new(),
+                })
+                .collect();
+            let (out, frontier) = run_schedule(build_sync, Antichain::new(), &schedule);
+            let mut emitted: Vec<i64> = out.iter().map(|(p, _, _)| *p).collect();
+            sent.sort();
+            emitted.sort();
+            assert_eq!(
+                emitted, sent,
+                "seed {seed}: operator lost or duplicated data\nschedule={schedule:?}\nout={out:?}"
+            );
+            assert_ne!(
+                frontier,
+                u64::MAX,
+                "seed {seed}: operator prematurely shut down (empty output frontier)\nschedule={schedule:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_sql_299_up_to_no_tail_loss() {
+        // until = 0. A remap entry with physical_upper = 5 keeps the operator
+        // out of the `waiting_for_remap` state (5 > cap.time() = 0), so the
+        // until check actually fires. Buffer a record at time 0 (payload 4) and
+        // leave it pending. In the single activation, the operator sees both the
+        // buffered record and the passthrough frontier at 0, which already
+        // satisfies `until <= pass_frontier` and drops the capability. The
+        // record must be emitted before that drop, not discarded. Buffering at
+        // time 0 (the cap's time) is what makes the record and the
+        // until-crossing land in the same activation — with the ordered
+        // `new_input` handle, advancing the passthrough frontier past the record
+        // would deliver the record in an earlier activation and mask the bug.
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 5,
+                logical_upper: 5,
+            },
+            Action::RemapFrontier(Some(5)),
+            Action::Pass {
+                records: vec![(4, 0)],
+            },
+            Action::PassFrontier(None),
+            Action::Step,
+        ];
+        let (output, _frontier) = run_schedule(build_sync, Antichain::from_elem(0), &schedule);
+        let payloads: Vec<i64> = output.iter().map(|(p, _, _)| *p).collect();
+        assert!(
+            payloads.contains(&4),
+            "buffered record at time 0 must be emitted before until-driven shutdown, got {output:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_per4_advance_after_remap_close() {
+        // Emit a remap entry whose logical_upper (10) exceeds its physical_upper
+        // (5). Close the remap input while the passthrough frontier is still
+        // below physical_upper (so the capability has NOT yet advanced to
+        // logical_upper), then advance the passthrough frontier up to
+        // physical_upper (5). The capability must still advance to logical_upper
+        // (10) using the remap entry retained across the close, not stall at the
+        // passthrough frontier (5). The async impl dropped the entry on close and
+        // stalled here (PER-4).
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 5,
+                logical_upper: 10,
+            },
+            Action::RemapFrontier(Some(10)),
+            Action::Step,
+            // Close remap before the passthrough frontier reaches physical_upper.
+            Action::RemapFrontier(None),
+            Action::Step,
+            // Only now does the passthrough frontier reach physical_upper.
+            Action::PassFrontier(Some(5)),
+            Action::Step,
+        ];
+        let (_output, frontier) = run_schedule(build_sync, Antichain::new(), &schedule);
+        assert_eq!(
+            frontier, 10,
+            "capability must advance to logical_upper after remap close, got {frontier}"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn frontiers_select_as_of_max_blocks() {
+        // Mimic `SELECT AS OF MAX`: a remap entry exists with physical_upper == 0
+        // (so physical_upper <= cap.time() and the operator waits for remap), no
+        // further remap update arrives, and the passthrough frontier reaches the
+        // empty antichain. The operator must NOT drop its capability (must keep
+        // blocking), so the output frontier stays finite (0), not u64::MAX.
+        let schedule = vec![
+            Action::Remap {
+                physical_upper: 0,
+                logical_upper: 0,
+            },
+            Action::RemapFrontier(Some(0)),
+            Action::PassFrontier(None),
+            Action::Step,
+        ];
+        let (_output, frontier) = run_schedule(build_sync, Antichain::new(), &schedule);
+        assert_eq!(
+            frontier, 0,
+            "operator must block (retain capability) while waiting for remap, got {frontier}"
+        );
     }
 }

@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
 $ set-arg-default single-replica-cluster=quickstart
 
+> BEGIN
 > CREATE SOURCE tpch
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 1000);
@@ -21,6 +23,7 @@ $ set-arg-default single-replica-cluster=quickstart
 > CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
@@ -42,12 +45,14 @@ $ set-arg-default single-replica-cluster=quickstart
 # Wait for the sink to create the topic
 $ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed} partitions=1
 
+> BEGIN
 > CREATE SOURCE progress_check
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
 
 > CREATE TABLE progress_check_tbl FROM SOURCE progress_check (REFERENCE "testdrive-progress-fixed-${testdrive.seed}")
   FORMAT JSON ENVELOPE NONE
+> COMMIT
 
 > SELECT COUNT(*) FROM progress_check_tbl WHERE data->'frontier' = '[]'::jsonb;
 1

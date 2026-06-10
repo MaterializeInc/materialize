@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: Load generator"
+title: "Appendix: Load generator"
 description: "Using Materialize's built-in load generators"
 pagerank: 50
 menu:
@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: load-generator
     name: Load generator
-    weight: 40
+    weight: 99
 ---
 
 {{% create-source/intro %}}
@@ -17,40 +17,7 @@ tests.
 
 ## Syntax
 
-{{< diagram "create-source-load-generator.svg" >}}
-
-#### `load_generator_option`
-
-{{< diagram "load-generator-option.svg" >}}
-
-#### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**COUNTER**  | Use the [counter](#counter) load generator.
-**AUCTION**  | Use the [auction](#auction) load generator.
-**MARKETING**| Use the [marketing](#marketing) load generator.
-**TPCH**     | Use the [tpch](#tpch) load generator.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
-**TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**AS OF**  | The tick at which to start producing data. Defaults to 0. {{< warn-if-unreleased-inline "v0.101" >}}
-**UP TO**  | The tick before which to stop producing data. Defaults to infinite. {{< warn-if-unreleased-inline "v0.101" >}}
-**SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
-**MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
-**KEYS**                    | Valid for [`KEY VALUE` generator](#key-value).
-**SNAPSHOT ROUNDS**         | Valid for [`KEY VALUE` generator](#key-value).
-**TRANSACTIONAL SNAPSHOT**  | Valid for [`KEY VALUE` generator](#key-value).
-**VALUE SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
-**SEED**                    | Valid for [`KEY VALUE` generator](#key-value).
-**PARTITIONS**              | Valid for [`KEY VALUE` generator](#key-value).
-**BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
-**FOR ALL TABLES** | Creates subsources for all tables in the load generator.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/create_source_load_generator" example="syntax" %}}
 
 ## Description
 
@@ -58,11 +25,6 @@ Materialize has several built-in load generators, which provide a quick way to
 get up and running with no external dependencies before plugging in your own
 data sources. If you would like to see an additional load generator, please
 submit a [feature request].
-
-### Counter
-
-The counter load generator produces the sequence `1`, `2`, `3`, …. Each tick
-interval, the next number in the sequence is emitted.
 
 ### Auction
 
@@ -117,20 +79,6 @@ create the following subsources:
 The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
-
-### Clock
-
-{{< private-preview />}}
-
-The clock load generator tracks the system clock time, and can be used in
-contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#limitations).
-On each tick interval, the source emits the system clock time. For example,
-configuring this load generator with `TICK INTERVAL '1 minute'` will cause the
-source to update every minute.
-
-Field | Type                         | Description
-----  | ---------------------------- | -------------
-time  | `timestamp with time zone`   | The system clock time.
 
 
 ### Marketing
@@ -197,37 +145,6 @@ The TPCH source must be used with `FOR ALL TABLES`, which will create the standa
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
 
-### KEY VALUE
-
-{{< private-preview />}}
-
-The `KEY VALUE` load generator produces keyed data that is intended to be passed though the [`UPSERT` envelope](/sql/create-source/#upsert-envelope).
-Its size and performance can be configured in detailed ways.
-
-The schema of the data is:
-
-Field      | Type       | Description
------------|------------|------------
-key        | [`uint8`]  | The key for the value
-partition  | [`uint8`]  | The partition this key belongs to
-value      | [`bytea`]  | Random data associated with the key.
-offset     | [`uint8`]  | The offset of the data (if `INCLUDE OFFSET` is configured).
-
-The following options are supported:
-
-- `KEYS`: The number of keys in the source. For now, this must be divisible by `PARTITIONS` * `BATCH SIZE`,
-    though this constraint may be lifted in the future.
-- `SNAPSHOT ROUNDS`: The number of rounds of data (1 update per key in each round) to produce
-    as the source starts up. Can be used to scale the size of the snapshot without changing the number
-    of keys.
-- `TRANSACTIONAL SNAPSHOT`: Whether or not to emit the snapshot as a singular transaction.
-- `VALUE SIZE`: The number of bytes in each `value`.
-- `TICK INTERVAL`: The _minimum interval_ (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
-- `SEED`: A per-source [`uint8`] seed for seeding the random data.
-- `PARTITIONS`: The number of partitions to spread the keys across. Can be used to scale concurrency independent of
-    the replica size.
-- `BATCH SIZE`: The number of keys per partition to produce in each update (based on `TICK INTERVAL`).
-
 ### Monitoring source progress
 
 By default, load generator sources expose progress metadata as a subsource that
@@ -253,30 +170,6 @@ more details on monitoring source ingestion progress and debugging related
 issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
-
-### Creating a counter load generator
-
-To create a load generator source that emits the next number in the sequence every
-500 milliseconds:
-
-```mzsql
-CREATE SOURCE counter
-  FROM LOAD GENERATOR COUNTER
-  (TICK INTERVAL '500ms');
-```
-
-To examine the counter:
-
-```mzsql
-SELECT * FROM counter;
-```
-```nofmt
- counter
----------
-       1
-       2
-       3
-```
 
 ### Creating an auction load generator
 
@@ -317,43 +210,6 @@ SELECT * from bids;
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
-```
-
-### Creating a clock load generator
-
-{{< private-preview />}}
-
-To create a load generator source that ticks over to a new time every second:
-
-```mzsql
-CREATE SOURCE clock
-  FROM LOAD GENERATOR CLOCK
-  (TICK INTERVAL '1s');
-```
-
-To display the created source:
-
-```mzsql
-SHOW SOURCES;
-```
-
-```nofmt
-      name      |      type      | size |  cluster
-----------------+----------------+------+-----------
- clock          | load-generator | 1    | mz_system
- clock_progress | progress       |      |
-```
-
-To check the current clock time:
-
-```mzsql
-SELECT * FROM clock;
-```
-
-```nofmt
-          time
-------------------------
- 2024-07-02 16:25:06+00
 ```
 
 ### Creating a marketing load generator

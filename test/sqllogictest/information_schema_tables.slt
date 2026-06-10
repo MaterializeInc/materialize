@@ -130,11 +130,11 @@ BASE TABLE
 materialize
 mz_catalog
 mz_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_databases
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_default_privileges
@@ -149,12 +149,16 @@ mz_functions
 BASE TABLE
 materialize
 mz_catalog
+mz_iceberg_sinks
+BASE TABLE
+materialize
+mz_catalog
 mz_index_columns
 BASE TABLE
 materialize
 mz_catalog
 mz_indexes
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_connections
@@ -178,7 +182,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_materialized_views
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_objects
@@ -201,8 +205,12 @@ mz_relations
 VIEW
 materialize
 mz_catalog
-mz_role_members
+mz_role_auth
 BASE TABLE
+materialize
+mz_catalog
+mz_role_members
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_role_parameters
@@ -214,11 +222,11 @@ BASE TABLE
 materialize
 mz_catalog
 mz_schemas
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_secrets
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sinks
@@ -226,7 +234,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_sources
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_ssh_tunnel_connections
@@ -281,20 +289,32 @@ mz_aws_privatelink_connection_statuses
 VIEW
 materialize
 mz_internal
+mz_builtin_materialized_views
+VIEW
+materialize
+mz_internal
+mz_builtin_sources
+VIEW
+materialize
+mz_internal
+mz_catalog_raw
+SOURCE
+materialize
+mz_internal
+mz_cluster_deployment_lineage
+VIEW
+materialize
+mz_internal
 mz_cluster_replica_history
 VIEW
 materialize
 mz_internal
 mz_cluster_replica_metrics
-BASE TABLE
+VIEW
 materialize
 mz_internal
 mz_cluster_replica_metrics_history
 SOURCE
-materialize
-mz_internal
-mz_cluster_replica_metrics_history_ct
-CONTINUAL-TASK
 materialize
 mz_internal
 mz_cluster_replica_name_history
@@ -305,12 +325,8 @@ mz_cluster_replica_status_history
 SOURCE
 materialize
 mz_internal
-mz_cluster_replica_status_history_ct
-CONTINUAL-TASK
-materialize
-mz_internal
 mz_cluster_replica_statuses
-BASE TABLE
+VIEW
 materialize
 mz_internal
 mz_cluster_replica_utilization
@@ -326,7 +342,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_cluster_workload_classes
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_comments
@@ -350,19 +366,11 @@ SOURCE
 materialize
 mz_internal
 mz_compute_operator_hydration_statuses
-VIEW
-materialize
-mz_internal
-mz_compute_operator_hydration_statuses_per_worker
 SOURCE
 materialize
 mz_internal
 mz_console_cluster_utilization_overview
 VIEW
-materialize
-mz_internal
-mz_continual_tasks
-BASE TABLE
 materialize
 mz_internal
 mz_frontiers
@@ -386,10 +394,14 @@ VIEW
 materialize
 mz_internal
 mz_internal_cluster_replicas
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_kafka_source_tables
+BASE TABLE
+materialize
+mz_internal
+mz_license_keys
 BASE TABLE
 materialize
 mz_internal
@@ -409,16 +421,24 @@ mz_materialized_view_refreshes
 SOURCE
 materialize
 mz_internal
+mz_mcp_data_product_details
+VIEW
+materialize
+mz_internal
+mz_mcp_data_products
+VIEW
+materialize
+mz_internal
 mz_mysql_source_tables
 BASE TABLE
 materialize
 mz_internal
 mz_network_policies
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_network_policy_rules
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_notices
@@ -429,12 +449,24 @@ mz_notices_redacted
 VIEW
 materialize
 mz_internal
+mz_object_arrangement_size_history
+BASE TABLE
+materialize
+mz_internal
+mz_object_arrangement_sizes
+SOURCE
+materialize
+mz_internal
 mz_object_dependencies
 BASE TABLE
 materialize
 mz_internal
 mz_object_fully_qualified_names
 VIEW
+materialize
+mz_internal
+mz_object_global_ids
+BASE TABLE
 materialize
 mz_internal
 mz_object_history
@@ -457,12 +489,28 @@ mz_objects_id_namespace_types
 VIEW
 materialize
 mz_internal
+mz_ontology_entity_types
+VIEW
+materialize
+mz_internal
+mz_ontology_link_types
+VIEW
+materialize
+mz_internal
+mz_ontology_properties
+VIEW
+materialize
+mz_internal
+mz_ontology_semantic_types
+VIEW
+materialize
+mz_internal
 mz_optimizer_notices
 BASE TABLE
 materialize
 mz_internal
 mz_pending_cluster_replicas
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_postgres_source_tables
@@ -495,6 +543,10 @@ materialize
 mz_internal
 mz_recent_sql_text_redacted
 VIEW
+materialize
+mz_internal
+mz_replacements
+BASE TABLE
 materialize
 mz_internal
 mz_session_history
@@ -534,10 +586,6 @@ VIEW
 materialize
 mz_internal
 mz_show_connections
-VIEW
-materialize
-mz_internal
-mz_show_continual_tasks
 VIEW
 materialize
 mz_internal
@@ -681,6 +729,10 @@ mz_source_statuses
 VIEW
 materialize
 mz_internal
+mz_sql_server_source_tables
+BASE TABLE
+materialize
+mz_internal
 mz_sql_text
 SOURCE
 materialize
@@ -717,6 +769,18 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
+mz_wallclock_global_lag
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_lag_histogram
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_lag_histogram_raw
+SOURCE
+materialize
+mz_internal
 mz_wallclock_global_lag_history
 VIEW
 materialize
@@ -729,10 +793,6 @@ mz_wallclock_lag_history
 SOURCE
 materialize
 mz_internal
-mz_wallclock_lag_history_ct
-CONTINUAL-TASK
-materialize
-mz_internal
 mz_webhook_sources
 BASE TABLE
 materialize
@@ -742,6 +802,10 @@ VIEW
 materialize
 mz_internal
 pg_attribute_all_databases
+VIEW
+materialize
+mz_internal
+pg_authid_core
 VIEW
 materialize
 mz_internal
@@ -825,6 +889,14 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
+mz_cluster_prometheus_metrics
+SOURCE
+materialize
+mz_introspection
+mz_compute_dataflow_global_ids_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_error_counts
 VIEW
 materialize
@@ -865,6 +937,10 @@ mz_compute_import_frontiers_per_worker
 SOURCE
 materialize
 mz_introspection
+mz_compute_lir_mapping_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_operator_durations_histogram
 VIEW
 materialize
@@ -874,6 +950,10 @@ VIEW
 materialize
 mz_introspection
 mz_compute_operator_durations_histogram_raw
+SOURCE
+materialize
+mz_introspection
+mz_compute_operator_hydration_statuses_per_worker
 SOURCE
 materialize
 mz_introspection
@@ -903,6 +983,10 @@ materialize
 mz_introspection
 mz_dataflow_channels_per_worker
 SOURCE
+materialize
+mz_introspection
+mz_dataflow_global_ids
+VIEW
 materialize
 mz_introspection
 mz_dataflow_operator_dataflows
@@ -941,18 +1025,6 @@ mz_dataflow_operators_per_worker
 SOURCE
 materialize
 mz_introspection
-mz_dataflow_shutdown_durations_histogram
-VIEW
-materialize
-mz_introspection
-mz_dataflow_shutdown_durations_histogram_per_worker
-VIEW
-materialize
-mz_introspection
-mz_dataflow_shutdown_durations_histogram_raw
-SOURCE
-materialize
-mz_introspection
 mz_dataflows
 VIEW
 materialize
@@ -962,6 +1034,14 @@ VIEW
 materialize
 mz_introspection
 mz_expected_group_size_advice
+VIEW
+materialize
+mz_introspection
+mz_lir_mapping
+VIEW
+materialize
+mz_introspection
+mz_mappable_objects
 VIEW
 materialize
 mz_introspection
@@ -1198,10 +1278,6 @@ MATERIALIZED VIEW
 materialize
 public
 s
-SOURCE
-materialize
-public
-s_progress
 SOURCE
 materialize
 public

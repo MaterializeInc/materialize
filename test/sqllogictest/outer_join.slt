@@ -27,7 +27,7 @@ INSERT INTO b VALUES (2);
 statement ok
 INSERT INTO c VALUES (3);
 
-query III
+query III rowsort
 SELECT * FROM a, b full join c on b = c;
 ----
 1  NULL  3
@@ -98,7 +98,7 @@ insert into right2 values (0,0);
 
 # `consolidate_output` should be true when there is a negated input to a Union.
 query T multiline
-explain physical plan for
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 select *
 from
   left
@@ -106,6 +106,22 @@ from
   LEFT JOIN right2 ON left.x = right2.x;
 ----
 Explained Query:
+  With
+    cte l0 =
+      TopK::MonotonicTop1 group_by=[#0] must_consolidate
+        Get::Collection materialize.public.right1
+          raw=true
+    cte l1 =
+      Reduce::Distinct
+        key_plan=id
+        val_plan
+          project=()
+        Union
+          Get::Collection materialize.public.left
+            project=(#0)
+            raw=true
+          Constant
+            - (null)
   Return
     Join::Delta
       plan_path[0]
@@ -159,13 +175,11 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[integer?, integer?]
         Get::PassArrangements materialize.public.left
           raw=true
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
-        types=[integer?, integer?, boolean?]
         Union
           Get::Collection l0
             project=(#0..=#2)
@@ -179,7 +193,6 @@ Explained Query:
               ArrangeBy
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                types=[integer?]
                 Union consolidate_output=true
                   Negate
                     Get::Collection l0
@@ -194,11 +207,9 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
-        types=[integer?, integer?, boolean?]
         Union
           Get::Collection materialize.public.right2
             project=(#0..=#2)
-            filter=((#0) IS NOT NULL)
             map=(true)
             raw=true
           Mfp
@@ -209,12 +220,10 @@ Explained Query:
               ArrangeBy
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                types=[integer?]
                 Union consolidate_output=true
                   Negate
                     Get::Collection materialize.public.right2
                       project=(#0)
-                      filter=((#0) IS NOT NULL)
                       raw=true
                   ArrangeBy
                     input_key=[#0]
@@ -222,22 +231,6 @@ Explained Query:
                     Get::PassArrangements l1
                       raw=false
                       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-  With
-    cte l1 =
-      Reduce::Distinct
-        val_plan
-          project=()
-        key_plan=id
-        Union
-          Get::Collection materialize.public.left
-            project=(#0)
-            raw=true
-          Constant
-            - (null)
-    cte l0 =
-      TopK::MonotonicTop1 group_by=[#0] must_consolidate
-        Get::Collection materialize.public.right1
-          raw=true
 
 Source materialize.public.left
 Source materialize.public.right1

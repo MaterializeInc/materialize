@@ -24,22 +24,32 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
-    Materialized(),
-    MySql(),
+    Mz(app_password=""),
+    Materialized(default_replication_factor=2),
+    MySql(
+        additional_args=create_mysql_server_args(
+            server_id="1", is_master=True, binlog_row_metadata="minimal"
+        )
+    ),
     MySql(
         name="mysql-replica-1",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="2", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="2", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     MySql(
         name="mysql-replica-2",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="3", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="3", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     Toxiproxy(),
     Testdrive(
@@ -50,6 +60,21 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        # TODO(def-): Reenable when database-issues#7775 is fixed
+        if name in ("bin-log-manipulations", "short-bin-log-retention"):
+            return
+
+        # clear to avoid issues
+        c.kill("mysql")
+        c.rm("mysql")
+
+        with c.test_case(name):
+            c.workflow(name)
+
     workflows_with_internal_sharding = [
         "disruptions",
         "bin-log-manipulations",
@@ -62,20 +87,7 @@ def workflow_default(c: Composition) -> None:
     print(
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
-    for name in sharded_workflows:
-        if name == "default":
-            continue
-
-        # TODO(def-): Reenable when database-issues#7775 is fixed
-        if name in ("bin-log-manipulations", "short-bin-log-retention"):
-            continue
-
-        # clear to avoid issues
-        c.kill("mysql")
-        c.rm("mysql")
-
-        with c.test_case(name):
-            c.workflow(name)
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_disruptions(c: Composition) -> None:
@@ -118,7 +130,7 @@ def workflow_disruptions(c: Composition) -> None:
 
 def workflow_backup_restore(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenario = backup_restore_mysql
         print(f"--- Running scenario {scenario.__name__}")
@@ -129,7 +141,7 @@ def workflow_backup_restore(c: Composition) -> None:
 
 def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
     ):
         scenarios = [
             reset_master_gtid,
@@ -154,7 +166,10 @@ def workflow_short_bin_log_retention(c: Composition) -> None:
     args = MySql.DEFAULT_ADDITIONAL_ARGS.copy()
     args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
 
-    with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
+    with c.override(
+        Materialized(sanity_restart=False, default_replication_factor=2),
+        MySql(additional_args=args),
+    ):
         scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
 
         scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -179,16 +194,20 @@ def workflow_master_changes(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
         MySql(
             name="mysql-replica-2",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="3", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="3", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c, create_source=False)
@@ -266,11 +285,13 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
     """
 
     with c.override(
-        Materialized(sanity_restart=False),
+        Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c)

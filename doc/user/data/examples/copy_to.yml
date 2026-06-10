@@ -1,0 +1,119 @@
+- name: "syntax-stdout"
+  code: |
+    COPY ( <query> ) TO STDOUT [WITH ( <option> = <val> )];
+  syntax_elements:
+    - name: "`<query>`"
+      description: |
+        The [`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe) query whose results are copied.
+
+    - name: "`WITH ( <option> = <val> )`"
+      description: |
+        Optional. The following `<option>` are supported:
+        | Name |  Description |
+        |------|---------------|
+        `FORMAT` | Sets the output format. Valid output formats are: `TEXT`,`BINARY`, `CSV`.<br><br> Default: `TEXT`.
+
+- name: "syntax-s3"
+  code: |
+    COPY <query> TO '<s3_uri>'
+    WITH (
+      AWS CONNECTION = <connection_name>,
+      FORMAT = <format>
+      [, MAX FILE SIZE = <size> ]
+    );
+  syntax_elements:
+    - name: "`<query>`"
+      description: |
+        The [`SELECT`](/sql/select) query whose results are copied.
+    - name: "`<s3_uri>`"
+      description: |
+        The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to store the output results in.
+    - name: "`AWS CONNECTION = <connection_name>`"
+      description: |
+        The name of the AWS connection to use in the `COPY TO` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page.
+    - name: "`FORMAT = '<format>'`"
+      description: |
+        The file format to write. Valid formats are `'csv'` and `'parquet'`.
+
+        - {{< include-from-yaml data="examples/copy_to"
+        name="csv-writer-settings" >}}
+
+        - {{< include-from-yaml data="examples/copy_to" name="parquet-writer-settings"
+        >}}
+
+    - name: "[`MAX FILE SIZE = <size>`]"
+      description: |
+        Optional. Sets the approximate maximum file size (in bytes) of each file uploaded to the S3 bucket.
+
+- name: "csv-writer-settings"
+  content: |
+    For `'csv'` format, Materialize writes CSV files using the following
+    writer settings:
+
+    | Setting | Value |
+    |---------|-------|
+    | delimiter | `,` |
+    | quote | `"` |
+    | escape | `"` |
+    | header | `false` |
+- name: "parquet-writer-settings"
+  content: |
+    For `'parquet'` format, Materialize writes Parquet files that aim for
+    maximum compatibility with downstream systems. The following Parquet
+    writer settings are used:
+
+    | Setting | Value |
+    |---------|-------|
+    | Writer version | 1.0 |
+    | Compression | `snappy` |
+    | Default column encoding | Dictionary |
+    | Fallback column encoding | Plain |
+    | Dictionary page encoding | Plain |
+    | Dictionary data page encoding | `RLE_DICTIONARY` |
+
+    If you encounter issues trying to ingest Parquet files produced by
+    Materialize into your downstream systems, please [contact our
+    team](/support/).
+
+- name: "parquet-data-types"
+  content: |
+    When using the `parquet` format, Materialize converts the values in the
+    result set to [Apache Arrow](https://arrow.apache.org/docs/index.html),
+    and then serializes this Arrow representation to Parquet. The Arrow schema is
+    embedded in the Parquet file metadata and allows reconstructing the Arrow
+    representation using a compatible reader.
+
+    Materialize also includes [Parquet `LogicalType` annotations](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#metadata)
+    where possible. However, many newer `LogicalType` annotations are not supported
+    in the 1.0 writer version.
+
+    Materialize also embeds its own type information into the Apache Arrow schema.
+    The field metadata in the schema contains an `ARROW:extension:name` annotation
+    to indicate the Materialize native type the field originated from.
+
+    Materialize type | Arrow extension name | [Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
+    ----------------------------------|----------------------------|------------|-------------------|--------------
+    [`bigint`](/sql/types/integer/#bigint-info)         | `materialize.v1.bigint`    | `int64` | `INT64`
+    [`boolean`](/sql/types/boolean/)        | `materialize.v1.boolean`   | `bool` | `BOOLEAN`
+    [`bytea`](/sql/types/bytea/)            | `materialize.v1.bytea`     | `large_binary` | `BYTE_ARRAY`
+    [`date`](/sql/types/date/)              | `materialize.v1.date`      | `date32` | `INT32` | `DATE`
+    [`double precision`](/sql/types/float/#double-precision-info) | `materialize.v1.double`    | `float64` | `DOUBLE`
+    [`integer`](/sql/types/integer/#integer-info)        | `materialize.v1.integer`   | `int32` | `INT32`
+    [`jsonb`](/sql/types/jsonb/)            | `materialize.v1.jsonb`     | `large_utf8` | `BYTE_ARRAY`
+    [`map`](/sql/types/map/)                | `materialize.v1.map`       | `map` (`struct` with fields `keys` and `values`) | Nested | `MAP`
+    [`list`](/sql/types/list/)              | `materialize.v1.list`      | `list` | Nested
+    [`numeric`](/sql/types/numeric/)        | `materialize.v1.numeric`   | `decimal128[38, 10 or max-scale]` | `FIXED_LEN_BYTE_ARRAY`             | `DECIMAL`
+    [`real`](/sql/types/float/#real-info)             | `materialize.v1.real`      | `float32` | `FLOAT`
+    [`smallint`](/sql/types/integer/#smallint-info)       | `materialize.v1.smallint`  | `int16` | `INT32` | `INT(16, true)`
+    [`text`](/sql/types/text/)              | `materialize.v1.text`      | `utf8` or `large_utf8` | `BYTE_ARRAY` | `STRING`
+    [`time`](/sql/types/time/)              | `materialize.v1.time`      | `time64[nanosecond]` | `INT64` | `TIME[isAdjustedToUTC = false, unit = NANOS]`
+    [`uint2`](/sql/types/uint/#uint2-info)             | `materialize.v1.uint2`     | `uint16` | `INT32` | `INT(16, false)`
+    [`uint4`](/sql/types/uint/#uint4-info)             | `materialize.v1.uint4`     | `uint32` | `INT32` | `INT(32, false)`
+    [`uint8`](/sql/types/uint/#uint8-info)             | `materialize.v1.uint8`     | `uint64` | `INT64` | `INT(64, false)`
+    [`timestamp`](/sql/types/timestamp/#timestamp-info)    | `materialize.v1.timestamp` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`
+    [`timestamp with time zone`](/sql/types/timestamp/#timestamp-with-time-zone-info) | `materialize.v1.timestampz` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`
+    [Arrays](/sql/types/array/) (`[]`)      | `materialize.v1.array`     | `struct` with `list` field `items` and `uint8` field `dimensions` | Nested
+    [`uuid`](/sql/types/uuid/)              | `materialize.v1.uuid`      | `fixed_size_binary(16)` | `FIXED_LEN_BYTE_ARRAY`
+    [`oid`](/sql/types/oid/)                      | Unsupported
+    [`interval`](/sql/types/interval/)            | Unsupported
+    [`record`](/sql/types/record/)                | Unsupported

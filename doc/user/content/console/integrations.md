@@ -5,11 +5,11 @@ disable_toc: true
 menu:
   main:
     parent: console
-    weight: 30
+    weight: 24
     identifier: console-integrations
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides an
+The Materialize Console provides an
 **Integrations** page that lists the supported 3rd party integrations,
 specifying:
 

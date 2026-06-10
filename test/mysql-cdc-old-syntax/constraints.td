@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -57,13 +56,25 @@ INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null
 <null> <null> <null>
 
 # Not null constraint optimizes like this:
-? EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
 Target cluster: quickstart
 
-? EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 
@@ -71,7 +82,17 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM pk
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM pk
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.pk_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM pk
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.pk pk_primary_idx=[*** full scan ***]
@@ -83,7 +104,17 @@ Target cluster: quickstart
 
 #
 # Unique converted to keys
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.unique_not_null_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM unique_not_null
 Explained Query (fast path):
   Project (#0, #1)
     ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
@@ -95,7 +126,18 @@ Target cluster: quickstart
 
 #
 # Unique NOT converted to keys because values are nullable
-? EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_nullable
+Explained Query:
+  Distinct project=[#0, #1]
+    Project (#0, #1)
+      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.unique_nullable_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM unique_nullable
 Explained Query:
   Distinct project=[#0, #1]
     Project (#0, #1)

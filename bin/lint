@@ -11,4 +11,4 @@
 #
 # lint — complains about misformatted files and other problems.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.lint.lint "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.lint "$@"

@@ -38,7 +38,7 @@ statement ok
 CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
   SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
   FROM lineitem
   ORDER BY l_linenumber, l_orderkey;
@@ -59,7 +59,7 @@ statement ok
 SET transaction_isolation = 'serializable'
 
 query T multiline
-EXPLAIN PHYSICAL PLAN FOR
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
   SELECT DISTINCT ON(l_linenumber) l_linenumber, l_discount
   FROM lineitem
   ORDER BY l_linenumber, l_orderkey;

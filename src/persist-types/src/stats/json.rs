@@ -10,15 +10,16 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use mz_ore::str::redact;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
 use serde_json::json;
 
-use crate::stats::primitive::{any_primitive_stats, PrimitiveStats};
+use crate::stats::primitive::{PrimitiveStats, any_primitive_stats};
 use crate::stats::{
-    proto_json_stats, DynStats, ProtoJsonMapElementStats, ProtoJsonMapStats, ProtoJsonStats,
-    TrimStats,
+    DynStats, ProtoJsonMapElementStats, ProtoJsonMapStats, ProtoJsonStats, TrimStats,
+    proto_json_stats,
 };
 
 // Aggregate statistics about a column of Json elements.
@@ -69,7 +70,22 @@ impl Default for JsonStats {
 
 impl Debug for JsonStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        match self {
+            JsonStats::None => f.write_str("None"),
+            JsonStats::Mixed => f.write_str("Mixed"),
+            JsonStats::JsonNulls => f.write_str("JsonNulls"),
+            JsonStats::Bools(stats) => f.debug_tuple("Bools").field(stats).finish(),
+            JsonStats::Strings(stats) => f.debug_tuple("Strings").field(stats).finish(),
+            JsonStats::Numerics(stats) => f.debug_tuple("Numerics").field(stats).finish(),
+            JsonStats::Lists => f.write_str("Lists"),
+            JsonStats::Maps(stats) => {
+                let mut f = f.debug_tuple("Maps");
+                for (k, v) in stats.iter() {
+                    f.field(&(redact(k), v.len, &v.stats));
+                }
+                f.finish()
+            }
+        }
     }
 }
 
@@ -242,10 +258,12 @@ mod tests {
 
                 // Assert force keep columns were kept.
                 if let Some(required) = required {
-                    assert!(stats
-                        .elements
-                        .iter()
-                        .any(|element| element.name == required));
+                    assert!(
+                        stats
+                            .elements
+                            .iter()
+                            .any(|element| element.name == required)
+                    );
                 } else {
                     assert!(cost_after <= budget);
                 }

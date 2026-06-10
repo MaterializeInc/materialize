@@ -51,12 +51,14 @@ contains:source "materialize.public.s" already exists
 
 > DROP SOURCE s
 
+> BEGIN
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
 
 > CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-blah-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE VIEW test1 AS SELECT 1;
 
@@ -88,6 +90,54 @@ contains:cannot drop view "test1": still depended upon by view "test2"
 > DROP VIEW test2;
 
 > DROP VIEW test1;
+
+# Test that a single DROP statement can drop an object together with its
+# dependents (without CASCADE): a dependent that is itself being dropped in the
+# same statement must not block the drop.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test1, test2, test3;
+
+# The order in which the objects are named must not matter.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test3, test1, test2;
+
+# Dropping an intermediate object together with its dependent still works while
+# leaving an upstream object in place.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+> CREATE VIEW test3 AS SELECT * FROM test2;
+
+> DROP VIEW test2, test3;
+
+# test1 has no dependents anymore, so it drops on its own.
+
+> DROP VIEW test1;
+
+# But omitting a dependent from the statement still errors without CASCADE.
+
+> CREATE VIEW test1 AS SELECT 1;
+
+> CREATE VIEW test2 AS SELECT * FROM test1;
+
+! DROP VIEW test1;
+contains:cannot drop view "test1": still depended upon by view "test2"
+
+> DROP VIEW test1 CASCADE;
 
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named view.
@@ -122,12 +172,14 @@ contains:unknown catalog item 'test2'
 ! DROP VIEW test4;
 contains:unknown catalog item 'test4'
 
+> BEGIN
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE SINK s1
   IN CLUSTER ${arg.single-replica-cluster}
@@ -160,7 +212,7 @@ contains:sink "materialize.public.s1" already exists
 
 # Test that sinks cannot be depended upon.
 ! CREATE VIEW v2 AS SELECT * FROM s1;
-contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 > CREATE VIEW v2 AS SELECT X from s_tbl;
 
@@ -171,7 +223,7 @@ contains:catalog item 'materialize.public.s1' is a sink and so cannot be depende
 # Test that indexes cannot be depended upon
 
 ! CREATE VIEW v3 as SELECT * FROM i1;
-contains:catalog item 'materialize.public.i1' is an index and so cannot be depended upon
+contains:index materialize.public.i1 cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 
@@ -273,12 +325,14 @@ contains:unknown catalog item 'i4'
 
 # Materialized source tests
 
+> BEGIN
 > CREATE SOURCE s3
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s3_tbl FROM SOURCE s3 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
 > CREATE INDEX j1 on s3_tbl(ascii(y))
@@ -298,12 +352,14 @@ contains:unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
+> BEGIN
 > CREATE SOURCE s4
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s4_tbl FROM SOURCE s4 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE INDEX j2 on s4_tbl(x+2);
 
@@ -337,12 +393,14 @@ contains:unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
+> BEGIN
 > CREATE SOURCE s5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s5_tbl FROM SOURCE s5 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON s5_tbl;
 

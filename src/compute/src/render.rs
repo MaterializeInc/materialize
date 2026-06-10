@@ -113,50 +113,61 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection, Data};
-use futures::channel::oneshot;
+use differential_dataflow::operators::arrange::ShutdownButton;
+use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::trace::{BatchReader, TraceReader};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
+use futures::channel::oneshot;
+use itertools::Itertools;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
-use mz_compute_types::plan::LirId;
-use mz_expr::{EvalError, Id};
-use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_compute_types::dyncfgs::{
+    COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
+    COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+};
+use mz_compute_types::plan::render_plan::{
+    self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
+};
+use mz_compute_types::plan::{ArrangementStrategy, LirId};
+use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
+use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::communication::Allocate;
-use timely::container::columnation::Columnation;
+use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
+use mz_timely_util::scope_label::ScopeExt;
+use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
-use timely::order::Product;
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::operators::vec::{BranchWhen, Filter};
+use timely::dataflow::operators::{Capability, Operator, Probe, probe};
+use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{ComputeEvent, LirMetadata, LogDataflowErrors};
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
+use crate::extensions::temporal_bucket::TemporalBucketing;
+use crate::logging::compute::{
+    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
-use crate::render::continual_task::ContinualTaskCtx;
-use crate::typedefs::{ErrSpine, KeyBatcher};
+use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::errors::DataflowErrorSer;
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
 pub mod context;
-pub(crate) mod continual_task;
-mod errors;
+pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
@@ -167,15 +178,26 @@ mod top_k;
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
 
+/// Guard that presses a differential [`ShutdownButton`] when dropped.
+///
+/// Dropping this guard releases the imported trace's capabilities.
+struct PressOnDrop<T>(ShutdownButton<T>);
+
+impl<T> Drop for PressOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.press();
+    }
+}
+
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_compute_dataflow(
+    timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
+    dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -200,58 +222,82 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.logger_for("timely").map(Into::into);
+    let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
+    let subscribe_snapshot_optimization =
+        SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        // TODO(ct3): This should be a config of the source instead, but at least try
-        // to contain the hacks.
-        let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
+        let scope = scope.with_label();
 
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         let mut imported_sources = Vec::new();
-        let mut tokens = BTreeMap::new();
+        let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
+        let output_probe = MzProbeHandle::default();
+
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
+            for (source_id, import) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
-                    let mut mfp = source.arguments.operators.clone().map(|ops| {
+                    let mut read_schema = None;
+                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
+                        // If enabled, we read from Persist with a `RelationDesc` that
+                        // omits uneeded columns.
+                        if apply_demands {
+                            let demands = ops.demand();
+                            let new_desc = import
+                                .desc
+                                .storage_metadata
+                                .relation_desc
+                                .apply_demand(&demands);
+                            let new_arity = demands.len();
+                            let remap: BTreeMap<_, _> = demands
+                                .into_iter()
+                                .enumerate()
+                                .map(|(new, old)| (old, new))
+                                .collect();
+                            ops.permute_fn(|old_idx| remap[&old_idx], new_arity);
+                            read_schema = Some(new_desc);
+                        }
+
                         mz_expr::MfpPlan::create_from(ops)
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode = SnapshotMode::Include;
-                    let mut suppress_early_progress_as_of = dataflow.as_of.clone();
-                    let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
-                    if let Some(x) = ct_source_transformer.as_ref() {
-                        snapshot_mode = x.snapshot_mode();
-                        suppress_early_progress_as_of = suppress_early_progress_as_of
-                            .map(|as_of| x.suppress_early_progress_as_of(as_of));
-                    }
+                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
+                    {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
+                    let suppress_early_progress_as_of = dataflow.as_of.clone();
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                        inner,
-                        *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        &compute_state.worker_config,
-                        source.storage_metadata.clone(),
-                        dataflow.as_of.clone(),
-                        snapshot_mode,
-                        until.clone(),
-                        mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
-                        |error| panic!("compute_import: {error}"),
-                    );
+                    let (mut ok_stream, err_stream, token) =
+                        persist_source::persist_source::<DataflowErrorSer>(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            import.desc.storage_metadata.clone(),
+                            read_schema,
+                            dataflow.as_of.clone(),
+                            snapshot_mode,
+                            until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            start_signal.clone().into_send_future(),
+                            ErrorHandler::Halt("compute_import"),
+                        );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -264,36 +310,46 @@ pub fn build_compute_dataflow<A: Allocate>(
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
+                    if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
+                        // Apply logical backpressure to the source.
+                        let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
+                            .get(&compute_state.worker_config);
+                        let slack = COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK
+                            .get(&compute_state.worker_config)
+                            .as_millis()
+                            .try_into()
+                            .expect("must fit");
+
+                        let stream = ok_stream.limit_progress(
+                            output_probe.clone(),
+                            slack,
+                            limit,
+                            import.upper.clone(),
+                            name.clone(),
+                        );
+                        ok_stream = stream;
+                    }
+
                     // Attach a probe reporting the input frontier.
                     let input_probe =
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
 
-                    // The `suppress_early_progress` operator and the input
-                    // probe both want to work on the untransformed ct input,
-                    // make sure this stays after them.
-                    let (ok_stream, err_stream) = match ct_source_transformer {
-                        None => (ok_stream, err_stream),
-                        Some(ct_source_transformer) => {
-                            let (oks, errs, ct_times) = ct_source_transformer
-                                .transform(ok_stream.as_collection(), err_stream.as_collection());
-                            // TODO(ct3): Ideally this would be encapsulated by
-                            // ContinualTaskCtx, but the types are tricky.
-                            ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
-                            (oks.inner, errs.inner)
-                        }
-                    };
-
                     let (oks, errs) = (
-                        ok_stream.as_collection().leave_region().leave_region(),
-                        err_stream.as_collection().leave_region().leave_region(),
+                        ok_stream
+                            .as_collection()
+                            .leave_region(region)
+                            .leave_region(scope),
+                        err_stream
+                            .as_collection()
+                            .leave_region(region)
+                            .leave_region(scope),
                     );
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
-                    let token: Rc<dyn Any> = Rc::new(token);
-                    tokens.insert(*source_id, token);
+                    tokens.insert(*source_id, Rc::new(token));
                 });
             }
         });
@@ -322,30 +378,42 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        &idx.typ,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
-
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
                             let depends = object.plan.depends();
+                            let in_let = object.plan.is_recursive();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_recursive_plan(object.id, 0, object.plan)
-                                .leave_region()
+                                .render_recursive_plan(
+                                    object.id,
+                                    0,
+                                    object.plan,
+                                    // recursive plans _must_ have bodies in a let
+                                    BindingInfo::Body { in_let },
+                                )
+                                .leave_region(context.scope)
                         },
                     );
                     let global_id = object.id;
@@ -364,11 +432,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
                     context.export_index_iterative(
+                        scope,
                         compute_state,
                         &tokens,
                         dependencies,
                         idx_id,
                         &idx,
+                        &output_probe,
                     );
                 }
 
@@ -381,7 +451,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
+                        scope,
                     );
                 }
             });
@@ -407,22 +478,27 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        &idx.typ,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
-
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
@@ -430,7 +506,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             context
                                 .enter_region(region, Some(&depends))
                                 .render_plan(object.id, object.plan)
-                                .leave_region()
+                                .leave_region(context.scope)
                         },
                     );
                     let global_id = object.id;
@@ -447,7 +523,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        idx_id,
+                        &idx,
+                        &output_probe,
+                    );
                 }
 
                 // Export declared sinks.
@@ -459,28 +542,56 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
+                        scope,
                     );
                 }
             });
         }
-    })
+    });
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
-impl<'g, G, T> Context<Child<'g, G, T>>
+impl<'g, T> Context<'g, T>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: Refines<G::Timestamp> + RenderTimestamp,
+    T: Refines<mz_repr::Timestamp> + RenderTimestamp,
 {
-    pub(crate) fn import_index(
+    /// Import the collection from the arrangement, discarding batches from the snapshot.
+    /// (This does not guarantee that no records from the snapshot are included; the assumption is
+    /// that we'll filter those out later if necessary.)
+    fn import_filtered_index_collection<
+        'outer,
+        Tr: TraceReader<Time = mz_repr::Timestamp> + Clone,
+        V: Data,
+    >(
+        &self,
+        arranged: Arranged<'outer, Tr>,
+        start_signal: StartSignal,
+        mut logic: impl FnMut(Tr::Key<'_>, Tr::Val<'_>) -> V + 'static,
+    ) -> VecCollection<'g, T, V, Tr::Diff>
+    where
+        // This is implied by the fact that the outer timestamp = mz_repr::Timestamp, but it's essential
+        // for our batch-level filtering to be safe, so we document it here regardless.
+        mz_repr::Timestamp: TotalOrder,
+    {
+        let oks = arranged.stream.with_start_signal(start_signal).filter({
+            let as_of = self.as_of_frontier.clone();
+            move |b| !<Antichain<mz_repr::Timestamp> as PartialOrder>::less_equal(b.upper(), &as_of)
+        });
+        Arranged::<'outer, Tr>::flat_map_batches(oks, move |a, b| [logic(a, b)]).enter(self.scope)
+    }
+
+    pub(crate) fn import_index<'outer>(
         &mut self,
+        outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        typ: &ReprRelationType,
+        snapshot_mode: SnapshotMode,
         start_signal: StartSignal,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
@@ -490,39 +601,70 @@ where
             );
 
             let token = traces.to_drop().clone();
-            // Import the specialized trace handle as a specialized arrangement import.
-            //
-            // Note that we incorporate probe setup as part of this process, since a specialized
-            // arrangement import requires us to enter a scope, but we can only enter after the
-            // probe is attached.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier(
-                &self.scope,
+
+            let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
+                outer,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
-                input_probe,
             );
+
+            oks.stream = oks.stream.probe_with(&input_probe);
+
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                &self.scope.parent,
+                outer,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let err_arranged = err_arranged.enter(&self.scope);
 
-            let ok_arranged = ok_arranged.with_start_signal(start_signal.clone());
-            let err_arranged = err_arranged.with_start_signal(start_signal);
-
-            self.update_id(
-                Id::Global(idx.on_id),
-                CollectionBundle::from_expressions(
-                    idx.key.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
-                ),
-            );
+            let bundle = match snapshot_mode {
+                SnapshotMode::Include => {
+                    let ok_arranged = oks
+                        .enter(self.scope)
+                        .with_start_signal(start_signal.clone());
+                    let err_arranged = err_arranged
+                        .enter(self.scope)
+                        .with_start_signal(start_signal);
+                    CollectionBundle::from_expressions(
+                        idx.key.clone(),
+                        ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    )
+                }
+                SnapshotMode::Exclude => {
+                    // When we import an index without a snapshot, we have two balancing considerations:
+                    // - It's easy to filter out irrelevant batches from the stream, but hard to filter them out from an arrangement.
+                    //   (The `TraceFrontier` wrapper allows us to set an "until" frontier, but not a lower.)
+                    // - We do not actually need to reference the arrangement in this dataflow, since all operators that use the arrangement
+                    //   (joins, reduces, etc.) also require the snapshot data.
+                    // So: when the snapshot is excluded, we import only the (filtered) collection itself and ignore the arrangement.
+                    let oks = {
+                        let mut datums = DatumVec::new();
+                        let (permutation, _thinning) =
+                            permutation_for_arrangement(&idx.key, typ.arity());
+                        self.import_filtered_index_collection(
+                            oks,
+                            start_signal.clone(),
+                            move |k: DatumSeq, v: DatumSeq| {
+                                let mut datums_borrow = datums.borrow();
+                                datums_borrow.extend(k);
+                                datums_borrow.extend(v);
+                                SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
+                            },
+                        )
+                    };
+                    let errs = self.import_filtered_index_collection(
+                        err_arranged,
+                        start_signal,
+                        |e, _| e.clone(),
+                    );
+                    CollectionBundle::from_collections(oks, errs)
+                }
+            };
+            self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
-                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+                Rc::new((PressOnDrop(ok_button), PressOnDrop(err_button), token)),
             );
         } else {
             panic!(
@@ -535,10 +677,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+impl<'g> Context<'g, mz_repr::Timestamp> {
     pub(crate) fn export_index(
         &self,
         compute_state: &mut ComputeState,
@@ -546,6 +685,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -566,32 +706,26 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    let token = Rc::new(());
-                    let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
-                        Weak::clone(&shutdown_token),
                     );
                     errs.stream = errs.stream.expire_stream_at(
                         &format!("{}_export_index_errs", self.debug_name),
                         expiration,
-                        shutdown_token,
                     );
-                    needed_tokens.push(token);
                 }
 
-                // Obtain a specialized handle matching the specialized arrangement.
-                let oks_trace = oks.trace_handle();
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -618,18 +752,19 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G, T> Context<Child<'g, G, T>>
+impl<'g, T> Context<'g, T>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
 {
-    pub(crate) fn export_index_iterative(
+    pub(crate) fn export_index_iterative<'outer>(
         &self,
+        outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -647,41 +782,51 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                // TODO: The following as_collection/leave/arrange sequence could be optimized.
+                //   * Combine as_collection and leave into a single function.
+                //   * Use columnar to extract columns from the batches to implement leave.
+                let mut oks = oks
+                    .as_collection(|k, v| (k.to_row(), v.to_row()))
+                    .leave(outer)
+                    .mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        _,
+                    >(
+                        "Arrange export iterative",
+                    );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave()
-                    .mz_arrange("Arrange export iterative err");
+                    .leave(outer)
+                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                        "Arrange export iterative err",
+                    );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    let token = Rc::new(());
-                    let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
-                        Weak::clone(&shutdown_token),
                     );
                     errs.stream = errs.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_err", self.debug_name),
                         expiration,
-                        shutdown_token,
                     );
-                    needed_tokens.push(token);
                 }
 
-                let oks_trace = oks.trace_handle();
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -704,93 +849,83 @@ where
             }
         };
     }
-
-    /// Dispatches the rearranging of an arrangement coming from an iterative scope
-    /// according to specialized key-value arrangement types.
-    fn dispatch_rearrange_iterative(
-        &self,
-        oks: MzArrangement<Child<'g, G, T>>,
-        name: &str,
-    ) -> MzArrangement<G> {
-        match oks {
-            MzArrangement::RowRow(inner) => {
-                let oks = inner
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .leave()
-                    .mz_arrange(name);
-                MzArrangement::RowRow(oks)
-            }
-        }
-    }
 }
 
-impl<G> Context<G>
-where
-    G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
-{
+/// Information about bindings, tracked in `render_recursive_plan` and
+/// `render_plan`, to be passed to `render_letfree_plan`.
+///
+/// `render_letfree_plan` uses these to produce nice output (e.g., `With ...
+/// Returning ...`) for local bindings in the `mz_lir_mapping` output.
+enum BindingInfo {
+    Body { in_let: bool },
+    Let { id: LocalId, last: bool },
+    LetRec { id: LocalId, last: bool },
+}
+
+impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
-    /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
+    /// This method allows for `plan` to contain [`RecBind`]s, and is planned
     /// in the context of `level` pre-existing iteration coordinates.
     ///
-    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each
+    /// This method recursively descends [`RecBind`] values, establishing nested scopes for each
     /// and establishing the appropriate recursive dependencies among the bound variables.
-    /// Once non-`LetRec` nodes are reached it calls in to `render_plan` which will error if
-    /// further `LetRec` variants are found.
+    /// Once all [`RecBind`]s have been rendered it calls in to `render_plan` which will error if
+    /// further [`RecBind`]s are found.
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(
+    fn render_recursive_plan(
         &mut self,
         object_id: GlobalId,
         level: usize,
-        plan: FlatPlan,
-    ) -> CollectionBundle<G> {
-        // First extract any let bindings that may wrap a letrec expression.
-        // This code allows us to handle plans that violate invariant (4).
-        // We do this here rather than in front of the recursive call below,
-        // in anticipation of recursive plans that start with let bindings,
-        // not just plans that have lets between recursive stages.
-        let (values, plan) = plan.split_lets();
-        for (id, value) in values {
-            let bundle = self
-                .scope
-                .clone()
-                .region_named(&format!("Binding({:?})", id), |region| {
-                    let depends = value.depends();
-                    self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(object_id, value)
-                        .leave_region()
-                });
-            self.insert_id(Id::Local(id), bundle);
-        }
+        plan: RenderPlan,
+        binding: BindingInfo,
+    ) -> CollectionBundle<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
+        for BindStage { lets, recs } in plan.binds {
+            // Render the let bindings in order.
+            let mut let_iter = lets.into_iter().peekable();
+            while let Some(LetBind { id, value }) = let_iter.next() {
+                let bundle =
+                    self.scope
+                        .clone()
+                        .region_named(&format!("Binding({:?})", id), |region| {
+                            let depends = value.depends();
+                            let last = let_iter.peek().is_none();
+                            let binding = BindingInfo::Let { id, last };
+                            self.enter_region(region, Some(&depends))
+                                .render_letfree_plan(object_id, value, binding)
+                                .leave_region(self.scope)
+                        });
+                self.insert_id(Id::Local(id), bundle);
+            }
 
-        if plan.is_recursive() {
-            let (values, body) = plan.split_recursive();
-            let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
+            let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
+            // Define variables for rec bindings.
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
-            for id in ids.iter() {
+            for id in rec_ids.iter() {
                 use differential_dataflow::dynamic::feedback_summary;
-                use differential_dataflow::operators::iterate::Variable;
                 let inner = feedback_summary::<u64>(level + 1, 1);
-                let oks_v = Variable::new(
-                    &mut self.scope,
-                    Product::new(Default::default(), inner.clone()),
-                );
-                let err_v = Variable::new(&mut self.scope, Product::new(Default::default(), inner));
+                let (oks_v, oks_collection) =
+                    Variable::new(self.scope, Product::new(Default::default(), inner.clone()));
+                let (err_v, err_collection) =
+                    Variable::new(self.scope, Product::new(Default::default(), inner));
 
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                    CollectionBundle::from_collections(oks_collection, err_collection),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the bindings.
-            for (id, value, limit) in values {
-                let bundle = self.render_recursive_plan(object_id, level + 1, value);
+            // Now render each of the rec bindings.
+            let mut rec_iter = recs.into_iter().peekable();
+            while let Some(RecBind { id, value, limit }) = rec_iter.next() {
+                let last = rec_iter.peek().is_none();
+                let binding = BindingInfo::LetRec { id, last };
+                let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
@@ -798,10 +933,10 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    oks = oks.with_token(Weak::clone(token));
-                }
+                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    oks,
+                    "LetRecConsolidation",
+                );
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -813,17 +948,15 @@ where
                             // The pointstamp starts counting from 0, so we need to add 1.
                             iteration_index + 1 >= limit.max_iters.into()
                         });
-                    oks = Collection::new(in_limit);
+                    oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(&Collection::new(over_limit).map(move |_data| {
-                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                        err = err.concat(VecCollection::new(over_limit).map(move |_data| {
+                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
-                            )))
+                            ))
                         }));
                     }
                 }
-
-                oks_v.set(&oks);
 
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
@@ -831,20 +964,26 @@ where
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
-                let mut errs = err
-                    .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
-                    .mz_reduce_abelian::<_, _, _, ErrSpine<_, _>>(
+                let errs = err
+                    .mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >(
+                        "Arrange recursive err",
+                    )
+                    .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Distinct recursive err",
-                        move |_k, _s, t| t.push(((), 1)),
+                        move |_k, _s, t| t.push(((), Diff::ONE)),
                     )
                     .as_collection(|k, _| k.clone());
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    errs = errs.with_token(Weak::clone(token));
-                }
-                err_v.set(&errs);
+
+                oks_v.set(oks);
+                err_v.set(errs);
             }
-            // Now extract each of the bindings into the outer scope.
-            for id in ids.into_iter() {
+            // Now extract each of the rec bindings into the outer scope.
+            for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
                 self.insert_id(
@@ -855,94 +994,131 @@ where
                     ),
                 );
             }
-
-            self.render_recursive_plan(object_id, level, body)
-        } else {
-            self.render_plan(object_id, plan)
         }
+
+        self.render_letfree_plan(object_id, plan.body, binding)
     }
 }
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
-    /// Renders a plan to a differential dataflow, producing the collection of results.
-    ///
-    /// The plan must _not_ contain any `LetRec` nodes. Recursive plans must be rendered using
-    /// `render_recursive_plan` instead.
+impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
+    /// Renders a non-recursive plan to a differential dataflow, producing the collection of
+    /// results.
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
-        let (values, body) = plan.split_lets();
-        for (id, value) in values {
-            let bundle = self
-                .scope
-                .clone()
-                .region_named(&format!("Binding({:?})", id), |region| {
-                    let depends = value.depends();
-                    self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(object_id, value)
-                        .leave_region()
-                });
-            self.insert_id(Id::Local(id), bundle);
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given plan contains any [`RecBind`]s. Recursive plans must be rendered using
+    /// `render_recursive_plan` instead.
+    fn render_plan(
+        &mut self,
+        object_id: GlobalId,
+        plan: RenderPlan,
+    ) -> CollectionBundle<'scope, T> {
+        let mut in_let = false;
+        for BindStage { lets, recs } in plan.binds {
+            assert!(recs.is_empty());
+
+            let mut let_iter = lets.into_iter().peekable();
+            while let Some(LetBind { id, value }) = let_iter.next() {
+                // if we encounter a single let, the body is in a let
+                in_let = true;
+                let bundle =
+                    self.scope
+                        .clone()
+                        .region_named(&format!("Binding({:?})", id), |region| {
+                            let depends = value.depends();
+                            let last = let_iter.peek().is_none();
+                            let binding = BindingInfo::Let { id, last };
+                            self.enter_region(region, Some(&depends))
+                                .render_letfree_plan(object_id, value, binding)
+                                .leave_region(self.scope)
+                        });
+                self.insert_id(Id::Local(id), bundle);
+            }
         }
 
         self.scope.clone().region_named("Main Body", |region| {
-            let depends = body.depends();
+            let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(object_id, body)
-                .leave_region()
+                .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
+                .leave_region(self.scope)
         })
     }
 
-    /// Renders a plan to a differential dataflow, producing the collection of results.
-    ///
-    /// The plan must _not_ contain any `Let` or `LetRec` nodes.
-    fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
-        let (mut steps, root_id, topological_order) = plan.destruct();
+    /// Renders a let-free plan to a differential dataflow, producing the collection of results.
+    fn render_letfree_plan(
+        &self,
+        object_id: GlobalId,
+        plan: LetFreePlan,
+        binding: BindingInfo,
+    ) -> CollectionBundle<'scope, T> {
+        let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
         // Mappings to send along.
         // To save overhead, we'll only compute mappings when we need to,
-        // which means things get gated behind options. Unfortuantely, that means we
+        // which means things get gated behind options. Unfortunately, that means we
         // have several `Option<...>` types that are _all_ `Some` or `None` together,
         // but there's no convenient way to express the invariant.
         let should_compute_lir_metadata = self.compute_logger.is_some();
         let mut lir_mapping_metadata = if should_compute_lir_metadata {
-            Some(Vec::with_capacity(steps.len()))
+            Some(Vec::with_capacity(nodes.len()))
         } else {
             None
         };
 
-        for lir_id in topological_order {
-            let step = steps.remove(&lir_id).unwrap();
+        let mut topo_iter = topological_order.into_iter().peekable();
+        while let Some(lir_id) = topo_iter.next() {
+            let node = nodes.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
             // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
             // in some other structure and have that structure impl ExprHumanizer
             let metadata = if should_compute_lir_metadata {
-                let operator: Box<str> = step.node.humanize(&DummyHumanizer).into();
-                let operator_id_start = self.scope.peek_identifier();
+                let operator = node.expr.humanize(&DummyHumanizer);
+
+                // mark the last operator in topo order with any binding decoration
+                let operator = if topo_iter.peek().is_none() {
+                    match &binding {
+                        BindingInfo::Body { in_let: true } => format!("Returning {operator}"),
+                        BindingInfo::Body { in_let: false } => operator,
+                        BindingInfo::Let { id, last: true } => {
+                            format!("With {id} = {operator}")
+                        }
+                        BindingInfo::Let { id, last: false } => {
+                            format!("{id} = {operator}")
+                        }
+                        BindingInfo::LetRec { id, last: true } => {
+                            format!("With Recursive {id} = {operator}")
+                        }
+                        BindingInfo::LetRec { id, last: false } => {
+                            format!("{id} = {operator}")
+                        }
+                    }
+                } else {
+                    operator
+                };
+
+                let operator_id_start = self.scope.worker().peek_identifier();
                 Some((operator, operator_id_start))
             } else {
                 None
             };
 
-            let mut bundle = self.render_plan_node(step.node, &collections);
+            let mut bundle = self.render_plan_expr(node.expr, &collections);
 
             if let Some((operator, operator_id_start)) = metadata {
-                let operator_id_end = self.scope.peek_identifier();
+                let operator_id_end = self.scope.worker().peek_identifier();
                 let operator_span = (operator_id_start, operator_id_end);
 
                 if let Some(lir_mapping_metadata) = &mut lir_mapping_metadata {
                     lir_mapping_metadata.push((
                         lir_id,
-                        LirMetadata::new(operator, step.parent, step.nesting, operator_span),
+                        LirMetadata::new(operator, node.parent, node.nesting, operator_span),
                     ))
                 }
             }
@@ -953,27 +1129,26 @@ where
         }
 
         if let Some(lir_mapping_metadata) = lir_mapping_metadata {
-            let mapping: Box<[(LirId, LirMetadata)]> = lir_mapping_metadata.into();
-            self.log_lir_mapping(object_id, mapping);
+            self.log_lir_mapping(object_id, lir_mapping_metadata);
         }
 
         collections
             .remove(&root_id)
-            .expect("FlatPlan invariant (1)")
+            .expect("LetFreePlan invariant (1)")
     }
 
-    /// Renders a plan node, producing the collection of results.
+    /// Renders a [`render_plan::Expr`], producing the collection of results.
     ///
     /// # Panics
     ///
-    /// Panics if any of the node's inputs is not found in `collections`.
+    /// Panics if any of the expr's inputs is not found in `collections`.
     /// Callers must ensure that input nodes have been rendered previously.
-    fn render_plan_node(
-        &mut self,
-        node: FlatPlanNode,
-        collections: &BTreeMap<LirId, CollectionBundle<G>>,
-    ) -> CollectionBundle<G> {
-        use FlatPlanNode::*;
+    fn render_plan_expr(
+        &self,
+        expr: render_plan::Expr,
+        collections: &BTreeMap<LirId, CollectionBundle<'scope, T>>,
+    ) -> CollectionBundle<'scope, T> {
+        use render_plan::Expr::*;
 
         let expect_input = |id| {
             collections
@@ -982,7 +1157,7 @@ where
                 .unwrap_or_else(|| panic!("missing input collection: {id}"))
         };
 
-        match node {
+        match expr {
             Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -1000,14 +1175,14 @@ where
                         if !until.less_equal(&time) {
                             Some((
                                 row,
-                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
+                                <T as Refines<mz_repr::Timestamp>>::to_inner(time),
                                 diff,
                             ))
                         } else {
                             None
                         }
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(self.scope)
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -1016,12 +1191,12 @@ where
                     .into_iter()
                     .map(move |e| {
                         (
-                            DataflowError::from(e),
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
-                            1,
+                            DataflowErrorSer::from(e),
+                            <T as Refines<mz_repr::Timestamp>>::to_inner(error_time),
+                            Diff::ONE,
                         )
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(self.scope)
                     .as_collection();
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
@@ -1035,10 +1210,11 @@ where
                 match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
-                        assert!(keys
-                            .arranged
-                            .iter()
-                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                        assert!(
+                            keys.arranged
+                                .iter()
+                                .all(|(key, _, _)| collection.arranged.contains_key(key))
+                        );
                         assert!(keys.raw <= collection.collection.is_some());
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {
@@ -1051,21 +1227,20 @@ where
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
+                            &self.config_set,
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            None,
+                            self.until.clone(),
+                            &self.config_set,
+                        );
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
-            }
-            Let { .. } => {
-                unreachable!("Let should have been extracted and rendered");
-            }
-            LetRec { .. } => {
-                unreachable!("LetRec should have been extracted and rendered");
             }
             Mfp {
                 input,
@@ -1077,20 +1252,24 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    let (oks, errs) = input.as_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        &self.config_set,
+                    );
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
             FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after: mfp,
                 input_key,
+                input,
+                exprs,
+                func,
+                mfp_after: mfp,
             } => {
                 let input = expect_input(input);
-                self.render_flat_map(input, func, exprs, mfp, input_key)
+                self.render_flat_map(input_key, input, exprs, func, mfp)
             }
             Join { inputs, plan } => {
                 let inputs = inputs.into_iter().map(expect_input).collect();
@@ -1104,23 +1283,35 @@ where
                 }
             }
             Reduce {
+                input_key,
                 input,
                 key_val_plan,
                 plan,
-                input_key,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 let input = expect_input(input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-                self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
+                self.render_reduce(
+                    input_key,
+                    input,
+                    key_val_plan,
+                    plan,
+                    mfp_option,
+                    temporal_bucketing_strategy,
+                )
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
                 let input = expect_input(input);
-                self.render_topk(input, top_k_plan)
+                self.render_topk(input, top_k_plan, temporal_bucketing_strategy)
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None);
+                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Threshold {
@@ -1133,46 +1324,81 @@ where
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
-                for input in inputs.into_iter() {
-                    let (os, es) = expect_input(input).as_specific_collection(None);
+                for (input, strategy) in inputs.into_iter().zip_eq(temporal_bucketing_strategies) {
+                    let (os, es) =
+                        expect_input(input).as_specific_collection(None, &self.config_set);
+                    // Apply per-input temporal bucketing. No-op for `Direct`.
+                    // Only consolidating Unions carry non-`Direct` strategies;
+                    // see the `Union` arm of `lower_mir_expr_stack_safe`.
+                    let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing)
+                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+                    {
+                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                            .get(&self.config_set)
+                            .try_into()
+                            .expect("must fit");
+                        T::maybe_apply_temporal_bucketing(
+                            os.inner,
+                            self.as_of_frontier.clone(),
+                            summary,
+                        )
+                    } else {
+                        os
+                    };
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
+                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        oks,
+                        "UnionConsolidation",
+                    )
                 }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
+                let errs = differential_dataflow::collection::concatenate(self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
             ArrangeBy {
-                input,
-                forms: keys,
                 input_key,
+                input,
                 input_mfp,
+                forms: keys,
+                strategy,
             } => {
                 let input = expect_input(input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.as_of_frontier.clone(),
+                    self.until.clone(),
+                    &self.config_set,
+                    strategy,
+                )
             }
         }
     }
 
-    fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
+    fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::DataflowGlobal { id, global_id });
+            logger.log(&ComputeEvent::DataflowGlobal(DataflowGlobal {
+                dataflow_index,
+                global_id,
+            }));
         }
     }
 
-    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
+    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Vec<(LirId, LirMetadata)>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirMapping { global_id, mapping });
+            logger.log(&ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
     }
 
-    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: LirId) {
+    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<'scope, T>, lir_id: LirId) {
         // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
         // which we should attach the logging operator.
         //
@@ -1195,15 +1421,13 @@ where
         match bundle.arranged.values_mut().next() {
             Some(arrangement) => {
                 use ArrangementFlavor::*;
-                use MzArrangement as A;
-                use MzArrangementImport as AI;
 
                 match arrangement {
-                    Local(A::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    Local(a, _) => {
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
-                    Trace(_, AI::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    Trace(_, a, _) => {
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                 }
             }
@@ -1212,19 +1436,25 @@ where
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
                 *oks = stream.as_collection();
             }
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(
+        &self,
+        stream: Stream<'scope, T, D>,
+        lir_id: LirId,
+    ) -> Stream<'scope, T, D>
     where
-        D: Clone + 'static,
+        D: timely::Container + Clone + 'static,
     {
-        let Some(logger) = self.hydration_logger.clone() else {
+        let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled
         };
+
+        let export_ids = self.export_ids.clone();
 
         // Convert the dataflow as-of into a frontier we can compare with input frontiers.
         //
@@ -1243,9 +1473,16 @@ where
         let name = format!("LogOperatorHydration ({lir_id})");
         stream.unary_frontier(Pipeline, &name, |_cap, _info| {
             let mut hydrated = false;
-            logger.log(lir_id, hydrated);
 
-            move |input, output| {
+            for &export_id in &export_ids {
+                logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
+                    export_id,
+                    lir_id,
+                    hydrated,
+                }));
+            }
+
+            move |(input, frontier), output| {
                 // Pass through inputs.
                 input.for_each(|cap, data| {
                     output.session(&cap).give_container(data);
@@ -1255,10 +1492,16 @@ where
                     return;
                 }
 
-                let frontier = input.frontier().frontier();
-                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier) {
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
                     hydrated = true;
-                    logger.log(lir_id, hydrated);
+
+                    for &export_id in &export_ids {
+                        logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
+                            export_id,
+                            lir_id,
+                            hydrated,
+                        }));
+                    }
                 }
             }
         })
@@ -1267,7 +1510,7 @@ where
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
+pub trait RenderTimestamp: MzTimestamp + Default + Refines<mz_repr::Timestamp> {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -1284,6 +1527,24 @@ pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + C
     /// Steps the timestamp back so that logical compaction to the output will
     /// not conflate `self` with any historical times.
     fn step_back(&self) -> Self;
+}
+
+/// Apply temporal bucketing to a stream when the timestamp type supports it.
+///
+/// Sibling to [`RenderTimestamp`]: bucketing is an arrangement-time concern, not a
+/// general property of a render timestamp, so the dispatch lives in its own trait.
+/// Total-ordered timestamps perform real bucketing; partially-ordered timestamps
+/// (e.g. `Product<…>` in iterative scopes) implement this as a no-op.
+pub trait MaybeBucketByTime: Timestamp {
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1304,6 +1565,23 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
+    }
+}
+
+impl MaybeBucketByTime for mz_repr::Timestamp {
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable,
+    {
+        stream
+            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
+            .as_collection()
     }
 }
 
@@ -1328,11 +1606,27 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
         let inner = self.inner.clone();
-        let mut vec = inner.into_vec();
+        let mut vec = inner.into_inner();
         for item in vec.iter_mut() {
             *item = item.saturating_sub(1);
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
+    }
+}
+
+impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
+        _as_of: Antichain<mz_repr::Timestamp>,
+        _summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable,
+    {
+        // TODO: Implement bucketing on outer timestamp for iterative scopes.
+        stream.as_collection()
     }
 }
 
@@ -1373,6 +1667,15 @@ impl StartSignal {
         self.token_ref.strong_count() == 0
     }
 
+    /// Returns a Send-safe future that completes when the signal fires.
+    ///
+    /// Unlike `StartSignal` itself, the returned future does not retain a reference to the token,
+    /// so it cannot be used for `drop_on_fire` or `has_fired` checks.
+    pub fn into_send_future(self) -> impl Future<Output = ()> + Send {
+        use futures::FutureExt;
+        self.fut.map(|_| ())
+    }
+
     pub fn drop_on_fire(&self, to_drop: Box<dyn Any>) {
         if let Some(token) = self.token_ref.upgrade() {
             let mut token = token.borrow_mut();
@@ -1399,25 +1702,9 @@ pub(crate) trait WithStartSignal {
     fn with_start_signal(self, signal: StartSignal) -> Self;
 }
 
-impl<S> WithStartSignal for MzArrangementImport<S>
+impl<'scope, Tr> WithStartSignal for Arranged<'scope, Tr>
 where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
-{
-    fn with_start_signal(self, signal: StartSignal) -> Self {
-        match self {
-            MzArrangementImport::RowRow(arr) => {
-                MzArrangementImport::RowRow(arr.with_start_signal(signal))
-            }
-        }
-    }
-}
-
-impl<S, Tr> WithStartSignal for Arranged<S, Tr>
-where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
-    Tr: TraceReader + Clone,
+    Tr: TraceReader<Time: RenderTimestamp> + Clone,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
         Arranged {
@@ -1427,18 +1714,14 @@ where
     }
 }
 
-impl<S, D> WithStartSignal for Stream<S, D>
+impl<'scope, T: Timestamp, D> WithStartSignal for Stream<'scope, T, D>
 where
-    S: Scope,
-    D: timely::Data,
+    D: timely::Container + Clone + 'static,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
+        let activations = self.scope().activations();
         self.unary(Pipeline, "StartSignal", |_cap, info| {
-            let token = Box::new(ActivateOnDrop::new(
-                (),
-                info.address,
-                self.scope().activations(),
-            ));
+            let token = Box::new(ActivateOnDrop::new((), info.address, activations));
             signal.drop_on_fire(token);
 
             let mut stash = Vec::new();
@@ -1485,34 +1768,194 @@ where
 /// still be upstream of `arrange_core` operators when those get to know about us dropping the
 /// minimum capability. The in-flight snapshot updates would hold back the input frontiers of
 /// `arrange_core` operators to the `as_of`, which would cause them to insert empty batches.
-fn suppress_early_progress<G, D>(
-    stream: Stream<G, D>,
-    as_of: Antichain<G::Timestamp>,
-) -> Stream<G, D>
+fn suppress_early_progress<'scope, T: Timestamp, D>(
+    stream: Stream<'scope, T, D>,
+    as_of: Antichain<T>,
+) -> Stream<'scope, T, D>
 where
-    G: Scope,
-    D: Data,
+    D: Data + timely::Container,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
 
-        move |input, output| {
-            input.for_each(|data_cap, data| {
-                let mut session = if as_of.less_than(data_cap.time()) {
-                    output.session(&data_cap)
+        move |(input, frontier), output| {
+            input.for_each_time(|data_cap, data| {
+                if as_of.less_than(data_cap.time()) {
+                    let mut session = output.session(&data_cap);
+                    for data in data {
+                        session.give_container(data);
+                    }
                 } else {
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
-                    output.session(cap)
-                };
-                session.give_container(data);
+                    let mut session = output.session(&cap);
+                    for data in data {
+                        session.give_container(data);
+                    }
+                }
             });
 
-            let frontier = input.frontier().frontier();
-            if !PartialOrder::less_equal(&frontier, &as_of.borrow()) {
+            if !PartialOrder::less_equal(&frontier.frontier(), &as_of.borrow()) {
                 early_cap.take();
             }
         }
     })
+}
+
+/// Extension trait for [`Stream`] to selectively limit progress.
+trait LimitProgress<T: Timestamp> {
+    /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
+    /// the implementation to observe times in data, and release capabilities based on the probe's
+    /// frontier, after applying `slack` to round up timestamps.
+    ///
+    /// The implementation of this operator is subtle to avoid regressions in the rest of the
+    /// system. Specifically joins hold back compaction on the other side of the join, so we need to
+    /// make sure we release capabilities as soon as possible. This is why we only limit progress
+    /// for times before the `upper`, which is the time until which the source can distinguish
+    /// updates at the time of rendering. Once we make progress to the `upper`, we need to release
+    /// our capability.
+    ///
+    /// This isn't perfect, and can result in regressions if on of the inputs lags behind. We could
+    /// consider using the join of the uppers, i.e, use lower bound upper of all available inputs.
+    ///
+    /// Once the input frontier reaches `[]`, the implementation must release any capability to
+    /// allow downstream operators to release resources.
+    ///
+    /// The implementation should limit the number of pending times to `limit` if it is `Some` to
+    /// avoid unbounded memory usage.
+    ///
+    /// * `handle` is a probe installed on the dataflow's outputs as late as possible, but before
+    ///   any timestamp rounding happens (c.f., `REFRESH EVERY` materialized views).
+    /// * `slack_ms` is the number of milliseconds to round up timestamps to.
+    /// * `name` is a human-readable name for the operator.
+    /// * `limit` is the maximum number of pending times to keep around.
+    /// * `upper` is the upper bound of the stream's frontier until which the implementation can
+    ///   retain a capability.
+    fn limit_progress(
+        self,
+        handle: MzProbeHandle<T>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<T>,
+        name: String,
+    ) -> Self;
+}
+
+// TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
+// number.
+impl<'scope, D, R> LimitProgress<mz_repr::Timestamp>
+    for StreamVec<'scope, mz_repr::Timestamp, (D, mz_repr::Timestamp, R)>
+where
+    D: Clone + 'static,
+    R: Clone + 'static,
+{
+    fn limit_progress(
+        self,
+        handle: MzProbeHandle<mz_repr::Timestamp>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<mz_repr::Timestamp>,
+        name: String,
+    ) -> Self {
+        let scope = self.scope();
+        let stream =
+            self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
+                // Times that we've observed on our input.
+                let mut pending_times: BTreeSet<mz_repr::Timestamp> = BTreeSet::new();
+                // Capability for the lower bound of `pending_times`, if any.
+                let mut retained_cap: Option<Capability<mz_repr::Timestamp>> = None;
+
+                let activator = scope.activator_for(info.address);
+                handle.activate(activator.clone());
+
+                move |(input, frontier), output| {
+                    input.for_each(|cap, data| {
+                        for time in data
+                            .iter()
+                            .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
+                        {
+                            // `slack_ms == 0` means no rounding; otherwise round up to the next
+                            // multiple of `slack_ms`. Avoids a divide-by-zero panic when the
+                            // operator is configured without slack.
+                            let rounded_time = if slack_ms == 0 {
+                                time
+                            } else {
+                                (time / slack_ms).saturating_add(1).saturating_mul(slack_ms)
+                            };
+                            if !upper.less_than(&rounded_time.into()) {
+                                pending_times.insert(rounded_time.into());
+                            }
+                        }
+                        output.session(&cap).give_container(data);
+                        if retained_cap.as_ref().is_none_or(|c| {
+                            !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
+                        }) {
+                            retained_cap = Some(cap.retain(0));
+                        }
+                    });
+
+                    handle.with_frontier(|f| {
+                        while pending_times
+                            .first()
+                            .map_or(false, |retained_time| !f.less_than(&retained_time))
+                        {
+                            let _ = pending_times.pop_first();
+                        }
+                    });
+
+                    while limit.map_or(false, |limit| pending_times.len() > limit) {
+                        let _ = pending_times.pop_first();
+                    }
+
+                    match (retained_cap.as_mut(), pending_times.first()) {
+                        (Some(cap), Some(first)) => cap.downgrade(first),
+                        (_, None) => retained_cap = None,
+                        _ => {}
+                    }
+
+                    if frontier.is_empty() {
+                        retained_cap = None;
+                        pending_times.clear();
+                    }
+
+                    if !pending_times.is_empty() {
+                        tracing::debug!(
+                            name,
+                            info.global_id,
+                            pending_times = %PendingTimesDisplay(pending_times.iter().cloned()),
+                            frontier = ?frontier.frontier().get(0),
+                            probe = ?handle.with_frontier(|f| f.get(0).cloned()),
+                            ?upper,
+                            "pending times",
+                        );
+                    }
+                }
+            });
+        stream
+    }
+}
+
+/// A formatter for an iterator of timestamps that displays the first element, and subsequently
+/// the difference between timestamps.
+struct PendingTimesDisplay<T>(T);
+
+impl<T> std::fmt::Display for PendingTimesDisplay<T>
+where
+    T: IntoIterator<Item = mz_repr::Timestamp> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.clone().into_iter();
+        write!(f, "[")?;
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first)?;
+            let mut last = u64::from(first);
+            for time in iter {
+                write!(f, ", +{}", u64::from(time) - last)?;
+                last = u64::from(time);
+            }
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
 }
 
 /// Helper to merge pairs of datum iterators into a row or split a datum iterator
@@ -1540,8 +1983,7 @@ impl Pairer {
     /// Splits a datum iterator into a pair of `Row` instances.
     fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
         let mut datum_iter = datum_iter.into_iter();
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
+        let mut row_builder = SharedRow::get();
         let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
         let second = row_builder.pack_using(datum_iter);
         (first, second)

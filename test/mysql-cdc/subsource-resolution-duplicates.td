@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
 
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -33,8 +32,10 @@ INSERT INTO t VALUES (1);
 CREATE TABLE other.t (f1 INT);
 INSERT INTO other.t VALUES (1);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
+> COMMIT
 > CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
 ! CREATE TABLE t FROM SOURCE mz_source (REFERENCE other.t);
 contains:catalog item 't' already exists
@@ -45,7 +46,6 @@ contains:catalog item 't' already exists
 
 > SHOW sources
  mz_source          mysql     quickstart  ""
- mz_source_progress progress  <null>      ""
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

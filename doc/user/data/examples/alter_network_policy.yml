@@ -1,0 +1,19 @@
+- name: "syntax"
+  code: |
+    ALTER NETWORK POLICY <name> SET (
+      RULES (
+        <rule_name> (action='allow', direction='ingress', address=<address>)
+        [, ...]
+      )
+    )
+    ;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the network policy to modify.
+    - name: "`<rule_name>`"
+      description: |
+        The name for the network policy rule. Must be unique within the network policy.
+    - name: "`<address>`"
+      description: |
+        The Classless Inter-Domain Routing (CIDR) block to which the rule applies.

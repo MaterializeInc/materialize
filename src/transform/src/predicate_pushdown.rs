@@ -27,24 +27,30 @@
 //! errors). See <https://github.com/MaterializeInc/database-issues/issues/4972#issuecomment-1547391011>
 //!
 //! ```rust
-//! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
+//! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, func};
 //! use mz_ore::id_gen::IdGen;
-//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
-//! let input1 = MirRelationExpr::constant(vec![], RelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
-//! ]));
-//! let input2 = MirRelationExpr::constant(vec![], RelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
-//! ]));
-//! let input3 = MirRelationExpr::constant(vec![], RelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
-//! ]));
+//! let bool_typ = ReprRelationType::new(vec![
+//!     ReprColumnType { scalar_type: ReprScalarType::Bool, nullable: false },
+//! ]);
+//! let input1 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input2 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ.clone(),
+//! };
+//! let input3 = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: bool_typ,
+//! };
 //! let join = MirRelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
 //!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
@@ -52,7 +58,7 @@
 //!
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
-//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
+//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), func::AddInt64);
 //! let predicate012 = MirScalarExpr::literal_false();
 //!
 //! let mut expr = join.filter(
@@ -64,13 +70,13 @@
 //!    ]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = typecheck::empty_context();
+//! let typecheck_ctx = typecheck::empty_typechecking_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
-//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
+//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), func::AddInt64);
 //! let expected_expr = MirRelationExpr::join(
 //!     vec![
 //!         input1.clone().filter(vec![predicate0.clone(), predicate00.clone()]),
@@ -85,14 +91,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use mz_expr::func::variadic::And;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
-    VariadicFunc, RECURSION_LIMIT,
+    AggregateFunc, Columns, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT, VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
-use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{ColumnType, Datum, ScalarType};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -117,12 +124,16 @@ impl CheckedRecursion for PredicatePushdown {
 }
 
 impl crate::Transform for PredicatePushdown {
+    fn name(&self) -> &'static str {
+        "PredicatePushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "predicate_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
@@ -214,7 +225,7 @@ impl PredicatePushdown {
                             for mut predicate in predicates.drain(..) {
                                 use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
-                                    func: BinaryFunc::Eq,
+                                    func: BinaryFunc::Eq(_),
                                     expr1,
                                     expr2,
                                 } = &predicate
@@ -304,7 +315,7 @@ impl PredicatePushdown {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
                                     new_predicate.visit_pre(|e| {
-                                        if let MirScalarExpr::Column(c) = e {
+                                        if let MirScalarExpr::Column(c, _) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
                                             }
@@ -312,12 +323,12 @@ impl PredicatePushdown {
                                     });
                                     if supported {
                                         new_predicate.visit_mut_post(&mut |e| {
-                                            if let MirScalarExpr::Column(i) = e {
+                                            if let MirScalarExpr::Column(i, _) = e {
                                                 *e = group_key[*i].clone();
                                             }
-                                        })?;
+                                        });
                                         push_down.push(new_predicate);
-                                    } else if let MirScalarExpr::Column(col) = &predicate {
+                                    } else if let MirScalarExpr::Column(col, _) = &predicate {
                                         if *col == group_key.len()
                                             && aggregates.len() == 1
                                             && aggregates[0].func == AggregateFunc::Any
@@ -325,7 +336,7 @@ impl PredicatePushdown {
                                             push_down.push(aggregates[0].expr.clone());
                                             aggregates[0].expr = MirScalarExpr::literal_ok(
                                                 Datum::True,
-                                                ScalarType::Bool,
+                                                ReprScalarType::Bool,
                                             );
                                         } else {
                                             retain.push(predicate);
@@ -339,7 +350,7 @@ impl PredicatePushdown {
                             }
 
                             if !push_down.is_empty() {
-                                *inner = Box::new(inner.take_dangerous().filter(push_down));
+                                **inner = inner.take_dangerous().filter(push_down);
                             }
                             self.action(inner, get_predicates)?;
 
@@ -383,7 +394,7 @@ impl PredicatePushdown {
                             std::mem::swap(&mut retain, predicates);
 
                             if !push_down.is_empty() {
-                                *input = Box::new(input.take_dangerous().filter(push_down));
+                                **input = input.take_dangerous().filter(push_down);
                             }
 
                             self.action(input, get_predicates)?;
@@ -450,7 +461,7 @@ impl PredicatePushdown {
                         }
                         MirRelationExpr::Union { base, inputs } => {
                             let predicates = std::mem::take(predicates);
-                            *base = Box::new(base.take_dangerous().filter(predicates.clone()));
+                            **base = base.take_dangerous().filter(predicates.clone());
                             self.action(base, get_predicates)?;
                             for input in inputs {
                                 *input = input.take_dangerous().filter(predicates.clone());
@@ -537,7 +548,7 @@ impl PredicatePushdown {
                     // and therefore we should attend to all of these expressions when pushing down
                     // a predicate into a Let binding.
                     let mut users = vec![&mut **body];
-                    for (id, value) in ids.iter_mut().zip(values).rev() {
+                    for (id, value) in ids.iter_mut().rev().zip_eq(values.into_iter().rev()) {
                         // Predicate pushdown from Gets in `users` into the value of a Let binding
                         //
                         // For now, we simply always avoid pushing into a Let binding that is
@@ -591,7 +602,7 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely();
+                            relation.take_safely(Some(relation.typ_with_input_types(&input_types)));
                             return Ok(());
                         }
 
@@ -612,7 +623,7 @@ impl PredicatePushdown {
                                         }
                                     } else {
                                         MirScalarExpr::CallBinary {
-                                            func: mz_expr::BinaryFunc::Eq,
+                                            func: mz_expr::func::Eq.into(),
                                             expr1: Box::new(expr.clone()),
                                             expr2: Box::new(constant.clone()),
                                         }
@@ -680,13 +691,14 @@ impl PredicatePushdown {
                                     .iter()
                                     .enumerate()
                                     .filter_map(|(pos, expr)| {
-                                        if let MirScalarExpr::Column(col_pos) = &expr {
+                                        if let MirScalarExpr::Column(col_pos, _) = &expr {
                                             let local_col =
                                                 input_mapper.map_column_to_local(*col_pos);
                                             if input == local_col.1 {
+                                                // TODO(mgree) !!! is it safe to propagate the name here?
                                                 return Some((
                                                     Some(pos),
-                                                    MirScalarExpr::Column(local_col.0),
+                                                    MirScalarExpr::column(local_col.0),
                                                 ));
                                             } else {
                                                 return None;
@@ -729,7 +741,7 @@ impl PredicatePushdown {
 
                                         push_downs[input].push(
                                             MirScalarExpr::CallBinary {
-                                                func: mz_expr::BinaryFunc::Eq,
+                                                func: func::Eq.into(),
                                                 expr1: Box::new(expr2.clone()),
                                                 expr2: Box::new(expr1.clone()),
                                             }
@@ -792,7 +804,7 @@ impl PredicatePushdown {
     ) {
         let new_inputs = inputs
             .drain(..)
-            .zip(push_downs)
+            .zip_eq(push_downs)
             .map(|(input, push_down)| {
                 if !push_down.is_empty() {
                     input.filter(push_down)
@@ -922,7 +934,7 @@ impl PredicatePushdown {
             if !predicate.is_literal_err() || all_errors {
                 // Consider inlining Map expressions.
                 if let Some(cleaned) =
-                    Self::inline_if_not_too_big(&predicate, input_arity, map_exprs)?
+                    Self::inline_if_not_too_big(&predicate, input_arity, map_exprs)
                 {
                     pushdown.push(cleaned);
                 } else {
@@ -953,7 +965,7 @@ impl PredicatePushdown {
         expr: &MirScalarExpr,
         input_arity: usize,
         map_exprs: &Vec<MirScalarExpr>,
-    ) -> Result<Option<MirScalarExpr>, RecursionLimitError> {
+    ) -> Option<MirScalarExpr> {
         let size_limit = 1000;
 
         // Transitively determine the support of `expr` produced by `map_exprs`
@@ -963,7 +975,7 @@ impl PredicatePushdown {
 
             // Seed with `map_exprs` support in `expr`.
             expr.visit_pre(|e| {
-                if let MirScalarExpr::Column(c) = e {
+                if let MirScalarExpr::Column(c, _) = e {
                     if *c >= input_arity {
                         support.insert(*c);
                     }
@@ -979,7 +991,7 @@ impl PredicatePushdown {
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
                     map_exprs[c - input_arity].visit_pre(|e| {
-                        if let MirScalarExpr::Column(c) = e {
+                        if let MirScalarExpr::Column(c, _) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {
                                     workset.push(*c);
@@ -1001,7 +1013,7 @@ impl PredicatePushdown {
             let mut new_size = 0;
             new_expr.visit_mut_post(&mut |expr| {
                 new_size += 1;
-                if let MirScalarExpr::Column(c) = expr {
+                if let MirScalarExpr::Column(c, _) = expr {
                     if *c >= input_arity && new_size <= size_limit {
                         // (inlined[c] is safe, because we proceed in column order, and we break out
                         // of the loop when we stop inserting into memo.)
@@ -1010,7 +1022,7 @@ impl PredicatePushdown {
                         new_size += m_size - 1; // Adjust for the +1 above.
                     }
                 }
-            })?;
+            });
 
             if new_size <= size_limit {
                 inlined.insert(*c, (new_expr, new_size));
@@ -1021,13 +1033,13 @@ impl PredicatePushdown {
 
         // Try to resolve expr against the memo table.
         if inlined.len() < cols_to_inline.len() {
-            Ok(None) // We couldn't memoize all map expressions within the given limit.
+            None // We couldn't memoize all map expressions within the given limit.
         } else {
             let mut new_expr = expr.clone();
             let mut new_size = 0;
             new_expr.visit_mut_post(&mut |expr| {
                 new_size += 1;
-                if let MirScalarExpr::Column(c) = expr {
+                if let MirScalarExpr::Column(c, _) = expr {
                     if *c >= input_arity && new_size <= size_limit {
                         // (inlined[c] is safe because of the outer if condition.)
                         let (m_expr, m_size): &(MirScalarExpr, _) = &inlined[c];
@@ -1035,13 +1047,13 @@ impl PredicatePushdown {
                         new_size += m_size - 1; // Adjust for the +1 above.
                     }
                 }
-            })?;
+            });
 
             soft_assert_eq_no_log!(new_size, new_expr.size());
             if new_size <= size_limit {
-                Ok(Some(new_expr)) // We managed to stay within the limit.
+                Some(new_expr) // We managed to stay within the limit.
             } else {
-                Ok(None) // Limit exceeded.
+                None // Limit exceeded.
             }
         }
     }
@@ -1145,10 +1157,10 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
+            func: VariadicFunc::Or(_),
             exprs,
         } = s
         {
@@ -1166,21 +1178,18 @@ impl PredicatePushdown {
     fn extract_equal_or_both_null_inner(
         or_arg1: &MirScalarExpr,
         or_arg2: &MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[ReprColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1: eq_lhs,
             expr2: eq_rhs,
         } = &or_arg2
         {
             let isnull1 = eq_lhs.clone().call_is_null();
             let isnull2 = eq_rhs.clone().call_is_null();
-            let both_null = MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
-                exprs: vec![isnull1, isnull2],
-            };
+            let both_null = MirScalarExpr::call_variadic(And, vec![isnull1, isnull2]);
 
             if Self::extract_reduced_conjunction_terms(both_null, column_types)
                 == Self::extract_reduced_conjunction_terms(or_arg1.clone(), column_types)
@@ -1194,12 +1203,12 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[ReprColumnType],
     ) -> Vec<MirScalarExpr> {
         s.reduce(column_types);
 
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
+            func: VariadicFunc::And(_),
             exprs,
         } = s
         {

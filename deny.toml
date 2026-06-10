@@ -1,3 +1,10 @@
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
 [bans]
 multiple-versions = "deny"
 # Try to avoid exemptions for duplicate dependencies! Duplicate dependencies
@@ -13,51 +20,20 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
-    { name = "base64", version = "0.21.5" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on. They just released v2.0 which not all crates have
     # migrated to yet.
     { name = "syn", version = "1.0.107" },
-    # `tokio` depends on a newer version of socket2, we are okay with _temporarily_
-    # allowing these duplicate dependencies until the rest of the ecosystem catches
-    # up.
-    { name = "socket2", version = "0.4.9" },
-    # held back by regex 1.7.0 depended on by arrow-string and bindgen
-    { name = "regex-syntax", version = "0.6.28" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
-    # held back by 'ciborium' which is depended on by 'criterion'
-    { name = "half", version = "1.6.0" },
-    { name = "windows-sys", version = "0.42.0" },
-    { name = "windows_aarch64_gnullvm", version = "0.42.0" },
-    { name = "windows_aarch64_msvc", version = "0.42.0" },
-    { name = "windows_i686_gnu", version = "0.42.0" },
-    { name = "windows_i686_msvc", version = "0.42.0" },
-    { name = "windows_x86_64_gnullvm", version = "0.42.0" },
-    { name = "windows_x86_64_gnu", version = "0.42.0" },
-    { name = "windows_x86_64_msvc", version = "0.42.0" },
-    { name = "windows-targets", version = "0.48.0" },
-    { name = "windows-sys", version = "0.48.0" },
-    { name = "windows_aarch64_gnullvm", version = "0.48.0" },
-    { name = "windows_aarch64_msvc", version = "0.48.0" },
-    { name = "windows_i686_gnu", version = "0.48.0" },
-    { name = "windows_i686_msvc", version = "0.48.0" },
-    { name = "windows_x86_64_gnullvm", version = "0.48.0" },
-    { name = "windows_x86_64_gnu", version = "0.48.0" },
-    { name = "windows_x86_64_msvc", version = "0.48.0" },
-    { name = "windows-sys", version = "0.52.0" },
-    # Newer versions of crates like `tempfile` are held back by crates like `atty`.
-    # This is very Unfortunate as we don't actually use these platforms.
-    { name = "hermit-abi", version = "0.1.6" },
-    { name = "hermit-abi", version = "0.2.6" },
-    { name = "redox_syscall", version = "0.2.10" },
-    { name = "linux-raw-sys", version = "0.3.4" },
-    { name = "rustix", version = "0.38.21" },
-
+    { name = "ordered-float", version = "4.6.0" },
     # Will require updating many crates
     { name = "indexmap", version = "1.9.1" },
     # Required by indexmap 1.9.1, which is depended on by many things
     { name = "hashbrown", version = "0.12.3" },
+    { name = "hashbrown", version = "0.14.5" },
+    # Required by hashbrown
+    { name = "foldhash", version = "0.1.5" },
 
     # Had to update `tower-http` to `0.4.3` to fix the `base64` duplicate version
     # but this introduced a new dependency on `bitflags 2.3.3` but all the rest of
@@ -65,22 +41,11 @@ skip = [
     # TODO: fork `tower-http` and swap to use older bitflags
     { name = "bitflags", version = "1.3.2" },
 
-    # TODO(parkmycar): In a followup/stacked PR, get rid of these duplicates.
-    { name = "bstr", version = "0.2.14" },
-    { name = "regex-automata", version = "0.1.9" },
-
-    # TODO: Required for Rust nightly upgrade
-    { name = "portable-atomic", version = "0.3.20" },
-
     # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
 
     # TODO: Required for Rust nightly upgrade
     { name = "http-body", version = "0.4.5" },
-
-    # The most recent version of `skeptic` depends on 0.14.2 and the latest
-    # version of `guppy` that uses `0.14` is very old.
-    { name = "cargo_metadata", version = "0.14.2" },
 
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
@@ -88,6 +53,7 @@ skip = [
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
+    { name = "winnow", version = "0.5.4" },
 
     # There are some crates in our dependency tree that have yet to upgrade to
     # `hyper 1.*`. As of now these are:
@@ -105,14 +71,83 @@ skip = [
 
     { name = "hyper-timeout", version = "0.4.1" },
 
-    { name = "tokio-tungstenite", version = "0.21.0" },
+    { name = "memmap2", version = "0.5.4" },
 
-    { name = "tungstenite", version = "0.21.0" },
-
-    # `axum 0.7.5` depends on both `sync_wrapper 1.*` and `axum-core 0.4.3`.
-    # The latter depends on `sync_wrapper 0.1.*`.
-    { name = "sync_wrapper", version = "0.1.2" },
+    { name = "async-channel", version = "1.9.0" },
+    { name = "event-listener", version = "2.5.3" },
+    { name = "fastrand", version = "1.9.0" },
+    { name = "futures-lite", version = "1.13.0" },
+    { name = "getrandom", version = "0.1.16" },
+    { name = "getrandom", version = "0.2.10" },
+    { name = "rand", version = "0.7.3" },
+    { name = "rand", version = "0.8.5" },
+    { name = "rand_chacha", version = "0.2.2" },
+    { name = "rand_chacha", version = "0.3.0" },
+    { name = "rand_core", version = "0.5.1" },
+    { name = "rand_core", version = "0.6.2" },
+    # Used by reqwest
+    { name = "thiserror", version = "1.0.61" },
+    { name = "thiserror-impl", version = "1.0.61" },
+    { name = "unicode-width", version = "0.1.10" },
+    # Used by rdkafka-sys
+    { name = "num_enum", version = "0.5.11" },
+    { name = "num_enum_derive", version = "0.5.11" },
+    { name = "proc-macro-crate", version = "1.3.1" },
+    # Used by tempfile
+    { name = "linux-raw-sys", version = "0.4.15" },
+    { name = "rustix", version = "0.38.44" },
+    # Used by bindgen
+    { name = "itertools", version = "0.13.0" },
+    # Used by pprof
+    { name = "nix", version = "0.26.4" },
+    # Held back by mysql_async `v0.36.1`
+    { name = "socket2", version = "0.5.10" },
+    # Used by azure_core
+    { name = "quick-xml", version = "0.31.0" },
+    # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
+    { name = "quick-xml", version = "0.37.5" },
+    # Used by opendal via iceberg
+    { name = "quick-xml", version = "0.38.4" },
+    # Used by sentry
+    { name = "reqwest", version = "0.13.3" },
+    # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
+    { name = "darling_macro", version = "0.20.11" },
+    { name = "darling_core", version = "0.20.11" },
+    { name = "darling", version = "0.20.11" },
+    { name = "darling_macro", version = "0.21.2" },
+    { name = "darling_core", version = "0.21.2" },
+    { name = "darling", version = "0.21.2" },
+    { name = "typed-builder", version = "0.20.1" },
+    { name = "typed-builder-macro", version = "0.20.1" },
+    # chrono-tz
+    { name = "phf", version = "0.11.3" },
+    { name = "phf_shared", version = "0.11.3" },
+    { name = "phf_generator", version = "0.11.2" },
+    { name = "phf_codegen", version = "0.11.3" },
+    # duckdb
+    { name = "fallible-iterator", version = "0.3.0" },
+    # arrow
+    { name = "hashbrown", version = "0.16.1" },
+    # Used by dynfmt; iceberg/typetag pulls in v0.4.
+    { name = "erased-serde", version = "0.3.26" },
+    # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
+    # while native-tls still pulls older versions.
+    { name = "core-foundation", version = "0.10.1" },
+    { name = "security-framework", version = "3.7.0" },
+    { name = "openssl-probe", version = "0.2.1" },
+    # reqsign (via iceberg-storage-opendal / opendal) pins older deps
+    # than the workspace.
+    { name = "jsonwebtoken", version = "9.3.1" },
+    { name = "quick-xml", version = "0.37.5" },
+    # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
+    { name = "untrusted", version = "0.7.1" },
+    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
+    { name = "spin", version = "0.5.2" },
 ]
+
+[[bans.deny]]
+crate = "crossbeam-channel@0.5.14"
+reason = "memory corruption, https://github.com/MaterializeInc/database-issues/issues/9091"
 
 # Use `tracing` instead.
 [[bans.deny]]
@@ -127,36 +162,52 @@ name = "md5"
 [[bans.deny]]
 name = "sha-1"
 
-# Use `prost` or `protobuf-native` instead.
+# Use `prost` or `protobuf-native` instead. Two exceptions:
+# - `prometheus` itself, whose `proto` types (used to encode/decode the
+#   Prometheus protobuf format) are generated by protobuf.
+# - `mz-prometheus-protobuf`, a tiny wrapper crate that owns the decode
+#   helper around `prometheus::proto::MetricFamily`. No other workspace
+#   crate should depend on `protobuf` directly.
 [[bans.deny]]
 name = "protobuf"
-wrappers = ["protobuf-parse"]
+wrappers = ["prometheus", "mz-prometheus-protobuf"]
 
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
 [[bans.deny]]
 name = "strum"
+wrappers = [
+    "apache-avro",
+    "iceberg",
+    "duckdb",
+]
 [[bans.deny]]
 name = "strum-macros"
 
 [[bans.deny]]
 name = "log"
 wrappers = [
+    "azure_svc_blobstorage",
+    "apache-avro",
+    "bindgen",
+    "buildid",
+    "cookie_store",
     "deadpool-postgres",
+    "domain",
     "eventsource-client",
     "fail",
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "mio",
     "native-tls",
+    "opendal",
     "os_info",
     "postgres",
     "pprof",
     "prost-build",
-    "protobuf-parse",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
+    "reqsign",
     "reqwest",
     "tokio-postgres",
     "tokio-tungstenite",
@@ -164,39 +215,29 @@ wrappers = [
     "tracing",
     "tungstenite",
     "want",
-    "wasm-bindgen-backend",
-    "workspace-hack",
+    "zopfli",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
+# mature and more widely used. `gcp_auth` only ships with rustls-based TLS,
+# so allow it through.
 [[bans.deny]]
 name = "rustls"
+wrappers = ["hyper-rustls", "tokio-rustls"]
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "bindgen",
-  "bstr",
-  "console",
-  "criterion",
-  "dynfmt",
-  "findshlibs",
-  "insta",
-  "jsonpath-rust",
-  "launchdarkly-server-sdk",
-  "launchdarkly-server-sdk-evaluation",
-  "mysql_async",
-  "mysql_common",
-  "native-tls",
-  "prometheus",
-  "proptest",
-  "rayon-core",
-  "schannel",
-  "sharded-slab",
-  "which",
+    "dynfmt",
+    "findshlibs",
+    "launchdarkly-server-sdk",
+    "launchdarkly-server-sdk-evaluation",
+    "num-bigint-dig",
+    "prometheus",
+    "rayon-core",
+    "sharded-slab",
 ]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more
@@ -219,23 +260,25 @@ wrappers = [
 [advisories]
 version = 2
 ignore = [
-    # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
-    "RUSTSEC-2024-0320",
-    # Consider `std::io::IsTerminal` or `is-terminal` instead of `atty` (unmaintained)
-    "RUSTSEC-2021-0145",
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
-    # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
-    "RUSTSEC-2024-0370",
-    # lexical-core: Multiple soundness issues, depends on arrow upgrading
-    "RUSTSEC-2023-0086",
-    # Use standard library's IsTerminal trait instead of `atty` (unmaintained)
-    "RUSTSEC-2024-0375",
+    # `proc-macro-error2` (the maintained fork of `proc-macro-error`) is now also
+    # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
+    # safe upgrade is available.
+    "RUSTSEC-2026-0173",
+    # `http-types`'s `Authorization::value`/`WwwAuthenticate::value` can violate
+    # ASCII invariants. The crate is unmaintained and pulled in transitively via
+    # the `azure_*` crates. No safe upgrade is available.
+    "RUSTSEC-2026-0174",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
-    # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
-    "RUSTSEC-2024-0384",
-
+    # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
+    "RUSTSEC-2024-0436",
+    # Bincode is unmaintained, the team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
+    "RUSTSEC-2025-0141",
+    # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
+    # Affects transitive deps (rand 0.7.3 via http-types, rand 0.8.5 via fail/quickcheck/etc).
+    "RUSTSEC-2026-0097",
 ]
 
 # Must be manually kept in sync with about.toml.
@@ -246,6 +289,7 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
@@ -253,7 +297,9 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
+    "OpenSSL",
     "Zlib",
+    "Unicode-3.0",
     "Unicode-DFS-2016",
 ]
 # copyleft is denied by default

@@ -9,7 +9,7 @@ menus:
     identifier: 'console'
 ---
 
-The [Materialize Console](https://console.materialize.com/) is a graphical user
+The Materialize Console is a graphical user
 interface for working with Materialize. From the Console, you can create and
 manage your clusters and sources, issue SQL queries, explore your objects, and
 view billing information.
@@ -17,8 +17,15 @@ view billing information.
 ![Image of the Materialize Console](/images/console/console.png
 "Materialize Console")
 
-- **Create New**: Shortcut menu to the **New Cluster**, **Create a
-  Source**, and **New app password** screens.
+- **Create New**: Shortcut menu to the following screens:
+
+  - [**New cluster**](/console/create-new/#create-new-cluster) screens
+
+  - [**New source**](/console/create-new/#create-new-source) screens
+
+  - [**New app
+    password**](/console/create-new/#create-new-app-password-cloud-only) screens
+    (***Cloud-only***)
 
 - [SQL Shell](/console/sql-shell/): Issue SQL queries.
 
@@ -31,8 +38,11 @@ view billing information.
 - [Monitoring](/console/monitoring/): Monitor your environment as well as access your query history.
 
 - [Admin](/console/admin/): Manage client credentials and billing information.
+  (***Cloud-only***)
 
-- [Connect](/console/connect/): View information needed to connect to
-  Materialize.
+- [Connect](/console/connect/): View information needed to connect using service
+  accounts. (***Cloud-only***)
 
-- [User Profile](/console/user-profile/): Manage your user profile.
+- [User Profile](/console/user-profile/): Manage your user profile
+  (***Cloud-only***), find links to links to the documentation, Materialize
+  Community slack, and Help Center.

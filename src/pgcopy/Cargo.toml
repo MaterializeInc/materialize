@@ -10,24 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
-bytes = "1.3.0"
-csv = "1.1.6"
+bytes.workspace = true
+csv-core.workspace = true
+itertools.workspace = true
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
-mz-proto = { path = "../proto", features = ["tokio-postgres"] }
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-serde = { version = "1.0.152", features = ["derive"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
-tonic-build = "0.12.1"
+proptest.workspace = true
+serde.workspace = true
 
 [features]
-default = ["mz-build-tools/default"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

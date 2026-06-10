@@ -1,16 +1,20 @@
 ---
-title: "CREATE SOURCE: PostgreSQL"
+title: "CREATE SOURCE: PostgreSQL (Legacy Syntax)"
 description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
     parent: 'create-source'
     identifier: cs_postgres
-    name: PostgreSQL
-    weight: 20
+    name: PostgreSQL (Legacy Syntax)
+    weight: 21
 aliases:
   - /sql/create-source/postgresql
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/postgres-v2)"
+include_blurb=true >}}
 
 {{% create-source/intro %}}
 Materialize supports PostgreSQL (11+) as a data source. To connect to a
@@ -31,32 +35,11 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Syntax
 
-{{< diagram "create-source-postgres.svg" >}}
-
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables in the publication.
-**FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
-
-### `CONNECTION` options
-
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
-`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+{{% include-syntax file="examples/create_source_postgres_legacy" example="syntax" %}}
 
 ## Features
 
@@ -128,11 +111,6 @@ When you define a source, Materialize will automatically:
 source as change events stream in, as a result of `INSERT`, `UPDATE` and
 `DELETE` operations in the upstream PostgreSQL database.
 
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a PostgreSQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-
 ##### PostgreSQL replication slots
 
 Each source ingests the raw replication stream data for all tables in the
@@ -140,21 +118,12 @@ specified publication using **a single** replication slot. This allows you to
 minimize the performance impact on the upstream database, as well as reuse the
 same source across multiple materializations.
 
-{{< warning >}}
-Make sure to delete any replication slots if you stop using Materialize, or if
-either the Materialize or PostgreSQL instances crash. To look up the name of
-the replication slot created for each source, use `mz_internal.mz_postgres_sources`.
-{{< /warning >}}
+{{< tip >}}
 
-If you delete all objects that depend on a source without also dropping the
-source, the upstream replication slot will linger and continue to accumulate
-data so that the source can resume in the future. To avoid unbounded disk space
-usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete
-the replication slot.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-replication-slots-tip-list" %}}
 
-For PostgreSQL 13+, it is recommended that you set a reasonable value for
-[`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE)
-to limit the amount of storage used by replication slots.
+{{</ tip >}}
 
 ##### PostgreSQL schemas
 
@@ -196,108 +165,52 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-##### Schema changes
+### Schema changes
 
-{{% schema-changes %}}
+Materialize supports schema changes in the upstream database as follows:
 
-#### Publication membership
+#### Compatible schema changes (Legacy syntax)
 
-PostgreSQL's logical replication API does not provide a signal when users remove
-tables from publications. Because of this, Materialize relies on periodic checks
-to determine if a table has been removed from a publication, at which time it
-generates an irrevocable error, preventing any values from being read from the
-table.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-compatible-schema-changes-legacy" %}}
 
-However, it is possible to remove a table from a publication and then re-add it
-before Materialize notices that the table was removed. In this case, Materialize
-can no longer provide any consistency guarantees about the data we present from
-the table and, unfortunately, is wholly unaware that this occurred.
+#### Incompatible schema changes
 
-To mitigate this issue, if you need to drop and re-add a table to a publication,
-ensure that you remove the table/subsource from the source _before_ re-adding it
-using the [`DROP SOURCE`](/sql/drop-source/) command.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-incompatible-schema-changes-legacy" %}}
 
-##### Supported types
+### Publication membership
 
-Materialize natively supports the following PostgreSQL types (including the
-array type for each of the types):
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership" %}}
 
-<ul style="column-count: 3">
-<li><code>bool</code></li>
-<li><code>bpchar</code></li>
-<li><code>bytea</code></li>
-<li><code>char</code></li>
-<li><code>date</code></li>
-<li><code>daterange</code></li>
-<li><code>float4</code></li>
-<li><code>float8</code></li>
-<li><code>int2</code></li>
-<li><code>int2vector</code></li>
-<li><code>int4</code></li>
-<li><code>int4range</code></li>
-<li><code>int8</code></li>
-<li><code>int8range</code></li>
-<li><code>interval</code></li>
-<li><code>json</code></li>
-<li><code>jsonb</code></li>
-<li><code>numeric</code></li>
-<li><code>numrange</code></li>
-<li><code>oid</code></li>
-<li><code>text</code></li>
-<li><code>time</code></li>
-<li><code>timestamp</code></li>
-<li><code>timestamptz</code></li>
-<li><code>tsrange</code></li>
-<li><code>tstzrange</code></li>
-<li><code>uuid</code></li>
-<li><code>varchar</code></li>
-</ul>
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership-mitigation-legacy" %}}
 
-Replicating tables that contain **unsupported [data types](/sql/types/)** is
-possible via the `TEXT COLUMNS` option. The specified columns will be treated
-as `text`, and will thus not offer the expected PostgreSQL type features. For
-example:
+### Supported types
 
-* [`enum`]: the implicit ordering of the original PostgreSQL `enum` type is not
-  preserved, as Materialize will sort values as `text`.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-supported-types" %}}
 
-* [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`,
-  since PostgreSQL adds typical currency formatting to the output.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-unsupported-types" %}}
 
-##### Truncation
+### Truncation
 
-Tables replicated into Materialize should not be truncated. If a table is
-truncated while replicated, the whole source becomes inaccessible and will not
-produce any data until it is recreated. Instead, remove all rows from a table
-using an unqualified `DELETE`.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-truncation-restriction" %}}
 
-```mzsql
-DELETE FROM t;
-```
+### Inherited tables
 
-##### Inherited tables
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables" %}}
 
-When using [PostgreSQL table inheritance](https://www.postgresql.org/docs/current/tutorial-inheritance.html),
-PostgreSQL serves data from `SELECT`s as if the inheriting tables' data is also
-present in the inherited table. However, both PostgreSQL's logical replication
-and `COPY` only present data written to the tables themselves, i.e. the
-inheriting data is _not_ treated as part of the inherited table.
-
-PostgreSQL sources use logical replication and `COPY` to ingest table data, so
-inheriting tables' data will only be ingested as part of the inheriting table,
-i.e. in Materialize, the data will not be returned when serving `SELECT`s from
-the inherited table.
-
-You can mimic PostgreSQL's `SELECT` behavior with inherited tables by creating a
-materialized view that unions data from the inherited and inheriting tables
-(using `UNION ALL`). However, if new tables inherit from the table, data from
-the inheriting tables will not be available in the view. You will need to add
-the inheriting tables via `ADD SUBSOURCE` and create a new view (materialized or
-non-) that unions the new table.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables-action-legacy" %}}
 
 ## Examples
 
-{{< warning >}}
+{{< important >}}
 Before creating a PostgreSQL source, you must set up logical replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
@@ -306,7 +219,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Azure DB](/ingest-data/postgres-azure-db/),
 [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
-{{< /warning >}}
+{{< /important >}}
 
 ### Creating a connection
 
@@ -332,10 +245,12 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 If your PostgreSQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host.
+through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -430,6 +345,8 @@ CREATE SOURCE mz_source
 ```
 
 ### Handling errors and schema changes
+
+{{% include-headless "/headless/schema-changes-in-progress" %}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

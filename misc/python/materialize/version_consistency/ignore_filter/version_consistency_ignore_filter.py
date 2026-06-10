@@ -22,6 +22,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
     is_operation_tagged,
+    is_timezone_conversion_expression,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_any_pattern,
@@ -64,6 +65,7 @@ MZ_VERSION_0_107_0 = MzVersion.parse_mz("v0.107.0")
 MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 MZ_VERSION_0_117_0 = MzVersion.parse_mz("v0.117.0")
 MZ_VERSION_0_118_0 = MzVersion.parse_mz("v0.118.0")
+MZ_VERSION_0_128_0 = MzVersion.parse_mz("v0.128.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -337,6 +339,14 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore(
                 "Added support for implicit cast from date to mz_timestamp with PR#29494"
             )
+
+        if (
+            self.lower_version <= MZ_VERSION_0_128_0 <= self.higher_version
+        ) and query_template.matches_any_expression(
+            is_timezone_conversion_expression,
+            True,
+        ):
+            return YesIgnore("Changed error message for private preview features")
 
         return super()._shall_ignore_error_mismatch(
             error, query_template, contains_aggregation

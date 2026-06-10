@@ -39,7 +39,6 @@ macro_rules! emit_boot_diagnostics {
             os.bitness = %os.bitness(),
             build.version = build_info.version,
             build.sha = build_info.sha,
-            build.time = build_info.time,
             cpus.logical = cpus.len(),
             cpus.physical = %system.physical_core_count().display_or("<unknown>"),
             cpu0.brand = cpus[0].brand(),

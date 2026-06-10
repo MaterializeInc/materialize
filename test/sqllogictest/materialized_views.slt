@@ -18,7 +18,7 @@ statement ok
 INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
 
 statement ok
-CREATE CLUSTER other REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'))
+CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
 
 
 # Test: Materialized view can be created.
@@ -246,11 +246,11 @@ SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
 0
 
 # mz_scheduling_elapsed_raw, a log source, is optimized away, but should still count as a dependency
-query error db error: ERROR: materialized view objects cannot depend on log sources
+query error materialized view objects cannot depend on log sources
 CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_introspection.mz_scheduling_elapsed_raw WHERE FALSE);
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET unsafe_enable_table_keys = true
 ----
 COMPLETE 0
 
@@ -264,7 +264,7 @@ CREATE TABLE t2 (f1 INTEGER NOT NULL PRIMARY KEY);
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE;
 
-statement error db error: ERROR: cannot drop table "t1": still depended upon by materialized view "mv"
+statement error cannot drop table "t1": still depended upon by materialized view "mv"
 DROP TABLE t1
 
 statement ok
@@ -274,7 +274,7 @@ DROP MATERIALIZED VIEW mv
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT t1.* FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1);
 
-statement error db error: ERROR: cannot drop table "t2": still depended upon by materialized view "mv"
+statement error cannot drop table "t2": still depended upon by materialized view "mv"
 DROP TABLE t2
 
 statement ok
@@ -283,7 +283,7 @@ DROP MATERIALIZED VIEW mv
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE AND EXISTS (SELECT * FROM t2);
 
-statement error db error: ERROR: cannot drop table "t2": still depended upon by materialized view "mv"
+statement error cannot drop table "t2": still depended upon by materialized view "mv"
 DROP TABLE t2
 
 statement ok
@@ -292,7 +292,7 @@ DROP MATERIALIZED VIEW mv
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE TRUE OR EXISTS (SELECT * FROM t2);
 
-statement error db error: ERROR: cannot drop table "t2": still depended upon by materialized view "mv"
+statement error cannot drop table "t2": still depended upon by materialized view "mv"
 DROP TABLE t2
 
 statement ok
@@ -301,7 +301,7 @@ DROP MATERIALIZED VIEW mv
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT (SELECT f1 FROM t2 WHERE FALSE) FROM t1;
 
-statement error db error: ERROR: cannot drop table "t2": still depended upon by materialized view "mv"
+statement error cannot drop table "t2": still depended upon by materialized view "mv"
 DROP TABLE t2
 
 statement ok
@@ -311,7 +311,7 @@ DROP MATERIALIZED VIEW mv
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT COALESCE(1, (SELECT * FROM t2 LIMIT 1)) FROM t1;
 
-statement error db error: ERROR: cannot drop table "t2": still depended upon by materialized view "mv"
+statement error cannot drop table "t2": still depended upon by materialized view "mv"
 DROP TABLE t2
 
 statement ok
@@ -324,7 +324,7 @@ CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE NULL::int4_list IS NOT NULL;
 
-statement error db error: ERROR: cannot drop type "int4_list": still depended upon by materialized view "mv"
+statement error cannot drop type "int4_list": still depended upon by materialized view "mv"
 DROP TYPE int4_list
 
 statement ok
@@ -369,15 +369,19 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
-name                  create_sql
-materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"quickstart"␠WITH␠(REFRESH␠=␠ON␠COMMIT)␠AS␠SELECT␠1
+name create_sql
+materialize.public.mv  CREATE␠MATERIALIZED␠VIEW␠materialize.public.mv⏎␠␠␠␠IN␠CLUSTER␠quickstart⏎␠␠␠␠WITH␠(REFRESH␠=␠ON␠COMMIT)⏎␠␠␠␠AS␠SELECT␠1;
 
 # Test: SHOW CREATE MATERIALIZED VIEW as mz_support
 
-simple conn=mz_catalog_server,user=mz_support
-SHOW CREATE MATERIALIZED VIEW mv
+simple multiline,conn=mz_catalog_server,user=mz_support
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv);
 ----
-materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
+CREATE MATERIALIZED VIEW materialize.public.mv
+    IN CLUSTER quickstart
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT 1;
+EOF
 COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
@@ -422,7 +426,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 query TT colnames
-SELECT name, definition FROM mz_materialized_views
+SELECT name, definition FROM mz_materialized_views WHERE id LIKE 'u%'
 ----
 name definition
 mv   SELECT␠1;
@@ -431,7 +435,7 @@ statement ok
 DROP MATERIALIZED VIEW mv
 
 query I
-SELECT count(*) FROM mz_materialized_views
+SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%'
 ----
 0
 
@@ -643,7 +647,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not supported
+query error REFRESH EVERY and REFRESH AT materialized views is not available
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
 simple conn=mz_system,user=mz_system
@@ -654,79 +658,79 @@ COMPLETE 0
 query error Expected one of ON or AT or EVERY, found number "5"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH 5) AS SELECT 1;
 
-query error db error: ERROR: REFRESH ON COMMIT cannot be specified multiple times
+query error REFRESH ON COMMIT cannot be specified multiple times
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH ON COMMIT, REFRESH ON COMMIT) AS SELECT 1;
 
-query error db error: ERROR: REFRESH ON COMMIT is not compatible with any of the other REFRESH options
+query error REFRESH ON COMMIT is not compatible with any of the other REFRESH options
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH ON COMMIT, REFRESH EVERY '1 day') AS SELECT 1;
 
-query error db error: ERROR: REFRESH AT does not support casting from record\(f1: integer,f2: integer\) to mz_timestamp
+query error REFRESH AT does not support casting from record\(f1: integer,f2: integer\) to mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT row(1,2)) AS SELECT 1;
 
-query error db error: ERROR: REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT 'aaaa') AS SELECT 1;
 
-query error db error: ERROR: column "ccc" does not exist
+query error column "ccc" does not exist
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT ccc) AS SELECT 1 as ccc;
 
-query error db error: ERROR: REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT now()) AS SELECT 1;
 
-query error db error: ERROR: REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT now()::mz_timestamp) AS SELECT 1;
 
-query error db error: ERROR: greatest types mz_timestamp and timestamp with time zone cannot be matched
+query error greatest types mz_timestamp and timestamp with time zone cannot be matched
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT greatest(mz_now(), now())) AS SELECT 1;
 
-query error db error: ERROR: REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH AT argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT greatest(mz_now(), now()::mz_timestamp)) AS SELECT 1;
 
-query error db error: ERROR: aggregate functions are not allowed in REFRESH AT \(function pg_catalog\.sum\)
+query error aggregate functions are not allowed in REFRESH AT \(function pg_catalog\.sum\)
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT sum(5)) AS SELECT 1;
 
-query error db error: ERROR: REFRESH AT does not allow subqueries
+query error REFRESH AT does not allow subqueries
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT (SELECT 1)) AS SELECT 1;
 
-query error db error: ERROR: window functions are not allowed in REFRESH AT \(function pg_catalog\.lag\)
+query error window functions are not allowed in REFRESH AT \(function pg_catalog\.lag\)
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT lag(7) OVER ()) AS SELECT 1;
 
 query error Expected literal string, found number "42"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY 42) AS SELECT 1;
 
-query error db error: ERROR: invalid input syntax for type interval: unknown units dayy: "1 dayy"
+query error invalid input syntax for type interval: unknown units dayy: "1 dayy"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 dayy') AS SELECT 1;
 
 query error Expected literal string, found INTERVAL
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY INTERVAL '1 day') AS SELECT 1;
 
-query error db error: ERROR: REFRESH interval must be positive; got: \-00:01:00
+query error REFRESH interval must be positive; got: \-00:01:00
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '-1 minutes') AS SELECT 1;
 
-query error db error: ERROR: REFRESH interval must not involve units larger than days
+query error REFRESH interval must not involve units larger than days
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 month') AS SELECT 1;
 
-query error db error: ERROR: REFRESH interval must not involve units larger than days
+query error REFRESH interval must not involve units larger than days
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 year') AS SELECT 1;
 
-query error db error: ERROR: REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO now()) AS SELECT 1;
 
-query error db error: ERROR: REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO now()::mz_timestamp) AS SELECT 1;
 
-query error db error: ERROR: greatest types mz_timestamp and timestamp with time zone cannot be matched
+query error greatest types mz_timestamp and timestamp with time zone cannot be matched
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO greatest(mz_now(), now())) AS SELECT 1;
 
-query error db error: ERROR: REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
+query error REFRESH EVERY \.\.\. ALIGNED TO argument must be an expression that can be simplified and/or cast to a constant whose type is mz_timestamp
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO greatest(mz_now(), now()::mz_timestamp)) AS SELECT 1;
 
-query error db error: ERROR: aggregate functions are not allowed in REFRESH EVERY \.\.\. ALIGNED TO \(function pg_catalog\.sum\)
+query error aggregate functions are not allowed in REFRESH EVERY \.\.\. ALIGNED TO \(function pg_catalog\.sum\)
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO sum(5)) AS SELECT 1;
 
-query error db error: ERROR: REFRESH EVERY \.\.\. ALIGNED TO does not allow subqueries
+query error REFRESH EVERY \.\.\. ALIGNED TO does not allow subqueries
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO (SELECT 1)) AS SELECT 1;
 
-query error db error: ERROR: window functions are not allowed in REFRESH EVERY \.\.\. ALIGNED TO \(function pg_catalog\.lag\)
+query error window functions are not allowed in REFRESH EVERY \.\.\. ALIGNED TO \(function pg_catalog\.lag\)
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '1 day' ALIGNED TO lag(7) OVER ()) AS SELECT 1;
 
 query error Expected literal string, found right parenthesis
@@ -741,17 +745,22 @@ CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x REFRESH EVERY '8 seconds
 query error Expected literal string, found ASSERT
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT * FROM t2;
 
-query error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
+query error invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELECT * FROM t2;
+
+query error REFRESH interval must be at least 1 ms
+CREATE MATERIALIZED VIEW mv_bad
+  WITH (REFRESH EVERY '999 microseconds')
+  AS SELECT 1;
 
 # This tests that we don't forget to purify EXPLAIN CREATE MATERIALIZED VIEW
 statement ok
-EXPLAIN CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT 1000*x, 1000*y, 1000*z
 FROM mv_on_commit;
 ----
@@ -773,7 +782,7 @@ statement ok
 INSERT INTO t2 VALUES (10, 11, 12);
 
 statement ok
-CREATE MATERIALIZED VIEW mv_assertion_plus_refresh_every WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
+CREATE MATERIALIZED VIEW mv_assertion_plus_refresh_every WITH (ASSERT NOT NULL x, REFRESH EVERY '10 seconds') AS SELECT * FROM t2;
 
 # There should be a refresh immediately when creating the MV. This refresh should already see what we just inserted.
 query III
@@ -803,10 +812,10 @@ SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 # A proper solution might be to add `AS OF now()` to the following SELECT, but calling `now()` seems to not be currently
 # allowed in `AS OF`.
 statement ok
-SELECT mz_unsafe.mz_sleep(8+2);
+SELECT mz_unsafe.mz_sleep(10+2);
 
 # Now we should see the NULL that should error out the MV.
-query error db error: ERROR: Evaluation error: column "x" must not be null
+query error Evaluation error: column "x" must not be null
 SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 
 ## Check `REFRESH AT greatest(<past time>, mz_now())`, because this is an idiom that we are recommending to users.
@@ -819,7 +828,7 @@ CREATE MATERIALIZED VIEW mv_greatest
 WITH (REFRESH AT greatest('1990-01-04 11:00', mz_now()))
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_greatest;
 ----
 NULL  -1  -2
@@ -851,7 +860,7 @@ INSERT INTO t2 VALUES (100, 100, 100);
 # Query it.
 # - The query should block until the first refresh.
 # - The newly inserted stuff should be visible.
-query III
+query III rowsort
 SELECT * FROM mv_no_creation_refresh;
 ----
 NULL  -1  -2
@@ -882,7 +891,7 @@ CREATE MATERIALIZED VIEW mv_aligned_to_past
 WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 - 10*10000 + 3000)
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_aligned_to_past;
 ----
 NULL  -1  -2
@@ -913,7 +922,7 @@ CREATE MATERIALIZED VIEW mv_aligned_to_future
 WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 + 10*10000 + 3000)
 AS SELECT * FROM t2;
 
-query III
+query III rowsort
 SELECT * FROM mv_aligned_to_future;
 ----
 NULL  -1  -2
@@ -961,7 +970,7 @@ statement ok
 SET transaction_isolation = 'strict serializable'
 
 ## MV that has refreshes only in the past
-query error db error: ERROR: REFRESH AT requested for a time where not all the inputs are readable
+query error REFRESH AT requested for a time where not all the inputs are readable
 CREATE MATERIALIZED VIEW mv_no_refresh
 WITH (REFRESH AT '2000-01-01 10:00')
 AS SELECT * FROM t2;
@@ -973,7 +982,7 @@ WITH (REFRESH AT mz_now()::text::int8 + 2000, REFRESH AT mz_now()::text::int8 + 
 AS SELECT * FROM t2;
 
 # Wait until the first refresh
-query III
+query III rowsort
 SELECT * FROM mv3;
 ----
 NULL  -1  -2
@@ -994,7 +1003,7 @@ statement ok
 INSERT INTO t2 VALUES (70, 70, 70);
 
 # We should be able to query the MV after the last refresh, and the newly inserted data shouldn't be visible.
-query III
+query III rowsort
 SELECT * FROM mv3;
 ----
 NULL  -1  -2
@@ -1010,7 +1019,7 @@ NULL  -1  -2
 # choosing a timestamp for mz_now.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unstable_dependencies = true
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 ----
 COMPLETE 0
 
@@ -1027,7 +1036,7 @@ CREATE MATERIALIZED VIEW mv5 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
 SELECT x+y+z from t2;
 
 statement ok
-EXPLAIN SELECT * FROM mv5;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mv5;
 
 statement ok
 EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;
@@ -1041,7 +1050,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT mz_now()::text::int8 + 3000) AS
 SELECT * from mv6;
 
-query I
+query I rowsort
 SELECT * FROM mv7
 ----
 NULL
@@ -1058,7 +1067,7 @@ NULL
 statement ok
 INSERT INTO t2 VALUES (0, 0, 0);
 
-query I
+query I rowsort
 SELECT * FROM mv6
 ----
 NULL
@@ -1080,7 +1089,7 @@ CREATE MATERIALIZED VIEW mv_multiple_refresh_options WITH (
 SELECT DISTINCT 5*x FROM t2;
 
 # Should return quickly due to the creation refresh.
-query I
+query I rowsort
 SELECT * FROM mv_multiple_refresh_options;
 ----
 NULL
@@ -1102,6 +1111,9 @@ statement ok
 INSERT INTO t3 VALUES (5), (6);
 
 statement ok
+CREATE DEFAULT INDEX ON t3;
+
+statement ok
 CREATE MATERIALIZED VIEW mv8 WITH (REFRESH AT CREATION) AS
 SELECT DISTINCT x-x FROM t3;
 
@@ -1116,7 +1128,7 @@ EXPLAIN REPLAN MATERIALIZED VIEW mv8;
 ## Indexes on REFRESH MVs
 
 statement ok
-CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 2000) AS
+CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 3000) AS
 SELECT 5*x FROM t3;
 
 statement ok
@@ -1163,7 +1175,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(8+2);
 
 # Visible now.
-query I
+query I rowsort
 SELECT * FROM mvi1;
 ----
 25
@@ -1190,7 +1202,7 @@ SELECT DISTINCT x+x+x FROM t3;
 statement ok
 CREATE DEFAULT INDEX on mvi2;
 
-query I
+query I rowsort
 SELECT * FROM mvi2;
 ----
 15
@@ -1217,7 +1229,7 @@ SELECT DISTINCT 5*x FROM t3;
 statement ok
 CREATE DEFAULT INDEX ON mvi3;
 
-query I
+query I rowsort
 SELECT * FROM mvi3
 ----
 25
@@ -1243,7 +1255,7 @@ SELECT mz_unsafe.mz_sleep(2+2);
 statement ok
 INSERT INTO t3 VALUES (-1);
 
-query I
+query I rowsort
 SELECT * FROM mvi3
 ----
 25
@@ -1273,8 +1285,8 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not supported
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
+query error `SCHEDULE = ON REFRESH` cluster option is not available
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
@@ -1287,34 +1299,34 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
+statement error Expected one of MANUAL or ON, found identifier "aaaaaaaa"
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = AAAAAAAA);
 
-statement error db error: ERROR: Expected one of MANUAL or ON, found number "42"
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = 42);
+statement error Expected one of MANUAL or ON, found number "42"
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = 42);
 
-statement error db error: ERROR: Expected one of MANUAL or ON, found REFRESH
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = REFRESH);
+statement error Expected one of MANUAL or ON, found REFRESH
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = REFRESH);
 
-statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
-
-statement ok
-CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
+statement error REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
 
 statement ok
-CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
+CREATE CLUSTER c_schedule_1 (SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL);
 
 statement ok
-CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_2 (SIZE = 'scale=1,workers=1', SCHEDULE MANUAL);
 
-statement error db error: ERROR: REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL
+statement ok
+CREATE CLUSTER c_schedule_3 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
+
+statement error REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL
 ALTER CLUSTER c_schedule_3 SET (REPLICATION FACTOR = 1);
 
 statement ok
 ALTER CLUSTER c_schedule_1 RESET (SCHEDULE);
 
-statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+statement error REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
 ALTER CLUSTER c_schedule_1 SET (REPLICATION FACTOR = 1, SCHEDULE = ON REFRESH);
 
 statement ok
@@ -1332,11 +1344,11 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_1
 ----
 0
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+statement error cluster schedules other than MANUAL are not supported for unmanaged clusters
 ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = ON REFRESH);
 
 # The SCHEDULE shouldn't simply "fall off" when switching to unmanaged,
-statement error db error: ERROR: when switching a cluster to unmanaged, if the managed cluster's SCHEDULE is anything other than MANUAL, you have to explicitly set the SCHEDULE to MANUAL
+statement error when switching a cluster to unmanaged, if the managed cluster's SCHEDULE is anything other than MANUAL, you have to explicitly set the SCHEDULE to MANUAL
 ALTER CLUSTER c_schedule_1 SET (MANAGED = false);
 
 # ... but can be explicitly set to MANUAL in the same command.
@@ -1344,7 +1356,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = MANUAL);
 
 statement ok
-ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
+ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = 'scale=1,workers=1');
 
 statement ok
 ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '0 seconds'));
@@ -1362,24 +1374,24 @@ statement ok
 ALTER CLUSTER c_schedule_1 RESET (INTROSPECTION DEBUGGING);
 
 statement ok
-CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE '1')))
+CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE 'scale=1,workers=1')))
 
 statement ok
 ALTER cluster unmanaged1 SET (SCHEDULE = MANUAL);
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+statement error cluster schedules other than MANUAL are not supported for unmanaged clusters
 ALTER cluster unmanaged1 SET (SCHEDULE = ON REFRESH);
 
-statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
-ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = '1');
+statement error REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = 'scale=1,workers=1');
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
-CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE '1')))
+statement error cluster schedules other than MANUAL are not supported for unmanaged clusters
+CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE 'scale=1,workers=1')))
 
 statement ok
-CREATE CLUSTER c_schedule_5 (SIZE = '1');
+CREATE CLUSTER c_schedule_5 (SIZE = 'scale=1,workers=1');
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found left parenthesis
+statement error Expected one of OWNER or RENAME or RESET or SET or SWAP, found left parenthesis
 ALTER CLUSTER c_schedule_5 (MANAGED = false, SCHEDULE = REFRESH);
 
 statement ok
@@ -1436,7 +1448,7 @@ SELECT * FROM mv11
 ## Very short refresh interval.
 
 statement ok
-CREATE CLUSTER c_schedule_4 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_4 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 statement ok
 CREATE MATERIALIZED VIEW mv12
@@ -1475,20 +1487,20 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4
 
 ## HYDRATION TIME ESTIMATE
 
-statement error db error: ERROR: Expected literal string, found number "0"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
+statement error Expected literal string, found number "0"
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
 
-statement error db error: ERROR: HYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
+statement error HYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
 
-statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
+statement error invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
 
-statement error db error: ERROR: HYDRATION TIME ESTIMATE must not involve units larger than days
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
+statement error HYDRATION TIME ESTIMATE must not involve units larger than days
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
 
-statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
+statement error invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
 
 # ----------------------------------------
 # Introspection
@@ -1502,7 +1514,7 @@ SELECT
   now() - aligned_to < INTERVAL '30 minutes',
   now() - at < INTERVAL '30 minutes'
 FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
-WHERE mv.id = mvrs.materialized_view_id
+WHERE mv.id LIKE 'u%' AND mv.id = mvrs.materialized_view_id
 ORDER BY name;
 ----
 const_mv  every  24:00:00  true  NULL
@@ -1523,7 +1535,7 @@ mv_aligned_to_future  every  00:00:10  true  NULL
 mv_aligned_to_past  every  00:00:10  true  NULL
 mv_assertion_at_begin  on-commit  NULL  NULL  NULL
 mv_assertion_at_end  on-commit  NULL  NULL  NULL
-mv_assertion_plus_refresh_every  every  00:00:08  true  NULL
+mv_assertion_plus_refresh_every  every  00:00:10  true  NULL
 mv_desugar1  at  NULL  NULL  true
 mv_desugar2  every  24:00:00  true  NULL
 mv_good_assertion_on_renamed_column  on-commit  NULL  NULL  NULL
@@ -1541,7 +1553,7 @@ mvi3  at  NULL  NULL  true
 mvi3  at  NULL  NULL  true
 
 statement ok
-CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
+CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
 # Make the above cluster turn on, so that we can test how the HYDRATION TIME ESTIMATE looks in `mz_audit_events`.
 statement ok
@@ -1564,9 +1576,9 @@ c_schedule_5  manual  NULL
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
 statement ok
-SELECT mz_unsafe.mz_sleep(4);
+SELECT mz_unsafe.mz_sleep(8);
 
-query TTTTBT
+query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
   object_type,
@@ -1578,11 +1590,11 @@ FROM mz_audit_events
 WHERE
   event_type IN ('create', 'drop') AND
   object_type = 'cluster-replica' AND
-  ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"');
+  ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"') AND
+  (details->'cluster_name')::text != '"c_schedule_4"';
 ----
 drop  cluster-replica  "other"  "manual"  true  NULL
 create  cluster-replica  "other"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
@@ -1590,7 +1602,6 @@ drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hyd
 drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
 create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 
 ## Now test `cluster_refresh_mv_compaction_estimate`.
@@ -1601,7 +1612,7 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
 COMPLETE 0
 
 statement ok
-CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_6 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 query I
 SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
@@ -1658,7 +1669,7 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6
 1
 
 # The audit events should now have a row that has a non-empty `objects_needing_compaction`.
-query TTTTBT
+query TTTTBT rowsort
 SELECT DISTINCT
   event_type,
   object_type,
@@ -1780,16 +1791,28 @@ EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi3;
 
 # Attempting to explain MVs which are not readable at the current time can block
 
-statement error db error: ERROR: canceling statement due to statement timeout
+statement error canceling statement due to statement timeout
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv4;
 
-statement error db error: ERROR: canceling statement due to statement timeout
+statement error canceling statement due to statement timeout
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv10;
 
-statement error db error: ERROR: canceling statement due to statement timeout
+statement error canceling statement due to statement timeout
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv11;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
 ----
 COMPLETE 0
+
+query T multiline
+SELECT regexp_replace(create_sql, 'AT \d+', 'XXX', 'g') FROM (SHOW CREATE MATERIALIZED VIEW mvi3);
+----
+CREATE MATERIALIZED VIEW materialize.public.mvi3
+    IN CLUSTER quickstart
+    WITH (
+        REFRESH = XXX::mz_catalog.mz_timestamp,
+        REFRESH = XXX::mz_catalog.mz_timestamp::pg_catalog.text::pg_catalog.int8 + 2000
+    )
+    AS SELECT DISTINCT 5 * x FROM materialize.public.t3;
+EOF

@@ -29,21 +29,38 @@ You can use `SUBSCRIBE` to:
 
 ## Syntax
 
-{{< diagram "subscribe-stmt.svg" >}}
+```mzsql
+SUBSCRIBE [TO] <object_name | (SELECT ...)>
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
+[WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
+[WITH (<option_name> [= <option_value>], ...)]
+[AS OF [AT LEAST] <timestamp_expression>]
+[UP TO <timestamp_expression>]
+;
 
-| Field                           | Use                                                                                                                                      |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
-| _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
-| **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **ENVELOPE DEBEZIUM**           | Use a [Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope), which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
+```
+
+where:
+
+- `<object_name>` is the name of the source, table, view, or materialized view
+  that you want to subscribe to.
+- `<select_stmt>` is the [`SELECT` statement](/sql/select) whose output you want
+  to subscribe to.
+
+The generated schemas have a Debezium-style diff envelope to capture changes in
+the input view or source.
+
+| Syntax element                  | Description                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **ENVELOPE UPSERT (KEY (**\<key1\>, ...**))**                | If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))**           | If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITHIN TIMESTAMP ORDER BY** \<column1\>, ... | If specified, use an `ORDER BY` clause to sort the subscription output within a timestamp. For each `ORDER BY` column, you can optionally specify: <ul><li> `ASC` or `DESC`</li><li> `NULLS FIRST` or `NULLS LAST`</li></ul> For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITH** \<option_name\> [= \<option_value\>] | If specified, use the specified option. For more information, see [`WITH` options](#with-options). |
+| **AS OF** \<timestamp_expression\> | If specified, no rows whose timestamp is earlier than the specified timestamp will be returned. For more information, see [`AS OF`](#as-of). |
+| **UP TO** \<timestamp_expression\> | If specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned. For more information, see [`UP TO`](#up-to). |
 
 
-
-The generated schemas have a Debezium-style diff envelope to capture changes in the input view or source.
-
-### `WITH` options
+#### `WITH` options
 
 The following options are valid within the `WITH` clause.
 
@@ -137,9 +154,13 @@ subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention
 If `AS OF` is unspecified, the system automatically chooses an `AS OF`
 timestamp.
 
+The value in the `AS OF` clause is automatically [cast to `mz_timestamp`](../../sql/types/mz_timestamp/#valid-casts) with an assignment or implicit cast.
+
 ### `UP TO`
 
 The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will cease running. If `UP TO` is specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned.
+
+The value in the `UP TO` clause is automatically [cast to `mz_timestamp`](../../sql/types/mz_timestamp/#valid-casts) with an assignment or implicit cast.
 
 ### Interaction of `AS OF` and `UP TO`
 
@@ -179,6 +200,29 @@ For example, an insert that occurred before the `SUBSCRIBE` began would appear i
 
 To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
 
+{{< note >}}
+While `WITH (SNAPSHOT = false)` guarantees that the snapshot will not be sent to
+the client, Materialize may still need to fetch and process the snapshot data to
+compute the correct result.
+
+For example, consider:
+
+```mzsql
+SUBSCRIBE TO SELECT SUM(column) FROM table WITH (SNAPSHOT = false)
+```
+
+The latest update for the query depends on _all_ rows in `table`, not just the
+rows that have changed recently.
+
+However, when subscribing directly to a collection; e.g.,
+
+```mzsql
+SUBSCRIBE TO <object> WITH (SNAPSHOT = false)
+```
+
+where `<object>` is a materialized view, table, source, or index, Materialize can generally skip fetching or processing the snapshot data from that collection entirely.
+{{< /note >}}
+
 ### `PROGRESS`
 
 If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
@@ -215,18 +259,24 @@ in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
 `2` or `3`—but that there may be more data arriving at timestamp `4`.
 
+### Connection pooling
+
+Because Materialize is wire-compatible with PostgreSQL, you can use any
+PostgreSQL connection pooler with Materialize. For example in using PgBouncer,
+see [Connection Pooling](/integrations/connection-pooling).
+
 ## Examples
 
 `SUBSCRIBE` produces rows similar to a `SELECT` statement, except that `SUBSCRIBE` may never complete.
 Many drivers buffer all results until a query is complete, and so will never return.
 Below are the recommended ways to work around this.
 
-### Creating a counter load generator
+### Creating an auction load generator
 
-As an example, we'll create a [counter load generator](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
+As an example, we'll create a [auction load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) that emits a row every second:
 
 ```mzsql
-CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 ```
 
 ### Subscribing with `FETCH`
@@ -234,13 +284,13 @@ CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 The recommended way to use `SUBSCRIBE` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-Next, let's subscribe to the `counter` load generator source that we've created above.
+Next, let's subscribe to the `bids` table of the `auction` load generator source that we've created above.
 
 First, declare a `SUBSCRIBE` cursor:
 
 ```mzsql
 BEGIN;
-DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM counter);
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM bids);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
@@ -274,18 +324,18 @@ FETCH ALL c WITH (timeout='0s');
 If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
 ```mzsql
-COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
+COPY (SUBSCRIBE (SELECT * FROM bids)) TO STDOUT;
 ```
 
 | Additional guides |
 | ---------------------- |
-| [Go](/integrations/golang/#stream)|
-| [Java](/integrations/java-jdbc/#stream)|
-| [Node.js](/integrations/node-js/#stream)|
-| [PHP](/integrations/php/#stream)|
-| [Python](/integrations/python/#stream)|
-| [Ruby](/integrations/ruby/#stream)|
-| [Rust](/integrations/rust/#stream)|
+| [Go](/integrations/client-libraries/golang/#stream)|
+| [Java](/integrations/client-libraries/java-jdbc/#stream)|
+| [Node.js](/integrations/client-libraries/node-js/#stream)|
+| [PHP](/integrations/client-libraries/php/#stream)|
+| [Python](/integrations/client-libraries/python/#stream)|
+| [Ruby](/integrations/client-libraries/ruby/#stream)|
+| [Rust](/integrations/client-libraries/rust/#stream)|
 
 ### Mapping rows to their updates
 
@@ -517,12 +567,12 @@ to sort the rows within each distinct timestamp.
 
 * If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
-### Dropping the `counter` load generator source
+### Dropping the `auction` load generator source
 
-When you're done, you can drop the `counter` load generator source:
+When you're done, you can drop the `auction` load generator source:
 
 ```mzsql
-DROP SOURCE counter;
+DROP SOURCE auction CASCADE;
 ```
 
 ### Durable subscriptions
@@ -542,10 +592,4 @@ subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
-- `SELECT` privileges on all relations in the query.
-  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-  execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
-    granted the necessary privileges.
-- `USAGE` privileges on all types used in the query.
-- `USAGE` privileges on the active cluster.
+{{% include-headless "/headless/sql-command-privileges/subscribe" %}}

@@ -11,7 +11,7 @@ The `TABLE` expression retrieves all rows from a single table.
 ## Syntax
 
 ```mzsql
-TABLE <table_name>
+TABLE <table_name>;
 ```
 
 ## Details

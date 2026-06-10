@@ -11,13 +11,20 @@ import json
 import random
 from typing import Any
 
-from materialize import buildkite
+from materialize import buildkite, ui
 from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
 from materialize.mzcompose.service import (
     Service,
-    ServiceDependency,
+    ServiceConfig,
 )
-from materialize.mzcompose.services.postgres import METADATA_STORE
+from materialize.mzcompose.services import foundationdb
+from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
+    METADATA_STORE,
+    metadata_store_companions,
+)
+from materialize.mzcompose.services.minio import minio_blob_uri
 
 
 class Testdrive(Service):
@@ -50,18 +57,24 @@ class Testdrive(Service):
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
-        external_metadata_store: bool = False,
-        external_minio: bool = False,
-        fivetran_destination: bool = False,
-        fivetran_destination_url: str = "http://fivetran-destination:6874",
-        fivetran_destination_files_path: str = "/share/tmp",
+        check_statement_logging: bool = False,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
+        external_blob_store: bool = False,
+        blob_store_is_azure: bool = False,
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
+        network_mode: str | None = None,
+        set_persist_urls: bool = True,
+        backoff_factor: float = 1.0,
+        networks: (
+            dict[str, dict[str, list[str]]]
+            | dict[str, dict[str, str]]
+            | list[str]
+            | None
+        ) = None,
     ) -> None:
-        depends_graph: dict[str, ServiceDependency] = {}
-
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
 
@@ -83,6 +96,8 @@ class Testdrive(Service):
 
         environment += [
             f"CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
+            "MZ_CI_LICENSE_KEY",
+            "LD_PRELOAD=libeatmydata.so",
         ]
 
         volumes = [
@@ -100,7 +115,10 @@ class Testdrive(Service):
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
                 *(["--materialize-use-https"] if materialize_use_https else []),
+                # Faster retries
             ]
+
+        entrypoint.append(f"--backoff-factor={backoff_factor}")
 
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")
@@ -127,7 +145,9 @@ class Testdrive(Service):
             entrypoint.append(f"--materialize-param={k}={v}")
 
         if default_timeout is None:
-            default_timeout = "360s"
+            default_timeout = (
+                "120s" if ui.env_is_truthy("CI_COVERAGE_ENABLED") else "20s"
+            )
         entrypoint.append(f"--default-timeout={default_timeout}")
 
         if kafka_default_partitions:
@@ -148,42 +168,68 @@ class Testdrive(Service):
         if no_consistency_checks:
             entrypoint.append("--consistency-checks=disable")
 
-        if fivetran_destination:
-            depends_graph["fivetran-destination"] = {"condition": "service_started"}
-            entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
-            entrypoint.append(
-                f"--fivetran-destination-files-path={fivetran_destination_files_path}"
-            )
+        if check_statement_logging:
+            entrypoint.append("--check-statement-logging")
 
-        if external_minio:
-            depends_graph["minio"] = {"condition": "service_healthy"}
-            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
-            entrypoint.append(f"--persist-blob-url={persist_blob_url}")
-        else:
-            entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
+        if set_persist_urls:
+            if external_blob_store:
+                blob_store = "azurite" if blob_store_is_azure else "minio"
+                address = (
+                    blob_store if external_blob_store == True else external_blob_store
+                )
+                persist_blob_url = (
+                    azure_blob_uri(address)
+                    if blob_store_is_azure
+                    else minio_blob_uri(address)
+                )
+                entrypoint.append(f"--persist-blob-url={persist_blob_url}")
+            else:
+                entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
-        if external_metadata_store:
-            depends_graph[metadata_store] = {"condition": "service_healthy"}
-            entrypoint.append(
-                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
-            )
-        else:
-            entrypoint.append(
-                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
-            )
+            if external_metadata_store:
+                if metadata_store == "foundationdb":
+                    entrypoint.append(
+                        "--persist-consensus-url=foundationdb:?prefix=consensus"
+                    )
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+                else:
+                    address = (
+                        metadata_store
+                        if external_metadata_store == True
+                        else external_metadata_store
+                    )
+                    entrypoint.append(
+                        f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus"
+                    )
+            else:
+                entrypoint.append(
+                    f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
+                )
 
         entrypoint.extend(entrypoint_extra)
 
+        config: ServiceConfig = {
+            "mzbuild": mzbuild,
+            "entrypoint": entrypoint,
+            "environment": environment,
+            "volumes": volumes,
+            "propagate_uid_gid": propagate_uid_gid,
+            "init": True,
+            "stop_grace_period": stop_grace_period,
+        }
+        if network_mode:
+            config["network_mode"] = network_mode
+
+        if networks:
+            config["networks"] = networks
+
         super().__init__(
             name=name,
-            config={
-                "depends_on": depends_graph,
-                "mzbuild": mzbuild,
-                "entrypoint": entrypoint,
-                "environment": environment,
-                "volumes": volumes,
-                "propagate_uid_gid": propagate_uid_gid,
-                "init": True,
-                "stop_grace_period": stop_grace_period,
-            },
+            config=config,
+        )
+
+        # Pull the external metadata store container(s) into the composition
+        # automatically, so compositions don't have to spell them out.
+        self.companions = metadata_store_companions(
+            metadata_store, external_metadata_store
         )

@@ -17,6 +17,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column (f1 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_add_column
 
@@ -26,12 +27,14 @@ $ schema-registry-wait topic=postgres.public.alter_add_column
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_add_column
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column');
 
 > CREATE TABLE alter_add_column_tbl FROM SOURCE alter_add_column (REFERENCE "postgres.public.alter_add_column")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM alter_add_column_tbl;
 123

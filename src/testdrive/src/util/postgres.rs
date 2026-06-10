@@ -10,7 +10,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_tls_util::make_tls;
@@ -63,7 +63,11 @@ pub async fn postgres_client(
         })
         .await?;
 
-    println!("Connecting to PostgreSQL server at {}...", url);
+    if url.contains("mzp_") {
+        println!("Connecting to PostgreSQL server at [REDACTED]...");
+    } else {
+        println!("Connecting to PostgreSQL server at {}...", url);
+    }
     let handle = task::spawn(|| "postgres_client_task", connection);
 
     Ok((client, handle))

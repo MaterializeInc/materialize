@@ -1,0 +1,104 @@
+columns:
+  - column: "mz_now() Compound Clause"
+  - column: "Valid/Invalid"
+
+rows:
+  - "mz_now() Compound Clause": |
+      <span class="copyableCode">
+
+      ```mzsql
+      SELECT * FROM orders
+      WHERE status = 'Shipped'
+      OR order_date + interval '1' days <= mz_now()
+      ;
+      ```
+      </span>
+
+    "Valid/Invalid": |
+
+      ✅ **Valid**
+
+      Ad-hoc queries do not have the same restrictions.
+
+  - "mz_now() Compound Clause": |
+      <span class="copyableCode">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders AS
+      SELECT * FROM orders
+      WHERE order_date + interval '3' days > mz_now()
+      AND order_date + interval '1' days < mz_now()
+      ;
+      ```
+      </span>
+    "Valid/Invalid": "✅ **Valid**"
+
+  - "mz_now() Compound Clause": |
+      <span class="copyableCode">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders AS
+      SELECT * FROM orders
+      WHERE (status = 'Complete' OR status = 'Shipped')
+      AND order_date + interval '1' days <= mz_now()
+      ;
+      ```
+      </span>
+    "Valid/Invalid": "✅ **Valid**"
+
+  - "mz_now() Compound Clause": |
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders AS
+      SELECT * FROM orders
+      WHERE status = 'Shipped'
+      OR order_date + interval '1' days <= mz_now()
+      ;
+      ```
+
+      </div>
+    "Valid/Invalid": |
+      ❌ **Invalid**
+
+      In materialized view definitions, `mz_now()` clause can only be combined
+      using an `AND`.
+
+  - "mz_now() Compound Clause": |
+
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders AS
+      SELECT * FROM orders
+      WHERE status = 'Complete'
+      OR (status = 'Shipped' AND order_date + interval '1' days <= mz_now())
+      ```
+
+      </div>
+    "Valid/Invalid": |
+      ❌ **Invalid**
+
+      In materialized view definitions with `mz_now()` clauses, top-level
+      conditions must be combined using an `AND`.
+
+  - "mz_now() Compound Clause": |
+      <div style="background-color: var(--code-block)">
+
+      ```mzsql
+      CREATE VIEW forecast_completed_orders AS
+      SELECT * FROM orders
+      WHERE status = 'Complete'
+      OR (status = 'Shipped' AND order_date + interval '1' days <= mz_now())
+      ;
+
+      CREATE INDEX idx_forecast_completed_orders ON forecast_completed_orders
+      (order_date); -- Unsupported because of the `mz_now()` clause
+      ```
+
+      </div>
+    "Valid/Invalid": |
+      ❌ **Invalid**
+
+      To index a view whose definitions includes `mz_now()` clauses, top-level
+      conditions must be combined using an `AND` in the view definition.

@@ -21,31 +21,36 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_expr::canonicalize::canonicalize_predicates;
-use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
+use mz_expr::canonicalize::canonicalize_predicates;
+use mz_expr::func::variadic::{And, Or};
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
 
+use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
-use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
 pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
+    fn name(&self) -> &'static str {
+        "LiteralConstraints"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "literal_constraints")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -66,7 +71,9 @@ impl LiteralConstraints {
         relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
         if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
+            id: Id::Global(id),
+            ref typ,
+            ..
         } = *relation
         {
             let orig_mfp = mfp.clone();
@@ -83,10 +90,11 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
+                relation_type: ReprRelationType,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                LiteralConstraints::canonicalize_predicates(mfp, relation);
+                LiteralConstraints::canonicalize_predicates(mfp, relation, relation_type);
                 // undo inline_literal_constraints
                 mfp.optimize();
                 // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
@@ -105,6 +113,8 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
+            let inp_typ = typ.clone();
+
             let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
             match key_val {
@@ -112,7 +122,7 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation);
+                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -126,7 +136,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation);
+                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ.clone());
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -136,17 +146,15 @@ impl LiteralConstraints {
                     // We transform the Get into a semi-join with a constant collection.
 
                     let inp_id = id.clone();
-                    let inp_typ = relation.typ();
                     let filter_list = MirRelationExpr::Constant {
-                        rows: Ok(possible_vals.iter().map(|val| (val.clone(), 1)).collect()),
-                        typ: mz_repr::RelationType {
+                        rows: Ok(possible_vals
+                            .iter()
+                            .map(|val| (val.clone(), Diff::ONE))
+                            .collect()),
+                        typ: ReprRelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| {
-                                    e.typ(&inp_typ.column_types)
-                                        // We make sure to not include a null in `expr_eq_literal`.
-                                        .nullable(false)
-                                })
+                                .map(|e| e.typ(&inp_typ.column_types).scalar_type.nullable(false))
                                 .collect(),
                             // (Note that the key inference for `MirRelationExpr::Constant` inspects
                             // the constant values to detect keys not listed within the node, but it
@@ -155,22 +163,22 @@ impl LiteralConstraints {
                             keys: vec![(0..key.len()).collect()],
                         },
                     }
-                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
+                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::column).collect_vec()]);
 
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        *relation = MirRelationExpr::Constant {
-                            rows: Ok(Vec::new()),
-                            typ: relation.typ(),
-                        };
+                        relation.take_safely(Some(inp_typ));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.
                         *relation = MirRelationExpr::Join {
                             // It's important to keep the `filter_list` in the second position.
-                            // Both the lowering and EXPLAIN depends on this.
-                            inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
+                            // Both the lowering and EXPLAIN depend on this.
+                            inputs: vec![
+                                relation.clone().arrange_by(std::slice::from_ref(&key)),
+                                filter_list,
+                            ],
                             equivalences: key
                                 .iter()
                                 .enumerate()
@@ -242,7 +250,7 @@ impl LiteralConstraints {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 for key_field in key {
-                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                    let and_args = or_arg.and_or_args(And.into());
                     // Let's find a constraint for this key field
                     if let Some((literal, inv_cast)) = and_args
                         .iter()
@@ -329,7 +337,7 @@ impl LiteralConstraints {
                             let recommended_key = or_args
                                 .iter()
                                 .map(|or_arg| {
-                                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                                    let and_args = or_arg.and_or_args(And.into());
                                     and_args
                                         .iter()
                                         .filter_map(|and_arg| and_arg.any_expr_eq_literal())
@@ -396,7 +404,7 @@ impl LiteralConstraints {
         // `c OR (d AND e)`
         let mut constraints_to_residual_sets = BTreeMap::new();
         or_args.iter().for_each(|or_arg| {
-            let and_args = or_arg.and_or_args(VariadicFunc::And);
+            let and_args = or_arg.and_or_args(And.into());
             let (mut constraints, mut residual): (Vec<_>, Vec<_>) =
                 and_args.iter().cloned().partition(|and_arg| {
                     key.iter()
@@ -429,16 +437,13 @@ impl LiteralConstraints {
             // We can remove the literal constraint
             assert!(residual_sets.len() >= 1); // We already checked `or_args.len() == 0` above
             let residual_set = residual_sets.into_iter().into_first();
-            let new_pred = MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: residual_set
+            let new_pred = MirScalarExpr::call_variadic(
+                Or,
+                residual_set
                     .into_iter()
-                    .map(|residual| MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
-                        exprs: residual,
-                    })
+                    .map(|residual| MirScalarExpr::call_variadic(And, residual))
                     .collect::<Vec<_>>(),
-            };
+            );
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)
@@ -475,7 +480,7 @@ impl LiteralConstraints {
         let mut changed = false;
         or_args.iter_mut().enumerate().for_each(|(i, or_arg)| {
             if let MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(And),
                 exprs: and_args,
             } = or_arg
             {
@@ -516,10 +521,7 @@ impl LiteralConstraints {
         swap_remove_multiple(&mut or_args, to_remove);
         // Rebuild the MFP if needed
         if changed {
-            let new_predicates = vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: or_args,
-            }];
+            let new_predicates = vec![MirScalarExpr::call_variadic(Or, or_args)];
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)
@@ -539,7 +541,7 @@ impl LiteralConstraints {
     fn get_or_args(mfp: &MapFilterProject) -> Vec<MirScalarExpr> {
         assert_eq!(mfp.predicates.len(), 1); // list_of_predicates_to_and_of_predicates ensured this
         let (_, pred) = mfp.predicates.get(0).unwrap();
-        pred.and_or_args(VariadicFunc::Or)
+        pred.and_or_args(Or.into())
     }
 
     /// Makes the job of [LiteralConstraints::detect_literal_constraints] easier by undoing some CSE to
@@ -561,20 +563,20 @@ impl LiteralConstraints {
         for (_before, p) in mfp.predicates.iter() {
             p.visit_pre(|e| {
                 if let MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
+                    func: BinaryFunc::Eq(_),
                     expr1,
                     expr2,
                 } = e
                 {
                     if matches!(**expr1, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr2 {
+                        if let MirScalarExpr::Column(col, _) = **expr2 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }
                         }
                     }
                     if matches!(**expr2, MirScalarExpr::Literal(..)) {
-                        if let MirScalarExpr::Column(col) = **expr1 {
+                        if let MirScalarExpr::Column(col, _) = **expr1 {
                             if col >= mfp.input_arity {
                                 should_inline[col] = true;
                             }
@@ -595,10 +597,10 @@ impl LiteralConstraints {
         // predicates also have a "before" field, which we need to update. (`filter` will recompute
         // these.)
         let (map, _predicates, project) = mfp.as_map_filter_project();
-        let new_predicates = vec![MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs: mfp.predicates.iter().map(|(_, p)| p.clone()).collect(),
-        }];
+        let new_predicates = vec![MirScalarExpr::call_variadic(
+            And,
+            mfp.predicates.iter().map(|(_, p)| p.clone()).collect(),
+        )];
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)
             .filter(new_predicates)
@@ -606,9 +608,16 @@ impl LiteralConstraints {
     }
 
     /// Call [mz_expr::canonicalize::canonicalize_predicates] on each of the predicates in the MFP.
-    fn canonicalize_predicates(mfp: &mut MapFilterProject, relation: &MirRelationExpr) {
+    fn canonicalize_predicates(
+        mfp: &mut MapFilterProject,
+        relation: &MirRelationExpr,
+        relation_type: ReprRelationType,
+    ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
-        let typ_after_map = relation.clone().map(map.clone()).typ();
+        let typ_after_map = relation
+            .clone()
+            .map(map.clone())
+            .typ_with_input_types(&[relation_type]);
         canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)
@@ -660,7 +669,7 @@ impl LiteralConstraints {
                 old_p = p.clone();
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     if let MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
+                        func: VariadicFunc::And(And),
                         exprs: and_args,
                     } = e
                     {
@@ -668,7 +677,7 @@ impl LiteralConstraints {
                             matches!(
                                 a,
                                 MirScalarExpr::CallVariadic {
-                                    func: VariadicFunc::Or,
+                                    func: VariadicFunc::Or(Or),
                                     ..
                                 }
                             )
@@ -676,12 +685,10 @@ impl LiteralConstraints {
                             // We found an AND whose ith argument is an OR. We'll distribute the other
                             // args of the AND over this OR.
                             let mut or = and_args.swap_remove(i);
-                            let to_distribute = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::And,
-                                exprs: (*and_args).clone(),
-                            };
+                            let to_distribute =
+                                MirScalarExpr::call_variadic(And, (*and_args).clone());
                             if let MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::Or,
+                                func: VariadicFunc::Or(Or),
                                 exprs: ref mut or_args,
                             } = or
                             {
@@ -694,10 +701,10 @@ impl LiteralConstraints {
                             *e = or; // The modified OR will be the new top-level expr.
                         }
                     }
-                })?;
+                });
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     e.flatten_associative();
-                })?;
+                });
             }
             Ok(())
         })
@@ -713,22 +720,16 @@ impl LiteralConstraints {
             if !matches!(
                 or_arg,
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
+                    func: VariadicFunc::And(And),
                     ..
                 }
             ) {
-                *or_arg = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
-                    exprs: vec![or_arg.clone()],
-                };
+                *or_arg = MirScalarExpr::call_variadic(And, vec![or_arg.clone()]);
                 changed = true;
             }
         });
         if changed {
-            let new_predicates = vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: or_args,
-            }];
+            let new_predicates = vec![MirScalarExpr::call_variadic(Or, or_args)];
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)

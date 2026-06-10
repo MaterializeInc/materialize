@@ -18,6 +18,7 @@ from materialize.scalability.operation.operations.operations import (
 )
 from materialize.scalability.operation.scalability_operation import Operation
 from materialize.scalability.workload.workload_markers import DmlDqlWorkload
+from materialize.scalability.workload.workload_version import WorkloadVersion
 
 
 class InsertWorkload(DmlDqlWorkload):
@@ -61,5 +62,14 @@ class InsertAndSelectLimitWorkload(DmlDqlWorkload):
 
 
 class UpdateWorkload(DmlDqlWorkload):
+    def max_concurrency(self) -> int | None:
+        # TPS is flat (~45) regardless of concurrency because all
+        # threads serialize on the same row.  Testing above 32 adds
+        # wall-clock time without additional signal.
+        return 32
+
+    def version(self) -> WorkloadVersion:
+        return WorkloadVersion.create(1, 2, 0)
+
     def operations(self) -> list["Operation"]:
         return [Update()]

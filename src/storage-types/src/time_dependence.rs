@@ -9,21 +9,12 @@
 
 //! Description of how a dataflow follows wall-clock time, independent of a specific point in time.
 
-use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::Timestamp;
-use proptest::arbitrary::{any, Arbitrary};
-use proptest::prelude::BoxedStrategy;
-use proptest::strategy::Strategy;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::instances::StorageInstanceId;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.time_dependence.rs"
-));
 
 /// Description of how a dataflow follows time.
 ///
@@ -32,7 +23,17 @@ include!(concat!(
 /// Note: This is different from `Timeline` or `TimelineContext`, which describe in what timeline
 /// an object exists. `TimeDependence` explains how an object in an epoch-based timeline
 /// relates to wall-clock time.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd
+)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates no rounding.
     pub schedule: Option<RefreshSchedule>,
@@ -125,40 +126,6 @@ pub enum TimeDependenceError {
     /// One of the imported collections does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(mz_repr::GlobalId),
-}
-
-impl RustType<ProtoTimeDependence> for TimeDependence {
-    fn into_proto(&self) -> ProtoTimeDependence {
-        ProtoTimeDependence {
-            schedule: self.schedule.as_ref().map(|s| s.into_proto()),
-            dependence: self.dependence.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimeDependence) -> Result<Self, TryFromProtoError> {
-        Ok(TimeDependence {
-            schedule: proto
-                .schedule
-                .map(RefreshSchedule::from_proto)
-                .transpose()?,
-            dependence: proto
-                .dependence
-                .into_iter()
-                .map(TimeDependence::from_proto)
-                .collect::<Result<_, _>>()?,
-        })
-    }
-}
-
-impl Arbitrary for TimeDependence {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any::<Option<RefreshSchedule>>()
-            .prop_map(|s| TimeDependence::new(s, vec![]))
-            .boxed()
-    }
 }
 
 #[cfg(test)]

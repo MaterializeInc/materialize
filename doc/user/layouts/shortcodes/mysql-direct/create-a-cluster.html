@@ -8,7 +8,7 @@ combination.
 In this case, you'll create a dedicated cluster for ingesting source data from
 your MySQL database.
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/)
    command to create the new cluster:
 
@@ -18,7 +18,7 @@ your MySQL database.
     SET CLUSTER = ingest_mysql;
     ```
 
-    A cluster of [size](/sql/create-cluster/#size) `200cc` should be enough to
+    A cluster of [size](/sql/create-cluster/#available-sizes) `200cc` should be enough to
     process the initial snapshot of the tables in your MySQL database. For very
     large snapshots, consider using a larger size to speed up processing. Once
     the snapshot is finished, you can readjust the size of the cluster to fit

@@ -142,12 +142,12 @@ CREATE TYPE d.public.t AS LIST (ELEMENT TYPE = int4);
 query T
 SELECT 't'::regtype::oid::int
 ----
-20179
+20197
 
 query T
 SELECT 's.t'::regtype::oid::int
 ----
-20180
+20198
 
 query T
 SELECT 't'::regtype = 's.t'::regtype
@@ -201,7 +201,7 @@ SELECT '1082'::regtype::text;
 ----
 date
 
-query error db error: ERROR: more than one function named "date"
+query error more than one function named "date"
 SELECT 'date'::regproc::text;
 
 query T

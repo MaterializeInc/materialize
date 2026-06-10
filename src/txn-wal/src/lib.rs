@@ -112,6 +112,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use mz_ore::metrics::MetricsRegistry;
+//! # use mz_persist_client::critical::Opaque;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 //! # use mz_txn_wal::metrics::Metrics;
 //! # use mz_txn_wal::operator::DataSubscribe;
@@ -127,7 +128,7 @@
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), dyncfgs, metrics, txns_id
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id, Opaque::encode(&0u64)
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -165,7 +166,7 @@
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4, Antichain::new(), true);
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4, Antichain::new());
 //! while subscribe.progress() <= 4 {
 //!     subscribe.step();
 //! #   tokio::task::yield_now().await;
@@ -205,19 +206,19 @@
 use std::fmt::Debug;
 use std::fmt::Write;
 
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::lattice::Lattice;
 use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
+use mz_persist_client::ShardId;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
@@ -333,7 +334,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
         xs.into_iter().fold(String::new(), |mut output, x| {
@@ -397,7 +398,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
@@ -443,7 +444,7 @@ async fn apply_caa<K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     let mut batches = batch_raws
         .into_iter()
@@ -493,6 +494,7 @@ async fn apply_caa<K, V, T, D>(
                 batches.as_mut_slice(),
                 Antichain::from_elem(upper.clone()),
                 Antichain::from_elem(commit_ts.step_forward()),
+                true,
             )
             .await
             .expect("usage was valid");
@@ -525,12 +527,11 @@ async fn apply_caa<K, V, T, D>(
 }
 
 #[instrument(level = "debug", fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
-pub(crate) async fn cads<T, O, C>(
-    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
+pub(crate) async fn cads<T, C>(
+    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64>,
     new_since_ts: T,
 ) where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     // Fast-path, don't bother trying to CaDS if we're already past that
@@ -551,7 +552,7 @@ pub(crate) async fn cads<T, O, C>(
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -570,13 +571,12 @@ pub mod tests {
 
     use super::*;
 
-    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
-        O: Opaque + Debug + Codec64,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync + Clone,
         C: TxnsCodec,
     {
         /// Returns a new, empty test transaction that can involve the data shards
@@ -599,7 +599,7 @@ pub mod tests {
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync + Clone,
     {
         pub(crate) fn new() -> Self {
             Self {
@@ -616,13 +616,12 @@ pub mod tests {
             self.txn.write(data_id, key, val, diff).await
         }
 
-        pub(crate) async fn commit_at<O, C>(
+        pub(crate) async fn commit_at<C>(
             &mut self,
-            handle: &mut TxnsHandle<K, V, T, D, O, C>,
+            handle: &mut TxnsHandle<K, V, T, D, C>,
             commit_ts: T,
         ) -> Result<TxnApply<T>, T>
         where
-            O: Opaque + Debug + Codec64,
             C: TxnsCodec,
         {
             self.txn.commit_at(handle, commit_ts).await
@@ -743,7 +742,7 @@ pub mod tests {
                 TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
             let _ = cache.update_gt(&as_of).await;
             let snapshot = cache.data_snapshot(data_id, as_of);
-            let mut data_read = self
+            let mut data_read: ReadHandle<String, (), _, _> = self
                 .client
                 .open_leased_reader(
                     data_id,
@@ -761,10 +760,7 @@ pub mod tests {
             data_read.expire().await;
             let snapshot: Vec<_> = snapshot
                 .into_iter()
-                .map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                .map(|((k, ()), t, d)| (k, t, d))
                 .collect();
 
             // Check that a subscribe would produce the same result.
@@ -795,7 +791,6 @@ pub mod tests {
                 data_id,
                 as_of,
                 Antichain::new(),
-                true,
             );
             data_subscribe.step_past(until - 1).await;
             data_subscribe

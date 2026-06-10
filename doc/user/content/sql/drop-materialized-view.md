@@ -12,14 +12,16 @@ them first, or use the `CASCADE` option.
 
 ## Syntax
 
-{{< diagram "drop-materialized-view.svg" >}}
+```mzsql
+DROP MATERIALIZED VIEW [IF EXISTS] <view_name> [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the named materialized view does not exist.
-_view&lowbar;name_ | The materialized view you want to drop. For available materialized views, see [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
-**RESTRICT** | Do not drop this materialized view if any other views depend on it. _(Default)_
-**CASCADE** | Drop all views that depend on this materialized view.
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the named materialized view does not exist.
+`<view_name>` | The materialized view you want to drop. For available materialized views, see [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
+**RESTRICT** | Optional. Do not drop this materialized view if any other views depend on it. _(Default)_
+**CASCADE** | Optional. If specified, drop the materialized view and all views that depend on this materialized view.
 
 ## Examples
 
@@ -47,12 +49,11 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped materialized view.
-- `USAGE` privileges on the containing schema.
+{{% include-headless "/headless/sql-command-privileges/drop-materialized-view" %}}
 
 ## Related pages
 
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
-- [DROP OWNED](../drop-owned)
+- [`DROP OWNED`](../drop-owned)

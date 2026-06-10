@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+mode cockroach
+
 # bin_date
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_binary_date_bin = true
@@ -14,71 +16,53 @@ ALTER SYSTEM SET enable_binary_date_bin = true
 COMPLETE 0
 
 # case 1: AD dates, origin < input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamptz '2001-01-01') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
+
 
 # case 3: AD dates, origin > input
-query TTT
+query TTT rowsort
 SELECT
   str,
   "interval",
   date_trunc(str, ts) = date_bin("interval"::interval, ts, timestamptz '2020-03-02') AS equal
 FROM (
   VALUES
-  ('week', '7 d'),
-  ('day', '1 d'),
-  ('hour', '1 h'),
-  ('minute', '1 m'),
-  ('second', '1 s')
+  ('week', '7d'),
+  ('day', '1d'),
+  ('hour', '1h'),
+  ('minute', '1m'),
+  ('second', '1s')
 ) intervals (str, interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-day
-1 d
-true
-hour
-1 h
-true
-week
-7 d
-true
-minute
-1 m
-true
-second
-1 s
-true
+day 1d true
+hour 1h true
+week 7d true
+minute 1m true
+second 1s true
+
 
 # bin timestamps into arbitrary intervals
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts, origin)
@@ -93,22 +77,43 @@ FROM (
 (VALUES (timestamptz '2020-02-11 15:44:17.71393+00')) ts (ts),
 (VALUES (timestamptz '2001-01-01')) origin (origin);
 ----
-15 days
-2020-02-06 00:00:00+00
-2 hours
-2020-02-11 14:00:00+00
-10 seconds
-2020-02-11 15:44:10+00
-15 minutes
-2020-02-11 15:30:00+00
-1 hour 30 minutes
-2020-02-11 15:00:00+00
+15␠days 2020-02-06␠00:00:00+00
+2␠hours 2020-02-11␠14:00:00+00
+10␠seconds 2020-02-11␠15:44:10+00
+15␠minutes 2020-02-11␠15:30:00+00
+1␠hour␠30␠minutes 2020-02-11␠15:00:00+00
 
 # shift bins using the origin parameter:
 query T
 SELECT date_bin('5 min'::interval, timestamptz '2020-02-01 01:01:01+00', timestamptz '2020-02-01 00:02:30+00');
 ----
 2020-02-01 00:57:30+00
+
+# source before origin, exactly on a bin boundary
+query T
+SELECT date_bin('5 min'::interval, timestamptz '1969-12-31 23:55:00+00', timestamptz '1970-01-01 00:00:00+00');
+----
+1969-12-31 23:55:00+00
+
+query T
+SELECT date_bin('1 hour'::interval, timestamptz '1970-01-01 00:00:00+00', timestamptz '1970-01-01 01:00:00+00');
+----
+1970-01-01 00:00:00+00
+
+query T
+SELECT date_bin('10 min'::interval, timestamptz '1969-12-31 23:40:00+00', timestamptz '1970-01-01 00:00:00+00');
+----
+1969-12-31 23:40:00+00
+
+# source before origin, not on a bin boundary
+query T
+SELECT date_bin('5 min'::interval, timestamptz '1969-12-31 23:56:30+00', timestamptz '1970-01-01 00:00:00+00');
+----
+1969-12-31 23:55:00+00
+
+# i64::MIN nanosecond boundary must error, not silently wrap
+query error source and origin must not differ more than 2\^63 nanoseconds
+SELECT date_bin('1 hour'::interval, timestamptz '1677-09-21 00:12:43.145224192+00', timestamptz '1970-01-01 00:00:00+00');
 
 # disallow > day intervals
 query error timestamps cannot be binned into intervals containing months or years
@@ -134,7 +139,7 @@ query error source and origin must not differ more than 2\^63 nanoseconds
 SELECT date_bin('1m', timestamptz '2262-04-11 23:47:17+00');
 
 # Test unintuitive day binning
-query TT
+query TT rowsort
 SELECT
     "interval",
     date_bin("interval"::interval, timestamptz '2020-02-27 15:44:17.71393+00', timestamptz '2001-01-01')
@@ -145,27 +150,18 @@ FROM (
     ('7d'), ('8d'), ('9d')
 ) intervals ("interval");
 ----
-1d
-2020-02-27 00:00:00+00
-2d
-2020-02-27 00:00:00+00
-3d
-2020-02-27 00:00:00+00
-4d
-2020-02-27 00:00:00+00
-5d
-2020-02-26 00:00:00+00
-6d
-2020-02-27 00:00:00+00
-7d
-2020-02-24 00:00:00+00
-8d
-2020-02-23 00:00:00+00
-9d
-2020-02-24 00:00:00+00
+1d 2020-02-27␠00:00:00+00
+2d 2020-02-27␠00:00:00+00
+3d 2020-02-27␠00:00:00+00
+4d 2020-02-27␠00:00:00+00
+5d 2020-02-26␠00:00:00+00
+6d 2020-02-27␠00:00:00+00
+7d 2020-02-24␠00:00:00+00
+8d 2020-02-23␠00:00:00+00
+9d 2020-02-24␠00:00:00+00
 
 # Test that binary extension behaves as expected
-query TT
+query TT rowsort
 SELECT
   "interval",
   date_bin("interval"::interval, ts) = date_bin("interval"::interval, ts, timestamptz '1970-01-01') AS equal
@@ -179,19 +175,37 @@ FROM (
 ) intervals (interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 ----
-15 days
-true
-2 hours
-true
-10 seconds
-true
-15 minutes
-true
-1 hour 30 minutes
-true
+15␠days true
+2␠hours true
+10␠seconds true
+15␠minutes true
+1␠hour␠30␠minutes true
 
 query error timestamp out of range
 select timezone('1 day'::interval, '1-12-31'::timestamptz+'262141 years'::interval)
+
+# Regression test for database-issues#CLU-92: a leap-second timestamptz combined
+# with a fixed offset that shifts the seconds off `:59` previously panicked
+# during row encoding because chrono cannot represent a leap-second nanosecond
+# value at a `NaiveTime` whose seconds-of-minute is not 59.
+query T
+SELECT timezone('+00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-06-30 23:59:59
+
+query T
+SELECT timezone('-00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-07-01 00:00:01
+
+# Complementary case: a zero offset keeps the result on `:59`, exercising the
+# `else` branch of `checked_add_with_leapsecond` that restores the leap-second
+# nanos via `with_nanosecond(nanos)`. The resulting leap-second `NaiveDateTime`
+# is then rendered as the following regular second.
+query T
+SELECT timezone('+00:00', TIMESTAMPTZ '2024-06-30 23:59:60+00')
+----
+2024-07-01 00:00:00
 
 ### to_char
 
@@ -309,11 +323,11 @@ FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  789 789012
 
 # Verify that the format string gets precompiled.
 query T multiline
-EXPLAIN SELECT to_char(ts, 'HH:MI:SS') FROM t
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT to_char(ts, 'HH:MI:SS') FROM t
 ----
 Explained Query:
   Project (#1)
-    Map (tochartstz[HH:MI:SS](#0))
+    Map (tochartstz[HH:MI:SS](#0{ts}))
       ReadStorage materialize.public.t
 
 Source materialize.public.t

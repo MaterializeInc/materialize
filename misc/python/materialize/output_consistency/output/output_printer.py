@@ -44,9 +44,6 @@ class OutputPrinter(BaseOutputPrinter):
         self._print_executable(sql)
         self.print_empty_line()
 
-    def print_non_executable_sql(self, sql: str) -> None:
-        self._print_text(sql)
-
     def print_info(self, text: str) -> None:
         self._print_text(text)
 

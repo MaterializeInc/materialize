@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 #
@@ -34,24 +34,19 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 # Multi-output load generator source using source-fed tables
 #
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
 
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE "auction"."bids");
+> COMMIT
 
 > SELECT count(*) FROM bids
 255
 
-# TODO(def-) Reenable when database-issues#8703 is fixed
-$ skip-if
-SELECT true
-
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'bids';
 running
-
-# TODO(def-) Reenable when database-issues#8703 is fixed
-$ skip-end
 
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");
@@ -88,6 +83,7 @@ users auction {id,org_id,name}
 # Single-output load generator source using source-fed tables
 #
 
+> BEGIN
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5);
@@ -95,6 +91,7 @@ users auction {id,org_id,name}
 > CREATE TABLE counter_1 FROM SOURCE counter (REFERENCE "counter");
 
 > CREATE TABLE counter_2 FROM SOURCE counter (REFERENCE "counter");
+> COMMIT
 
 > SELECT count(*) from counter_1;
 5
@@ -143,7 +140,6 @@ ALTER TABLE pg_table REPLICA IDENTITY FULL;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > SHOW SUBSOURCES ON pg_source
-pg_source_progress progress
 
 ! CREATE TABLE pg_table_1 FROM SOURCE pg_source (REFERENCE "pg_table");
 contains:referenced tables use unsupported types
@@ -267,7 +263,6 @@ INSERT INTO mysql_table VALUES ('var1', 1234), ('var0', 0);
   FROM MYSQL CONNECTION mysql_conn;
 
 > SHOW SUBSOURCES ON mysql_source
-mysql_source_progress progress
 
 ! CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table");
 contains:referenced tables use unsupported types
@@ -402,6 +397,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammal1"}
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
+> BEGIN
 > CREATE SOURCE avro_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}');
@@ -417,6 +413,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'avro_table_upsert';
 running
@@ -465,6 +462,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_create_table_from_source = true
 ALTER SYSTEM SET enable_load_generator_key_value = true
 
+> BEGIN
 > CREATE SOURCE keyvalue
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR KEY VALUE (
@@ -480,6 +478,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
 
 > CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+> COMMIT
 
 > SELECT partition, count(*) FROM kv_1 GROUP BY partition
 0   4

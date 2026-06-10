@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -16,17 +19,20 @@ use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
+use clap::ArgAction;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
@@ -50,14 +56,14 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(long, env = "VAR", use_delimiter = true, value_name = "NAME=VALUE")]
+    #[clap(long, env = "VAR", value_name = "NAME=VALUE")]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
-    #[clap(long, value_name = "N")]
+    #[clap(long, value_name = "N", action = ArgAction::Set)]
     seed: Option<u32>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
-    #[clap(long)]
+    #[clap(long, action = ArgAction::SetTrue)]
     no_reset: bool,
     /// Force the use of the specified temporary directory.
     ///
@@ -69,7 +75,7 @@ struct Args {
     #[clap(long, value_name = "SOURCE")]
     source: Option<String>,
     /// Default timeout for cancellable operations.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "30s", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
     /// The default number of times to retry a query expecting it to converge to the desired result.
     #[clap(long, default_value = "18446744073709551615", value_name = "N")]
@@ -77,7 +83,7 @@ struct Args {
     /// Initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "50ms", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "50ms", value_name = "DURATION")]
     initial_backoff: Duration,
     /// Backoff factor when retrying.
     ///
@@ -97,7 +103,7 @@ struct Args {
     shuffle_tests: bool,
     /// Divide the test files into shards and run only the test files in this
     /// shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
@@ -108,6 +114,10 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    #[clap(long, action = ArgAction::SetTrue)]
+    check_statement_logging: bool,
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
@@ -117,7 +127,7 @@ struct Args {
         value_name = "FILTER",
         default_value = "librdkafka=off,mz_kafka_util::client=off,warn"
     )]
-    log_filter: EnvFilter,
+    log_filter: String,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
     /// Automatically rewrite the testdrive file with the correct results when they are not as
@@ -130,14 +140,16 @@ struct Args {
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
-        value_name = "URL"
+        value_name = "URL",
+        action = ArgAction::Set,
     )]
     materialize_url: tokio_postgres::Config,
     /// materialize internal SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6877",
-        value_name = "INTERNAL_URL"
+        value_name = "INTERNAL_URL",
+        action = ArgAction::Set,
     )]
     materialize_internal_url: tokio_postgres::Config,
     #[clap(long)]
@@ -153,9 +165,19 @@ struct Args {
     /// The hostname is taken from `materialize_internal_url`.
     #[clap(long, default_value = "6878", value_name = "PORT")]
     materialize_internal_http_port: u16,
+    /// The port on which Materialize is listening for password authenticated SQL connections.
+    ///
+    /// The hostname is taken from `materialize_url`.
+    #[clap(long, default_value = "6880", value_name = "PORT")]
+    materialize_password_sql_port: u16,
+    /// The port on which Materialize is listening for password authenticated SQL connections.
+    ///
+    /// The hostname is taken from `materialize_url`.
+    #[clap(long, default_value = "6881", value_name = "PORT")]
+    materialize_sasl_sql_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
-    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     materialize_param: Vec<(String, String)>,
     /// Validate the catalog state of the specified catalog kind.
     #[clap(long)]
@@ -166,14 +188,15 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate_catalog_store", "true"),
+        action = ArgAction::Set,
     )]
     persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate_catalog_store", "true")
     )]
     persist_blob_url: Option<SensitiveUrl>,
 
@@ -182,7 +205,8 @@ struct Args {
     #[clap(
         long,
         value_name = "ENCRYPTION://HOST:PORT",
-        default_value = "localhost:9092"
+        default_value = "localhost:9092",
+        action = ArgAction::Set,
     )]
     kafka_addr: String,
     /// Default number of partitions to create for topics
@@ -190,7 +214,7 @@ struct Args {
     kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
-    #[clap(long, env = "KAFKA_OPTION", use_delimiter=true, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, env = "KAFKA_OPTION", use_value_delimiter=true, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     kafka_option: Vec<(String, String)>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
@@ -217,7 +241,7 @@ struct Args {
     /// Cannot be specified if --aws-endpoint is specified.
     #[clap(
         long,
-        conflicts_with = "aws-endpoint",
+        conflicts_with = "aws_endpoint",
         value_name = "REGION",
         env = "AWS_REGION"
     )]
@@ -228,7 +252,7 @@ struct Args {
     /// Cannot be specified if --aws-region is specified.
     #[clap(
         long,
-        conflicts_with = "aws-region",
+        conflicts_with = "aws_region",
         value_name = "URL",
         env = "AWS_ENDPOINT"
     )]
@@ -250,23 +274,12 @@ struct Args {
     )]
     aws_secret_access_key: String,
 
-    // === Fivetran options. ===
-    /// Address of the Fivetran Destination that testdrive will interact with.
-    #[clap(
-        long,
-        value_name = "FIVETRAN_DESTINATION_URL",
-        default_value = "http://localhost:6874"
-    )]
-    fivetran_destination_url: String,
-    #[clap(
-        long,
-        value_name = "FIVETRAN_DESTINATION_FILES_PATH",
-        default_value = "/tmp"
-    )]
-    fivetran_destination_files_path: String,
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: String,
+
+    #[clap(long, env = "MZ_CI_LICENSE_KEY")]
+    license_key: Option<String>,
 }
 
 #[tokio::main]
@@ -274,7 +287,7 @@ async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
+        .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stdout)
         .init();
 
@@ -356,9 +369,23 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
-        serde_json::from_str(&args.cluster_replica_sizes)
-            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
+    let license_key = if let Some(license_key_text) = args.license_key {
+        mz_license_keys::validate(license_key_text.trim())
+            .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
+    } else {
+        // Use `disabled()` to match environmentd's behavior when no license
+        // key is provided. `disabled()` sets
+        // `allow_credit_consumption_override: true`, which skips memory-based
+        // credit recalculation. Using `default()` here would cause a mismatch
+        // with environmentd's catalog state in the consistency check.
+        ValidatedLicenseKey::disabled()
+    };
+
+    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
+        &args.cluster_replica_sizes,
+        !license_key.allow_credit_consumption_override,
+    )
+    .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
 
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {
@@ -377,7 +404,7 @@ async fn main() {
     let config = Config {
         // === Testdrive options. ===
         arg_vars,
-        seed: args.seed,
+        seed: args.seed.map(|s| s.to_string()),
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
         source: args.source,
@@ -386,6 +413,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 
         // === Materialize options. ===
@@ -395,6 +423,8 @@ async fn main() {
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_use_https: args.materialize_use_https,
+        materialize_password_sql_port: args.materialize_password_sql_port,
+        materialize_sasl_sql_port: args.materialize_sasl_sql_port,
         materialize_params: args.materialize_param,
         materialize_catalog_config,
         build_info: &BUILD_INFO,
@@ -416,10 +446,6 @@ async fn main() {
         // === AWS options. ===
         aws_config,
         aws_account,
-
-        // === Fivetran options. ===
-        fivetran_destination_url: args.fivetran_destination_url,
-        fivetran_destination_files_path: args.fivetran_destination_files_path,
     };
 
     if args.junit_report.is_some() && args.rewrite_results {
@@ -476,7 +502,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().gen());
+        let seed = args.seed.unwrap_or_else(rand::random);
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }
@@ -492,6 +518,7 @@ async fn main() {
     };
 
     for file in files.into_iter().take(args.max_tests) {
+        #[allow(deprecated)] // fails with libraries still using old time lib
         let start_time = Instant::now();
         let res = if file == Path::new("-") {
             if args.rewrite_results {
@@ -543,8 +570,8 @@ async fn main() {
         eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
-        if config.source.is_some() {
-            eprintln!("source: {}", config.source.unwrap());
+        if let Some(source) = &config.source {
+            eprintln!("source: {source}");
         } else if !error_files.is_empty() {
             eprintln!(
                 "files involved: {}",
@@ -555,9 +582,9 @@ async fn main() {
     }
 }
 
-fn parse_kafka_opt(opt: &str) -> (String, String) {
+fn parse_kafka_opt(opt: &str) -> Result<(String, String), Infallible> {
     let mut pieces = opt.splitn(2, '=');
     let key = pieces.next().unwrap_or("").to_owned();
     let val = pieces.next().unwrap_or("").to_owned();
-    (key, val)
+    Ok((key, val))
 }

@@ -11,7 +11,15 @@ aliases:
   - /connect-sources/ssh-tunnel/
 ---
 
+{{< tabs >}}
+{{< tab "Cloud" >}}
 {{% network-security/ssh-tunnel %}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+{{% network-security/ssh-tunnel-sm %}}
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Create a source connection
 
@@ -26,14 +34,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-You can reuse this Kafka connection across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
-statements:
-
-```mzsql
-CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT JSON;
-```
+You can reuse this Kafka connection across multiple [`CREATE
+SOURCE`](/sql/create-source/kafka/) statements.
 
 {{< /tab >}}
 {{< tab "PostgreSQL">}}
@@ -65,20 +67,15 @@ CREATE SOURCE mz_source
 ```mzsql
 CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
 
-    CREATE CONNECTION mysql_connection TO MYSQL (
-    HOST '<host>',
-    SSH TUNNEL ssh_connection,
-    );
+CREATE CONNECTION mysql_connection TO MYSQL (
+  HOST '<host>',
+  SSH TUNNEL ssh_connection,
+);
 ```
 
 You can reuse this MySQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
-statements:
+statements.
 
-```mzsql
-    CREATE SOURCE mz_source
-      FROM mysql CONNECTION mysql_connection
-      FOR ALL TABLES;
-```
 {{< /tab >}}
 
 {{< /tabs >}}

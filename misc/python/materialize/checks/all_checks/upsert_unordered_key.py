@@ -10,12 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 # A schema that allows null values
-SCHEMA = dedent(
-    """
+SCHEMA = dedent("""
         # Must be a subset of the keys in the rows AND
         # in a different order than the value.
         $ set keyschema={
@@ -60,39 +57,25 @@ SCHEMA = dedent(
               }
             ]
           }
-    """
-)
+    """)
 
 
 class UpsertUnorderedKey(Check):
     """Upsert with keys in a different order than values."""
 
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
-
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            SCHEMA
-            + dedent(
-                """
+        return Testdrive(SCHEMA + dedent("""
                 $ kafka-create-topic topic=upsert-unordered-key
                 $ kafka-ingest format=avro topic=upsert-unordered-key key-format=avro key-schema=${keyschema} schema=${schema}
                 {"b": "bdata", "a": 1} {"before": {"row": {"a": 1, "data": "fish", "b": "bdata"}}, "after": {"row": {"a": 1, "data": "fish2", "b": "bdata"}}}
 
-                >[version<11900] CREATE SOURCE upsert_unordered_key
+                > CREATE SOURCE upsert_unordered_key_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-unordered-key-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM
-
-                >[version>=11900] CREATE SOURCE upsert_unordered_key_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-unordered-key-${testdrive.seed}')
-                >[version>=11900] CREATE TABLE upsert_unordered_key
+                > CREATE TABLE upsert_unordered_key
                   FROM SOURCE upsert_unordered_key_src (REFERENCE "testdrive-upsert-unordered-key-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -110,11 +93,7 @@ class UpsertUnorderedKey(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_unordered_key
                 1 fish4 bdata
-                """
-            )
-        )
+                """))

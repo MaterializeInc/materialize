@@ -10,7 +10,13 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-substring.svg" >}}
+```mzsql
+substring(str, start_pos)
+substring(str, start_pos, len)
+substring(str FROM start_pos)
+substring(str FOR len)
+substring(str FROM start_pos FOR len)
+```
 
 Parameter | Type | Description
 ----------|------|------------

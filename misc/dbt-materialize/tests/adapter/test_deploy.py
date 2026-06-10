@@ -13,10 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import threading
 import time
 
+import psycopg2
 import pytest
-from dbt.tests.util import run_dbt
+from dbt.tests.util import run_dbt, run_dbt_and_capture
 from fixtures import (
     test_materialized_view,
     test_materialized_view_deploy,
@@ -118,8 +121,8 @@ class TestApplyGrantsAndPrivileges:
     def test_apply_cluster_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
         project.run_sql("GRANT my_role TO materialize")
-        project.run_sql("CREATE CLUSTER blue_cluster SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green_cluster SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_cluster SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER green_cluster SIZE = 'scale=1,workers=1'")
 
         project.run_sql("GRANT CREATE ON CLUSTER green_cluster TO my_role")
         project.run_sql("GRANT USAGE ON CLUSTER blue_cluster TO my_role")
@@ -389,7 +392,7 @@ class TestTargetDeploy:
                 "deployment": {
                     "default": {
                         "clusters": ["prod"],
-                        "schemas": ["prod"],
+                        "schemas": ["prod", "staging"],
                     }
                 },
             }
@@ -401,12 +404,16 @@ class TestTargetDeploy:
         project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -417,6 +424,12 @@ class TestTargetDeploy:
         before_schemas = dict(
             project.run_sql(
                 "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        before_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -435,11 +448,25 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] != after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
         assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] != after_schemas["prod"]
+        assert (
+            before_staging_schemas["staging"]
+            != after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            != after_staging_schemas["staging"]
+        )
 
         run_dbt(["run-operation", "deploy_promote"])
 
@@ -455,32 +482,55 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-
-        # Verify that the 'prod' schema is tagged correctly
-        tagged_schema_comment = project.run_sql(
-            """
-            SELECT c.comment
-            FROM mz_internal.mz_comments c
-            JOIN mz_schemas s USING (id)
-            WHERE s.name = 'prod';
-            """,
-            fetch="one",
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+        assert (
+            before_staging_schemas["staging"]
+            == after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            == after_staging_schemas["staging"]
         )
 
-        assert tagged_schema_comment is not None
-        assert "Deployment by" in tagged_schema_comment[0]
-        assert "on" in tagged_schema_comment[0]
+        # Verify that both schemas are tagged correctly
+        for schema_name in ["prod", "staging"]:
+            tagged_schema_comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one",
+            )
+
+            assert (
+                tagged_schema_comment is not None
+            ), f"No comment found for schema {schema_name}"
+            assert (
+                "Deployment by" in tagged_schema_comment[0]
+            ), f"Missing deployment info in {schema_name} comment"
+            assert (
+                "on" in tagged_schema_comment[0]
+            ), f"Missing timestamp in {schema_name} comment"
 
     def test_dbt_deploy_with_force(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -516,30 +566,145 @@ class TestTargetDeploy:
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
     def test_dbt_deploy_missing_deployment_cluster(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
-    def test_fails_on_unmanaged_cluster(self, project):
+    def test_dbt_deploy_init_unmanaged_empty(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
-        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_init"])
+
+        managed = project.run_sql(
+            "SELECT managed FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert managed == (False,)
+
+        replica_count = project.run_sql(
+            """
+            SELECT count(*)
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+        assert replica_count == (0,)
+
+    def test_dbt_deploy_init_unmanaged_single_replica(self, project):
+        project.run_sql("CREATE CLUSTER prod REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        managed = project.run_sql(
+            "SELECT managed FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert managed == (False,)
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [("r1", "scale=1,workers=1")]
+
+    def test_dbt_deploy_init_unmanaged_multi_replica(self, project):
+        project.run_sql(
+            "CREATE CLUSTER prod REPLICAS ("
+            "r1 (SIZE 'scale=1,workers=1'), "
+            "r2 (SIZE 'scale=1,workers=1'))"
+        )
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [
+            ("r1", "scale=1,workers=1"),
+            ("r2", "scale=1,workers=1"),
+        ]
+
+    def test_dbt_deploy_init_unmanaged_idempotent(self, project):
+        project.run_sql("CREATE CLUSTER prod REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+        run_dbt(["run-operation", "deploy_init"])
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [("r1", "scale=1,workers=1")]
+
+    def test_dbt_deploy_init_unmanaged_errors_on_unsized_replica(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod REPLICAS ("
+                "r1 (STORAGECTL ADDRESSES ['s:1234'], "
+                "COMPUTECTL ADDRESSES ['c:1234'], "
+                "WORKERS 1), "
+                "r2 (STORAGECTL ADDRESSES ['s:1235'], "
+                "COMPUTECTL ADDRESSES ['c:1235'], "
+                "WORKERS 1))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects unsized replicas: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        _, log_output = run_dbt_and_capture(
+            ["run-operation", "deploy_init"], expect_pass=False
+        )
+        assert "r1" in log_output
+        assert "r2" in log_output
+        assert "no SIZE" in log_output
 
     def test_dbt_deploy_init_with_refresh_hydration_time(self, project):
         project.run_sql(
-            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
+            "CREATE CLUSTER prod (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -557,17 +722,18 @@ class TestTargetDeploy:
         assert cluster_type == ("on-refresh",)
 
     def test_dbt_deploy_init_and_cleanup(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
-        (size, replication_factor) = project.run_sql(
+        size, replication_factor = project.run_sql(
             "SELECT size, replication_factor FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )
 
-        assert size == "1"
+        assert size == "scale=1,workers=1"
         assert replication_factor == "1"
 
         result = project.run_sql(
@@ -591,10 +757,12 @@ class TestTargetDeploy:
         assert bool(result[0])
 
     def test_cluster_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql(
             "CREATE MATERIALIZED VIEW mv IN CLUSTER prod_dbt_deploy AS SELECT 1"
@@ -611,10 +779,12 @@ class TestTargetDeploy:
         )
 
     def test_schema_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
 
@@ -687,6 +857,103 @@ class TestLagTolerance:
         assert len(result) > 0 and result[0].status == "success"
 
 
+class TestMultiClusterAwait:
+    """Tests that deploy_await correctly handles multiple clusters in a
+    single consolidated polling loop, reducing catalog server load."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["prod", "analytics"],
+                        "schemas": ["prod", "analytics"],
+                    }
+                },
+            }
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS analytics CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS analytics_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS analytics CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS analytics_dbt_deploy CASCADE")
+
+    def test_multi_cluster_await(self, project):
+        """Verify that deploy_await succeeds with multiple clusters,
+        checking all clusters in a single consolidated query."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER analytics SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA analytics")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        # Verify both deployment clusters were created
+        result = project.run_sql(
+            "SELECT count(*) FROM mz_clusters WHERE name IN ('prod_dbt_deploy', 'analytics_dbt_deploy')",
+            fetch="one",
+        )
+        assert int(result[0]) == 2
+
+        # Run deploy_await — should check both clusters in one query
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_await",
+                "--args",
+                "{poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+    def test_multi_cluster_promote_with_wait(self, project):
+        """Verify that deploy_promote with wait=true works for multiple
+        clusters using the consolidated readiness check."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER analytics SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA analytics")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        before_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy', 'analytics', 'analytics_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        result = run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{wait: true, poll_interval: 5, lag_threshold: '5s'}",
+            ]
+        )
+        assert len(result) > 0 and result[0].status == "success"
+
+        after_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy', 'analytics', 'analytics_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        # Verify swap happened for both clusters
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+        assert before_clusters["analytics"] == after_clusters["analytics_dbt_deploy"]
+        assert before_clusters["analytics_dbt_deploy"] == after_clusters["analytics"]
+
+
 class TestEndToEndDeployment:
     @pytest.fixture(scope="class")
     def dbt_profile_target(self):
@@ -725,7 +992,7 @@ class TestEndToEndDeployment:
 
         # Prepare the source table, the sink cluster and schema
         project.run_sql("CREATE TABLE source_table (val INTEGER)")
-        project.run_sql("CREATE CLUSTER sinks_cluster SIZE = '1'")
+        project.run_sql("CREATE CLUSTER sinks_cluster SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA sinks_schema")
 
         project.run_sql("INSERT INTO source_table VALUES (1)")
@@ -953,6 +1220,248 @@ class TestEndToEndDeployment:
         ), "Sink's view ID should be different after deployment"
 
         run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])
+
+
+# Test-only macro that exposes `adapter.try_atomic_swap` directly so we can
+# assert on its error classification without needing to reproduce exotic
+# server-side conditions.
+_test_try_atomic_swap_macro = """
+{% macro _test_try_atomic_swap(swap_sql) %}
+    {% set ok = adapter.try_atomic_swap(swap_sql) %}
+    {{ log("try_atomic_swap returned: " ~ ok, info=True) }}
+{% endmacro %}
+"""
+
+
+class TestDeployPromoteRetry:
+    """Covers the retry behavior in deploy_promote.
+
+    The atomic swap should retry on Materialize's concurrent-DDL conflict
+    (SQLSTATE 40001) and raise all other errors immediately.
+    """
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["prod"],
+                        "schemas": ["prod"],
+                    }
+                },
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def macros(self):
+        return {"_test_try_atomic_swap.sql": _test_try_atomic_swap_macro}
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS concurrent_probe CASCADE")
+
+    def test_try_atomic_swap_raises_syntax_errors_immediately(self, project):
+        """A syntax error is not a DDL conflict and must surface to the user
+        right away rather than being silently retried."""
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'NOT VALID SQL'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
+        # Must not be disguised as a retry-exhausted error from deploy_promote.
+        assert (
+            "failed after" not in msg
+        ), f"syntax error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original syntax error must actually surface. Materialize phrases
+        # parser errors as "Unexpected keyword ..."; match either that or the
+        # generic "syntax" wording.
+        assert (
+            "unexpected" in msg or "syntax" in msg
+        ), f"expected the underlying syntax error to surface; got: {msg}"
+
+    def test_try_atomic_swap_raises_missing_object_errors_immediately(self, project):
+        """A missing-object error is not a DDL conflict and must raise
+        immediately, not be retried as if it were one."""
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'ALTER SCHEMA does_not_exist_xyz SWAP WITH also_missing_xyz'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
+        assert (
+            "failed after" not in msg
+        ), f"missing-object error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original missing-object error must actually surface.
+        assert (
+            "does_not_exist_xyz" in msg or "unknown schema" in msg or "not found" in msg
+        ), f"expected the underlying missing-object error to surface; got: {msg}"
+
+    def test_deploy_promote_succeeds_under_concurrent_ddl(self, project):
+        """Injects continuous concurrent DDL on a second connection while
+        deploy_promote runs. The swap transaction must eventually succeed
+        despite potential conflicts. The retry *path* is tested
+        deterministically by the other tests in this class; this test
+        only asserts the final state is correct."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        before_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        before_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        stop = threading.Event()
+
+        def churn_ddl():
+            conn = psycopg2.connect(
+                host=os.environ.get("DBT_HOST", "localhost"),
+                port=int(os.environ.get("DBT_PORT", 6875)),
+                user="materialize",
+                password="password",
+                dbname="materialize",
+            )
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    while not stop.is_set():
+                        try:
+                            cur.execute("CREATE SCHEMA IF NOT EXISTS concurrent_probe")
+                            cur.execute("DROP SCHEMA IF EXISTS concurrent_probe")
+                        except psycopg2.Error:
+                            pass
+                        time.sleep(0.05)
+            finally:
+                conn.close()
+
+        churn = threading.Thread(target=churn_ddl, daemon=True)
+        churn.start()
+        try:
+            _, log_output = run_dbt_and_capture(
+                [
+                    "run-operation",
+                    "deploy_promote",
+                    "--args",
+                    "{max_retries: 50, retry_backoff: 0.5}",
+                ]
+            )
+        finally:
+            stop.set()
+            churn.join(timeout=5)
+
+        after_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        after_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        # Schemas and clusters should have swapped identities.
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+
+        # We intentionally do NOT assert that retries happened: the churn
+        # thread may or may not race the swap on any given run.  The retry
+        # path is covered deterministically by the other tests in this class.
+
+    def test_deploy_promote_happy_path_logs_swap_lines(self, project):
+        """Regression guard: the user-visible "Swapping schemas/clusters"
+        log lines must still fire on a happy-path swap. Without these,
+        customers have no feedback during the deploy."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        _, log_output = run_dbt_and_capture(["run-operation", "deploy_promote"])
+        assert "Swapping schemas prod and prod_dbt_deploy" in log_output, log_output
+        assert "Swapping clusters prod and prod_dbt_deploy" in log_output, log_output
+        # No retries should have happened on the happy path.
+        assert "Retrying atomic swap" not in log_output, log_output
+
+    def test_deploy_promote_max_retries_zero_succeeds_without_conflict(self, project):
+        """Sanity check that `max_retries=0` still permits a successful
+        swap — the retry loop must execute exactly one attempt, not zero."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        before_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{max_retries: 0}",
+            ]
+        )
+        after_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+
+    def test_deploy_promote_raises_retry_exhausted_error(self, project):
+        """Pins down the retry-exhausted failure path. With `max_retries=-1`
+        the retry loop executes zero attempts and must raise the
+        exhaustion error; this covers the branch deterministically without
+        having to race concurrent DDL."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{max_retries: -1}",
+            ],
+            expect_pass=False,
+        )
+        assert "failed after" in log_output, log_output
+        assert "attempts" in log_output, log_output
 
 
 def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):

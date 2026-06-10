@@ -9,31 +9,26 @@
 
 //! Types related to postgres sources
 
-use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, ScalarType};
-use proptest::prelude::any;
-use proptest_derive::Arbitrary;
+use mz_proto::{RustType, TryFromProtoError};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
+use crate::AlterCompatible;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
-use crate::AlterCompatible;
-
-use super::SourceExportDetails;
 
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.postgres.rs"
 ));
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: CatalogItemId,
     pub connection: C::Pg,
@@ -63,7 +58,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
 
 pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
-        .with_column("lsn", ScalarType::UInt64.nullable(true))
+        .with_column("lsn", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 
@@ -123,12 +118,12 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         Some(self.connection_id)
     }
 
-    fn primary_export_details(&self) -> SourceExportDetails {
-        SourceExportDetails::None
-    }
-
     fn supports_read_only(&self) -> bool {
         false
+    }
+
+    fn prefers_single_replica(&self) -> bool {
+        true
     }
 }
 
@@ -176,7 +171,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CastType {
     /// This cast is corresponds to its type in the upstream system.
     Natural,
@@ -184,66 +179,12 @@ pub enum CastType {
     Text,
 }
 
-impl RustType<ProtoCastType> for CastType {
-    fn into_proto(&self) -> ProtoCastType {
-        use proto_cast_type::Kind::*;
-        ProtoCastType {
-            kind: Some(match self {
-                CastType::Natural => Natural(()),
-                CastType::Text => Text(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoCastType) -> Result<Self, TryFromProtoError> {
-        use proto_cast_type::Kind::*;
-        Ok(match proto.kind {
-            Some(Natural(())) => CastType::Natural,
-            Some(Text(())) => CastType::Text,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoWindowFrameUnits::kind",
-                ))
-            }
-        })
-    }
-}
-
-impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
-    fn into_proto(&self) -> ProtoPostgresSourceConnection {
-        ProtoPostgresSourceConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            publication: self.publication.clone(),
-            details: Some(self.publication_details.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PostgresSourceConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoPostgresSourceConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoPostgresSourceConnection::connection_id")?,
-            publication: proto.publication,
-            publication_details: proto
-                .details
-                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
-        })
-    }
-}
-
 /// The details of a source export from a postgres source.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceExportDetails {
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types
-    #[proptest(
-        strategy = "proptest::collection::vec((any::<CastType>(), any::<MirScalarExpr>()), 0..4)"
-    )]
-    pub column_casts: Vec<(CastType, MirScalarExpr)>,
+    pub column_casts: Vec<(CastType, crate::sources::casts::StorageScalarExpr)>,
     pub table: PostgresTableDesc,
 }
 
@@ -259,46 +200,7 @@ impl AlterCompatible for PostgresSourceExportDetails {
     }
 }
 
-impl RustType<ProtoPostgresSourceExportDetails> for PostgresSourceExportDetails {
-    fn into_proto(&self) -> ProtoPostgresSourceExportDetails {
-        let mut column_casts = Vec::with_capacity(self.column_casts.len());
-
-        for (col_type, cast) in self.column_casts.iter() {
-            column_casts.push(ProtoPostgresColumnCast {
-                cast: Some(cast.into_proto()),
-                cast_type: Some(col_type.into_proto()),
-            });
-        }
-
-        ProtoPostgresSourceExportDetails {
-            table: Some(self.table.into_proto()),
-            column_casts,
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        let mut column_casts = vec![];
-        for column_cast in proto.column_casts.into_iter() {
-            column_casts.push((
-                column_cast
-                    .cast_type
-                    .into_rust_if_some("ProtoPostgresColumnCast::cast_type")?,
-                column_cast
-                    .cast
-                    .into_rust_if_some("ProtoPostgresColumnCast::cast")?,
-            ));
-        }
-
-        Ok(PostgresSourceExportDetails {
-            table: proto
-                .table
-                .into_rust_if_some("ProtoPostgresSourceExportDetails::table")?,
-            column_casts,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourcePublicationDetails {
     pub slot: String,
     /// The active timeline_id when this source was created

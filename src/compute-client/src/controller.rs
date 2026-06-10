@@ -23,44 +23,49 @@
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
 //! collection is dropped with `drop_collections()`.
 //!
+//! A dataflow can be in read-only or read-write mode. In read-only mode, the dataflow does not
+//! modify any persistent state. Sending a `allow_write` message to the compute instance will
+//! transition the dataflow to read-write mode, allowing it to write to persistent sinks.
+//!
 //! Created dataflows will prevent the compaction of their inputs, including other compute
 //! collections but also collections managed by the storage layer. Each dataflow input is prevented
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate;
-use futures::stream::FuturesUnordered;
-use futures::{FutureExt, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::config::ComputeReplicaConfig;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::{
+    COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
+use mz_persist_types::PersistLocation;
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
+use mz_storage_client::controller::StorageController;
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -69,37 +74,32 @@ use crate::controller::error::{
     ReplicaCreationError, ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
+use crate::controller::introspection::{IntrospectionUpdates, spawn_introspection_sink};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
+mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
+pub mod instance_client;
+pub use instance_client::InstanceClient;
 
-type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
-type StorageCollections<T> = Arc<
-    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
->;
-
-/// A composite trait for types that serve as timestamps in the Compute Controller.
-/// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
-pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> + Sync {}
-
-impl ComputeControllerTimestamp for mz_repr::Timestamp {}
+pub(crate) type StorageCollections =
+    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
-pub enum ComputeControllerResponse<T> {
+pub enum ComputeControllerResponse {
     /// See [`PeekNotification`].
     PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// See [`crate::protocol::response::ComputeResponse::SubscribeResponse`].
-    SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    SubscribeResponse(GlobalId, SubscribeBatch),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
     ///
     /// The `GlobalId` identifies the sink. The `Result` is the response from
@@ -119,7 +119,7 @@ pub enum ComputeControllerResponse<T> {
         /// The ID of a compute collection.
         id: GlobalId,
         /// The new upper frontier of the identified compute collection.
-        upper: Antichain<T>,
+        upper: Antichain<Timestamp>,
     },
 }
 
@@ -130,6 +130,8 @@ pub enum PeekNotification {
     Success {
         /// Number of rows in the returned peek result.
         rows: u64,
+        /// Size of the returned peek result in bytes.
+        result_size: u64,
     },
     /// Error of an unsuccessful peek, including the reason for the error.
     Error(String),
@@ -142,50 +144,48 @@ impl PeekNotification {
     /// parameters are used to calculate the number of rows in the peek result.
     fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
-            PeekResponse::Rows(rows) => Self::Success {
-                rows: u64::cast_from(rows.count(offset, limit)),
-            },
+            PeekResponse::Rows(rows) => {
+                let num_rows = u64::cast_from(RowCollection::offset_limit(
+                    rows.iter().map(|r| r.count()).sum(),
+                    offset,
+                    limit,
+                ));
+                let result_size = u64::cast_from(rows.iter().map(|r| r.byte_len()).sum::<usize>());
+
+                tracing::trace!(?num_rows, ?result_size, "inline peek result");
+
+                Self::Success {
+                    rows: num_rows,
+                    result_size,
+                }
+            }
+            PeekResponse::Stashed(stashed_response) => {
+                let rows = stashed_response.num_rows(offset, limit);
+                let result_size = stashed_response.size_bytes();
+
+                tracing::trace!(?rows, ?result_size, "stashed peek result");
+
+                Self::Success {
+                    rows: u64::cast_from(rows),
+                    result_size: u64::cast_from(result_size),
+                }
+            }
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }
     }
 }
 
-/// Replica configuration
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ComputeReplicaConfig {
-    /// TODO(database-issues#7533): Add documentation.
-    pub logging: ComputeReplicaLogging,
-}
-
-/// Logging configuration of a replica.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct ComputeReplicaLogging {
-    /// Whether to enable logging for the logging dataflows.
-    pub log_logging: bool,
-    /// The interval at which to log.
-    ///
-    /// A `None` value indicates that logging is disabled.
-    pub interval: Option<Duration>,
-}
-
-impl ComputeReplicaLogging {
-    /// Return whether logging is enabled.
-    pub fn enabled(&self) -> bool {
-        self.interval.is_some()
-    }
-}
-
 /// A controller for the compute layer.
-pub struct ComputeController<T: ComputeControllerTimestamp> {
-    instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
+pub struct ComputeController {
+    instances: BTreeMap<ComputeInstanceId, InstanceState>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
     instance_workload_classes: Arc<Mutex<BTreeMap<ComputeInstanceId, Option<String>>>>,
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
-    storage_collections: StorageCollections<T>,
+    storage_collections: StorageCollections,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Whether or not this controller is in read-only mode.
@@ -196,18 +196,16 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     read_only: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// `arrangement_exert_proportionality` value passed to new replicas.
-    arrangement_exert_proportionality: u32,
+    /// The persist location where we can stash large peek results.
+    peek_stash_persist_location: PersistLocation,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
-    stashed_response: Option<ComputeControllerResponse<T>>,
-    /// A number that increases on every `environmentd` restart.
-    envd_epoch: NonZeroI64,
+    stashed_response: Option<ComputeControllerResponse>,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
     /// A function that produces the current wallclock time.
     now: NowFn,
     /// A function that computes the lag between the given time and wallclock time.
-    wallclock_lag: WallclockLagFn<T>,
+    wallclock_lag: WallclockLagFn<Timestamp>,
     /// Dynamic system configuration.
     ///
     /// Updated through `ComputeController::update_configuration` calls and shared with all
@@ -215,13 +213,16 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     dyncfg: Arc<ConfigSet>,
 
     /// Receiver for responses produced by `Instance`s.
-    response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse<T>>,
+    response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
     /// Response sender that's passed to new `Instance`s.
-    response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
+    response_tx: mpsc::UnboundedSender<ComputeControllerResponse>,
     /// Receiver for introspection updates produced by `Instance`s.
-    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
+    ///
+    /// When [`ComputeController::start_introspection_sink`] is first called, this receiver is
+    /// passed to the introspection sink task.
+    introspection_rx: Option<mpsc::UnboundedReceiver<IntrospectionUpdates>>,
     /// Introspection updates sender that's passed to new `Instance`s.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
 
     /// Ticker for scheduling periodic maintenance work.
     maintenance_ticker: tokio::time::Interval,
@@ -229,19 +230,20 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     maintenance_scheduled: bool,
 }
 
-impl<T: ComputeControllerTimestamp> ComputeController<T> {
+impl ComputeController {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
-        storage_collections: StorageCollections<T>,
-        envd_epoch: NonZeroI64,
+        storage_collections: StorageCollections,
         read_only: bool,
-        metrics_registry: MetricsRegistry,
+        metrics_registry: &MetricsRegistry,
+        peek_stash_persist_location: PersistLocation,
+        controller_metrics: ControllerMetrics,
         now: NowFn,
-        wallclock_lag: WallclockLagFn<T>,
+        wallclock_lag: WallclockLagFn<Timestamp>,
     ) -> Self {
         let (response_tx, response_rx) = mpsc::unbounded_channel();
-        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
+        let (introspection_tx, introspection_rx) = mpsc::unbounded_channel();
 
         let mut maintenance_ticker = time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -266,9 +268,9 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
                 for metric in metrics {
                     'metric: for metric in metric.mut_metric() {
                         for label in metric.get_label() {
-                            if label.get_name() == "instance_id" {
+                            if label.name() == "instance_id" {
                                 if let Some(workload_class) = instance_workload_classes
-                                    .get(label.get_value())
+                                    .get(label.value())
                                     .cloned()
                                     .flatten()
                                 {
@@ -288,6 +290,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             }
         });
 
+        let metrics = ComputeControllerMetrics::new(metrics_registry, controller_metrics);
+
         Self {
             instances: BTreeMap::new(),
             instance_workload_classes,
@@ -296,19 +300,28 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized: false,
             read_only,
             config: Default::default(),
-            arrangement_exert_proportionality: 16,
+            peek_stash_persist_location,
             stashed_response: None,
-            envd_epoch,
-            metrics: ComputeControllerMetrics::new(metrics_registry),
+            metrics,
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
             response_tx,
-            introspection_rx,
+            introspection_rx: Some(introspection_rx),
             introspection_tx,
             maintenance_ticker,
             maintenance_scheduled: false,
+        }
+    }
+
+    /// Start sinking the compute controller's introspection data into storage.
+    ///
+    /// This method should be called once the introspection collections have been registered with
+    /// the storage controller. It will panic if invoked earlier than that.
+    pub fn start_introspection_sink(&mut self, storage_controller: &dyn StorageController) {
+        if let Some(rx) = self.introspection_rx.take() {
+            spawn_introspection_sink(rx, storage_controller);
         }
     }
 
@@ -318,15 +331,23 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     }
 
     /// Return a reference to the indicated compute instance.
-    fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState<T>, InstanceMissing> {
+    fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState, InstanceMissing> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
+    }
+
+    /// Return an `InstanceClient` for the indicated compute instance.
+    pub fn instance_client(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<InstanceClient, InstanceMissing> {
+        self.instance(id).map(|instance| instance.client.clone())
     }
 
     /// Return a mutable reference to the indicated compute instance.
     fn instance_mut(
         &mut self,
         id: ComputeInstanceId,
-    ) -> Result<&mut InstanceState<T>, InstanceMissing> {
+    ) -> Result<&mut InstanceState, InstanceMissing> {
         self.instances.get_mut(&id).ok_or(InstanceMissing(id))
     }
 
@@ -348,7 +369,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         collection_id: GlobalId,
         instance_id: Option<ComputeInstanceId>,
-    ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
+    ) -> Result<CollectionFrontiers, CollectionLookupError> {
         let collection = match instance_id {
             Some(id) => self.instance(id)?.collection(collection_id)?,
             None => self
@@ -372,42 +393,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let ids = collections
             .filter_map(move |(cid, c)| c.compute_dependencies.contains(&id).then_some(*cid));
         Ok(ids)
-    }
-
-    /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
-    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.arrangement_exert_proportionality = value;
-    }
-
-    /// Returns `true` if all non-transient, non-excluded collections on all clusters have been
-    /// hydrated.
-    ///
-    /// For this check, zero-replica clusters are always considered hydrated.
-    /// Their collections would never normally be considered hydrated but it's
-    /// clearly intentional that they have no replicas.
-    pub async fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        let instances = self.instances.iter();
-        let mut pending: FuturesUnordered<_> = instances
-            .map(|(id, instance)| {
-                let exclude_collections = exclude_collections.clone();
-                instance
-                    .call_sync(move |i| i.collections_hydrated(&exclude_collections))
-                    .map(move |x| (id, x))
-            })
-            .collect();
-
-        let mut result = true;
-        while let Some((id, hydrated)) = pending.next().await {
-            if !hydrated {
-                result = false;
-
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-hydrated clusters.
-                tracing::info!("cluster {id} is not hydrated");
-            }
-        }
-
-        result
     }
 
     /// Returns `true` iff the given collection has been hydrated.
@@ -444,7 +429,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let instance = self.instance(instance_id)?;
 
         // Validation
-        if instance.replicas.is_empty() && !replicas.iter().any(|id| instance.replicas.contains(id))
+        if !instance.replicas.is_empty()
+            && !replicas.iter().any(|id| instance.replicas.contains(id))
         {
             return Err(HydrationCheckBadTarget(replicas).into());
         }
@@ -478,9 +464,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized,
             read_only,
             config: _,
-            arrangement_exert_proportionality,
+            peek_stash_persist_location: _,
             stashed_response,
-            envd_epoch,
             metrics: _,
             now: _,
             wallclock_lag: _,
@@ -506,36 +491,18 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map(|(id, wc)| (id.to_string(), format!("{wc:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instances", instances_dump)?,
-            field("instance_workload_classes", instance_workload_classes)?,
-            field("initialized", initialized)?,
-            field("read_only", read_only)?,
-            field(
-                "arrangement_exert_proportionality",
-                arrangement_exert_proportionality,
-            )?,
-            field("stashed_response", format!("{stashed_response:?}"))?,
-            field("envd_epoch", envd_epoch)?,
-            field("maintenance_scheduled", maintenance_scheduled)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instances": instances_dump,
+            "instance_workload_classes": instance_workload_classes,
+            "initialized": initialized,
+            "read_only": read_only,
+            "stashed_response": format!("{stashed_response:?}"),
+            "maintenance_scheduled": maintenance_scheduled,
+        }))
     }
 }
 
-impl<T> ComputeController<T>
-where
-    T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
-{
+impl ComputeController {
     /// Create a compute instance.
     pub fn create_instance(
         &mut self,
@@ -556,25 +523,22 @@ where
             logs.push((log, id, shared));
         }
 
-        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
-
-        let client = instance::Client::spawn(
+        let client = InstanceClient::spawn(
             id,
             self.build_info,
             Arc::clone(&self.storage_collections),
+            self.peek_stash_persist_location.clone(),
             logs,
-            self.envd_epoch,
             self.metrics.for_instance(id),
             self.now.clone(),
-            Arc::clone(&self.wallclock_lag),
+            self.wallclock_lag.clone(),
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
-            read_holds_tx.clone(),
-            read_holds_rx,
+            self.read_only,
         );
 
-        let instance = InstanceState::new(client, collections, read_holds_tx);
+        let instance = InstanceState::new(client, collections);
         self.instances.insert(id, instance);
 
         self.instance_workload_classes
@@ -585,10 +549,6 @@ where
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
             instance.call(Instance::initialization_complete);
-        }
-
-        if !self.read_only {
-            instance.call(Instance::allow_writes);
         }
 
         let mut config_params = self.config.clone();
@@ -625,7 +585,7 @@ where
     /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(instance) = self.instances.remove(&id) {
-            instance.call(|i| i.check_empty());
+            instance.call(|i| i.shutdown());
         }
 
         self.instance_workload_classes
@@ -655,6 +615,18 @@ where
             let mut params = config_params.clone();
             params.workload_class = Some(instance_workload_classes[id].clone());
             instance.call(|i| i.update_configuration(params));
+        }
+
+        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(&self.dyncfg);
+        match overflowing_behavior.parse() {
+            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+            Err(err) => {
+                tracing::error!(
+                    err,
+                    overflowing_behavior,
+                    "Invalid value for ore_overflowing_behavior"
+                );
+            }
         }
 
         // Remember updates for future clusters.
@@ -725,6 +697,12 @@ where
 
         let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
 
+        // Capture dictionary compression once, at replica creation, and hold it fixed for the
+        // replica's lifetime (see `InstanceConfig::arrangement_dictionary_compression`). This is
+        // why a later flip of the flag only affects replicas created afterwards.
+        let arrangement_dictionary_compression =
+            ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA.get(&self.dyncfg);
+
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -733,16 +711,16 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
+            arrangement_dictionary_compression,
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");
         instance.replicas.insert(replica_id);
 
         instance.call(move |i| {
-            i.add_replica(replica_id, replica_config)
+            i.add_replica(replica_id, replica_config, None)
                 .expect("validated")
         });
 
@@ -773,24 +751,29 @@ where
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
-    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
-    /// considered.
+    /// Only materialized views and subscribes are allowed to have a `target_replica`.
+    ///
+    /// Panics if called with a dataflow description that has index exports
+    /// when `target_replica` is set.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        mut dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-        subscribe_target_replica: Option<ReplicaId>,
+        mut dataflow: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
         let instance = self.instance(instance_id)?;
 
         // Validation: target replica
-        if let Some(replica_id) = subscribe_target_replica {
+        if let Some(replica_id) = target_replica {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            assert!(
+                dataflow.exported_index_ids().next().is_none(),
+                "Replica-targeted indexes are not supported"
+            );
         }
 
         // Validation: as_of
@@ -846,8 +829,8 @@ where
             i.create_dataflow(
                 dataflow,
                 import_read_holds,
-                subscribe_target_replica,
                 shared_collection_state,
+                target_replica,
             )
             .expect("validated")
         });
@@ -879,15 +862,22 @@ where
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
+    ///
+    /// The caller supplies a `read_hold` for the peek target — via
+    /// [`ComputeController::acquire_read_hold`] for `PeekTarget::Index`, or via the storage
+    /// collections for `PeekTarget::Persist`. The hold keeps the collection's `since` at
+    /// `<= timestamp` until the peek completes.
     pub fn peek(
         &self,
         instance_id: ComputeInstanceId,
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
-        timestamp: T,
+        timestamp: Timestamp,
+        result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
@@ -902,14 +892,11 @@ where
             }
         }
 
-        // Validation: peek target
-        let read_hold = match &peek_target {
-            PeekTarget::Index { id } => instance.acquire_read_hold(*id)?,
-            PeekTarget::Persist { id, .. } => self
-                .storage_collections
-                .acquire_read_holds(vec![*id])?
-                .into_element(),
-        };
+        // Validation: the read hold must target this collection and must hold its `since`
+        // at `<= timestamp`.
+        if read_hold.id() != peek_target.id() {
+            return Err(ReadHoldIdMismatch(read_hold.id()));
+        }
         if !read_hold.since().less_equal(&timestamp) {
             return Err(SinceViolation(peek_target.id()));
         }
@@ -920,6 +907,7 @@ where
                 literal_constraints,
                 uuid,
                 timestamp,
+                result_desc,
                 finishing,
                 map_filter_project,
                 read_hold,
@@ -966,7 +954,7 @@ where
     pub fn set_read_policy(
         &self,
         instance_id: ComputeInstanceId,
-        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) -> Result<(), ReadPolicyError> {
         use ReadPolicyError::*;
 
@@ -991,7 +979,7 @@ where
         &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<ReadHold<T>, CollectionUpdateError> {
+    ) -> Result<ReadHold, CollectionUpdateError> {
         let read_hold = self
             .instance(instance_id)?
             .acquire_read_hold(collection_id)?;
@@ -1002,14 +990,8 @@ where
     fn determine_time_dependence(
         &self,
         instance_id: ComputeInstanceId,
-        dataflow: &DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        dataflow: &DataflowDescription<mz_compute_types::plan::Plan, ()>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
-        // TODO(ct3): Continual tasks don't support replica expiration
-        let is_continual_task = dataflow.continual_task_ids().next().is_some();
-        if is_continual_task {
-            return Ok(None);
-        }
-
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
@@ -1024,8 +1006,7 @@ where
 
         'source: for id in dataflow.imported_source_ids() {
             // We first check whether the id is backed by a compute object, in which case we use
-            // the time dependence we know. This is true for materialized views, continual tasks,
-            // etc.
+            // the time dependence we know. This is true for storage sinks.
             for instance in self.instances.values() {
                 if let Ok(dependence) = instance.get_time_dependence(id) {
                     time_dependencies.push(dependence);
@@ -1043,55 +1024,12 @@ where
         ))
     }
 
-    #[mz_ore::instrument(level = "debug")]
-    fn record_introspection_updates(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
-        use IntrospectionType::*;
-
-        // We could record the contents of `introspection_rx` directly here, but to reduce the
-        // pressure on persist we spend some effort consolidating first.
-        let mut updates_by_type = BTreeMap::new();
-
-        for (type_, updates) in self.introspection_rx.try_iter() {
-            updates_by_type
-                .entry(type_)
-                .or_insert_with(Vec::new)
-                .extend(updates);
-        }
-        for updates in updates_by_type.values_mut() {
-            consolidate(updates);
-        }
-
-        for (type_, updates) in updates_by_type {
-            if updates.is_empty() {
-                continue;
-            }
-
-            match type_ {
-                Frontiers
-                | ReplicaFrontiers
-                | ComputeDependencies
-                | ComputeOperatorHydrationStatus
-                | ComputeMaterializedViewRefreshes => {
-                    let op = StorageWriteOp::Append { updates };
-                    storage.update_introspection_collection(type_, op);
-                }
-                WallclockLagHistory => {
-                    storage.append_introspection_updates(type_, updates);
-                }
-                _ => panic!("unexpected introspection type: {type_:?}"),
-            }
-        }
-    }
-
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
-    pub fn process(
-        &mut self,
-        storage: &mut dyn StorageController<Timestamp = T>,
-    ) -> Option<ComputeControllerResponse<T>> {
+    pub fn process(&mut self) -> Option<ComputeControllerResponse> {
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
-            self.maintain(storage);
+            self.maintain();
             self.maintenance_scheduled = false;
         }
 
@@ -1100,84 +1038,87 @@ where
     }
 
     #[mz_ore::instrument(level = "debug")]
-    fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
+    fn maintain(&mut self) {
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
             instance.call(Instance::maintain);
         }
+    }
 
-        // Record pending introspection updates.
-        //
-        // It's beneficial to do this as the last maintenance step because previous steps can cause
-        // dropping of state, which can can cause introspection retractions, which lower the volume
-        // of data we have to record.
-        self.record_introspection_updates(storage);
+    /// Allow writes for the specified collections on `instance_id`.
+    ///
+    /// If this controller is in read-only mode, this is a no-op.
+    pub fn allow_writes(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        if self.read_only {
+            tracing::debug!("Skipping allow_writes in read-only mode");
+            return Ok(());
+        }
+
+        let instance = self.instance_mut(instance_id)?;
+
+        // Validation
+        instance.collection(collection_id)?;
+
+        instance.call(move |i| i.allow_writes(collection_id).expect("validated"));
+
+        Ok(())
     }
 }
 
 #[derive(Debug)]
-struct InstanceState<T: ComputeControllerTimestamp> {
-    client: instance::Client<T>,
+struct InstanceState {
+    client: InstanceClient,
     replicas: BTreeSet<ReplicaId>,
-    collections: BTreeMap<GlobalId, Collection<T>>,
-    /// Sender for updates to collection read holds.
-    ///
-    /// Copies of this sender are given to [`ReadHold`]s that are created in
-    /// [`InstanceState::acquire_read_hold`].
-    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    collections: BTreeMap<GlobalId, Collection>,
 }
 
-impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(
-        client: instance::Client<T>,
-        collections: BTreeMap<GlobalId, Collection<T>>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-    ) -> Self {
+impl InstanceState {
+    fn new(client: InstanceClient, collections: BTreeMap<GlobalId, Collection>) -> Self {
         Self {
             client,
             replicas: Default::default(),
             collections,
-            read_holds_tx,
         }
     }
 
-    fn collection(&self, id: GlobalId) -> Result<&Collection<T>, CollectionMissing> {
+    fn collection(&self, id: GlobalId) -> Result<&Collection, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
-    pub fn call<F>(&self, f: F)
+    /// Calls the given function on the instance task. Does not await the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
+    fn call<F>(&self, f: F)
     where
-        F: FnOnce(&mut Instance<T>) + Send + 'static,
+        F: FnOnce(&mut Instance) + Send + 'static,
     {
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call").entered();
-            otel_ctx.attach_as_parent();
-
-            f(instance)
-        }));
+        self.client.call(f).expect("instance not dropped")
     }
 
-    pub async fn call_sync<F, R>(&self, f: F) -> R
+    /// Calls the given function on the instance task, and awaits the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
+    async fn call_sync<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        F: FnOnce(&mut Instance) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call_sync").entered();
-            otel_ctx.attach_as_parent();
-
-            let result = f(instance);
-            let _ = tx.send(result);
-        }));
-
-        rx.await.expect("instance not dropped")
+        self.client
+            .call_sync(f)
+            .await
+            .expect("instance not dropped")
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold, CollectionMissing> {
         // We acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that in `create_dataflow` we can acquire read holds
         // on compute dependencies at frontiers that are held back by other read holds the caller
@@ -1194,7 +1135,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             since
         });
 
-        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        let hold = ReadHold::new(id, since, self.client.read_hold_tx());
         Ok(hold)
     }
 
@@ -1213,7 +1154,6 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             client: _,
             replicas,
             collections,
-            read_holds_tx: _,
         } = self;
 
         let instance = self.call_sync(|i| i.dump()).await?;
@@ -1223,36 +1163,28 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instance", instance)?,
-            field("replicas", replicas)?,
-            field("collections", collections)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instance": instance,
+            "replicas": replicas,
+            "collections": collections,
+        }))
     }
 }
 
 #[derive(Debug)]
-struct Collection<T> {
+struct Collection {
+    /// Whether a collection is write-only, i.e., we cannot read it directly like an index.
     write_only: bool,
     compute_dependencies: BTreeSet<GlobalId>,
-    shared: SharedCollectionState<T>,
+    shared: SharedCollectionState,
     /// The computed time dependence for this collection. None indicates no specific information,
     /// a value describes how the collection relates to wall-clock time.
     time_dependence: Option<TimeDependence>,
 }
 
-impl<T: Timestamp> Collection<T> {
+impl Collection {
     fn new_log() -> Self {
-        let as_of = Antichain::from_elem(T::minimum());
+        let as_of = Antichain::from_elem(Timestamp::MIN);
         Self {
             write_only: false,
             compute_dependencies: Default::default(),
@@ -1261,7 +1193,7 @@ impl<T: Timestamp> Collection<T> {
         }
     }
 
-    fn frontiers(&self) -> CollectionFrontiers<T> {
+    fn frontiers(&self) -> CollectionFrontiers {
         let read_frontier = self
             .shared
             .lock_read_capabilities(|c| c.frontier().to_owned());
@@ -1275,18 +1207,18 @@ impl<T: Timestamp> Collection<T> {
 
 /// The frontiers of a compute collection.
 #[derive(Clone, Debug)]
-pub struct CollectionFrontiers<T> {
+pub struct CollectionFrontiers {
     /// The read frontier.
-    pub read_frontier: Antichain<T>,
+    pub read_frontier: Antichain<Timestamp>,
     /// The write frontier.
-    pub write_frontier: Antichain<T>,
+    pub write_frontier: Antichain<Timestamp>,
 }
 
-impl<T: Timestamp> Default for CollectionFrontiers<T> {
+impl Default for CollectionFrontiers {
     fn default() -> Self {
         Self {
-            read_frontier: Antichain::from_elem(T::minimum()),
-            write_frontier: Antichain::from_elem(T::minimum()),
+            read_frontier: Antichain::from_elem(Timestamp::MIN),
+            write_frontier: Antichain::from_elem(Timestamp::MIN),
         }
     }
 }

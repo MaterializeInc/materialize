@@ -15,7 +15,7 @@
 //! $ cargo run --release --example upsert_open_loop -- --runtime 5sec \
 //!   --records-per-second 200000 --num-keys 200000 --batch-size 20000 \
 //!   --key-value-store in-memory-hash-map \
-//!   --num-async-workers 16 --num-timely-workers=16 --num-sources=16
+//!   --num-async-workers 16 --num-timely,workers=16 --num-sources=16
 //! ```
 //!
 //! ## Description
@@ -108,7 +108,7 @@ use anyhow::bail;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
@@ -117,16 +117,16 @@ use mz_ore::task;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{debug, error, info, info_span, trace, warn, Instrument};
+use tokio::sync::mpsc::error::SendError;
+use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
@@ -153,7 +153,7 @@ pub struct Args {
     num_timely_workers: usize,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second, per source.
@@ -178,7 +178,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// The address of the internal HTTP server.
@@ -193,7 +193,7 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     /// The type of key-value store to use.
-    #[clap(arg_enum, long, default_value_t = KeyValueStore::Noop)]
+    #[clap(value_enum, long, default_value_t = KeyValueStore::Noop)]
     key_value_store: KeyValueStore,
 
     /// Wether to buffer (and reduce) batches of records in the UPSERT operator. The materialize
@@ -245,7 +245,7 @@ pub struct Args {
 }
 
 /// Different key-value stores under examination.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum KeyValueStore {
     /// Pass data straight through, without running any upsert logic.
     Noop,
@@ -277,7 +277,7 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let _ = runtime
+    runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "upsert-open-loop",
@@ -315,8 +315,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                 axum::Router::new()
                     .route(
                         "/metrics",
-                        axum::routing::get(move || async move {
-                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                            mz_http_util::handle_prometheus(&metrics_registry, headers).await
                         }),
                     )
                     .into_make_service(),
@@ -346,8 +346,8 @@ async fn run_benchmark(
     );
 
     let benchmark_description = format!(
-        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async-workers={} \
-        num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} \
+        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async,workers={} \
+        num-timely,workers={} runtime={:?} num_records_total={} records-per-second={} \
         num-keys={} key-record-size-bytes={} value-record-size-bytes={} batch-size={}",
         args.key_value_store,
         args.upsert_pre_reduce,
@@ -445,17 +445,19 @@ async fn run_benchmark(
                             let batch = mz_ore::task::spawn_blocking(
                                 || "data_generator-batch",
                                 move || {
-                                    batch_span
-                                        .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
+                                    batch_span.in_scope(|| {
+                                        data_generator_cloned
+                                            .gen_batch(usize::cast_from(batch_idx))
+                                    })
                                 },
                             )
-                            .await
-                            .expect("task failed");
+                            .await;
                             trace!("data generator {} made a batch", source_id);
                             let batch = match batch {
                                 Some(x) => x,
                                 None => {
-                                    let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                                    let records_sent =
+                                        usize::cast_from(batch_idx) * args.batch_size;
                                     let finished = format!(
                                         "Data generator {} finished after {} ms and sent {} records",
                                         source_id,
@@ -468,7 +470,9 @@ async fn run_benchmark(
                             batch_idx += 1;
 
                             // send will only error if the matching receiver has been dropped.
-                            if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
+                            if let Err(SendError(_)) =
+                                generator_tx.send(GeneratorEvent::Data(batch))
+                            {
                                 bail!("receiver unexpectedly dropped");
                             }
                             debug!("data generator {} wrote a batch", source_id);
@@ -564,14 +568,14 @@ async fn run_benchmark(
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
 
-            for (source_id, rocks_options) in (0..num_sources).zip(rocksdb_options.iter()) {
+            for (source_id, rocks_options) in (0..num_sources).zip_eq(rocksdb_options.iter()) {
                 let source_rxs = Arc::clone(&source_rxs);
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
 
                 let upsert_stream = upsert(
                     scope,
-                    &source_stream,
+                    source_stream,
                     source_id,
                     &dir_path,
                     args.clone(),
@@ -592,10 +596,10 @@ async fn run_benchmark(
 
                 let mut frontier = Antichain::from_elem(0);
                 let mut max_lag = 0;
-                upsert_stream.sink(
-                    Exchange::new(move |_| u64::cast_from(chosen_worker)),
+                upsert_stream.clone().sink(
+                    Exchange::new(move |_: &(Vec<u8>, Vec<u8>, i32)| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
-                    move |input| {
+                    move |(input, input_frontier)| {
                         if !active_worker {
                             return;
                         }
@@ -611,7 +615,7 @@ async fn run_benchmark(
                             }
                         });
 
-                        if input.frontier().is_empty() {
+                        if input_frontier.is_empty() {
                             assert_eq!(num_records_total, num_additions);
                             info!(
                                 "Processing source {source_id} finished \
@@ -621,9 +625,9 @@ async fn run_benchmark(
                             );
                         } else if PartialOrder::less_than(
                             &frontier.borrow(),
-                            &input.frontier().frontier(),
+                            &input_frontier.frontier(),
                         ) {
-                            frontier = input.frontier().frontier().to_owned();
+                            frontier = input_frontier.frontier().to_owned();
                             let data_timestamp = frontier.clone().into_option().unwrap();
                             let elapsed = start.elapsed();
 
@@ -752,7 +756,7 @@ async fn run_benchmark(
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
@@ -774,14 +778,11 @@ enum GeneratorEvent {
 ///
 /// Only one worker is expected to read from the channel that the associated generator is writing
 /// to.
-fn generator_source<G>(
-    scope: &G,
+fn generator_source<'scope>(
+    scope: Scope<'scope, u64>,
     source_id: usize,
     generator_rxs: Arc<Mutex<BTreeMap<usize, UnboundedReceiver<GeneratorEvent>>>>,
-) -> Stream<G, (Vec<u8>, Vec<u8>)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)> {
     let generator_rxs = Arc::clone(&generator_rxs);
 
     let scope = scope.clone();
@@ -793,7 +794,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -831,17 +832,14 @@ where
 }
 
 /// A representative upsert operator.
-fn upsert<G>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert<'scope>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
     rocksdb_options: &rocksdb::Options,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     // TODO(aljoscha): Not liking this duplications...!
     if args.upsert_pre_reduce {
         match args.key_value_store {
@@ -904,19 +902,17 @@ where
     }
 }
 
-fn upsert_core_pre_reduce<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core_pre_reduce<'scope, M: Map + 'static>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1002,19 +998,17 @@ where
     output_stream
 }
 
-fn upsert_core<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core<'scope, M: Map + 'static>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1121,8 +1115,8 @@ impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
 
 use std::path::{Path, PathBuf};
 
-use rocksdb::{Error, DB};
-use tokio::sync::oneshot::{channel, Sender};
+use rocksdb::{DB, Error};
+use tokio::sync::oneshot::{Sender, channel};
 
 #[derive(Clone)]
 struct IoThreadRocksDB {
@@ -1176,7 +1170,7 @@ impl IoThreadRocksDB {
                 let mut writes = rocksdb::WriteBatch::default();
 
                 // TODO(guswynn): sort by key before writing.
-                for ((k, v), get) in batches.into_iter().flat_map(|b| b.into_iter()).zip(gets) {
+                for ((k, v), get) in batches.into_iter().flat_map(|b| b.into_iter()).zip_eq(gets) {
                     writes.put(k.as_slice(), v.as_slice());
 
                     match get {
@@ -1198,7 +1192,9 @@ impl IoThreadRocksDB {
                         continue 'batch;
                     }
                 }
-                debug!("finished writing batch size({size}) for worker {worker_id}, source {source_id}");
+                debug!(
+                    "finished writing batch size({size}) for worker {worker_id}, source {source_id}"
+                );
 
                 let _ = resp.send(Ok(previous));
             }

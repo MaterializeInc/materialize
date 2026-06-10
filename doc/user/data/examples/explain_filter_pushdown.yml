@@ -1,0 +1,11 @@
+- name: "syntax"
+  code: |
+    EXPLAIN FILTER PUSHDOWN
+    FOR <select_stmt | MATERIALIZED VIEW <name>>
+  syntax_elements:
+    - name: "**FOR** `<select_stmt>`"
+      description: |
+        Display statistics for an ad-hoc [`SELECT`](/sql/select) statement.
+    - name: "**FOR MATERIALIZED VIEW** `<name>`"
+      description: |
+        Display statistics for an existing materialized view.

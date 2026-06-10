@@ -10,33 +10,32 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
-array-concat = "0.5.2"
-aws-sdk-sts = { version = "1.7.0", default-features = false, features = [
-    "rt-tokio",
-] }
-bitflags = "1.3.2"
-chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive"] }
-derivative = "2.2.0"
-dynfmt = { version = "0.1.5", features = ["curly"] }
-enum-kinds = "0.5.1"
-fail = { version = "0.5.1", features = ["failpoints"] }
-globset = "0.4.14"
-hex = "0.4.3"
-http = "1.1.0"
-im = "15.1.0"
-ipnet = "2.5.0"
-itertools = "0.10.5"
-maplit = "1.0.2"
-mysql_async = { version = "0.34.1", default-features = false, features = [
-    "minimal",
-] }
+anyhow.workspace = true
+array-concat.workspace = true
+aws-sdk-sts.workspace = true
+bitflags.workspace = true
+chrono.workspace = true
+clap.workspace = true
+derivative.workspace = true
+dynfmt.workspace = true
+enum-kinds.workspace = true
+fail.workspace = true
+globset.workspace = true
+hex.workspace = true
+http.workspace = true
+iceberg.workspace = true
+imbl.workspace = true
+ipnet.workspace = true
+itertools.workspace = true
+maplit.workspace = true
+mysql_async.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
+mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
+mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -45,7 +44,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "panic"] }
 mz-mysql-util = { path = "../mysql-util" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
@@ -53,44 +52,41 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire-common = { path = "../pgwire-common" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-pretty = { path = "../sql-pretty" }
 mz-sql-lexer = { path = "../sql-lexer" }
+mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-txn-wal = { path = "../txn-wal" }
-paste = "1.0"
-prometheus = { version = "0.13.3", default-features = false }
-protobuf-native = "0.3.2"
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
-regex = "1.7.0"
-reqwest = "0.11.13"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.125"
-static_assertions = "1.1"
-thiserror = "1.0.37"
-tokio = { version = "1.38.0", features = ["fs"] }
-tokio-postgres = { version = "0.7.8", features = ["serde"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
-uncased = "0.9.7"
-uuid = { version = "1.7.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+paste.workspace = true
+prometheus.workspace = true
+protobuf-native.workspace = true
+proptest.workspace = true
+proptest-derive.workspace = true
+prost.workspace = true
+rdkafka.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+static_assertions.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = ["serde"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uncased.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
+version-compare.workspace = true
 
 [dev-dependencies]
-datadriven = "0.8.0"
+datadriven.workspace = true
 mz-lowertest = { path = "../lowertest" }
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+[features]
+default = []

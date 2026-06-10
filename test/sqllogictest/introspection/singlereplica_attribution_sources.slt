@@ -1,0 +1,1593 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Ensure attribution sources function (are created, dropped appropriately)
+
+mode cockroach
+
+reset-server
+
+# VIEW + INDEX
+
+statement ok
+CREATE TABLE t(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE VIEW v AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM t AS t1, t AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+CREATE INDEX v_idx_x ON v(x);
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query IT
+SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+----
+5  u2
+5  u3
+
+query TI
+SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
+----
+u2  5
+u2  4
+u2  3
+u2  2
+u2  1
+u3  7
+u3  6
+
+## attribution queries
+
+# omitting sum(duration_ns) as duration, sum(count) as count
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
+         ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
+u2  4  5  ␠␠Arrange␠(#0{y})
+u2  3  4  ␠␠␠␠Read␠u1
+u2  2  5  ␠␠Arrange␠(#0{x})
+u2  1  2  ␠␠␠␠Read␠u1
+u3  7  NULL  Arrange␠(#0{x})
+u3  6  7  ␠␠Stream␠u2
+
+# omitting pg_size_pretty(sum(size)) as size
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_arrangement_sizes mas
+         ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
+u2  4  5  ␠␠Arrange␠(#0{y})
+u2  3  4  ␠␠␠␠Read␠u1
+u2  2  5  ␠␠Arrange␠(#0{x})
+u2  1  2  ␠␠␠␠Read␠u1
+u3  7  NULL  Arrange␠(#0{x})
+u3  6  7  ␠␠Stream␠u2
+
+statement ok
+DROP TABLE t CASCADE;
+
+# we need the dataflow to actually drop to see the updates
+statement ok
+SELECT mz_unsafe.mz_sleep(3)
+
+query I
+SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_internal.mz_lir_mapping;
+----
+0
+
+# MATERIALIZED VIEW
+
+statement ok
+CREATE TABLE u(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE MATERIALIZED VIEW w AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM u AS t1, u AS t2
+  WHERE t1.x = t2.y;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query IT
+SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+----
+10  t52
+
+
+query TI
+SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
+----
+t52  5
+t52  4
+t52  3
+t52  2
+t52  1
+
+## attribution queries
+
+# omitting sum(duration_ns) as duration, sum(count) as count
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
+         ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+t52  5  NULL  Differential␠Join␠%0␠»␠%1
+t52  4  5  ␠␠Arrange␠(#0{y})
+t52  3  4  ␠␠␠␠Read␠u4
+t52  2  5  ␠␠Arrange␠(#0{x})
+t52  1  2  ␠␠␠␠Read␠u4
+
+# omitting pg_size_pretty(sum(size)) as size
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_arrangement_sizes mas
+         ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+t52  5  NULL  Differential␠Join␠%0␠»␠%1
+t52  4  5  ␠␠Arrange␠(#0{y})
+t52  3  4  ␠␠␠␠Read␠u4
+t52  2  5  ␠␠Arrange␠(#0{x})
+t52  1  2  ␠␠␠␠Read␠u4
+
+statement ok
+DROP TABLE u CASCADE;
+
+# we need the dataflow to actually drop to see the updates
+statement ok
+SELECT mz_unsafe.mz_sleep(3)
+
+query I
+SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_internal.mz_lir_mapping;
+----
+0
+
+# checking in on bindings
+
+statement ok
+CREATE TABLE Person (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint,
+    firstName text NOT NULL,
+    lastName text NOT NULL,
+    gender text NOT NULL,
+    birthday date NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    LocationCityId bigint NOT NULL,
+    speaks text NOT NULL,
+    email text NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_id ON Person (id)
+
+statement ok
+CREATE INDEX Person_LocationCityId ON Person (LocationCityId)
+
+statement ok
+CREATE TABLE Person_knows_Person (
+    creationDate timestamp with time zone NOT NULL,
+    Person1id bigint NOT NULL,
+    Person2id bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person2id ON person_knows_person (Person2id)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
+
+statement ok
+CREATE TABLE Post (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    imageFile text,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    language text,
+    content text,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    ContainerForumId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Post_id ON Post (id)
+
+statement ok
+CREATE TABLE Comment (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    content text NOT NULL,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL,
+    ParentPostId bigint,
+    ParentCommentId bigint
+)
+
+statement ok
+CREATE INDEX Comment_id ON Comment (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Message AS
+WITH MUTUALLY RECURSIVE
+  -- compute the transitive closure (with root information) using minimnal info
+  roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT id AS MessageId, id AS RootPostId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
+     UNION SELECT
+              Comment.id AS MessageId,
+         ParentPostId AS RootPostId,
+         language AS RootPostLanguage,
+         Post.ContainerForumId AS ContainerForumId,
+         ParentPostId AS ParentMessageId
+           FROM Comment
+       JOIN Post
+       ON Comment.ParentPostId = Post.id),
+  ms (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT *
+           FROM roots
+     UNION SELECT
+              Comment.id AS MessageId,
+         ms.RootPostId AS RootPostId,
+         ms.RootPostLanguage AS RootPostLanguage,
+         ms.ContainerForumId AS ContainerForumId,
+         ParentCommentId AS ParentMessageId
+           FROM Comment
+       JOIN ms
+       ON ParentCommentId = ms.MessageId)
+  -- now do the late materialization
+  (     SELECT
+          creationDate,
+          id AS MessageId,
+          id AS RootPostId,
+          language AS RootPostLanguage,
+          content,
+          imageFile,
+          locationIP,
+          browserUsed,
+          length,
+          CreatorPersonId,
+          ContainerForumId,
+          LocationCountryId,
+          NULL::bigint AS ParentMessageId
+        FROM Post
+  UNION (SELECT
+          Comment.creationDate AS creationDate,
+          Comment.id AS MessageId,
+          ms.RootPostId AS RootPostId,
+          ms.RootPostLanguage AS RootPostLanguage,
+          Comment.content AS content,
+          NULL::text AS imageFile,
+          Comment.locationIP AS locationIP,
+          Comment.browserUsed AS browserUsed,
+          Comment.length AS length,
+          Comment.CreatorPersonId AS CreatorPersonId,
+          ms.ContainerForumId AS ContainerForumId,
+          Comment.LocationCountryId AS LocationCityId,
+          ms.ParentMessageId AS ParentMessageId
+    FROM Comment
+    JOIN ms
+    ON Comment.id = ms.MessageId))
+
+statement ok
+CREATE INDEX Message_MessageId ON Message (MessageId)
+
+statement ok
+CREATE INDEX Message_ParentMessageId ON Message (ParentMessageId)
+
+statement ok
+CREATE INDEX Message_CreatorPersonId ON Message (CreatorPersonId)
+
+statement ok
+CREATE VIEW PathQ19 AS
+WITH
+  -- asymmetrize...
+  knows_asymmetric AS (
+    SELECT person1id, person2id
+      FROM Person_knows_person
+     WHERE person1id < person2id
+  ),
+  -- compute interaction scores (no interactions means we ignore that 'knows' relationship)
+  weights(src, dst, w) AS (
+    SELECT
+        person1id AS src,
+        person2id AS dst,
+        greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
+    FROM Message m1,
+         Message m2,
+         knows_asymmetric pp
+    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
+      AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
+      AND m1.parentmessageid = m2.messageid
+      AND m1.creatorpersonid <> m2.creatorpersonid
+ GROUP BY src, dst
+)
+-- resymmetrize
+SELECT src, dst, w FROM weights
+UNION ALL
+SELECT dst, src, w FROM weights;
+
+statement ok
+CREATE INDEX PathQ19_src ON PathQ19 (src);
+
+statement ok
+CREATE VIEW ldbc_q19 AS
+WITH MUTUALLY RECURSIVE
+  -- Source and destination identifiers, which do not evolve recursively.
+  srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
+  dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
+  -- Only work off of nodes not more than half a viable path.
+  active_forward(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM forward WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  forward (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT f as src, f as dst, 0.0 as w FROM srcs
+      UNION ALL
+      SELECT f.src, p.dst, f.w + p.w
+      FROM active_forward f, PathQ19 p
+      WHERE f.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+  -- Only work off of nodes not more than half a viable path.
+  active_reverse(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM reverse WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  reverse (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT t as src, t as dst, 0.0 as w FROM dsts
+      UNION ALL
+      SELECT r.src, p.dst, r.w + p.w
+      FROM active_reverse r, PathQ19 p
+      WHERE r.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+  -- Once we find a path from `f` to `t` it appears here.
+  paths (f bigint, t bigint, w double precision) AS (
+    SELECT l.src as f, r.src as t, min(l.w + r.w) AS w
+    FROM forward l, reverse r
+    WHERE l.dst = r.dst
+    GROUP BY l.src, r.src
+  ),
+  shortest (w double precision) AS (
+    SELECT min(w) FROM paths
+  )
+SELECT f, t, w
+FROM paths
+WHERE w = (SELECT MIN(w) FROM paths);
+
+statement ok
+CREATE INDEX ldbc_q19_idx ON ldbc_q19 (f);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query TT
+SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
+FROM mz_internal.mz_lir_mapping mlm
+ORDER BY global_id, lir_id DESC;
+----
+t77  Returning␠Distinct␠GroupAggregate
+t77  ␠␠Union
+t77  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t77  ␠␠␠␠␠␠Arrange␠(#0{messageid})
+t77  ␠␠␠␠␠␠␠␠Stream␠l0
+t77  ␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠Arranged␠u13
+t77  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t77  ␠␠Distinct␠GroupAggregate
+t77  ␠␠␠␠Union
+t77  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
+t77  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t77  ␠␠␠␠␠␠␠␠Arranged␠u13
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠␠␠Arranged␠u13
+u10  Arrange␠(#1{person1id})
+u10  ␠␠Stream␠u9
+u11  Arrange␠(#2{person2id})
+u11  ␠␠Arranged␠u9
+u12  Arrange␠(#1{person1id},␠#2{person2id})
+u12  ␠␠Arranged␠u9
+u14  Arrange␠(#1{id})
+u14  ␠␠Stream␠u13
+u16  Arrange␠(#1{id})
+u16  ␠␠Stream␠u15
+u18  Arrange␠(#1{messageid})
+u18  ␠␠Stream␠u17
+u19  Arrange␠(#12{parentmessageid})
+u19  ␠␠Arranged␠u17
+u20  Arrange␠(#9{creatorpersonid})
+u20  ␠␠Arranged␠u17
+u21  Returning␠Union
+u21  ␠␠Read␠l0
+u21  ␠␠Stream␠l0
+u21  With␠l0␠=␠Map/Filter/Project
+u21  ␠␠Accumulable␠GroupAggregate
+u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u21  ␠␠␠␠␠␠Arranged␠u9
+u21  ␠␠␠␠␠␠Arranged␠u17
+u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{parentmessageid})
+u21  ␠␠␠␠␠␠␠␠Arranged␠u17
+u22  Arrange␠(#0{src})
+u22  ␠␠Stream␠u21
+u23  Returning␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠Arrange␠(#0)
+u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠␠␠Read␠l5
+u23  ␠␠Arrange␠(#2{w})
+u23  ␠␠␠␠Stream␠l5
+u23  With␠Recursive␠l7␠=␠Union
+u23  ␠␠Map/Filter/Project
+u23  ␠␠␠␠Consolidating␠Union
+u23  ␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Negate␠Diffs
+u23  ␠␠␠␠␠␠␠␠Arranged␠l6
+u23  ␠␠Arranged␠l6
+u23  l6␠=␠Unarranged␠Raw␠Stream
+u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠Arranged␠l5
+u23  l5␠=␠Unarranged␠Raw␠Stream
+u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
+u23  ␠␠␠␠␠␠␠␠Read␠l4
+u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
+u23  ␠␠␠␠␠␠␠␠Read␠l3
+u23  l4␠=␠Non-monotonic␠TopK
+u23  ␠␠Union
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠␠␠Arranged␠l1
+u23  ␠␠␠␠␠␠Arranged␠l2
+u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
+u23  ␠␠␠␠␠␠␠␠Read␠l4
+u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠␠␠␠␠Arrange␠(#0)
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Arranged␠l0
+u23  l3␠=␠Non-monotonic␠TopK
+u23  ␠␠Union
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠␠␠Arranged␠l1
+u23  ␠␠␠␠␠␠Arranged␠l2
+u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
+u23  ␠␠␠␠␠␠␠␠Read␠l3
+u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠␠␠␠␠Arrange␠(#0)
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠Arranged␠l0
+u23  l2␠=␠Arrange␠(empty␠key)
+u23  ␠␠Union
+u23  ␠␠␠␠Map/Filter/Project
+u23  ␠␠␠␠␠␠Consolidating␠Union
+u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
+u23  ␠␠␠␠␠␠␠␠Negate␠Diffs
+u23  ␠␠␠␠␠␠␠␠␠␠Read␠l7
+u23  ␠␠␠␠Read␠l7
+u23  With␠l1␠=␠Arranged␠u21
+u23  l0␠=␠Arranged␠u6
+u24  Arrange␠(#0{f})
+u24  ␠␠Stream␠u23
+u7  Arrange␠(#1{id})
+u7  ␠␠Stream␠u6
+u8  Arrange␠(#8{locationcityid})
+u8  ␠␠Arranged␠u6
+
+statement ok
+DROP TABLE Person, Person_knows_Person, Post, Comment CASCADE;
+
+# ATTRIBUTING TOP K HINTS
+
+statement ok
+CREATE TABLE t(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE VIEW v2 AS SELECT DISTINCT ON(x, y) * FROM t ORDER BY x, y;
+
+statement ok
+CREATE INDEX v2_idx_x ON v2(x);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query TIITIIIT
+SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator, levels, to_cut, savings, hint
+    FROM           mz_internal.mz_lir_mapping mlm
+         JOIN      mz_introspection.mz_dataflow_global_ids mdgi
+         ON (mlm.global_id = mdgi.global_id)
+         LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
+         ON (megsa.dataflow_id = mdgi.id AND
+             mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
+ORDER BY mlm.global_id, lir_id DESC;
+----
+u26  2  NULL  Non-monotonic␠TopK  NULL  NULL  NULL  NULL
+u26  1  2  ␠␠Stream␠u25  NULL  NULL  NULL  NULL
+u27  4  NULL  Arrange␠(#0{x})  NULL  NULL  NULL  NULL
+u27  3  4  ␠␠Stream␠u26  NULL  NULL  NULL  NULL
+
+# rebuild everything other stuff, make sure it all shows up as mappable objects
+
+statement ok
+CREATE VIEW v AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM t AS t1, t AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+CREATE INDEX v_idx_x ON v(x);
+
+statement ok
+CREATE TABLE u(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE MATERIALIZED VIEW w AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM u AS t1, u AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query TTI rowsort
+SELECT name, global_id, COUNT(lir_id)
+FROM mz_introspection.mz_mappable_objects LEFT JOIN mz_introspection.mz_lir_mapping
+USING (global_id)
+GROUP BY name, global_id;
+----
+materialize.public.v2_idx_x  u26  2
+materialize.public.v2_idx_x  u27  2
+materialize.public.v_idx_x  u28  5
+materialize.public.v_idx_x  u29  2
+materialize.public.w  t90  5
+
+# explain analyze SQL generation
+
+query T multiline
+EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW w AS SQL;
+----
+WITH
+    summary_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    sm.total_records AS total_records
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.w'
+ORDER BY mlm.lir_id DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CPU FOR MATERIALIZED VIEW w AS SQL;
+----
+WITH
+    summary_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.w'
+ORDER BY mlm.lir_id DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE MEMORY, CPU FOR MATERIALIZED VIEW w AS SQL;
+----
+WITH
+    summary_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    sm.total_records AS total_records,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.w'
+ORDER BY mlm.lir_id DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w AS SQL;
+----
+WITH
+    summary_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    pwm.worker_id AS worker_id,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
+    pg_size_pretty(pwm.worker_memory) AS worker_memory,
+    pg_size_pretty(sm.avg_memory) AS avg_memory,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
+    pwm.worker_records AS worker_records,
+    sm.avg_records AS avg_records,
+    sm.total_records AS total_records,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
+    pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.w' AND pwc.worker_id = pwm.worker_id
+ORDER BY mlm.lir_id DESC, worker_id;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w AS SQL;
+----
+WITH
+    summary_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+    ),
+    summary_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    pwc.worker_id AS worker_id,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
+    pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
+    pg_size_pretty(pwm.worker_memory) AS worker_memory,
+    pg_size_pretty(sm.avg_memory) AS avg_memory,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
+    pwm.worker_records AS worker_records,
+    sm.avg_records AS avg_records,
+    sm.total_records AS total_records
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.w' AND pwm.worker_id = pwc.worker_id
+ORDER BY mlm.lir_id DESC, worker_id;
+EOF
+
+# we can actually look at real hints here, because it'll be stable
+query TIIIT
+EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x;
+----
+Arrange␠(#0{x})  NULL  NULL  NULL  NULL
+␠␠Stream␠u26  NULL  NULL  NULL  NULL
+Non-monotonic␠TopK  NULL  NULL  NULL  NULL
+␠␠Stream␠u25  NULL  NULL  NULL  NULL
+
+query T multiline
+EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x AS SQL;
+----
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    megsa.levels AS levels,
+    megsa.to_cut AS to_cut,
+    megsa.hint AS hint,
+    pg_size_pretty(megsa.savings) AS savings
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        JOIN
+            mz_introspection.mz_dataflow_global_ids AS mdgi
+            ON (mlm.global_id = mdgi.global_id)
+        LEFT JOIN
+            (
+                generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                    JOIN
+                        mz_introspection.mz_expected_group_size_advice AS megsa
+                        ON (megsa.region_id = valid_id)
+            )
+            ON (megsa.dataflow_id = mdgi.id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.v2_idx_x'
+ORDER BY mlm.lir_id DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR INDEX v2_idx_x AS SQL;
+----
+WITH
+    summary_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_cpu AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+    ),
+    summary_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_worker_memory AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || operator AS operator,
+    pwc.worker_id AS worker_id,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
+    pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
+    pg_size_pretty(pwm.worker_memory) AS worker_memory,
+    pg_size_pretty(sm.avg_memory) AS avg_memory,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
+    pwm.worker_records AS worker_records,
+    sm.avg_records AS avg_records,
+    sm.total_records AS total_records
+FROM
+    mz_introspection.mz_lir_mapping AS mlm
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
+        JOIN
+            mz_introspection.mz_mappable_objects AS mo
+            ON (mlm.global_id = mo.global_id)
+WHERE mo.name = 'materialize.public.v2_idx_x' AND pwm.worker_id = pwc.worker_id
+ORDER BY mlm.lir_id DESC, worker_id;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CLUSTER MEMORY AS SQL;
+----
+WITH
+    per_operator_memory_totals AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    object_memory_totals AS
+    (
+        SELECT
+            pomt.global_id AS global_id,
+            sum(pomt.total_memory) AS total_memory,
+            sum(pomt.total_records) AS total_records
+        FROM per_operator_memory_totals AS pomt
+        GROUP BY pomt.global_id
+    )
+SELECT
+    mo.name AS object,
+    mo.global_id AS global_id,
+    pg_size_pretty(omt.total_memory) AS total_memory,
+    omt.total_records AS total_records
+FROM
+    mz_introspection.mz_mappable_objects AS mo
+        LEFT JOIN object_memory_totals AS omt USING(global_id)
+ORDER BY
+    total_memory DESC NULLS LAST,
+    total_records DESC NULLS LAST,
+    mo.name DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CLUSTER MEMORY, CPU AS SQL;
+----
+WITH
+    per_operator_memory_totals AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    object_memory_totals AS
+    (
+        SELECT
+            pomt.global_id AS global_id,
+            sum(pomt.total_memory) AS total_memory,
+            sum(pomt.total_records) AS total_records
+        FROM per_operator_memory_totals AS pomt
+        GROUP BY pomt.global_id
+    ),
+    per_operator_cpu_totals AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    object_cpu_totals AS
+    (
+        SELECT poct.global_id AS global_id, sum(poct.total_ns) AS total_ns
+        FROM per_operator_cpu_totals AS poct
+        GROUP BY poct.global_id
+    )
+SELECT
+    mo.name AS object,
+    mo.global_id AS global_id,
+    pg_size_pretty(omt.total_memory) AS total_memory,
+    omt.total_records AS total_records,
+    oct.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM
+    mz_introspection.mz_mappable_objects AS mo
+        LEFT JOIN object_memory_totals AS omt USING(global_id)
+        LEFT JOIN object_cpu_totals AS oct USING(global_id)
+ORDER BY
+    total_memory DESC NULLS LAST,
+    total_records DESC NULLS LAST,
+    total_elapsed DESC NULLS LAST,
+    mo.name DESC;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW AS SQL;
+----
+WITH
+    per_operator_cpu_summary AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_operator_cpu_per_worker AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+    ),
+    per_operator_cpu_ratios AS
+    (
+        SELECT
+            pocpw.global_id AS global_id,
+            pocpw.lir_id AS lir_id,
+            pocpw.worker_id AS worker_id,
+            CASE
+                    WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0
+                            THEN round(pocpw.worker_ns / pocs.avg_ns, 2)
+                        ELSE NULL
+                END
+                AS cpu_ratio
+        FROM
+            per_operator_cpu_per_worker AS pocpw
+                JOIN per_operator_cpu_summary AS pocs USING(global_id, lir_id)
+    ),
+    object_cpu AS
+    (
+        SELECT
+            pocpw.global_id AS global_id,
+            pocpw.worker_id AS worker_id,
+            max(pomr.cpu_ratio) AS max_operator_cpu_ratio,
+            sum(pocpw.worker_ns) AS worker_ns
+        FROM
+            per_operator_cpu_per_worker AS pocpw
+                JOIN
+                    per_operator_cpu_ratios AS pomr
+                    USING(global_id, worker_id, lir_id)
+        GROUP BY pocpw.global_id, pocpw.worker_id
+    ),
+    object_average_cpu AS
+    (
+        SELECT
+            oc.global_id AS global_id,
+            sum(oc.worker_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT oc.worker_id) <> 0
+                            THEN
+                                sum(oc.worker_ns) / count(DISTINCT oc.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM object_cpu AS oc
+        GROUP BY oc.global_id
+    ),
+    per_operator_memory_summary AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id
+    ),
+    per_operator_memory_per_worker AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.lir_id AS lir_id,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = valid_id)
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
+    ),
+    per_operator_memory_ratios AS
+    (
+        SELECT
+            pompw.global_id AS global_id,
+            pompw.lir_id AS lir_id,
+            pompw.worker_id AS worker_id,
+            CASE
+                    WHEN pompw.worker_id IS NOT NULL AND poms.avg_memory <> 0
+                            THEN round(pompw.worker_memory / poms.avg_memory, 2)
+                        ELSE NULL
+                END
+                AS memory_ratio,
+            CASE
+                    WHEN pompw.worker_id IS NOT NULL AND poms.avg_records <> 0
+                            THEN
+                                round(
+                                    pompw.worker_records / poms.avg_records, 2
+                                )
+                        ELSE NULL
+                END
+                AS records_ratio
+        FROM
+            per_operator_memory_per_worker AS pompw
+                JOIN
+                    per_operator_memory_summary AS poms
+                    USING(global_id, lir_id)
+    ),
+    object_memory AS
+    (
+        SELECT
+            pompw.global_id AS global_id,
+            pompw.worker_id AS worker_id,
+            max(pomr.memory_ratio) AS max_operator_memory_ratio,
+            max(pomr.records_ratio) AS max_operator_records_ratio,
+            sum(pompw.worker_memory) AS worker_memory,
+            sum(pompw.worker_records) AS worker_records
+        FROM
+            per_operator_memory_per_worker AS pompw
+                JOIN
+                    per_operator_memory_ratios AS pomr
+                    USING(global_id, worker_id, lir_id)
+        GROUP BY pompw.global_id, pompw.worker_id
+    ),
+    object_average_memory AS
+    (
+        SELECT
+            om.global_id AS global_id,
+            sum(om.worker_memory) AS total_memory,
+            CASE
+                    WHEN count(DISTINCT om.worker_id) <> 0
+                            THEN
+                                sum(om.worker_memory)
+                                / count(DISTINCT om.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            sum(om.worker_records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT om.worker_id) <> 0
+                            THEN
+                                sum(om.worker_records)
+                                / count(DISTINCT om.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM object_memory AS om
+        GROUP BY om.global_id
+    )
+SELECT
+    mo.name AS object,
+    mo.global_id AS global_id,
+    oc.worker_id AS worker_id,
+    oc.max_operator_cpu_ratio AS max_operator_cpu_ratio,
+    oc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    oac.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    oac.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
+    om.max_operator_memory_ratio AS max_operator_memory_ratio,
+    pg_size_pretty(om.worker_memory) AS worker_memory,
+    pg_size_pretty(oam.avg_memory) AS avg_memory,
+    pg_size_pretty(oam.total_memory) AS total_memory,
+    om.max_operator_records_ratio AS max_operator_records_ratio,
+    om.worker_records AS worker_records,
+    oam.avg_records AS avg_records,
+    oam.total_records AS total_records
+FROM
+    mz_introspection.mz_mappable_objects AS mo
+        LEFT JOIN object_cpu AS oc USING(global_id)
+        LEFT JOIN object_average_cpu AS oac USING(global_id)
+        LEFT JOIN object_memory AS om USING(global_id)
+        LEFT JOIN object_average_memory AS oam USING(global_id)
+WHERE om.worker_id = oc.worker_id
+ORDER BY
+    max_operator_cpu_ratio DESC NULLS LAST,
+    worker_elapsed DESC NULLS LAST,
+    worker_id,
+    max_operator_memory_ratio DESC NULLS LAST,
+    max_operator_records_ratio DESC NULLS LAST,
+    worker_memory DESC NULLS LAST,
+    worker_records DESC NULLS LAST,
+    mo.name DESC;
+EOF
+
+# exhaustive "statement ok" checking
+
+statement ok
+EXPLAIN ANALYZE HINTS FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w;
+
+statement ok
+EXPLAIN ANALYZE HINTS FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX v_idx_x;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER MEMORY;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER CPU;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER CPU, MEMORY;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER MEMORY, CPU;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER MEMORY WITH SKEW;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER CPU WITH SKEW;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW;
+
+statement ok
+EXPLAIN ANALYZE CLUSTER MEMORY, CPU WITH SKEW;

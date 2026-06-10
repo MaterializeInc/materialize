@@ -14,17 +14,13 @@ from materialize.checks.checks import Check
 
 class Aggregation(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE SCHEMA aggregation_schema
 
             > CREATE TABLE aggregation_schema.t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER);
 
             > INSERT INTO aggregation_schema.t1 VALUES (1,1,1);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -74,9 +70,7 @@ class Aggregation(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET search_path=aggregation_schema;
 
                 > SELECT * FROM order_by1;
@@ -168,6 +162,4 @@ class Aggregation(Check):
 
                 > SELECT * FROM global_aggregation_distinct2;
                 6 1 6 21
-            """
-            )
-        )
+            """))

@@ -2790,27 +2790,23 @@ empty
 [1970-01-02,)
 NULL
 
+mode cockroach
+
 #
 # daterange upper, lower
-query TT
+query TT rowsort
 SELECT DISTINCT lower(a), upper(a) FROM daterange_values;
 ----
-NULL
-NULL
-NULL
-1970-01-01
-NULL
-1970-01-02
-1970-01-01
-NULL
-1970-01-02
-NULL
-1969-12-31
-1970-01-01
-1969-12-31
-1970-01-02
-1970-01-01
-1970-01-02
+NULL        NULL
+NULL        1970-01-01
+NULL        1970-01-02
+1970-01-01  NULL
+1970-01-02  NULL
+1969-12-31  1970-01-01
+1969-12-31  1970-01-02
+1970-01-01  1970-01-02
+
+mode standard
 
 # test that lower and upper roundtrip through range constructor function
 query T
@@ -3961,21 +3957,20 @@ SELECT numrange(1,2,null);
 query error range constructor flags argument must not be null
 SELECT numrange(null,null,null);
 
+mode cockroach
+
 #
 # numrange upper, lower
-query TT
+query TT rowsort
 SELECT DISTINCT lower(a), upper(a) FROM numrange_values;
 ----
-NULL
-NULL
-NULL
-1
-1
-NULL
-0
-0
--1
-1
+NULL  NULL
+NULL  1
+1     NULL
+0     0
+-1    1
+
+mode standard
 
 # test that lower and upper roundtrip through range constructor function
 query T
@@ -8728,3 +8723,24 @@ query T
 SELECT '(,)'::tstzrange - '(1970-01-01 00:00:01,)'::tstzrange
 ----
 (,"1970-01-01 00:00:01+00"]
+
+# Test over tables with disallowed types
+statement ok
+CREATE TABLE t_disallowed_types(c0 UINT2, c1 FLOAT4);
+
+# Test over empty tables
+query error range type over uint2 is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c0)) IS TRUE FROM t_disallowed_types;
+
+query error range type over real is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c1)) IS TRUE FROM t_disallowed_types;
+
+# Test over tables with data
+statement ok
+INSERT INTO t_disallowed_types VALUES (1, 1.0);
+
+query error range type over uint2 is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c0)) IS TRUE FROM t_disallowed_types;
+
+query error range type over real is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c1)) IS TRUE FROM t_disallowed_types;

@@ -24,12 +24,14 @@ $ schema-registry-wait topic=mysql.transaction
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE t1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'mysql.test.t1');
 
 > CREATE TABLE t1_tbl FROM SOURCE t1 (REFERENCE "mysql.test.t1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM t1_tbl;
 123 123 123

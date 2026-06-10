@@ -9,6 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# helm-chart-version-bump -- Make helm chart use the current environmentd/orchestratord versions
+# helm-chart-version-bump -- Bump environmentd (appVersion) and helm chart versions in helm chart
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.helm_chart_version_bump "$@"

@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Test that the source ingestion pipeline commits offsets back to Kafka with
 # the expected group ID.
@@ -26,6 +28,7 @@ three
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
 > CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
@@ -34,6 +37,7 @@ three
 
 > CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
+> COMMIT
 
 > SELECT * from topic_tbl
 one
@@ -54,6 +58,7 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 
 # Test than an arbitrary prefix can be prepended to the consumer group.
 
+> BEGIN
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
@@ -63,6 +68,7 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 
 > CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
+> COMMIT
 
 > SELECT * from topic_tbl
 one

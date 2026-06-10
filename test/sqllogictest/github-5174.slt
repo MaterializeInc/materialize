@@ -10,6 +10,9 @@
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/5174
 mode cockroach
 
+statement ok
+SET cluster_replica = r1
+
 query T
 SELECT
 	worker_id

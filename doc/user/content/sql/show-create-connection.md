@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-connection.svg" >}}
+```sql
+SHOW [REDACTED] CREATE CONNECTION <connection_name>;
+```
 
-Field | Use
-------|-----
-_connection&lowbar;name_ | The connection you want to get the `CREATE` statement for. For available connections, see [`SHOW CONNECTIONS`](../show-connections).
+{{< yaml-table data="show_create_redacted_option" >}}
+
+For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
 
 ## Examples
 
@@ -32,7 +34,7 @@ SHOW CREATE CONNECTION kafka_connection;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the connection.
+{{% include-headless "/headless/sql-command-privileges/show-create-connection" %}}
 
 ## Related pages
 

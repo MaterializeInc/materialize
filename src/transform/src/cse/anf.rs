@@ -30,12 +30,16 @@ pub struct ANF;
 use crate::TransformCtx;
 
 impl crate::Transform for ANF {
+    fn name(&self) -> &'static str {
+        "ANF"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "anf")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _ctx: &mut TransformCtx,
@@ -166,7 +170,7 @@ impl Bindings {
                     // These rebindings will be used for each binding until we process the binding.
                     scoped_anf
                         .rebindings
-                        .extend(ids.iter().zip(before_ids.iter()).map(|(x, y)| (*x, *y)));
+                        .extend(ids.iter().zip_eq(before_ids.iter()).map(|(x, y)| (*x, *y)));
 
                     // Convert each bound expression into a sequence of let bindings, which are appended
                     // to the sequence of let bindings from prior bound expressions.

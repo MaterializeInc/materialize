@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 #
@@ -79,3 +81,28 @@ SELECT '${arg.uses-redpanda}'::BOOL
 
 > SELECT status, error FROM mz_internal.mz_sink_statuses WHERE name = 'topic_config_unknown';
 stalled "kafka: Error creating topic testdrive-kafka-config-unknown-${testdrive.seed} for sink: Admin operation error: InvalidConfig (Broker: Configuration is invalid)"
+
+# Test whether MZ can alter the progress topic configuration when the relevant option is enabled
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_sink_ensure_topic_config = 'alter'
+
+$ kafka-create-topic topic=kafka-progress partitions=1 compaction=false
+
+$ kafka-verify-topic topic=testdrive-kafka-progress-${testdrive.seed} topic-config={"cleanup.policy": "delete"} replication-factor=1 partition-count=1
+
+> CREATE CONNECTION kafka_conn_progress
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, PROGRESS TOPIC 'testdrive-kafka-progress-${testdrive.seed}');
+
+> CREATE SINK topic_config_check
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn_progress (
+    TOPIC 'testdrive-kafka-config-check-${testdrive.seed}',
+    TOPIC PARTITION COUNT 3
+  )
+  KEY(f1)
+  FORMAT JSON
+  ENVELOPE UPSERT
+
+$ kafka-verify-topic topic=testdrive-kafka-progress-${testdrive.seed} topic-config={"cleanup.policy": "compact", "segment.bytes": "134217728"} replication-factor=1 partition-count=1

@@ -37,14 +37,18 @@ INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456-09');
 INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456+09');
 ALTER TABLE timestamp_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source_time FOR TABLE time_table;
 
 CREATE PUBLICATION mz_source_timestamp FOR TABLE timestamp_table;
 
+> BEGIN
 > CREATE SOURCE mz_source_timestamp
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_timestamp');
 
 > CREATE TABLE timestamp_table FROM SOURCE mz_source_timestamp (REFERENCE timestamp_table);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM timestamp_table;
 true

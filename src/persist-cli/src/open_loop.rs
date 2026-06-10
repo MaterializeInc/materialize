@@ -30,14 +30,14 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistLocation, ShardId};
 use prometheus::Encoder;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
-use tracing::{debug, error, info, info_span, trace, Instrument};
+use tokio::sync::mpsc::error::SendError;
+use tracing::{Instrument, debug, error, info, info_span, trace};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
 /// Different benchmark configurations.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum BenchmarkType {
     /// Data is written straight into persistence from the data generator.
     RawWriter,
@@ -66,11 +66,11 @@ pub struct Args {
     blob_uri: SensitiveUrl,
 
     /// The type of benchmark to run
-    #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]
+    #[clap(value_enum, long, default_value_t = BenchmarkType::RawWriter)]
     benchmark_type: BenchmarkType,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second.
@@ -86,7 +86,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// Id of the persist shard (for use in multi-process runs).
@@ -122,8 +122,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                 axum::Router::new()
                     .route(
                         "/metrics",
-                        axum::routing::get(move || async move {
-                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                            mz_http_util::handle_prometheus(&metrics_registry, headers).await
                         }),
                     )
                     .into_make_service(),
@@ -183,8 +183,14 @@ where
 
     let benchmark_description = format!(
         "num-readers={} num-writers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.num_readers, args.num_writers, args.runtime, num_records_total, args.records_per_second,
-        args.record_size_bytes, args.batch_size);
+        args.num_readers,
+        args.num_writers,
+        args.runtime,
+        num_records_total,
+        args.records_per_second,
+        args.record_size_bytes,
+        args.batch_size
+    );
 
     info!("starting benchmark: {}", benchmark_description);
     let mut generator_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
@@ -246,8 +252,7 @@ where
                                 .in_scope(|| data_generator.gen_batch(usize::cast_from(batch_idx)))
                         },
                     )
-                    .await
-                    .expect("task failed");
+                    .await;
                     trace!("data generator {} made a batch", idx);
                     let batch = match batch {
                         Some(x) => x,
@@ -304,60 +309,72 @@ where
 
         // Intentionally create the span outside the task to set the parent.
         let writer_span = info_span!("writer", idx);
-        let writer_handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-            trace!("writer {} waiting for barrier", idx);
-            b.wait().await;
-            info!("starting writer {}", idx);
+        let writer_handle = mz_ore::task::spawn(
+            || format!("writer-{}", idx),
+            async move {
+                trace!("writer {} waiting for barrier", idx);
+                b.wait().await;
+                info!("starting writer {}", idx);
 
-            // Max observed latency for BenchmarkWriter::write.
-            let mut max_write_latency = Duration::from_millis(0);
+                // Max observed latency for BenchmarkWriter::write.
+                let mut max_write_latency = Duration::from_millis(0);
 
-            // The last time we emitted progress information to stdout, expressed
-            // as a relative duration from start.
-            let mut prev_log = Duration::from_millis(0);
-            let mut records_written = 0;
+                // The last time we emitted progress information to stdout, expressed
+                // as a relative duration from start.
+                let mut prev_log = Duration::from_millis(0);
+                let mut records_written = 0;
 
-            loop {
-                let batch = match rx.recv().await {
-                    Some(batch) => batch,
-                    None => break,
-                };
+                loop {
+                    let batch = match rx.recv().await {
+                        Some(batch) => batch,
+                        None => break,
+                    };
 
-                trace!("writer {} received a batch. writing", idx);
-                let write_start = Instant::now();
-                writer.write(batch).await?;
+                    trace!("writer {} received a batch. writing", idx);
+                    let write_start = Instant::now();
+                    writer.write(batch).await?;
 
-                records_written += args.batch_size;
-                let write_latency = write_start.elapsed();
-                if write_latency > max_write_latency {
-                    max_write_latency = write_latency;
+                    records_written += args.batch_size;
+                    let write_latency = write_start.elapsed();
+                    if write_latency > max_write_latency {
+                        max_write_latency = write_latency;
+                    }
+
+                    let elapsed = start.elapsed();
+
+                    if elapsed - prev_log > args.logging_granularity {
+                        info!(
+                            "After {} ms writer {} has written {} records. \
+                         Max write latency {} ms most recent write \
+                         latency {} ms.",
+                            elapsed.as_millis(),
+                            idx,
+                            records_written,
+                            max_write_latency.as_millis(),
+                            write_latency.as_millis(),
+                        );
+                        prev_log = elapsed;
+                    }
+
+                    if records_written >= num_records_total {
+                        break;
+                    }
                 }
-
                 let elapsed = start.elapsed();
+                let finished = format!(
+                    "Writer {} finished after {} ms and wrote {} records. Max write latency {} ms.",
+                    idx,
+                    elapsed.as_millis(),
+                    records_written,
+                    max_write_latency.as_millis()
+                );
 
-                if elapsed - prev_log > args.logging_granularity {
-                    info!("After {} ms writer {} has written {} records. Max write latency {} ms most recent write latency {} ms.",
-                          elapsed.as_millis(), idx, records_written, max_write_latency.as_millis(), write_latency.as_millis());
-                    prev_log = elapsed;
-                }
+                writer.finish().await.unwrap();
 
-                if records_written >= num_records_total {
-                    break;
-                }
+                Ok(finished)
             }
-            let elapsed = start.elapsed();
-            let finished = format!(
-                "Writer {} finished after {} ms and wrote {} records. Max write latency {} ms.",
-                idx,
-                elapsed.as_millis(),
-                records_written,
-                max_write_latency.as_millis()
-            );
-
-            writer.finish().await.unwrap();
-
-            Ok(finished)
-        }.instrument(writer_span));
+            .instrument(writer_span),
+        );
 
         write_handles.push(writer_handle);
     }
@@ -368,77 +385,106 @@ where
         let b = Arc::clone(&barrier);
         // Intentionally create the span outside the task to set the parent.
         let reader_span = info_span!("reader", idx);
-        let reader_handle = mz_ore::task::spawn(|| format!("reader-{}", idx), async move {
-            trace!("reader {} waiting for barrier", idx);
-            b.wait().await;
-            info!("starting reader {}", idx);
+        let reader_handle = mz_ore::task::spawn(
+            || format!("reader-{}", idx),
+            async move {
+                trace!("reader {} waiting for barrier", idx);
+                b.wait().await;
+                info!("starting reader {}", idx);
 
-            // Max observed latency for BenchmarkReader::num_records.
-            let mut max_read_latency = Duration::from_millis(0);
+                // Max observed latency for BenchmarkReader::num_records.
+                let mut max_read_latency = Duration::from_millis(0);
 
-            // Max observed delay between the number of records expected to be read at any
-            // point in time vs the number of records actually ingested by that point.
-            let mut max_lag = 0;
+                // Max observed delay between the number of records expected to be read at any
+                // point in time vs the number of records actually ingested by that point.
+                let mut max_lag = 0;
 
-            // The last time we emitted progress information to stdout, expressed
-            // as a relative duration from start.
-            let mut prev_log = Duration::from_millis(0);
-            loop {
-                let elapsed = start.elapsed();
-                let expected_sent = elapsed.as_millis() as usize
-                    / (time_per_batch.as_millis() as usize)
-                    * args.batch_size;
-                let read_start = Instant::now();
-                let num_records_read = reader.num_records().await?;
-                let read_latency = read_start.elapsed();
-                let lag = if expected_sent > num_records_read {
-                    expected_sent - num_records_read
-                } else {
-                    0
-                };
-                if lag > max_lag {
-                    max_lag = lag;
-                }
+                // The last time we emitted progress information to stdout, expressed
+                // as a relative duration from start.
+                let mut prev_log = Duration::from_millis(0);
+                loop {
+                    let elapsed = start.elapsed();
+                    let expected_sent = elapsed.as_millis() as usize
+                        / (time_per_batch.as_millis() as usize)
+                        * args.batch_size;
+                    let read_start = Instant::now();
+                    let num_records_read = reader.num_records().await?;
+                    let read_latency = read_start.elapsed();
+                    let lag = if expected_sent > num_records_read {
+                        expected_sent - num_records_read
+                    } else {
+                        0
+                    };
+                    if lag > max_lag {
+                        max_lag = lag;
+                    }
 
-                if read_latency > max_read_latency {
-                    max_read_latency = read_latency;
-                }
+                    if read_latency > max_read_latency {
+                        max_read_latency = read_latency;
+                    }
 
-                if elapsed - prev_log > args.logging_granularity {
-                    let elapsed_seconds = elapsed.as_secs();
-                    let mb_read = (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
-                    let throughput = mb_read / elapsed_seconds as f64;
-                    info!("After {} ms reader {} has read {} records (throughput {:.3} MiB/s). Max read lag {} records, most recent read lag {} records. Max read latency {} ms, most recent read latency {} ms",
-                          elapsed.as_millis(), idx, num_records_read, throughput, max_lag, lag, max_read_latency.as_millis(), read_latency.as_millis());
-                    prev_log = elapsed;
-                }
-                if num_records_read == num_records_total {
-                    let elapsed_seconds = elapsed.as_secs();
-                    let mb_read = (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
-                    let throughput = mb_read / elapsed_seconds as f64;
-                    let finished = format!("Reader {} finished after {} ms and read {} records (throughput {:.3} MiB/s). Max read lag {} records. Max read latency {} ms.",
-                          idx, elapsed.as_millis(), num_records_read, throughput, max_lag, max_read_latency.as_millis());
-                    return Ok((finished, reader));
+                    if elapsed - prev_log > args.logging_granularity {
+                        let elapsed_seconds = elapsed.as_secs();
+                        let mb_read =
+                            (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
+                        let throughput = mb_read / elapsed_seconds as f64;
+                        info!(
+                            "After {} ms reader {} has read {} records \
+                         (throughput {:.3} MiB/s). Max read lag {} \
+                         records, most recent read lag {} records. \
+                         Max read latency {} ms, most recent read \
+                         latency {} ms",
+                            elapsed.as_millis(),
+                            idx,
+                            num_records_read,
+                            throughput,
+                            max_lag,
+                            lag,
+                            max_read_latency.as_millis(),
+                            read_latency.as_millis(),
+                        );
+                        prev_log = elapsed;
+                    }
+                    if num_records_read == num_records_total {
+                        let elapsed_seconds = elapsed.as_secs();
+                        let mb_read =
+                            (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
+                        let throughput = mb_read / elapsed_seconds as f64;
+                        let finished = format!(
+                            "Reader {} finished after {} ms and read \
+                         {} records (throughput {:.3} MiB/s). \
+                         Max read lag {} records. \
+                         Max read latency {} ms.",
+                            idx,
+                            elapsed.as_millis(),
+                            num_records_read,
+                            throughput,
+                            max_lag,
+                            max_read_latency.as_millis(),
+                        );
+                        return Ok((finished, reader));
+                    }
                 }
             }
-        }.instrument(reader_span));
+            .instrument(reader_span),
+        );
         read_handles.push(reader_handle);
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
     }
     for handle in write_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
     }
     for handle in read_handles {
-        match handle.await? {
+        match handle.await {
             Ok((finished, _)) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
@@ -488,11 +534,11 @@ mod raw_persist_benchmark {
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-    use mz_persist_types::codec_impls::VecU8Schema;
     use mz_persist_types::Codec64;
+    use mz_persist_types::codec_impls::VecU8Schema;
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
-    use tracing::{info_span, Instrument};
+    use tracing::{Instrument, info_span};
 
     use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -655,7 +701,7 @@ mod raw_persist_benchmark {
             self.tx.take().expect("already finished");
 
             for handle in self.handles.drain(..) {
-                let () = handle.await?;
+                let () = handle.await;
             }
 
             Ok(())

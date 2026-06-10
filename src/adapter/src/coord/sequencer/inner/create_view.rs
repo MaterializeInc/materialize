@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
@@ -28,13 +29,14 @@ use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
     ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    infer_sql_type_for_catalog,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{catalog, AdapterNotice, ExecuteContext};
+use crate::{AdapterNotice, ExecuteContext, catalog};
 
 impl Staged for CreateViewStage {
     type Ctx = ExecuteContext;
@@ -82,7 +84,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, ExplainContext::None),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -127,7 +129,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, explain_ctx),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -180,7 +182,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, explain_ctx),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -188,7 +190,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_view(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -222,7 +224,7 @@ impl Coordinator {
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.locally_optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -242,7 +244,8 @@ impl Coordinator {
 
     #[instrument]
     fn create_view_validate(
-        &mut self,
+        &self,
+        session: &Session,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -260,11 +263,20 @@ impl Coordinator {
         // reject queries that depend on a relation in the wrong timeline, for
         // example, even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        self.validate_timeline_context(expr_depends_on.iter().copied())?;
+        self.catalog()
+            .validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track resolved dependencies so concurrent drops are caught between
+        // stages instead of panicking later when the persisted SQL is
+        // re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            resolved_ids.items().copied().collect(),
+            None,
+            None,
+            session.role_metadata().clone(),
+        );
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
@@ -284,7 +296,7 @@ impl Coordinator {
             explain_ctx,
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.allocate_user_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -389,6 +401,7 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -403,8 +416,8 @@ impl Coordinator {
                     create_sql: create_sql.clone(),
                     global_id,
                     raw_expr: raw_expr.into(),
-                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                    optimized_expr: optimized_expr.into(),
+                    desc: RelationDesc::new(typ, column_names.clone()),
+                    locally_optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {
@@ -420,8 +433,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -435,7 +447,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_view_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateViewExplain {
             id,

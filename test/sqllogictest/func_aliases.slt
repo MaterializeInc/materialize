@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query T
+SELECT current_user = current_user()
+----
+true
+
+query T
+SELECT current_role = current_role()
+----
+true
+
+query T
+SELECT current_schema = current_schema()
+----
+true
+
+query T
+SELECT current_catalog = current_catalog()
+----
+true
+
+query T
+SELECT session_user = session_user()
+----
+true

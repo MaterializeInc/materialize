@@ -12,8 +12,8 @@
 //! TODO: eliminate macros in favor of using `walkabout`?
 
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse, Data, DeriveInput, Fields};
+use quote::{ToTokens, quote};
+use syn::{Data, DeriveInput, Fields, parse};
 
 /// Types defined outside of Materialize used to build test objects.
 const EXTERNAL_TYPES: &[&str] = &["String", "FixedOffset", "Tz", "NaiveDateTime", "Regex"];
@@ -93,7 +93,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         .map(|typ| quote! { #typ::add_to_reflected_type_info(rti); })
         .collect::<Vec<_>>();
 
-    let gen = quote! {
+    let generated = quote! {
       impl mz_lowertest::MzReflect for #object_name {
         fn add_to_reflected_type_info(
             rti: &mut mz_lowertest::ReflectedTypeInfo
@@ -104,7 +104,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
         }
       }
     };
-    gen.into()
+    generated.into()
 }
 
 /* #region Helper methods */
@@ -117,7 +117,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
 /// 3. The types of the fields as [syn::Type]
 ///
 /// Fields with the attribute `#[mzreflect(ignore)]` are not returned.
-fn get_fields_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>, Vec<&syn::Type>) {
+fn get_fields_names_types(f: &Fields) -> (Vec<String>, Vec<String>, Vec<&syn::Type>) {
     match f {
         Fields::Named(named_fields) => {
             let (names, types): (Vec<_>, Vec<_>) = named_fields
@@ -151,15 +151,15 @@ fn get_fields_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>, Vec<&sy
 /// Returns None if the field has the attribute `#[mzreflect(ignore)]`.
 fn get_field_name_type(f: &syn::Field) -> Option<(String, (String, &syn::Type))> {
     for attr in f.attrs.iter() {
-        if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
-            if meta_list.path.segments.last().unwrap().ident == "mzreflect" {
-                for nested_meta in meta_list.nested.iter() {
-                    if let syn::NestedMeta::Meta(syn::Meta::Path(path)) = nested_meta {
-                        if path.segments.last().unwrap().ident == "ignore" {
-                            return None;
-                        }
-                    }
-                }
+        if attr.path().is_ident("mzreflect") {
+            let mut ignore = false;
+            attr.parse_nested_meta(|meta| {
+                ignore |= meta.path.is_ident("ignore");
+                Ok(())
+            })
+            .unwrap();
+            if ignore {
+                return None;
             }
         }
     }
@@ -224,7 +224,7 @@ fn extract_reflected_type(t: &syn::Type) -> Vec<&syn::Type> {
                             .collect::<Vec<_>>();
                     }
                 }
-                _ => {}
+                syn::PathArguments::Parenthesized(_) => {}
             }
         }
         syn::Type::Tuple(tt) => {

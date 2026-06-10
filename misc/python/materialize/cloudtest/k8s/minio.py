@@ -10,9 +10,7 @@
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
-MINIO_YAML_DIRECTORY_URL = (
-    "https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio"
-)
+MINIO_YAML_DIRECTORY_URL = "https://raw.githubusercontent.com/kubernetes/examples/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio"
 
 
 class Minio(K8sResource):
@@ -63,9 +61,10 @@ class Minio(K8sResource):
         self.wait(
             resource="deployment.apps/minio-deployment",
             condition="condition=Available=True",
+            timeout_secs=600,
         )
 
-        self.create_buckets(["persist", "copytos3"])
+        self.create_buckets(["persist", "copytos3", "copyfroms3"])
 
     def create_buckets(self, buckets: list[str]) -> None:
         cmds = [
@@ -81,7 +80,7 @@ class Minio(K8sResource):
         self.kubectl(
             "run",
             "minio",
-            "--image=minio/mc",
+            "--image=minio/mc:RELEASE.2023-07-07T05-25-51Z",
             "--restart=Never",
             "--command",
             "/bin/sh",

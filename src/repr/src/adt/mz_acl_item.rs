@@ -16,16 +16,19 @@ use std::ops::BitOrAssign;
 use std::str::FromStr;
 
 use crate::adt::system::Oid;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use bitflags::bitflags;
-use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -246,10 +249,7 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -268,8 +268,18 @@ impl Arbitrary for AclMode {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,
@@ -385,10 +395,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
@@ -516,8 +522,18 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AclItem {
     /// Role that this item grants privileges to.
     pub grantee: Oid,
@@ -646,10 +662,6 @@ impl RustType<ProtoAclItem> for AclItem {
     }
 }
 
-impl Columnation for AclItem {
-    type InnerRegion = CopyRegion<AclItem>;
-}
-
 /// An encoded packed variant of [`AclItem`].
 ///
 /// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
@@ -707,7 +719,17 @@ impl FixedSizeCodec<AclItem> for PackedAclItem {
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PrivilegeMap(
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
 );
@@ -835,7 +857,7 @@ pub fn merge_mz_acl_items(
         .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
             let item = accum
                 .entry((mz_acl_item.grantee, mz_acl_item.grantor))
-                .or_insert(MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
+                .or_insert_with(|| MzAclItem::empty(mz_acl_item.grantee, mz_acl_item.grantor));
             item.acl_mode |= mz_acl_item.acl_mode;
             accum
         })
@@ -1134,6 +1156,7 @@ fn test_acl_item_binary_size() {
     assert_eq!(16, AclItem::binary_size());
 }
 
+#[cfg(test)]
 proptest! {
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
@@ -1153,6 +1176,7 @@ proptest! {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_roundtrips() {
     fn roundtrip_acl_item(og: AclItem) {
         let packed = PackedAclItem::from_value(og);
@@ -1167,6 +1191,7 @@ fn proptest_packed_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_sorts() {
     fn sort_acl_items(mut og: Vec<AclItem>) {
         let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
@@ -1184,6 +1209,7 @@ fn proptest_packed_acl_item_sorts() {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_roundtrips() {
     fn roundtrip_mz_acl_item(og: MzAclItem) {
         let packed = PackedMzAclItem::from_value(og);
@@ -1198,6 +1224,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og

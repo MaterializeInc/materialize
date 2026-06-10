@@ -18,7 +18,7 @@
 /// Halts the process.
 ///
 /// `halt` forwards the provided arguments to the [`tracing::warn`] macro, then
-/// terminates the process with exit code 2.
+/// terminates the process with exit code 166.
 ///
 /// Halting a process is a middle ground between a graceful shutdown and a
 /// panic. Use halts for errors that are severe enough to require shutting down
@@ -36,13 +36,13 @@
 ///     tap into the existing whole-process retry logic. Use halt judiciously in
 ///     these cases, as restarting a process can be inefficient (e.g., mandatory
 ///     restart backoff, rehydrating expensive state).
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-        $crate::process::exit_thread_safe(2);
+        $crate::process::exit_thread_safe(166);
     }}
 }
 
@@ -50,8 +50,8 @@ macro_rules! halt {
 ///
 /// `exit!` forwards the provided arguments to the [`tracing::info`] macro, then
 /// terminates the process with given exit code.
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! exit {
     ($exit_code:literal, $($arg:expr),* $(,)?) => {{

@@ -9,10 +9,11 @@
 
 """
 Write a single set of .td fragments for a particular feature or functionality
-and then have Zippy execute them in upgrade, 0dt-upgrade, restart, recovery and
-failure contexts.
+and then execute them in upgrade, 0dt-upgrade, restart, recovery and failure
+contexts.
 """
 
+import argparse
 import os
 from enum import Enum
 
@@ -20,64 +21,96 @@ from materialize import buildkite
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
+from materialize.checks.features import Features
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import (
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
 TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 
 def create_mzs(
-    additional_system_parameter_defaults: dict[str, str] | None = None
-) -> list[Materialized]:
+    azurite: bool,
+    default_replication_factor: int,
+    additional_system_parameter_defaults: dict[str, str] | None = None,
+    external_metadata_store: bool = True,
+    external_blob_store: bool = True,
+) -> list[TestdriveService | Materialized]:
     return [
         Materialized(
             name=mz_name,
-            external_metadata_store=True,
-            external_minio=True,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            metadata_store="postgres-metadata",
+            external_metadata_store=external_metadata_store,
+            external_blob_store=external_blob_store,
+            blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
-            metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
+            default_replication_factor=default_replication_factor,
+            support_external_clusterd=True,
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
+    ] + [
+        TestdriveService(
+            default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
+            materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
+            external_blob_store=external_blob_store,
+            blob_store_is_azure=azurite,
+            no_reset=True,
+            seed=1,
+            entrypoint_extra=[
+                "--var=replicas=1",
+                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            ],
+            volumes_extra=["secrets:/share/secrets"],
+        )
     ]
 
 
 SERVICES = [
     TestCerts(),
-    # TODO(def-): Switch to CockroachOrPostgres after we have 4 versions
-    # support Postgres as metadata store
-    Cockroach(
+    PostgresMetadata(
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
-    Zookeeper(),
+    SqlServer(),
     Kafka(
+        # The Self-Managed upgrade scenarios exercise historical Mz versions
+        # whose embedded librdkafka cannot SCRAM-auth against Kafka 4.x. Pin
+        # platform-checks to the previous Confluent Platform major (Apache
+        # Kafka 3.9, KRaft) until those Mz versions age out of the support
+        # window.
+        tag="7.9.4",
         auto_create_topics=True,
         depends_on_extra=["test-certs"],
         advertised_listeners=[
@@ -91,9 +124,10 @@ SERVICES = [
             "sasl_ssl://kafka:9096",
             "sasl_mssl://kafka:9097",
         ],
+        # Move the KRaft controller port off 9093, which is used for SSL above.
+        controller_port=29093,
         environment_extra=[
-            "ZOOKEEPER_SASL_ENABLED=FALSE",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,ssl:SSL,mssl:SSL,sasl_plaintext:SASL_PLAINTEXT,sasl_ssl:SASL_SSL,sasl_mssl:SASL_SSL",
             "KAFKA_INTER_BROKER_LISTENER_NAME=plaintext",
             "KAFKA_SASL_ENABLED_MECHANISMS=PLAIN,SCRAM-SHA-256,SCRAM-SHA-512",
             "KAFKA_SSL_KEY_PASSWORD=mzmzmz",
@@ -104,12 +138,20 @@ SERVICES = [
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/jaas.config",
             "KAFKA_LISTENER_NAME_MSSL_SSL_CLIENT_AUTH=required",
             "KAFKA_LISTENER_NAME_SASL__MSSL_SSL_CLIENT_AUTH=required",
-            "KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer",
+            "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
             "KAFKA_SUPER_USERS=User:materialize;User:CN=materialized;User:ANONYMOUS",
+            # Bootstrap SCRAM users at storage-format time. See
+            # `misc/mzcompose/kafka/ensure-with-scram.sh` for why the runtime
+            # `kafka-configs --add-config=SCRAM-*` path is unreliable on
+            # Kafka 4.x KRaft.
+            "KAFKA_INIT_SCRAM_USERS="
+            "SCRAM-SHA-256=[name=materialize,password=sekurity];"
+            "SCRAM-SHA-512=[name=materialize,password=sekurity]",
         ],
         volumes=[
             "secrets:/etc/kafka/secrets",
             "./kafka.jaas.config:/etc/kafka/jaas.config",
+            "../../misc/mzcompose/kafka/ensure-with-scram.sh:/etc/confluent/docker/ensure",
         ],
     ),
     SchemaRegistry(),
@@ -117,20 +159,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    *create_mzs(),
-    TestdriveService(
-        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
-        materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
-        no_reset=True,
-        seed=1,
-        entrypoint_extra=[
-            "--var=replicas=1",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-        ],
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
+    *create_mzs(azurite=False, default_replication_factor=1),
     Persistcli(),
     SshBastionHost(),
 ]
@@ -145,39 +174,35 @@ class ExecutionMode(Enum):
         return self.value
 
 
-def setup(c: Composition) -> None:
-    c.up("testdrive", persistent=True)
-    c.up(c.metadata_store())
-
-    c.up(
+def setup(c: Composition, external_blob_store: bool) -> None:
+    dependencies = [
         "test-certs",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
         "debezium",
-        "minio",
         "ssh-bastion-host",
-    )
+        Service("testdrive", idle=True),
+    ]
 
-    c.enable_minio_versioning()
+    if external_blob_store:
+        dependencies.extend(
+            [
+                "minio",
+                Service("mc", idle=True),
+            ]
+        )
 
-    # Add `materialize` SCRAM user to Kafka.
-    c.exec(
-        "kafka",
-        "kafka-configs",
-        "--bootstrap-server=localhost:9092",
-        "--alter",
-        "--add-config=SCRAM-SHA-256=[password=sekurity],SCRAM-SHA-512=[password=sekurity]",
-        "--entity-type=users",
-        "--entity-name=materialize",
-    )
+    c.up(*dependencies)
 
+    if external_blob_store:
+        c.enable_minio_versioning()
 
-def teardown(c: Composition) -> None:
-    c.rm(*[s.name for s in SERVICES], stop=True, destroy_volumes=True)
-    c.rm_volumes("mzdata", "tmp", force=True)
+    # The `materialize` SCRAM user is bootstrapped by Kafka's storage-format
+    # step via `KAFKA_INIT_SCRAM_USERS` (see `ensure-with-scram.sh`), so no
+    # runtime `kafka-configs` call is needed here.
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -212,7 +237,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
     )
 
+    parser.add_argument(
+        "--features",
+        nargs="*",
+        help="A list of features (e.g. azurite), to enable.",
+    )
+
+    parser.add_argument(
+        "--default-replication-factor",
+        type=int,
+        default=2,
+        help="Default replication factor for clusters",
+    )
+
+    parser.add_argument(
+        "--external-metadata-store", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--external-blob-store", action=argparse.BooleanOptionalAction, default=True
+    )
+
     args = parser.parse_args()
+    features = Features(args.features)
 
     if args.scenario:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
@@ -242,7 +288,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
-    with c.override(*create_mzs(additional_system_parameter_defaults)):
+    with c.override(
+        *create_mzs(
+            features.azurite_enabled(),
+            args.default_replication_factor,
+            additional_system_parameter_defaults,
+            external_blob_store=args.external_blob_store,
+            external_metadata_store=args.external_metadata_store,
+        )
+    ):
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:
             assert issubclass(
@@ -261,12 +315,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             execution_mode = args.execution_mode
 
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                setup(c)
+                setup(c, args.external_blob_store)
                 scenario = scenario_class(
-                    checks=checks, executor=executor, seed=args.seed
+                    checks=checks,
+                    executor=executor,
+                    features=features,
+                    seed=args.seed,
                 )
                 scenario.run()
-                teardown(c)
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
@@ -275,11 +331,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.override_current_testcase_name(
                         f"Check '{check}' with scenario '{scenario_class}'"
                     )
-                    setup(c)
+                    setup(c, args.external_blob_store)
                     scenario = scenario_class(
-                        checks=[check], executor=executor, seed=args.seed
+                        checks=[check],
+                        executor=executor,
+                        features=features,
+                        seed=args.seed,
                     )
                     scenario.run()
-                    teardown(c)
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")

@@ -12,6 +12,8 @@
 import argparse
 import sys
 
+import frontmatter
+
 from materialize import git, spawn
 from materialize.release.util import doc_file_path
 
@@ -26,11 +28,16 @@ def main():
 
     print(f"Marking {args.release_version} as released in the docs...")
     release_version_doc_file = doc_file_path(args.release_version)
-    release_version_doc_file.write_text(
-        release_version_doc_file.read_text().replace(
-            "released: false", f"released: true\npatch: {args.patch}"
-        )
-    )
+    metadata = frontmatter.load(release_version_doc_file)
+    metadata["released"] = True
+    metadata["patch"] = int(args.patch)
+    if "rc" in metadata:
+        del metadata["rc"]
+    with open(release_version_doc_file, "w", encoding="utf-8") as f:
+        frontmatter.dump(metadata, f, sort_keys=False)
+        # Always have a trailing newline
+        f.write("\n")
+
     git.add_file(str(release_version_doc_file))
     git.commit_all_changed(f"release: mark {args.release_version} as released")
 

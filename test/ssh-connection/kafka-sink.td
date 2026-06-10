@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+ALTER SYSTEM SET kafka_transaction_timeout = '60s'
 
 # Test creating a Kafka sink using ssh.
 
@@ -18,7 +18,7 @@ $ kafka-ingest topic=thetopic format=bytes
 one
 
 > DROP CLUSTER IF EXISTS sc;
-> CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
+> CREATE CLUSTER sc REPLICAS (r1 (SIZE 'scale=1,workers=32'))
 
 
 # Unfortunately, currently we need a source we can add stuff to (so kafka), but one that
@@ -28,16 +28,15 @@ one
 > CREATE CONNECTION kafka_conn_non_ssh
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE non_ssh IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn_non_ssh (
-    TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL '1s'
-  )
+  FROM KAFKA CONNECTION kafka_conn_non_ssh (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
 > CREATE TABLE non_ssh_tbl FROM SOURCE non_ssh (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
+> COMMIT
 
 > CREATE CONNECTION kafka_conn_using
   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);

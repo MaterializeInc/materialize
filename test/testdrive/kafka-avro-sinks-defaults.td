@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-sql-timeout duration=60s
+
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 # Test Avro UPSERT sinks with null defaults
@@ -46,6 +48,7 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   );
 
 > CREATE CLUSTER upsert_input_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE upsert_input
   IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
@@ -53,6 +56,7 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 > CREATE TABLE upsert_input_tbl FROM SOURCE upsert_input (REFERENCE "testdrive-upsert-avro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 # we split avro unions into separate columns
 > SELECT * FROM upsert_input_tbl;
