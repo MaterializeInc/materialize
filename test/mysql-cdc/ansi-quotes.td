@@ -10,7 +10,7 @@
 # MySQL with ANSI_QUOTES enabled at runtime via SET GLOBAL before Materialize
 # connects, so its snapshot and replication connections inherit it and `"` quotes
 # identifiers. The full source lifecycle must work. Companion to
-# override/20-ansi-quotes.td, which covers the boot-time variant.
+# override/ansi-quotes.td, which covers the boot-time variant.
 
 $ set-sql-timeout duration=120s
 
@@ -27,8 +27,12 @@ CREATE DATABASE public;
 USE public;
 CREATE TABLE ansi_global (f1 INTEGER);
 CREATE TABLE `ansi spaced` (f1 INTEGER);
+# A name whose body is literal backticks. This session is in the default
+# sql_mode, so it is backtick-quoted with the inner backticks doubled.
+CREATE TABLE ```ansi_backticks``` (f1 INTEGER);
 INSERT INTO ansi_global VALUES (1);
 INSERT INTO `ansi spaced` VALUES (1);
+INSERT INTO ```ansi_backticks``` VALUES (1);
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -42,17 +46,21 @@ INSERT INTO `ansi spaced` VALUES (1);
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE ansi_global FROM SOURCE mz_source (REFERENCE public.ansi_global);
 > CREATE TABLE ansi_spaced FROM SOURCE mz_source (REFERENCE public."ansi spaced");
+> CREATE TABLE ansi_backticks FROM SOURCE mz_source (REFERENCE public."`ansi_backticks`");
 > COMMIT
 
 > SELECT * FROM ansi_global;
 1
 > SELECT * FROM ansi_spaced;
 1
+> SELECT * FROM ansi_backticks;
+1
 
 # Replication-time DDL detection must also work against this server.
 $ mysql-execute name=mysql
 INSERT INTO ansi_global VALUES (2);
 INSERT INTO `ansi spaced` VALUES (2);
+INSERT INTO ```ansi_backticks``` VALUES (2);
 
 > SELECT * FROM ansi_global;
 1
@@ -60,14 +68,20 @@ INSERT INTO `ansi spaced` VALUES (2);
 > SELECT * FROM ansi_spaced;
 1
 2
+> SELECT * FROM ansi_backticks;
+1
+2
 
 $ mysql-execute name=mysql
 DROP TABLE ansi_global;
 DROP TABLE `ansi spaced`;
+DROP TABLE ```ansi_backticks```;
 
 ! SELECT * FROM ansi_global;
 contains:table was dropped
 ! SELECT * FROM ansi_spaced;
+contains:table was dropped
+! SELECT * FROM ansi_backticks;
 contains:table was dropped
 
 > DROP SOURCE mz_source CASCADE;

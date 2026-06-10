@@ -197,7 +197,7 @@ def workflow_cdc_ansi_quotes(c: Composition, parser: WorkflowArgumentParser) -> 
         c.up("materialized", "mysql")
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            "override/20-ansi-quotes.td",
+            "override/ansi-quotes.td",
         )
 
 
