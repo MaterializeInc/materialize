@@ -14,6 +14,7 @@
 //! another, and enable the removal of semijoins that do not restrict the
 //! terms they are joined against.
 
+use itertools::Itertools;
 use mz_expr::{Columns, Id, MirRelationExpr, MirScalarExpr};
 
 use crate::analysis::Analysis;
@@ -368,7 +369,7 @@ fn meet_prov_vecs(this: &mut Vec<ProvenanceInfo>, that: &[ProvenanceInfo]) {
                 let columns: Vec<_> = prov1
                     .columns
                     .iter()
-                    .zip(prov2.columns.iter())
+                    .zip_eq(prov2.columns.iter())
                     .map(|(c1, c2)| if c1 == c2 { c1.clone() } else { None })
                     .collect();
                 let filters = match (&prov1.filters, &prov2.filters) {

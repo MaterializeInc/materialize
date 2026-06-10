@@ -14,6 +14,7 @@
 //! other join input, and the restriction can be expressed by a list of
 //! predicates that can be migrated to the other input.
 
+use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 
 use crate::analysis::provenance::Provenance;
@@ -212,7 +213,7 @@ impl SemijoinElimination {
             if let Some(projection) = projection {
                 *expr = expr.take_dangerous().project(projection);
             } else {
-                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+                todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()));
             }
         }
     }
